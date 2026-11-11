@@ -10,13 +10,11 @@ import UIKit
 import AppKit
 #endif
 
-/// The soft band that rises from the bottom of a screen's content. It sits beneath the bars, so the
-/// tab bar's glass bends it instead of it covering the bar. Hit testing is off and it is hidden from
+/// The light along the bottom edge of a screen's content. It sits beneath the bars, so the tab bar's
+/// glass picks it up instead of it covering the bar. Hit testing is off and it is hidden from
 /// accessibility. The keyboard and the Finder extension do not use this view.
 struct SyncGlowBand: View {
     var status: SyncGlowStatus?
-    /// Points at the bottom covered by bars (tab bar, home indicator). The band reaches under them.
-    var barInset: CGFloat = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -55,7 +53,7 @@ struct SyncGlowBand: View {
             previous = old
             transitionStart = CACurrentMediaTime()
             // One-shot moments start their clock here. Leaving one lets its age keep growing so the
-            // outgoing field stays on the settled frame instead of snapping back to the start.
+            // outgoing glow stays on its settled frame instead of snapping back to the start.
             if new == .refused || new == .repull || new == .nudge {
                 eventStart = CACurrentMediaTime()
             }
@@ -112,9 +110,7 @@ struct SyncGlowBand: View {
             reduceMotion: reduceMotion,
             lowPower: lowPower,
             intensity: SyncGlowComposer.defaultIntensity,
-            density: SyncGlowComposer.defaultDensity,
             dark: colorScheme == .dark,
-            barInset: Float(barInset),
             visible: onScreen,
             sceneActive: scenePhase == .active)
         return draw
@@ -132,9 +128,7 @@ struct SyncGlowDraw: Equatable {
     var reduceMotion: Bool
     var lowPower: Bool
     var intensity: Float
-    var density: Float
     var dark: Bool
-    var barInset: Float
     var visible: Bool
     var sceneActive: Bool
 }
@@ -226,85 +220,42 @@ final class SyncGlowMTKView: MTKView {
     }
 }
 
-/// What every band draws with: the device, its queue, the four pipelines and the glyph atlas. Built
-/// once, on the first band. The tabs' bands, the queue sheet's and the editor cover's take turns, and
-/// building all of this again on each turn was a main-thread hitch in the middle of a presentation.
+/// What every band draws with: the device, its queue and the one pipeline. Built once, on the first
+/// band. The tabs' bands, the queue sheet's and the editor cover's take turns, and building this again
+/// on each turn was a main-thread hitch in the middle of a presentation.
 @MainActor
 final class SyncGlowResources {
     static let shared = SyncGlowResources()
 
     let device: MTLDevice?
     let queue: MTLCommandQueue?
-    private(set) var starsPipeline: MTLRenderPipelineState?
-    private(set) var blurHPipeline: MTLRenderPipelineState?
-    private(set) var blurVPipeline: MTLRenderPipelineState?
-    private(set) var presentPipeline: MTLRenderPipelineState?
-    private(set) var atlas: MTLTexture?
-    private(set) var glyphs = false
+    private(set) var pipeline: MTLRenderPipelineState?
 
     private init() {
         let device = MTLCreateSystemDefaultDevice()
         self.device = device
         queue = device?.makeCommandQueue()
-        guard let device else { return }
-        buildPipelines(device)
-        if let image = GlyphAtlasBaker.rasterize(), let texture = GlyphAtlasBaker.texture(device: device, image: image) {
-            atlas = texture
-            glyphs = true
-        } else {
-            atlas = Self.fallbackAtlas(device)
-            glyphs = false
-        }
-    }
-
-    private static func fallbackAtlas(_ device: MTLDevice) -> MTLTexture? {
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .r8Unorm, width: 1, height: 1, mipmapped: false)
-        descriptor.usage = [.shaderRead]
-        descriptor.storageMode = .shared
-        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
-        var pixel: UInt8 = 0
-        texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &pixel, bytesPerRow: 1)
-        return texture
-    }
-
-    private func buildPipelines(_ device: MTLDevice) {
-        guard let library = device.makeDefaultLibrary(),
+        guard let device, let library = device.makeDefaultLibrary(),
               let vertex = library.makeFunction(name: "glowVertex"),
-              let stars = library.makeFunction(name: "glowStars"),
-              let blurH = library.makeFunction(name: "glowBlurH"),
-              let blurV = library.makeFunction(name: "glowBlurV"),
-              let present = library.makeFunction(name: "glowPresent") else { return }
-        starsPipeline = pipeline(device, vertex: vertex, fragment: stars, format: .rgba16Float)
-        blurHPipeline = pipeline(device, vertex: vertex, fragment: blurH, format: .rgba16Float)
-        blurVPipeline = pipeline(device, vertex: vertex, fragment: blurV, format: .rgba16Float)
-        presentPipeline = pipeline(device, vertex: vertex, fragment: present, format: .rgba16Float)
-    }
-
-    private func pipeline(_ device: MTLDevice, vertex: MTLFunction, fragment: MTLFunction, format: MTLPixelFormat) -> MTLRenderPipelineState? {
+              let fragment = library.makeFunction(name: "glowFragment") else { return }
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.vertexFunction = vertex
         descriptor.fragmentFunction = fragment
-        descriptor.colorAttachments[0].pixelFormat = format
-        return try? device.makeRenderPipelineState(descriptor: descriptor)
+        descriptor.colorAttachments[0].pixelFormat = .rgba16Float
+        pipeline = try? device.makeRenderPipelineState(descriptor: descriptor)
     }
 }
 
-/// Draws the constellation into an extended-range drawable. Frame rate comes from `SyncGlowPace`:
-/// a sweep, a crossfade or a one-shot moment runs, a settled calm band is one still frame, and a
-/// hidden, covered or background library does not draw. The render targets are this band's own.
+/// Draws the glow into an extended-range drawable. Frame rate comes from `SyncGlowPace`: the syncing
+/// light, a crossfade or a one-shot moment runs, a settled calm or offline band is one still frame,
+/// and a hidden, covered or background library does not draw.
 @MainActor
 final class SyncGlowRenderer: NSObject, MTKViewDelegate {
     private let resources: SyncGlowResources
-    private var starTex: MTLTexture?
-    private var blurTex: MTLTexture?
-    private var bloomTex: MTLTexture?
-    private var starSize = CGSize.zero
-    private var bloomSize = CGSize.zero
     private var drawState = SyncGlowDraw(
         state: .upToDate, previous: .upToDate, transitionStart: 0, eventStart: 0, pinEventAge: nil,
         pinTime: nil, pending: 0, reduceMotion: false, lowPower: false, intensity: SyncGlowComposer.defaultIntensity,
-        density: SyncGlowComposer.defaultDensity, dark: true, barInset: 0, visible: true, sceneActive: true)
+        dark: true, visible: true, sceneActive: true)
     /// The last settled frame that reached the screen. A frame from the middle of a crossfade is not one.
     private var lastStill: SyncGlowDraw?
     private var drawing = false
@@ -329,10 +280,9 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         view.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         view.isPaused = true
         view.enableSetNeedsDisplay = false
-        // The present pass renders into the drawable with its own pass, so the texture cannot be framebuffer-only.
-        view.framebufferOnly = false
+        view.framebufferOnly = true
         view.autoResizeDrawable = true
-        view.preferredFramesPerSecond = SyncGlowPace.idle
+        view.preferredFramesPerSecond = SyncGlowPace.slow
         if let layer = view.layer as? CAMetalLayer {
             layer.pixelFormat = .rgba16Float
             layer.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
@@ -413,17 +363,11 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         drawing = true
         defer { drawing = false }
         guard drawState.visible, showing, drawState.sceneActive, drawState.state != .off else { return }
-        guard let starsPipeline = resources.starsPipeline, let blurHPipeline = resources.blurHPipeline,
-              let blurVPipeline = resources.blurVPipeline, let presentPipeline = resources.presentPipeline,
-              let atlas = resources.atlas else { return }
+        guard let pipeline = resources.pipeline else { return }
         guard let drawable = view.currentDrawable, let command = resources.queue?.makeCommandBuffer() else { return }
         let width = drawable.texture.width
         let height = drawable.texture.height
         guard width > 0, height > 0 else { return }
-        let bloomW = max(width / 2, 1)
-        let bloomH = max(height / 2, 1)
-        guard ensureTargets(width: width, height: height, bloomW: bloomW, bloomH: bloomH),
-              let starTex, let blurTex, let bloomTex else { return }
 
         let now = CACurrentMediaTime()
         let fade = crossfade(at: now)
@@ -439,7 +383,7 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         }
         let age = drawState.pinEventAge.map { TimeInterval($0) } ?? max(0, now - drawState.eventStart)
         let time = drawState.pinTime ?? Float(now - started)
-        // Pixels per point, from the drawable against the view's own size, so stars and the horizon
+        // Pixels per point, from the drawable against the view's own size, so the line and the light
         // keep their size in points at 1x, 2x and 3x.
         let boundsWidth = Double(view.bounds.width)
         let pointScale = boundsWidth > 0 ? Float(Double(width) / boundsWidth) : 1
@@ -447,42 +391,12 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
             time: time, state: drawState.state, previous: drawState.previous, transition: fade,
             pendingCount: drawState.pending, reduceMotion: drawState.reduceMotion, lowPower: drawState.lowPower,
             headroom: headroom(of: view), eventAge: age, width: Float(width), height: Float(height),
-            glyphsEnabled: resources.glyphs, intensity: drawState.intensity, density: drawState.density,
-            pointScale: pointScale, dark: drawState.dark, barInset: drawState.barInset)
+            intensity: drawState.intensity, pointScale: pointScale, dark: drawState.dark)
         var packed = uniforms.packed
 
-        encode(command, pipeline: starsPipeline, target: starTex, clear: true, packed: &packed) { encoder in
-            encoder.setFragmentTexture(atlas, index: 0)
-        }
-        var blurPacked = packed
-        blurPacked[SyncGlowUniforms.Index.width] = Float(bloomW)
-        blurPacked[SyncGlowUniforms.Index.height] = Float(bloomH)
-        encode(command, pipeline: blurHPipeline, target: blurTex, clear: true, packed: &blurPacked) { encoder in
-            encoder.setFragmentTexture(starTex, index: 0)
-        }
-        encode(command, pipeline: blurVPipeline, target: bloomTex, clear: true, packed: &blurPacked) { encoder in
-            encoder.setFragmentTexture(blurTex, index: 0)
-        }
-        encode(command, pipeline: presentPipeline, target: drawable.texture, clear: true, packed: &packed) { encoder in
-            encoder.setFragmentTexture(starTex, index: 0)
-            encoder.setFragmentTexture(bloomTex, index: 1)
-        }
-        command.present(drawable)
-        command.commit()
-        lastStill = settled ? drawState : nil
-    }
-
-    private func encode(
-        _ command: MTLCommandBuffer,
-        pipeline: MTLRenderPipelineState,
-        target: MTLTexture,
-        clear: Bool,
-        packed: inout [Float],
-        bind: (MTLRenderCommandEncoder) -> Void
-    ) {
         let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = target
-        pass.colorAttachments[0].loadAction = clear ? .clear : .dontCare
+        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return }
@@ -492,31 +406,11 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
                 encoder.setFragmentBytes(base, length: raw.count, index: 0)
             }
         }
-        bind(encoder)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
-    }
-
-    private func ensureTargets(width: Int, height: Int, bloomW: Int, bloomH: Int) -> Bool {
-        guard let device = resources.device else { return false }
-        if starTex == nil || Int(starSize.width) != width || Int(starSize.height) != height {
-            starTex = makeTarget(device, width: width, height: height)
-            starSize = CGSize(width: width, height: height)
-        }
-        if bloomTex == nil || Int(bloomSize.width) != bloomW || Int(bloomSize.height) != bloomH {
-            blurTex = makeTarget(device, width: bloomW, height: bloomH)
-            bloomTex = makeTarget(device, width: bloomW, height: bloomH)
-            bloomSize = CGSize(width: bloomW, height: bloomH)
-        }
-        return starTex != nil && blurTex != nil && bloomTex != nil
-    }
-
-    private func makeTarget(_ device: MTLDevice, width: Int, height: Int) -> MTLTexture? {
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba16Float, width: width, height: height, mipmapped: false)
-        descriptor.usage = [.shaderRead, .renderTarget]
-        descriptor.storageMode = .private
-        return device.makeTexture(descriptor: descriptor)
+        command.present(drawable)
+        command.commit()
+        lastStill = settled ? drawState : nil
     }
 
     private func headroom(of view: MTKView) -> Float {
@@ -530,7 +424,7 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
 }
 
 extension View {
-    /// The band along the bottom of this content: `SyncGlowLook.bandHeight` points above the bottom
+    /// The glow along the bottom of this content: `SyncGlowLook.bandHeight` points above the bottom
     /// safe area, reaching down under the bars to the edge. Attach it to content that sits beneath the
     /// bars (a tab's root, the Mac detail column, a sheet's stack), never on top of a whole window, or
     /// it is drawn over the bars instead of under their glass. `suppressed` is true while another
@@ -540,7 +434,7 @@ extension View {
             if !suppressed, status != nil {
                 GeometryReader { proxy in
                     let inset = proxy.safeAreaInsets.bottom
-                    SyncGlowBand(status: status, barInset: inset)
+                    SyncGlowBand(status: status)
                         .frame(height: SyncGlowPlacement.bandHeight(bottomInset: Double(inset)))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         .ignoresSafeArea(.container, edges: .bottom)
@@ -556,9 +450,9 @@ extension View {
 @MainActor
 enum SyncGlowDebugLaunch {
     /// `-previewSyncGlow upToDate|syncing|offline|refused|repull|nudge|off`
-    /// `-previewSyncGlowPending N` (offline with no number shows three waiting stars)
+    /// `-previewSyncGlowPending N` (offline with no number shows three counted dashes)
     /// `-previewSyncGlowAge S` freezes the picture S seconds into the state (the event age and the
-    /// clock both), so a still lands on a chosen moment: mid-flash, mid-sweep, mid-crossing.
+    /// clock both), so a still lands on a chosen moment: mid-flash, mid-wipe, mid-pulse.
     /// `-previewTab save|library|links|chat|stage|names|queue|settings` chooses which screen is up.
     /// Every tab, the queue sheet and the editor have their own band, so the flags work on each.
     static var frozenAge: Double? {

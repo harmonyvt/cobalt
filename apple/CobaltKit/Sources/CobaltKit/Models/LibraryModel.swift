@@ -126,7 +126,7 @@ public final class LibraryModel {
     public var debugStatus: SyncGlowStatus?
     #endif
 
-    /// The constellation glow. Nil while the flag is off and nothing has forced a preview.
+    /// The sync glow. Nil while the flag is off and nothing has forced a preview.
     public var syncStatus: SyncGlowStatus? {
         #if DEBUG
         sync?.status ?? debugStatus

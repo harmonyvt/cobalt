@@ -61,7 +61,7 @@ final class LibrarySync {
     /// False after `GET /sync` answers 404, or fails (a 503, a 500) with nothing on the device to show.
     /// Today's library loading takes over for this launch.
     private(set) var isActive = true
-    /// What the constellation glow draws. Updated as passes start and end; it does not decide them.
+    /// What the sync glow draws. Updated as passes start and end; it does not decide them.
     let status = SyncGlowStatus()
     var onApply: (@MainActor (SyncLibrarySnapshot, String) -> Void)?
     /// The route is missing and the cache, if any, must not be the only copy the screen keeps.
@@ -129,7 +129,7 @@ final class LibrarySync {
     }
 
     /// The ChangeFeed socket will call this. The nudge carries no rows; the pull does.
-    /// The glow plays a shooting star, then the same pass as any other kick.
+    /// The glow plays one pulse along its edge, then the same pass as any other kick.
     func nudge() async {
         status.nudged()
         await kick(.nudge)
