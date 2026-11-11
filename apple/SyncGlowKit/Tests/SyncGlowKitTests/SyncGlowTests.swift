@@ -238,9 +238,9 @@ struct SyncGlowComposerTests {
         #expect(packed[SyncGlowUniforms.Index.dark] == 1)
     }
 
-    @Test func theBlockIsSixteenFloatsAndCarriesScaleAndAppearance() {
-        // `setFragmentBytes` wants a multiple of 16 bytes; the Metal struct is sixteen floats.
-        #expect(SyncGlowUniforms.Index.count == 16)
+    @Test func theBlockIsTwentyFloatsAndCarriesScaleAndAppearance() {
+        // `setFragmentBytes` wants a multiple of 16 bytes; the Metal struct is twenty floats.
+        #expect(SyncGlowUniforms.Index.count == 20)
         #expect((SyncGlowUniforms.Index.count * MemoryLayout<Float>.size) % 16 == 0)
         #expect(MemoryLayout<SyncGlowUniforms>.size == SyncGlowUniforms.Index.count * MemoryLayout<Float>.size)
         let uniforms = SyncGlowComposer.uniforms(
@@ -497,9 +497,9 @@ struct SyncGlowLookTests {
         for gone in ["atlas", "glyph", "starLayer", "kStar", "blur"] {
             #expect(!shader.contains(gone), "shader still has \(gone)")
         }
-        // Sixteen floats, in Index order.
+        // Twenty floats, in Index order.
         let fields = ["time", "state", "previous", "transition", "pending", "intensity", "reduced",
-                      "headroom", "lowPower", "eventAge", "width", "height", "pointScale", "dark", "pad0", "pad1"]
+                      "headroom", "lowPower", "eventAge", "width", "height", "pointScale", "dark", "activity", "touchX", "touchLevel", "scroll", "pad0", "pad1"]
         #expect(fields.count == SyncGlowUniforms.Index.count)
         let body = try #require(shader.range(of: "struct GlowUniforms {")).upperBound
         let end = try #require(shader.range(of: "};", range: body..<shader.endIndex)).lowerBound

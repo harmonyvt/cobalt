@@ -8,6 +8,9 @@ public final class SyncGlowStatus {
     public private(set) var state: SyncGlowState = .upToDate
     public private(set) var pendingCount: Int = 0
     public private(set) var lastEvent: SyncGlowEvent = .none
+    /// The owner's own saves and uploads (`SyncGlowActivity`): nil is none. It rides on top of every
+    /// state, so it never changes `state`.
+    public private(set) var activity: Double?
 
     @ObservationIgnored private var engineEnabled = true
     @ObservationIgnored private var routeActive = true
@@ -86,6 +89,21 @@ public final class SyncGlowStatus {
     public func nudged() {
         guard forced == nil else { return }
         beginTransient(.nudge)
+    }
+
+    /// A pull brought posts this device did not have. A refusal or a re-pull still playing is not
+    /// cut short for it, and neither is the offline line (nothing arrives while offline anyway).
+    public func arrived(count: Int) {
+        guard forced == nil, count > 0 else { return }
+        let now = clock()
+        if transientActive(at: now), transient == .refused || transient == .repull { return }
+        beginTransient(.arrived)
+    }
+
+    /// The owner's own saves and uploads, from `SyncGlowActivity.combine`. Nil when there are none.
+    public func setActivity(_ value: Double?) {
+        let next = value.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        if next != activity { activity = next }
     }
 
     public func reachability(_ up: Bool, pending: Int) {

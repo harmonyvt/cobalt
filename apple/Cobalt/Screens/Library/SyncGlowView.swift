@@ -54,7 +54,7 @@ struct SyncGlowBand: View {
             transitionStart = CACurrentMediaTime()
             // One-shot moments start their clock here. Leaving one lets its age keep growing so the
             // outgoing glow stays on its settled frame instead of snapping back to the start.
-            if new == .refused || new == .repull || new == .nudge {
+            if SyncGlowPace.isOneShot(new) {
                 eventStart = CACurrentMediaTime()
             }
         }
@@ -107,6 +107,7 @@ struct SyncGlowBand: View {
             pinEventAge: pinned,
             pinTime: pinTime,
             pending: status.pendingCount,
+            activity: status.activity,
             reduceMotion: reduceMotion,
             lowPower: lowPower,
             intensity: SyncGlowComposer.defaultIntensity,
@@ -125,6 +126,8 @@ struct SyncGlowDraw: Equatable {
     var pinEventAge: Float?
     var pinTime: Float?
     var pending: Int
+    /// The owner's own saves and uploads (`SyncGlowActivity`), nil when there are none.
+    var activity: Double?
     var reduceMotion: Bool
     var lowPower: Bool
     var intensity: Float
@@ -182,6 +185,7 @@ final class SyncGlowMTKView: MTKView {
             centre.addObserver(
                 self, selector: #selector(occlusionChanged(_:)),
                 name: NSWindow.didChangeOcclusionStateNotification, object: window)
+            SyncGlowInteraction.shared.attach(to: window)
         }
         reportShowing()
     }
@@ -196,6 +200,7 @@ final class SyncGlowMTKView: MTKView {
     #else
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        if let window { SyncGlowInteraction.shared.attach(to: window) }
         onShowingChange?(self, window != nil)
     }
     #endif
@@ -254,7 +259,7 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
     private let resources: SyncGlowResources
     private var drawState = SyncGlowDraw(
         state: .upToDate, previous: .upToDate, transitionStart: 0, eventStart: 0, pinEventAge: nil,
-        pinTime: nil, pending: 0, reduceMotion: false, lowPower: false, intensity: SyncGlowComposer.defaultIntensity,
+        pinTime: nil, pending: 0, activity: nil, reduceMotion: false, lowPower: false, intensity: SyncGlowComposer.defaultIntensity,
         dark: true, visible: true, sceneActive: true)
     /// The last settled frame that reached the screen. A frame from the middle of a crossfade is not one.
     private var lastStill: SyncGlowDraw?
@@ -264,6 +269,8 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
     /// False while the view has no window (iOS) or its window is minimised or fully covered (Mac).
     private var showing = true
     private let started = CACurrentMediaTime()
+    /// The band this renderer draws, for a wake from `SyncGlowInteraction` between SwiftUI updates.
+    private weak var view: SyncGlowMTKView?
 
     override init() {
         resources = SyncGlowResources.shared
@@ -273,6 +280,8 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
     func makeView() -> SyncGlowMTKView {
         let view = SyncGlowMTKView(frame: .zero, device: resources.device)
         view.delegate = self
+        self.view = view
+        SyncGlowInteraction.shared.register(self)
         view.onShowingChange = { [weak self] view, showing in
             self?.showingChanged(showing, in: view)
         }
@@ -310,6 +319,41 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         schedule(view)
     }
 
+    /// A finger, the pointer or a scroll started moving while this band rested.
+    func interactionWoke() {
+        guard let view else { return }
+        schedule(view)
+    }
+
+    /// Something on top of the state still moves: a save running, or the owner's hands.
+    private func live(at now: TimeInterval) -> Bool {
+        guard !drawState.reduceMotion else { return false }
+        if drawState.activity != nil { return true }
+        guard SyncGlowInteraction.shared.isLive(now: now), let view else { return false }
+        return SyncGlowInteraction.shared.point(in: view.window) != nil || SyncGlowInteraction.shared.scroll(now: now) > 0
+    }
+
+    /// The finger or pointer as this band sees it: x in points from its left edge (-1 when it is not
+    /// over the band's width), and how strongly it lights the line. A finger anywhere on the screen
+    /// lights it, more the nearer it is to the bottom; a hovering pointer only near the bottom.
+    private func touch(in view: MTKView, now: TimeInterval) -> (x: Float, level: Float) {
+        let interaction = SyncGlowInteraction.shared
+        let level = interaction.level(now: now)
+        guard level > 0, let point = interaction.point(in: view.window) else { return (-1, 0) }
+        let local = view.convert(point, from: nil)
+        let bounds = view.bounds
+        guard local.x >= 0, local.x <= bounds.width else { return (-1, 0) }
+        #if os(iOS)
+        let fromBottom = Double(bounds.maxY - local.y)
+        #else
+        let fromBottom = Double(view.isFlipped ? bounds.maxY - local.y : local.y)
+        #endif
+        let near: Double = interaction.isTouch
+            ? max(0.45, 1 - max(fromBottom, 0) / 260)
+            : max(0, 1 - max(fromBottom, 0) / 200)
+        return (Float(local.x), level * Float(near))
+    }
+
     private func crossfade(at now: TimeInterval) -> Float {
         SyncGlowComposer.transition(elapsed: now - drawState.transitionStart, reduceMotion: drawState.reduceMotion)
     }
@@ -321,7 +365,8 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         let fps = SyncGlowPace.framesPerSecond(
             state: drawState.state, transitioning: !SyncGlowPace.isSettled(transition: crossfade(at: CACurrentMediaTime())),
             reduceMotion: drawState.reduceMotion, lowPower: drawState.lowPower,
-            visible: drawState.visible && showing, sceneActive: drawState.sceneActive)
+            visible: drawState.visible && showing, sceneActive: drawState.sceneActive,
+            live: live(at: CACurrentMediaTime()))
         if let fps {
             view.preferredFramesPerSecond = fps
             if view.isPaused { view.isPaused = false }
@@ -374,13 +419,14 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         let settled = SyncGlowPace.isSettled(transition: fade)
         if let fps = SyncGlowPace.framesPerSecond(
             state: drawState.state, transitioning: !settled, reduceMotion: drawState.reduceMotion,
-            lowPower: drawState.lowPower, visible: true, sceneActive: true
+            lowPower: drawState.lowPower, visible: true, sceneActive: true, live: live(at: now)
         ) {
             if view.preferredFramesPerSecond != fps { view.preferredFramesPerSecond = fps }
         } else if !view.isPaused {
             // The crossfade into calm has just finished. This frame is the still; no more are scheduled.
             view.isPaused = true
         }
+        let hand = touch(in: view, now: now)
         let age = drawState.pinEventAge.map { TimeInterval($0) } ?? max(0, now - drawState.eventStart)
         let time = drawState.pinTime ?? Float(now - started)
         // Pixels per point, from the drawable against the view's own size, so the line and the light
@@ -391,7 +437,9 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
             time: time, state: drawState.state, previous: drawState.previous, transition: fade,
             pendingCount: drawState.pending, reduceMotion: drawState.reduceMotion, lowPower: drawState.lowPower,
             headroom: headroom(of: view), eventAge: age, width: Float(width), height: Float(height),
-            intensity: drawState.intensity, pointScale: pointScale, dark: drawState.dark)
+            intensity: drawState.intensity, pointScale: pointScale, dark: drawState.dark,
+            activity: drawState.activity, touchX: hand.x, touchLevel: hand.level,
+            scroll: SyncGlowInteraction.shared.scroll(now: now))
         var packed = uniforms.packed
 
         let pass = MTLRenderPassDescriptor()
@@ -410,7 +458,8 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         encoder.endEncoding()
         command.present(drawable)
         command.commit()
-        lastStill = settled ? drawState : nil
+        // A frame lit by a finger, a scroll or a running save is not the resting picture.
+        lastStill = settled && hand.level == 0 && uniforms.scroll == 0 && drawState.activity == nil ? drawState : nil
     }
 
     private func headroom(of view: MTKView) -> Float {
@@ -481,7 +530,12 @@ struct SyncGlowDebugCommands: Commands {
             Button("Refused") { model.library.debugSyncGlow(.refused, pending: 1) }
             Button("Full re-pull") { model.library.debugSyncGlow(.repull, pending: 0) }
             Button("Nudge") { model.library.debugSyncGlow(.nudge, pending: 0) }
+            Button("New posts") { model.library.debugSyncGlow(.arrived, pending: 0) }
             Button("Off") { model.library.debugSyncGlow(.off, pending: 0) }
+            Divider()
+            Button("Saving 40%") { model.library.debugSyncActivity(0.4) }
+            Button("Working, no progress") { model.library.debugSyncActivity(SyncGlowActivity.indeterminate) }
+            Button("No work") { model.library.debugSyncActivity(nil) }
             Divider()
             Button("Follow the engine") { model.library.debugSyncGlow(nil, pending: 0) }
         }
