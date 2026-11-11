@@ -6,6 +6,9 @@ import { arr, clock, cut, int, listText, num, plural, readPosts, rec, round, sec
 
 const Input = z.object({ id: z.string().min(1).max(200).optional(), query: z.string().min(1).max(200).optional() });
 
+// edits.list answered every project; so does this, up to a hundred
+const PROJECTS_MAX = 100;
+
 type Out = z.infer<typeof EditOut>;
 type Project = NonNullable<Out["project"]>;
 
@@ -112,6 +115,7 @@ function projectOf(got: Record<string, unknown>, read: PostsRead): Project {
         main,
         overlay,
         render,
+        timeline: got.timeline ?? null,
     };
 }
 
@@ -120,6 +124,8 @@ function projectText(p: Project): string {
     const clips = listText(
         `${plural(p.main.length, "clip")} on the main track:`,
         p.main.map((c) => `${cut(c.name, 60)} · ${clock(c.start)}–${clock(c.end)}${c.speed && c.speed !== 1 ? ` · ${c.speed}x` : ""}${c.muted ? " · muted" : ""}`),
+        p.main.length,
+        50,
     );
     const overlays = p.overlay.length === 0 ? "No overlays." : `${plural(p.overlay.length, "overlay")}: ${p.overlay.slice(0, 5).map((o) => `${cut(o.name, 30)} (${o.kind}) ${clock(o.start)}–${clock(o.end)}`).join("; ")}${p.overlay.length > 5 ? "; …" : ""}`;
     const r = p.render;
@@ -130,7 +136,9 @@ function projectText(p: Project): string {
           : r.status === "error"
             ? "The last render failed."
             : `Rendering${r.progress !== null ? ` (${Math.round(r.progress * 100)}%)` : ""}.`;
-    return [head, clips, overlays, render].join("\n");
+    // the timeline itself, so an agent can change it and hand it to edits_update (it has no names or pictures)
+    const timeline = p.timeline ? `Timeline (for edits_update):\n${JSON.stringify(p.timeline)}` : null;
+    return [head, clips, overlays, render, timeline].filter(Boolean).join("\n");
 }
 
 export const showEdit: AppTool<z.infer<typeof Input>> = {
@@ -159,7 +167,7 @@ export const showEdit: AppTool<z.infer<typeof Input>> = {
             const project = projectOf(got, read);
             return { text: projectText(project), structured: { view: "edit", project, projects: [] } satisfies Out };
         }
-        const shown = (list ?? []).slice(0, 24);
+        const shown = (list ?? []).slice(0, PROJECTS_MAX);
         const items = shown.map((p) => str(rec(p.render).item_id)).filter((x): x is string => !!x);
         const read = await readPosts(ctx.op, { files: items });
         const projects = shown.map((p) => {
@@ -182,7 +190,7 @@ export const showEdit: AppTool<z.infer<typeof Input>> = {
                     ? `No edit projects match “${input.query}”.`
                     : "There are no edit projects yet."
                 : `${plural(total, "edit project")}${input.query ? ` match “${input.query}”` : ""}; pick one by id.`;
-        const text = total === 0 ? count : listText(count, projects.map((p) => `${cut(p.title, 60)} · ${seconds(p.duration_s)} · ${p.rendered ? "rendered" : "not rendered"} · ${p.id}`), total);
+        const text = total === 0 ? count : listText(count, projects.map((p) => `${cut(p.title, 60)} · ${seconds(p.duration_s)} · ${p.rendered ? "rendered" : "not rendered"} · ${p.id}`), total, PROJECTS_MAX);
         return { text, structured: { view: "edit", project: null, projects } satisfies Out };
     },
 };

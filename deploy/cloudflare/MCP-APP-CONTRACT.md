@@ -55,7 +55,8 @@ The zod schemas there are the contract between tools and widgets. Rules:
 
 ## 4. Tools
 
-Existing tools keep their names (`library_search`, `links_create`, ...). App tool names must not collide with them.
+The older tools keep their names, except the twelve that the app tools replaced (section 6.3). App tool names must not
+collide with the listed older tools.
 
 | Tool | Kind | View | Built on |
 | - | - | - | - |
@@ -72,26 +73,42 @@ Existing tools keep their names (`library_search`, `links_create`, ...). App too
 
 Inputs (zod, all objects):
 
-- `search_library { query: string 1..200, kind?: "video"|"image"|"gallery", since?: ISO date, limit?: 1..24 = 12 }`
-- `show_post { id: string }`
+Since the migration (section 6.3) each tool also takes every option of the older tool it replaced; all added fields are
+optional and the defaults stay widget-sized.
+
+- `search_library { query?: string 1..200, kind?, since?, until? (ISO date or ms), source? (a host), within?, match?:
+  "meaning"|"text", limit?: 1..1000 = 12 }`: with no `query` it lists newest first (`mode: "list"`, `query: ""`);
+  `mode` is `"meaning"`, `"text"` or `"list"`. `within` (a collection, a link or a list of posts) is meaning search only:
+  it errors rather than being ignored while meaning search is off or failing. `match: "text"` forces the title/name/link/
+  caption substring match. At most 500 rows by meaning, 1000 by list. Items carry `score`, `why`, `said`, `source_link`
+  and `caption` (null when the search did not give them).
+- `show_post { id: string }`: every file with `id`, `role`, `name`, `url`, `share_url`, `private_url`, `private_file_url`
+  (what `library.post` gave the caller; a hidden post is an error and gives no URL).
 - `show_edit { id?: string, query?: string }`: an id, or a title to find; neither, or several matches: `project: null`
-  and the list in `projects`.
-- `list_collections { name?: string, limit?: 1..50 = 20 }`
-- `list_share_links { collection?: string, query?: string, limit?: 1..50 = 20 }`
-- `convert_to_webp { id: string, start?: number, end?: number, width?: 320|480 = 480, quality?: "low"|"med"|"high" = "med" }`:
-  without both `start` and `end` nothing runs and the answer is `state: "pick"` (for a source of 10 s or less the whole
-  clip is the default range and it runs).
-- `upload_files { files?: [{ name: string, title?: string }] 1..10, public?: boolean }`: no `files`: one link.
-- `create_share_link { ids: string[] 1..10, title?: string, private?: boolean, collection?: string }`
-- `save_link { url: http(s) URL, engine?: "auto"|"cobalt"|"ytdlp" = "auto" }`
-- `job_status { job: string }`
+  and the list in `projects` (up to 100). A project carries its raw `timeline` (what `edits_update` takes back; its
+  `sources`, with names and pictures, are not passed on).
+- `list_collections { name?: string, limit?: 1..500 = 20 }`: collections carry `link_ids` and `post_ids`.
+- `list_share_links { collection?: string, query?: string, limit?: 1..500 = 20 }`: links carry `post_ids` and a private
+  link's `file_urls`.
+- `convert_to_webp { id: string, start?: number, end?: number, crop?: {x,y,w,h}, width?: 320|480 = 480, quality?:
+  "low"|"med"|"high" = "med" }`: without both `start` and `end` nothing runs and the answer is `state: "pick"` (for a
+  source of 10 s or less the whole clip is the default range and it runs).
+- `upload_files { files?: [{ name?: string, title?: string }] 1..10, name?, title?, public?: boolean, queue?: boolean }`:
+  no `files`: one link; the flat `name` and `title` are the single-file form of `upload_begin`.
+- `create_share_link { ids: string[] | string (no tool limit; the op allows 10 files), title?: string, private?: boolean, collection?: string }`
+- `save_link { url: http(s) URL, engine?: "auto"|"cobalt"|"ytdlp" = "auto", items?, public?, title?, wait?: 0..60 = 8 }`
+  (`auto` leaves the op's engine unset); the answer carries `save_id` and `saves_left_today`.
+- `job_status { job: string, seconds?: 0..25 = 8 }`: besides state and post, `file_id`, `post_id`, `queue_ahead`, a finished
+  render's `file`, and for a helper (`agent:<id>`) its `agent` report.
 
 Every read tool has `annotations.readOnlyHint: true`; write tools `readOnlyHint: false`, `destructiveHint: false` (they
 only add things), and `openWorldHint: false` except `save_link`. `job_status` is visible to the model too, so a host
 with no widgets can follow a job. Every tool has `outputSchema` (from `output`) and a `title`.
 
-The **text** must stand alone: a count line, then up to 10 numbered rows with title, kind, id and (where there is one)
-the share link; for a job, what is running and what the user will get. No JSON dump in the text.
+The **text** must stand alone: a count line, then numbered rows with title, kind, id and (where there is one) the share
+link, one compact line each; 10 rows, or as many as the caller asked for with `limit` (cut at `MCP_RESULT_MAX` with the
+usual note); for a job, what is running and what the user will get. No JSON dump in the text (the one exception is a
+project's timeline, which an agent hands back to `edits_update`).
 
 Not in this step: deletes, status changes, rendering an edit, rerolling links (they stay on the existing tools, marked
 `destructiveHint`), and changing a timeline from the chat.
@@ -117,9 +134,9 @@ Not in this step: deletes, status changes, rendering an edit, rerolling links (t
 ## 6. Core: what a host sees
 
 - `initialize`: capabilities `tools` and `resources`; the instructions gain two lines on the app tools.
-- `tools/list`: the app tools first, then the existing tools, unchanged. `?tools=app` on the URL lists the app tools only
-  (for a host that does badly with ~100 tools). An app tool with a view carries `_meta.ui.resourceUri` (and the legacy
-  `_meta["ui/resourceUri"]`), as `registerAppTool` writes them.
+- `tools/list`: the app tools first, then the older tools that are not retired (6.3). `?tools=app` on the URL lists the
+  app tools only (and the retired names do not answer there). An app tool with a view carries `_meta.ui.resourceUri` (and
+  the legacy `_meta["ui/resourceUri"]`), as `registerAppTool` writes them; so do the older tools of 6.5.
 - `resources/list`, `resources/read`: the widgets, `mimeType: "text/html;profile=mcp-app"`, with `_meta.ui.csp`:
   `resourceDomains` = the media and share origins, `connectDomains` = the API origin (the upload PUT).
   `_meta.ui.domain`: only if a host needs it; if set, it is worked out per request from the URL the host connected to
@@ -127,8 +144,54 @@ Not in this step: deletes, status changes, rendering an edit, rerolling links (t
 - `PUT /mcp/upload/<token>` answers CORS for any origin (the token is the credential; a widget's sandbox origin is not
   knowable ahead of time), with its `OPTIONS` preflight.
 - Existing behaviour that must not change: auth and the 401/403/404/405/503 answers, the private link, batches, the
-  per-key thread, `look` returning images, result cutting at `MCP_RESULT_MAX`, tool names, descriptions, input schemas
-  and annotations of the existing tools, `test/route-snapshot.test.ts`.
+  per-key thread, `look` returning images, result cutting at `MCP_RESULT_MAX`, tool names, input schemas and annotations
+  of the older tools that stay listed, `test/route-snapshot.test.ts`.
+
+### 6.3 Retired tools
+
+The chat AI keeps every op; only the MCP stops listing twelve (`MCP_RETIRED_CALLS` in `src/mcp.ts`), because each duplicates
+an app tool and models kept picking the old one, which draws no widget. `src/mcp-app/retired.ts` maps each old tool name
+to its replacement; a `tools/call` of an old name is answered by that app tool (not listed, not offered under
+`?tools=app`), with the arguments mapped as below. Hosts (Claude, Claude Code, ChatGPT, Grok) only let the model call tools
+that `tools/list` shows, so the aliases help only raw JSON-RPC clients and scripts. Saved prompts, skills and permission
+allowlists (for example Claude Code's `mcp__Capystore__library_search`) that name an old tool must be changed to the new
+names. Delete the map when no script still calls the old names.
+
+| Old tool | App tool | Arguments |
+| - | - | - |
+| `library_search` | `search_library` | as they are |
+| `library_list` | `search_library` | as they are, `limit` 100 when absent (as library_list); a non-empty `query` adds `match: "text"` (library_list was the substring match), an empty one is dropped |
+| `library_post` | `show_post` | as they are |
+| `edits_get`, `edits_list` | `show_edit` | `{ id }`, `{}` |
+| `collections_list`, `links_list` | `list_collections`, `list_share_links` | `{ limit: 500 }` (they answered every row) |
+| `links_create` | `create_share_link` | as they are |
+| `make_webp` | `convert_to_webp` | as they are |
+| `upload_begin` | `upload_files` | as they are (the flat `name`, `title`, `public`, `queue`) |
+| `library_save` | `save_link` | as they are |
+| `jobs_wait` | `job_status` | as they are (`seconds` default 8, not 15) |
+
+The app tools still call the retired ops through `ctx.call`, so the registry, `openapi.json` and the route snapshot do not
+move.
+
+### 6.4 structuredContent on every tool
+
+Every other tool answers `structuredContent` too: the op's JSON when it is a plain object, `{ items: [...] }` for an array,
+none for a string or null (and none when the JSON is past `MCP_RESULT_MAX`, or for `look`, which answers images). The
+text is exactly the op's JSON as before. No `outputSchema` is advertised for them.
+
+### 6.5 Widgets after a write
+
+`src/mcp-app/follow.ts` gives some older write tools a widget, without touching their ops: the op runs and answers its
+text as always, then the view is built from a fresh read with the app tools' own helpers and sent as `structuredContent`;
+the tool carries `_meta.ui.resourceUri` in `tools/list`. Any failure of the read falls back to 6.4.
+
+| Tools | View | Built from |
+| - | - | - |
+| `collections_create`, `collections_add`, `collections_update` | `collections` | that collection, as `list_collections` builds it |
+| `links_update`; `links_private`, `links_rotate` on a gallery link | `links` | that link, `created` set to it |
+| `library_title`; `library_visibility`, `library_status` on one post | `post` | that post, as `show_post` builds it |
+
+A private link of a single file, several posts, or a hidden result have no view. Ask-tier tools keep `destructiveHint`.
 
 ## 7. Sign-in
 

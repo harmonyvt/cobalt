@@ -107,7 +107,8 @@ function render() {
             console.error(x);
         }
         wrap.appendChild(node);
-    } else if (!S.err) wrap.appendChild(skeleton(S.defView));
+    } else if (S.done && !S.err) wrap.appendChild(h("div", { class: "empty", text: "done." }));
+    else if (!S.err) wrap.appendChild(skeleton(S.defView));
     root.replaceChildren(wrap);
 }
 
@@ -122,9 +123,10 @@ bridge.on("result", (p) => {
         S.data = sc;
         S.err = null;
     } else {
+        // a write that worked but names no one thing to draw (no view): done, not an error
         S.data = null;
-        const text = ((p && p.content) || []).map((c) => c.text).filter(Boolean).join("\n");
-        S.err = { msg: text || "nothing to show yet" };
+        S.err = null;
+        S.done = true;
     }
     render();
 });

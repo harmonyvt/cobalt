@@ -1,11 +1,13 @@
 VIEWS.search = (d) => {
     const items = d.items || [];
-    const title = items.length || d.total ? `${plural(d.total == null ? items.length : d.total, "post")} · "${d.query || ""}"` : `nothing for "${d.query || ""}"`;
+    // mode "list": no query, the library newest first
+    const what = d.query ? ` · "${d.query}"` : "";
+    const title = items.length || d.total ? `${plural(d.total == null ? items.length : d.total, "post")}${what}` : d.query ? `nothing for "${d.query}"` : "nothing here";
     const right = [];
     if (d.mode === "text") right.push(h("span", { class: "tag", title: "matched on titles and links", text: "text match" }));
     const w = h("div", null, head(title, right));
     if (!items.length) {
-        w.appendChild(h("div", { class: "empty", text: "no posts found. try other words." }));
+        w.appendChild(h("div", { class: "empty", text: d.query ? "no posts found. try other words." : "no posts match those filters." }));
         return w;
     }
     const grid = h("div", { class: "thumbs" });

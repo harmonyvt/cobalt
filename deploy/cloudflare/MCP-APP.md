@@ -1,7 +1,7 @@
 # capystore in Claude, ChatGPT and Grok
 
 capystore's MCP server (`https://api.capybaraharmony.com/mcp`) is also an MCP App: besides the tools it always had, it
-has a few app tools whose answers Claude and ChatGPT draw as widgets (search grid, post card, editor timeline, webp
+has ten app tools whose answers Claude and ChatGPT draw as widgets (search grid, post card, editor timeline, webp
 maker, collections, share links, upload tray, save progress). A host that draws nothing still gets a full text answer.
 Design and wire contract: `MCP-APP-CONTRACT.md`.
 
@@ -12,8 +12,18 @@ Use the **private link** (settings > mcp in the app, or settings > instances on 
 the mode to "private" turns the plain `/mcp` URL off for everyone but that link; rotating the link cuts every host off
 at once. Treat the link like a password.
 
-A host that struggles with the full list (about 110 tools) can use the short list: add `?tools=app` to the URL
-(`.../mcp/k/<secret>?tools=app`) and only the app tools are offered.
+The tool list is the ten app tools first, then the older tools that do not overlap them (about 55). Twelve older tools
+that the app tools replaced (`library_search`, `library_list`, `library_post`, `edits_get`, `edits_list`,
+`collections_list`, `links_list`, `links_create`, `make_webp`, `upload_begin`, `library_save`, `jobs_wait`) are no longer
+listed, so a model picks the app tool and the host can draw a widget; each app tool takes every option those had. A call
+to an old name still works for raw JSON-RPC clients and scripts: the server answers it with the app tool. Claude, Claude Code,
+ChatGPT and Grok only call tools that are listed, so saved prompts, skills and permission allowlists that name an old tool
+must be changed to the new name. Every tool also answers
+`structuredContent`, and some older write tools (`collections_*`, `links_update`, `links_private`, `links_rotate`,
+`library_title`, `library_visibility`, `library_status`) end on a widget as well.
+
+A host that struggles with the full list can use the short list: add `?tools=app` to the URL
+(`.../mcp/k/<secret>?tools=app`) and only the app tools are offered (the old names do not answer there).
 
 Clients that send headers (Claude Code, the xAI API) can keep using `https://api.capybaraharmony.com/mcp` with
 `Authorization: Bearer <client key>`.

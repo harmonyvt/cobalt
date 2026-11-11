@@ -88,7 +88,8 @@ await step("initialize, tools/list and resources over HTTP", async () => {
     const { tools } = await client.listTools();
     const app = ["search_library", "show_post", "show_edit", "list_collections", "list_share_links", "convert_to_webp", "upload_files", "create_share_link", "save_link", "job_status"];
     eq(tools.slice(0, 10).map((t) => t.name), app, "ten app tools first");
-    ok(tools.length > 10 && tools.some((t) => t.name === "library_list"), "the older tools follow");
+    ok(tools.length > 10 && tools.some((t) => t.name === "library_title"), "the older tools follow");
+    ok(!["library_list", "library_search", "library_post", "upload_begin", "jobs_wait"].some((n) => tools.some((t) => t.name === n)), "the retired duplicates are not listed");
     for (const t of tools.slice(0, 10)) {
         ok(t.outputSchema?.type === "object", `${t.name} has an outputSchema`);
         if (t.name === "job_status") eq(t._meta, undefined, "job_status is an ordinary tool: no widget, not hidden from the model");

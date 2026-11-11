@@ -15,21 +15,21 @@ export function phaseOf(job: unknown): Phase {
     return { state: "running", progress, error: null };
 }
 
-export type MadePost = { post: PostSummary | null; share_url: string | null };
+export type MadePost = { post: PostSummary | null; share_url: string | null; hidden: boolean };
 
-// The post a job made, as a PostSummary, and its share page when it has one. Null post: not found, or hidden.
+// The post a job made, as a PostSummary, and its share page when it has one. Null post: not found, or hidden (then `hidden` is set).
 export async function madePost(ctx: AppToolCtx, postId: string | null, jobShare: string | null = null): Promise<MadePost> {
-    if (!postId) return { post: null, share_url: jobShare };
+    if (!postId) return { post: null, share_url: jobShare, hidden: false };
     let record: Rec;
     try {
         record = rec(await ctx.call("library.post", { id: postId }));
     } catch {
-        return { post: null, share_url: jobShare };
+        return { post: null, share_url: jobShare, hidden: false };
     }
-    if (record.hidden === true) return { post: null, share_url: null };
+    if (record.hidden === true) return { post: null, share_url: null, hidden: true };
     const read = await readPosts(ctx.op, { posts: [postId] });
     const post = summaryOf(record, read);
-    return { post, share_url: post ? (jobShare ?? read.posts.get(postId)?.share_url ?? null) : null };
+    return { post, share_url: post ? (jobShare ?? read.posts.get(postId)?.share_url ?? null) : null, hidden: false };
 }
 
 // A save is followed by its own id: `save:<studio session id>` (the registry has no job id for one).
