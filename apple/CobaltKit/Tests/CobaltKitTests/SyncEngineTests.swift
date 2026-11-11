@@ -791,7 +791,8 @@ struct SyncPullFailureTests {
         let sender = ScriptedSender(results: [.failure(SyncError.retryable("offline"))])
         let seen = Mutex<[SyncActivity]>([])
         let failures = Mutex<[String]>([])
-        let engine = SyncEngine(store: store, transport: transport, sender: sender)
+        // The op is stamped `t0`; on the default clock ("now") the outbox would drop it as expired.
+        let engine = SyncEngine(store: store, transport: transport, sender: sender, clock: { t0 })
         await engine.setCallbacks(
             snapshot: { _ in }, fallback: { Issue.record("a 503 with a copy must not fall back") },
             acknowledged: { _, _ in }, refused: { _, _ in },
