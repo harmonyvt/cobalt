@@ -57,6 +57,44 @@ body[data-preview="1"] #stage.off{background:#000}
 #hint{position:absolute;right:40px;bottom:40px;z-index:100001;background:rgba(0,0,0,.82);border-radius:12px;padding:12px 18px;font-size:18px;color:#e1e1e1;display:none}
 #hint b{color:#fff;font-weight:600}
 body[data-ambient="1"] #toast,body[data-ambient="1"] #hint,body[data-ambient="1"] #chaosrow,body[data-ambient="1"] #spcap{display:none!important}
+#np{position:absolute;right:40px;top:40px;z-index:100003;width:560px;box-sizing:border-box;background:rgba(0,0,0,.86);border:1px solid #383838;border-radius:18px;padding:18px;display:none;flex-direction:column;gap:14px;transition:opacity .4s}
+#np.in{animation:slide .45s cubic-bezier(.2,.9,.3,1) both}
+#np.paused{opacity:.5}
+#np.paused .bars i{animation:none;height:4px}
+#np .top{display:flex;gap:18px;align-items:center;min-width:0}
+#np .art{flex:none;width:96px;height:96px;border-radius:10px;background:#1b1b1b;object-fit:cover;display:block}
+#np .meta{min-width:0;display:flex;flex-direction:column;gap:4px;flex:1}
+#np .kick{font-size:15px;color:#1ed760;display:flex;align-items:center;gap:8px}
+.bars{display:inline-flex;gap:3px;align-items:flex-end;height:16px}
+.bars i{width:4px;height:4px;background:#1ed760;border-radius:1px;animation:eq 1s ease-in-out infinite}
+.bars i:nth-child(2){animation-delay:.2s}.bars i:nth-child(3){animation-delay:.4s}
+@keyframes eq{0%,100%{height:4px}50%{height:16px}}
+#nptitle{font-size:26px;color:#fff;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#npartist{font-size:19px;color:#c4c4c4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#npby{font-size:16px;color:#b69cff;display:none}
+#npprog{display:flex;align-items:center;gap:12px;font-size:15px;color:#8f8f8f}
+#npprog .track{flex:1;height:6px;border-radius:3px;background:#2c2c2c;overflow:hidden}
+#npfill{height:100%;width:0;background:#fff;border-radius:3px}
+#npnext{border-top:1px solid #2c2c2c;padding-top:12px;display:none;flex-direction:column;gap:10px}
+#npnext .h{font-size:15px;color:#8f8f8f;display:flex;justify-content:space-between}
+.qrow{display:flex;align-items:center;gap:12px;font-size:17px;min-width:0}
+.qrow .n{color:#8f8f8f;width:20px;flex:none}
+.qrow img,.qrow .noart{width:40px;height:40px;border-radius:6px;object-fit:cover;flex:none;background:#1b1b1b}
+.qrow .t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff}
+.qrow .t span{color:#9a9a9a}
+.qrow .src{font-size:12px;padding:2px 7px;border-radius:5px;background:#3a1416;color:#ff6b6b;flex:none}
+.qrow .w{color:#b69cff;font-size:15px;white-space:nowrap;flex:none}
+#np.compact{width:auto;max-width:620px;flex-direction:row;align-items:center;padding:12px 16px 12px 12px;border-radius:14px}
+#np.compact .art{width:56px;height:56px;border-radius:8px}
+#np.compact .kick,#np.compact #npprog,#np.compact #npnext,#np.compact #npby{display:none!important}
+#np.compact #nptitle{font-size:19px}
+#np.compact #npartist{font-size:15px}
+#np .cbars{display:none;margin-left:8px}
+#np.compact .cbars{display:inline-flex}
+#np.noup #npnext{display:none!important}
+body[data-only="np"] #stage .layer{display:none!important}
+body[data-only="np"] #np{left:24px;right:auto;top:24px}
+body[data-ambient="1"] #np{display:none!important}
 `;
 
 const LIVE_BODY = String.raw`
@@ -79,6 +117,20 @@ const LIVE_BODY = String.raw`
     <div class="col"><div id="tl1"></div><div id="tl2"></div></div>
   </div>
   <div id="hint" class="layer"></div>
+  <div id="np">
+    <div class="top">
+      <img id="npart" class="art" alt="">
+      <div class="meta">
+        <div class="kick"><span class="bars"><i></i><i></i><i></i></span>now playing</div>
+        <div id="nptitle"></div>
+        <div id="npartist"></div>
+        <div id="npby"></div>
+      </div>
+      <span class="bars cbars"><i></i><i></i><i></i></span>
+    </div>
+    <div id="npprog"><span id="npcur">0:00</span><div class="track"><div id="npfill"></div></div><span id="npdur">0:00</span></div>
+    <div id="npnext"><div class="h"><span>up next</span><span id="npcount"></span></div><div id="nprows"></div></div>
+  </div>
 </div>
 `;
 
@@ -87,11 +139,14 @@ const LIVE_JS = String.raw`
   'use strict';
   var body = document.body;
   var PREVIEW = body.getAttribute('data-preview') === '1' || /[?&]preview=1(&|$)/.test(location.search);
-  var CLEAR_BG = /[?&]bg=(clear|transparent)(&|$)/.test(location.search);
+  var CLEAR_BG = /[?&]bg=(clear|transparent)(&|$)/.test(location.search) || /[?&]only=nowplaying(&|$)/.test(location.search);
   // ambient: the wallpaper and screensaver mode. Silent, always playing (on air or not), only the tiles and the
   // spotlight: no toast, store hint or chaos pill. The spotlight caption bar is never drawn, ambient or not.
   var AMBIENT = /[?&]ambient=1(&|$)/.test(location.search);
   var SILENT = PREVIEW || AMBIENT;
+  // only=nowplaying: just the music card (its own OBS source), shown on air or not
+  var ONLY_NP = /[?&]only=nowplaying(&|$)/.test(location.search);
+  if (ONLY_NP) body.setAttribute('data-only', 'np');
   // 1080 logical px tall; as wide as the window's shape (1920 at 16:9, what OBS uses), so no window is letterboxed
   var W = 1920, H = 1080, MAX_SLOTS = 100, MAX_POOL = 2000;
   var BASE = location.pathname.replace(/\/+$/, '');
@@ -106,7 +161,8 @@ const LIVE_JS = String.raw`
 
   var DEFAULTS = {
     on_air: false, density: 30, tile_seconds: 10, tile_scale: 1, spotlight_auto: true,
-    spotlight_seconds: 20, sound: true, sound_all: false, play_through: false, video_max: 12, store_hint: true, store_url: null
+    spotlight_seconds: 20, sound: true, sound_all: false, play_through: false, video_max: 12, store_hint: true, store_url: null,
+    music_card: 'full', music_up_next: true, duck: true
   };
   var cfg = merge(DEFAULTS, {});
   var pool = [];
@@ -628,7 +684,7 @@ const LIVE_JS = String.raw`
     tl1.appendChild(m);
     var a = document.createElement('span');
     a.className = 'a';
-    a.textContent = action;
+    a.textContent = action === 'song' ? 'song request' : action;
     tl1.appendChild(a);
     var detail = typeof t.detail === 'string' ? t.detail : '';
     tl2.textContent = detail;
@@ -670,6 +726,7 @@ const LIVE_JS = String.raw`
   // ---- applying settings and state ------------------------------------------------------------------------------
   function applyCfg(prev) {
     var onAir = !!cfg.on_air;
+    if (typeof loadMusic === 'function') setTimeout(function () { loadMusic(true); }, 0);
     stage.className = (onAir ? '' : 'off') + (CLEAR_BG ? ' clear' : '');
     if (!onAir) {
       for (var i = 0; i < slots.length; i++) if (busy(slots[i])) hideSlot(slots[i]);
@@ -702,13 +759,14 @@ const LIVE_JS = String.raw`
     var prev = cfg;
     var stg = st && st.stage && typeof st.stage === 'object' ? st.stage : {};
     cfg = norm(merge(DEFAULTS, stg));
-    var list = st && Array.isArray(st.pool) ? st.pool : [];
+    // the music card on its own loads no tiles and no spotlight
+    var list = st && Array.isArray(st.pool) && !ONLY_NP ? st.pool : [];
     var next = [];
     for (var i = 0; i < list.length && next.length < MAX_POOL; i++) if (validItem(list[i])) next.push(list[i]);
     pool = next;
     var ch = st && (st.chaos !== undefined ? st.chaos : (st.chaos_until !== undefined ? { until: st.chaos_until, by: st.chaos_by } : stg.chaos_until !== undefined ? { until: stg.chaos_until, by: stg.chaos_by } : undefined));
     if (ch && typeof ch === 'object') takeChaos(ch.until, ch.by); else if (typeof ch === 'number') takeChaos(ch, '');
-    var sp = st && st.spotlight;
+    var sp = st && !ONLY_NP ? st.spotlight : null;
     if (sp && validItem(sp.item) && sp.item.kind === 'video' && cfg.on_air) {
       var key = sp.item.id + ':' + num(sp.at, 0);
       if (spot && spot.item.id + ':' + spot.at === key) {
@@ -825,7 +883,7 @@ const LIVE_JS = String.raw`
         loadState();
         break;
       case 'summon':
-        if (cfg.on_air && ev.spotlight) setSpot(ev.spotlight);
+        if (cfg.on_air && ev.spotlight && !ONLY_NP) setSpot(ev.spotlight);
         showToast(ev.toast);
         break;
       case 'chaos':
@@ -855,14 +913,128 @@ const LIVE_JS = String.raw`
       case 'rotated':
         stop();
         break;
+      case 'music':
+        loadMusic(true);
+        break;
       default:
         break;
     }
   }
 
+  // ---- now playing, up next, turning the music down (section 56) ---------------------------------------------------
+  var npEl = $('np'), npArt = $('npart'), npTitle = $('nptitle'), npArtist = $('npartist'), npBy = $('npby');
+  var npCur = $('npcur'), npDur = $('npdur'), npFill = $('npfill'), npNext = $('npnext'), npRows = $('nprows'), npCount = $('npcount');
+  var music = null, musicBusy = false, musicNext = 0, musicKey = '', ducked = false, duckOffSince = 0;
+  function musicWanted() {
+    if (stopped || AMBIENT) return false;
+    if (!ONLY_NP && !cfg.on_air) return false;
+    return cfg.music_card !== 'off' || (!ONLY_NP && cfg.music_up_next);
+  }
+  function mmss(ms) {
+    var s = Math.max(0, Math.floor(num(ms, 0) / 1000));
+    return Math.floor(s / 60) + ':' + (s % 60 < 10 ? '0' : '') + (s % 60);
+  }
+  function loadMusic(force) {
+    if (!musicWanted()) { drawMusic(); return; }
+    if (musicBusy || (!force && Date.now() < musicNext)) return;
+    musicBusy = true;
+    var done = function (wait) { musicBusy = false; musicNext = Date.now() + wait; };
+    var req;
+    try { req = fetch(BASE + '/music', { cache: 'no-store' }); } catch (e) { done(15000); return; }
+    req.then(function (res) { return res.ok ? res.json() : null; }).then(function (m) {
+      if (!m || typeof m !== 'object') { done(15000); return; }
+      music = m;
+      music.got = Date.now();
+      done(m.connected ? 5000 : 30000);
+      drawMusic();
+    }).catch(function () { done(15000); });
+  }
+  function rowOf(n, s) {
+    var r = document.createElement('div');
+    r.className = 'qrow';
+    var k = document.createElement('span'); k.className = 'n'; k.textContent = String(n); r.appendChild(k);
+    if (typeof s.art_url === 'string' && /^https:\/\//.test(s.art_url)) {
+      var im = document.createElement('img'); im.src = s.art_url; im.alt = ''; r.appendChild(im);
+    } else { var na = document.createElement('div'); na.className = 'noart'; r.appendChild(na); }
+    var t = document.createElement('div'); t.className = 't'; t.textContent = typeof s.title === 'string' ? s.title : '';
+    if (s.artist) { var sa = document.createElement('span'); sa.textContent = ' · ' + s.artist; t.appendChild(sa); }
+    r.appendChild(t);
+    if (s.source === 'youtube') { var y = document.createElement('span'); y.className = 'src'; y.textContent = 'from youtube'; r.appendChild(y); }
+    var w = document.createElement('span'); w.className = 'w'; w.textContent = s.by ? '@' + s.by : ''; r.appendChild(w);
+    return r;
+  }
+  function drawMusic() {
+    var np = music && music.connected ? music.now_playing : null;
+    var list = music && music.connected && Array.isArray(music.up_next) ? music.up_next : [];
+    var card = typeof cfg.music_card === 'string' ? cfg.music_card : 'full';
+    var showUp = !ONLY_NP && cfg.music_up_next && card === 'full' && list.length > 0;
+    if (!musicWanted() || !np || card === 'off' || typeof np.title !== 'string') {
+      npEl.style.display = 'none';
+      musicKey = '';
+      return;
+    }
+    npEl.className = (card === 'compact' ? 'compact' : '') + (np.playing ? '' : ' paused') + (showUp ? '' : ' noup');
+    var key = np.uri + '|' + np.title;
+    if (key !== musicKey) {
+      npTitle.textContent = np.title;
+      npArtist.textContent = np.artist || '';
+      if (typeof np.art_url === 'string' && /^https:\/\//.test(np.art_url)) { npArt.src = np.art_url; npArt.style.visibility = 'visible'; }
+      else { npArt.removeAttribute('src'); npArt.style.visibility = 'hidden'; }
+      if (npEl.style.display !== 'flex') { npEl.style.display = 'flex'; restartAnim(npEl, 'in', 0); }
+      musicKey = key;
+    }
+    npEl.style.display = 'flex';
+    npBy.textContent = np.by ? 'requested by @' + np.by : '';
+    npBy.style.display = np.by ? 'block' : 'none';
+    while (npRows.firstChild) npRows.removeChild(npRows.firstChild);
+    if (showUp) {
+      for (var i = 0; i < list.length && i < 5; i++) npRows.appendChild(rowOf(i + 1, list[i]));
+      npCount.textContent = list.length + (music.queue_max ? ' of ' + music.queue_max : '');
+      npNext.style.display = 'flex';
+    } else npNext.style.display = 'none';
+    progressTick();
+  }
+  function progressTick() {
+    var np = music && music.connected ? music.now_playing : null;
+    if (!np || npEl.style.display === 'none') return;
+    var dur = num(np.duration_ms, 0);
+    var at = num(np.progress_ms, 0) + (np.playing ? Date.now() - num(music.got, Date.now()) : 0);
+    if (dur > 0) at = Math.min(at, dur);
+    npCur.textContent = mmss(at);
+    npDur.textContent = mmss(dur);
+    npFill.style.width = (dur > 0 ? Math.round(1000 * at / dur) / 10 : 0) + '%';
+    // the song should have ended: ask again rather than wait for the 5 s
+    if (np.playing && dur > 0 && at >= dur) loadMusic(false);
+  }
+  // A summoned (or owner-picked) video playing with sound turns the owner's Spotify down; it comes back up a moment
+  // after the spotlight lets go. The server remembers the volume and lifts a duck the canvas never ended.
+  function wantDuck() {
+    return !!(cfg.duck && cfg.on_air && !ONLY_NP && !SILENT && spot && spot.action && spot.isVideo && audible());
+  }
+  function sendDuck(on) {
+    ducked = on;
+    try {
+      fetch(BASE + '/duck', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: on }), keepalive: true }).catch(function () {});
+    } catch (e) {}
+  }
+  function duckTick() {
+    var w = wantDuck();
+    if (w) { duckOffSince = 0; if (!ducked) sendDuck(true); return; }
+    if (!ducked) return;
+    if (!duckOffSince) duckOffSince = Date.now();
+    if (Date.now() - duckOffSince > 1200) { duckOffSince = 0; sendDuck(false); }
+  }
+  window.addEventListener('pagehide', function () {
+    if (!ducked) return;
+    try { navigator.sendBeacon(BASE + '/duck', JSON.stringify({ on: false })); } catch (e) {}
+    ducked = false;
+  });
+
   fit();
   window.addEventListener('resize', fit);
   setInterval(spotTick, 500);
+  setInterval(duckTick, 500);
+  setInterval(function () { loadMusic(false); progressTick(); }, 1000);
   setInterval(chaosTick, 250);
   setInterval(loadState, 5 * 60 * 1000);
   loadState();
@@ -962,6 +1134,19 @@ footer{color:#8f8f8f;font-size:12.5px;border-top:1px solid #282828;padding-top:1
 #bar .b{color:#8f8f8f;font-size:12.5px}
 #bar .x{width:44px;height:44px;border-radius:11px;border:0;background:#282828;color:#e1e1e1;display:inline-flex;align-items:center;justify-content:center}
 .gone{padding:40px 16px;color:#8f8f8f}
+.npw{background:#191919;border-radius:16px;padding:12px;display:flex;gap:12px;align-items:center}
+.npw img,.mrow img,.noart{width:52px;height:52px;border-radius:8px;object-fit:cover;background:#0f0f0f;flex:none}
+.npw .k{font-size:11.5px;color:#1ed760}
+.npw .t{font-weight:500;word-break:break-word}
+.npw .s{font-size:12.5px;color:#8f8f8f;word-break:break-word}
+.mrow{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid #282828;font-size:13px}
+.mrow:last-child{border-bottom:0}
+.mrow img,.mrow .noart{width:36px;height:36px;border-radius:6px}
+.mrow .tt{flex:1;min-width:0;word-break:break-word}
+.mrow .tt .s{color:#8f8f8f;font-size:12px}
+.mrow .w{color:#b69cff;font-size:12px}
+.how{background:#191919;border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:8px;font-size:13px;line-height:1.5}
+.how code{background:#0f0f0f;padding:2px 6px;border-radius:5px;font-size:12px;word-break:break-all}
 `;
 
 const TWITCH_SVG =
@@ -990,6 +1175,19 @@ const STORE_BODY_TOP = String.raw`
   <section aria-labelledby="rw" id="rewards" hidden>
     <h2 id="rw">rewards</h2>
     <div class="grid" id="rewardlist"></div>
+  </section>
+
+  <section aria-labelledby="music" id="musicsec" hidden>
+    <h2 id="music">music</h2>
+    <div class="npw" id="npw" hidden></div>
+    <div class="how" id="songhow" hidden>
+      <div>redeem <b style="color:#b69cff">song request</b> in twitch chat and type one of:</div>
+      <div><code>open.spotify.com/track/…</code></div>
+      <div><code>youtu.be/…</code> <span class="muted">(found on spotify by its title)</span></div>
+      <div><code>blue hour tidepool</code> <span class="muted">(the song and artist)</span></div>
+    </div>
+    <h2 id="upnexth" hidden>up next</h2>
+    <div class="mine" id="upnext" hidden></div>
   </section>
 
   <section aria-labelledby="mine" id="minesec" hidden>
@@ -1081,8 +1279,10 @@ const STORE_JS = String.raw`
     chaos: '100 things on screen at once for 30 seconds.',
     shuffle: 'wipe the canvas and refill it from the pool.',
     pin: 'keep the current spotlight up for 2 more minutes.',
-    skip: 'clear the spotlight.'
+    skip: 'clear the spotlight.',
+    song: 'paste a spotify or youtube link, or type the song and artist. it joins the queue and plays on stream.'
   };
+  var songOn = false;
 
   // ---- rewards -----------------------------------------------------------------------------------------------
   function loadRewards() {
@@ -1105,6 +1305,10 @@ const STORE_JS = String.raw`
         box.appendChild(c);
       }
       $('rewards').hidden = list.length === 0;
+      songOn = false;
+      for (var j = 0; j < list.length; j++) if (list[j].action === 'song') songOn = true;
+      $('songhow').hidden = !songOn;
+      drawMusic();
     }).catch(function () {});
   }
 
@@ -1262,7 +1466,50 @@ const STORE_JS = String.raw`
 
   @@TWITCH@@
 
+  // ---- music (section 56) -------------------------------------------------------------------------------------
+  var music = null;
+  function art(u) {
+    if (typeof u === 'string' && /^https:\/\//.test(u)) { var im = el('img'); im.src = u; im.alt = ''; return im; }
+    return el('div', 'noart');
+  }
+  function drawMusic() {
+    var np = music && music.connected ? music.now_playing : null;
+    var list = music && music.connected && Array.isArray(music.up_next) ? music.up_next : [];
+    var npw = $('npw');
+    npw.innerHTML = '';
+    if (np && typeof np.title === 'string') {
+      npw.appendChild(art(np.art_url));
+      var col = el('div');
+      col.appendChild(el('div', 'k', np.playing ? 'now playing' : 'paused'));
+      col.appendChild(el('div', 't', np.title));
+      col.appendChild(el('div', 's', (np.artist || '') + (np.by ? ' · @' + np.by : '')));
+      npw.appendChild(col);
+    }
+    npw.hidden = !(np && typeof np.title === 'string');
+    var box = $('upnext');
+    box.innerHTML = '';
+    for (var i = 0; i < list.length; i++) {
+      var r = el('div', 'mrow');
+      r.appendChild(art(list[i].art_url));
+      var tt = el('div', 'tt');
+      tt.appendChild(el('div', '', String(list[i].title || '')));
+      tt.appendChild(el('div', 's', String(list[i].artist || '') + (list[i].source === 'youtube' ? ' · from youtube' : '')));
+      r.appendChild(tt);
+      r.appendChild(el('span', 'w', list[i].by ? '@' + list[i].by : ''));
+      box.appendChild(r);
+    }
+    box.hidden = $('upnexth').hidden = list.length === 0;
+    $('musicsec').hidden = npw.hidden && !songOn && list.length === 0;
+  }
+  function loadMusic() {
+    getJson('/store/api/music').then(function (r) {
+      if (r.status === 200 && r.json) { music = r.json; drawMusic(); }
+    }).catch(function () {});
+  }
+  setInterval(function () { if (!document.hidden) loadMusic(); }, 15000);
+
   loadRewards();
+  loadMusic();
   loadPool(true);
 })();
 `;

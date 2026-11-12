@@ -1055,6 +1055,40 @@ A 1080p stream canvas that OBS loads as a Browser Source, a public viewer store,
 - The daily cron deletes redemptions older than 30 days.
 - Logs: `[stage]` lines in Workers Logs (`cf observability telemetry query ... "datasets":["cloudflare-workers"]`).
 
+### Music: now playing, song requests, turning the music down (`APP-API-CONTRACT.md` section 56)
+
+The owner's Spotify is the player: the canvas and store show what it plays, a sixth reward "song request" adds a
+viewer's Spotify link, YouTube link (matched on Spotify by its title) or words to its queue, and the canvas turns it
+down while a summoned video with sound has the spotlight. Code: `src/stage-spotify.ts` (Spotify and YouTube calls,
+input parsing), `src/stage-music.ts` (connect, now playing, up next, the reward, duck); D1 `stage_spotify`,
+`stage_songs`, migration 0039. Spotify needs Premium (its development-mode rule since February 2026, and the queue and
+volume calls need it anyway).
+
+Owner steps (once):
+
+1. Apply migration 0039 (before the API deploy).
+2. At <https://developer.spotify.com/dashboard> press **Create app**: any name (e.g. `capystore studio`), redirect URI
+   `https://studio.capybaraharmony.com/spotify/callback`, tick **Web API**, save. Open **Settings** for the client id
+   and the client secret.
+3. Add both to the secrets file without them showing on screen (paste each at its prompt). The keys must be in the file
+   before the next API deploy even if empty, or `cf deploy` refuses:
+
+       python3 - "$HOME/.config/cobalt/secrets.json" <<'PY'
+       import getpass, json, sys
+       p = sys.argv[1]
+       d = json.load(open(p))
+       d["SPOTIFY_CLIENT_ID"] = getpass.getpass("spotify client id: ").strip()
+       d["SPOTIFY_CLIENT_SECRET"] = getpass.getpass("spotify client secret: ").strip()
+       json.dump(d, open(p, "w"), indent=2)
+       PY
+
+4. Deploy the API. In the app's studio tab, **connect spotify** (sign in, allow), then turn **song requests** on (the
+   reward starts off). Play something on Spotify on the Mac: the canvas card appears within 5 s.
+
+Notes: requests need an open Spotify app (else "spotify isn't on, points refunded"); Spotify lets the studio change
+volume only on desktop players, not phones; a request never heard within 3 hours leaves up next; "skip current" skips
+whatever Spotify is playing. The card alone is `…/live/<token>?only=nowplaying` for its own OBS source.
+
 ## Old Discord links (`APP-API-CONTRACT.md` section 19.6)
 
 Discord answers 404 to an attachment link without its `?ex=&is=&hm=` signature, or with an expired one. With a bot token the

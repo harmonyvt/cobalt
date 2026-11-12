@@ -227,6 +227,11 @@ export default defineConfig({
 			TWITCH_CLIENT_ID: bindings.secret(),
 			TWITCH_CLIENT_SECRET: bindings.secret(),
 			TWITCH_EVENTSUB_SECRET: bindings.secret(),
+			// Stage music (APP-API-CONTRACT.md section 56): the Spotify app's id and secret from developer.spotify.com (redirect
+			// URI https://studio.capybaraharmony.com/spotify/callback), SECRETS from ~/.config/cobalt/secrets.json. Declared,
+			// so the keys must be in the file; empty leaves the stage without music (`features.stage_spotify` false).
+			SPOTIFY_CLIENT_ID: bindings.secret(),
+			SPOTIFY_CLIENT_SECRET: bindings.secret(),
 			// Old Discord attachment links (APP-API-CONTRACT.md section 19.6): a Discord bot token, a SECRET from
 			// ~/.config/cobalt/secrets.json. The Durable Object hands it to the container's helper (envVars), which
 			// asks Discord to sign an unsigned or expired attachment link again. Empty: Discord links save as before and

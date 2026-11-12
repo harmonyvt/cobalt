@@ -70,13 +70,15 @@ describe("connecting (30.8)", () => {
 
         // one reward per action, as the rows say
         const rewards = [...w.twitch.rewards.values()];
-        expect(rewards.map((r) => r.title)).toEqual(["summon", "chaos", "shuffle", "pin", "skip"]);
+        expect(rewards.map((r) => r.title)).toEqual(["summon", "chaos", "shuffle", "pin", "skip", "song request"]);
         expect(rewards.map((r) => [r.cost, r.cooldown, r.is_enabled, r.input])).toEqual([
             [500, 30, true, true],
             [2000, 300, true, false],
             [1000, 120, true, false],
             [300, 60, false, false],
             [200, 15, true, false],
+            // section 56: off until the owner turns it on, and it takes the viewer's text
+            [300, 30, false, true],
         ]);
         const posts = w.twitch.called("POST", "/custom_rewards");
         for (const p of posts) expect(p.body.should_redemptions_skip_request_queue).toBe(false);
@@ -190,7 +192,7 @@ describe("connecting (30.8)", () => {
         await w.settle();
         const r = await w.owner("GET", "/stage");
         expect(r.body.stage.twitch.status).toBe("ok");
-        expect(w.twitch.rewards.size).toBe(5);
+        expect(w.twitch.rewards.size).toBe(6);
     });
 
     it("a title Twitch already has (not ours) gets the 'capystore ' prefix", async () => {
@@ -199,9 +201,9 @@ describe("connecting (30.8)", () => {
         w.twitch.takenTitles.add("pin");
         w.twitch.takenTitles.add("skip");
         await w.connectTwitch();
-        expect([...w.twitch.rewards.values()].map((r) => r.title).sort()).toEqual(["capystore pin", "capystore skip", "capystore summon", "chaos", "shuffle"]);
+        expect([...w.twitch.rewards.values()].map((r) => r.title).sort()).toEqual(["capystore pin", "capystore skip", "capystore summon", "chaos", "shuffle", "song request"]);
         const r = await w.owner("GET", "/stage");
-        expect(r.body.rewards.map((x: any) => x.title)).toEqual(["capystore summon", "chaos", "shuffle", "capystore pin", "capystore skip"]);
+        expect(r.body.rewards.map((x: any) => x.title)).toEqual(["capystore summon", "chaos", "shuffle", "capystore pin", "capystore skip", "song request"]);
     });
 
     it("rewards this app already made are adopted on a reconnect, not duplicated", async () => {
@@ -229,7 +231,7 @@ describe("connecting (30.8)", () => {
         await w.settle();
         expect((await w.owner("GET", "/stage")).body.stage.twitch.status).toBe("ok");
         expect(w.twitch.subs).toHaveLength(1);
-        expect(w.twitch.rewards.size).toBe(5);
+        expect(w.twitch.rewards.size).toBe(6);
     });
 
     it("connecting a different channel drops the old channel's subscription and rewards", async () => {
@@ -239,7 +241,7 @@ describe("connecting (30.8)", () => {
         await w.connectTwitch();
         expect(w.one("SELECT broadcaster_id FROM stage_twitch").broadcaster_id).toBe("b123");
         expect(w.twitch.subs).toHaveLength(1);
-        expect(w.twitch.rewards.size).toBe(5);
+        expect(w.twitch.rewards.size).toBe(6);
     });
 });
 
@@ -789,7 +791,7 @@ describe("reward edits adopt what is on the channel (30.8, 30.10)", () => {
         w.db.raw.prepare("UPDATE stage_rewards SET twitch_reward_id = NULL, synced = 0 WHERE action = 'chaos'").run();
         const r = await w.owner("PATCH", "/stage/rewards/chaos", { cost: 2500 });
         expect(r.body.reward).toMatchObject({ action: "chaos", cost: 2500, synced: true, title: "chaos" });
-        expect(w.twitch.rewards.size).toBe(5);
+        expect(w.twitch.rewards.size).toBe(6);
         expect(w.rewardId("chaos")).toBe(id);
         expect(w.twitch.rewards.get(id)!.cost).toBe(2500);
     });
@@ -806,7 +808,7 @@ describe("reward edits adopt what is on the channel (30.8, 30.10)", () => {
         w.twitch.failList = false;
         await w.owner("GET", "/stage");
         await w.settle();
-        expect(w.twitch.rewards.size).toBe(5);
+        expect(w.twitch.rewards.size).toBe(6);
         expect((await w.owner("GET", "/stage")).body.stage.twitch.status).toBe("ok");
     });
 });

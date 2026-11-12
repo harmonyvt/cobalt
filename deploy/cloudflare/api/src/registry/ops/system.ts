@@ -1,6 +1,7 @@
 // System routes as ops (APP-API-CONTRACT.md 33.12, plan thread T7): app discovery, telemetry, the upstream cobalt API
 // (POST /, GET /, GET /tunnel) and the webp service (POST /webp, GET /webp/<id>, DELETE /media/<name>). All tier hidden:
 // owner and system plumbing the chat AI never sees. Each wraps the code worker.ts ran for it, unchanged.
+import { spotifyConfigFrom } from "../../stage-spotify";
 import * as z from "zod";
 import { capabilities } from "../../app-routes";
 import { livePushConfigured } from "../../apns";
@@ -101,6 +102,8 @@ export const capabilitiesOp = defineOp({
             !!env.IMAGES,
             // section 49: the yt-dlp box
             !!env.YTDLP,
+            // section 56: the stage's music
+            spotifyConfigFrom(env) !== null,
         );
         return { status: r.status, body: r.body };
     },

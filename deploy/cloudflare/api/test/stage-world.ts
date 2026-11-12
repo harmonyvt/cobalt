@@ -54,6 +54,119 @@ export class FakeRoom implements RoomPort {
     }
 }
 
+// ---- the fake Spotify (and YouTube's oEmbed) -------------------------------------------------------------------
+
+export const SPOTIFY_ID = "spotify-client-id";
+export const SPOTIFY_SECRET = "spotify-client-secret";
+export type FakeTrack = { id: string; name: string; artist: string; duration_ms: number; explicit?: boolean };
+export const spTrack = (id: string, name: string, artist: string, duration_ms = 200_000, explicit = false): FakeTrack => ({ id: id.padEnd(22, "x").slice(0, 22), name, artist, duration_ms, explicit });
+
+export class FakeSpotify {
+    calls: { method: string; url: string; body: any }[] = [];
+    tracks = new Map<string, FakeTrack>();
+    // what the search answers, by the exact q (else the first track whose name is in q, else nothing)
+    searches = new Map<string, string>();
+    youtube = new Map<string, { title: string; author_name: string }>();
+    playing: { id: string; progress_ms: number; is_playing: boolean } | null = null;
+    device: { id: string; volume_percent: number; supports_volume: boolean } | null = { id: "dev-1", volume_percent: 70, supports_volume: true };
+    queued: string[] = [];
+    volumes: number[] = [];
+    nexts = 0;
+    premium = true;
+    refreshFails = false;
+    code = "sp-code";
+    scope = "user-read-currently-playing user-read-playback-state user-modify-playback-state";
+    valid = new Set<string>(["sp-at-1"]);
+    private n = 1;
+
+    add(t: FakeTrack) {
+        this.tracks.set(t.id, t);
+        return t;
+    }
+    private raw(t: FakeTrack) {
+        return {
+            type: "track",
+            id: t.id,
+            uri: `spotify:track:${t.id}`,
+            name: t.name,
+            duration_ms: t.duration_ms,
+            explicit: !!t.explicit,
+            artists: [{ name: t.artist }],
+            album: { images: [{ url: `https://i.scdn.co/image/${t.id}-640`, width: 640 }, { url: `https://i.scdn.co/image/${t.id}-300`, width: 300 }, { url: `https://i.scdn.co/image/${t.id}-64`, width: 64 }] },
+        };
+    }
+    private json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    private playerErr = (status: number, reason: string) => this.json(status, { error: { status, message: reason.toLowerCase(), reason } });
+
+    fetch = async (input: string, init: RequestInit = {}): Promise<Response> => {
+        const url = new URL(input);
+        const method = (init.method ?? "GET").toUpperCase();
+        const raw = typeof init.body === "string" ? init.body : "";
+        this.calls.push({ method, url: input, body: raw ? Object.fromEntries(new URLSearchParams(raw)) : null });
+        if (url.host === "www.youtube.com" && url.pathname === "/oembed") {
+            const v = new URL(url.searchParams.get("url")!).searchParams.get("v")!;
+            const y = this.youtube.get(v);
+            return y ? this.json(200, { ...y, type: "video" }) : new Response("Not Found", { status: 404 });
+        }
+        if (url.host === "accounts.spotify.com" && url.pathname === "/api/token") {
+            const b = Object.fromEntries(new URLSearchParams(raw));
+            if (new Headers(init.headers).get("authorization") !== `Basic ${btoa(`${SPOTIFY_ID}:${SPOTIFY_SECRET}`)}`) return this.json(400, { error: "invalid_client" });
+            if (b.grant_type === "authorization_code") {
+                if (b.code !== this.code) return this.json(400, { error: "invalid_grant" });
+                return this.json(200, { access_token: "sp-at-1", refresh_token: "sp-rt-1", expires_in: 3600, scope: this.scope, token_type: "Bearer" });
+            }
+            if (b.grant_type === "refresh_token") {
+                if (this.refreshFails) return this.json(400, { error: "invalid_grant", error_description: "Refresh token revoked" });
+                const at = `sp-at-${++this.n}`;
+                this.valid.add(at);
+                return this.json(200, { access_token: at, expires_in: 3600, scope: this.scope });
+            }
+            return this.json(400, { error: "unsupported_grant_type" });
+        }
+        if (url.host !== "api.spotify.com") return new Response("no", { status: 599 });
+        const auth = new Headers(init.headers).get("authorization") ?? "";
+        if (!this.valid.has(auth.replace(/^Bearer /, ""))) return this.json(401, { error: { status: 401, message: "The access token expired" } });
+        const path = url.pathname.replace(/^\/v1/, "");
+        if (path === "/me") return this.json(200, { id: "harmony", display_name: "Harmony", product: this.premium ? "premium" : "free" });
+        if (path === "/me/player/currently-playing") {
+            if (!this.playing) return new Response(null, { status: 204 });
+            const t = this.tracks.get(this.playing.id)!;
+            return this.json(200, { is_playing: this.playing.is_playing, progress_ms: this.playing.progress_ms, item: this.raw(t), currently_playing_type: "track" });
+        }
+        if (path === "/me/player" && method === "GET") return this.device ? this.json(200, { device: this.device, is_playing: !!this.playing }) : new Response(null, { status: 204 });
+        if (path.startsWith("/tracks/")) {
+            const t = this.tracks.get(decodeURIComponent(path.slice("/tracks/".length)));
+            return t ? this.json(200, this.raw(t)) : this.json(404, { error: { status: 404, message: "Resource not found" } });
+        }
+        if (path === "/search") {
+            const q = url.searchParams.get("q") ?? "";
+            const id = this.searches.get(q) ?? [...this.tracks.values()].find((t) => q.toLowerCase().includes(t.name.toLowerCase()))?.id;
+            const t = id ? this.tracks.get(id) : undefined;
+            return this.json(200, { tracks: { items: t ? [this.raw(t)] : [] } });
+        }
+        if (!this.premium && path.startsWith("/me/player/")) return this.playerErr(403, "PREMIUM_REQUIRED");
+        if (path === "/me/player/queue" && method === "POST") {
+            if (!this.device) return this.playerErr(404, "NO_ACTIVE_DEVICE");
+            this.queued.push(url.searchParams.get("uri")!);
+            return new Response(null, { status: 204 });
+        }
+        if (path === "/me/player/next" && method === "POST") {
+            if (!this.device) return this.playerErr(404, "NO_ACTIVE_DEVICE");
+            this.nexts++;
+            return new Response(null, { status: 204 });
+        }
+        if (path === "/me/player/volume" && method === "PUT") {
+            if (!this.device) return this.playerErr(404, "NO_ACTIVE_DEVICE");
+            if (!this.device.supports_volume) return this.playerErr(403, "VOLUME_CONTROL_DISALLOW");
+            const v = Number(url.searchParams.get("volume_percent"));
+            this.volumes.push(v);
+            this.device.volume_percent = v;
+            return new Response(null, { status: 204 });
+        }
+        return this.json(404, { error: { status: 404, message: "Service not found" } });
+    };
+}
+
 // ---- the fake meaning search ----------------------------------------------------------------------------------
 
 // word -> a unit vector along one axis; unknown words are orthogonal to every post
@@ -235,7 +348,7 @@ export class FakeTwitch {
 
 // ---- the world ---------------------------------------------------------------------------------------------------------
 
-export type WorldOpts = { stage?: boolean; twitch?: boolean; search?: boolean; env?: Partial<WorkerEnv>; limits?: StageDeps["limits"] };
+export type WorldOpts = { stage?: boolean; twitch?: boolean; spotify?: boolean; search?: boolean; env?: Partial<WorkerEnv>; limits?: StageDeps["limits"] };
 
 export async function world(opts: WorldOpts = {}) {
     KEY_HASH ||= await hashKey(CLIENT);
@@ -248,6 +361,7 @@ export async function world(opts: WorldOpts = {}) {
     const room = new FakeRoom();
     room.clock = () => now;
     const twitch = new FakeTwitch();
+    const spotify = new FakeSpotify();
     const space = new FakeSpace();
     const pending: Promise<unknown>[] = [];
     const env: WorkerEnv = {
@@ -261,6 +375,7 @@ export async function world(opts: WorldOpts = {}) {
         SHARE_BASE_URL: SHARE,
         ...(opts.stage === false ? {} : { STAGE_BASE_URL: STAGE }),
         ...(opts.twitch === false ? {} : { TWITCH_CLIENT_ID: TWITCH_ID, TWITCH_CLIENT_SECRET: TWITCH_SECRET, TWITCH_EVENTSUB_SECRET: EVENTSUB_SECRET }),
+        ...(opts.spotify ? { SPOTIFY_CLIENT_ID: SPOTIFY_ID, SPOTIFY_CLIENT_SECRET: SPOTIFY_SECRET } : {}),
         ...opts.env,
     };
     const container = {
@@ -273,6 +388,7 @@ export async function world(opts: WorldOpts = {}) {
         waitUntil: (p: Promise<unknown>) => void pending.push(p),
         stageRoom: room,
         twitchFetch: twitch.fetch,
+        spotifyFetch: spotify.fetch,
         stageEmbed: opts.search ? space : null,
         stageLimits: opts.limits,
     });
@@ -404,6 +520,13 @@ export async function world(opts: WorldOpts = {}) {
         await settle();
         return { res, state, authorize_url: c.body.authorize_url as string };
     };
+    // connects Spotify through the real flow (connect -> callback)
+    const connectSpotify = async () => {
+        const c = await owner("POST", "/stage/spotify/connect");
+        const state = new URL(c.body.authorize_url).searchParams.get("state")!;
+        const res = await site(`/spotify/callback?code=${spotify.code}&state=${state}`);
+        return { res, state, authorize_url: c.body.authorize_url as string };
+    };
     const rewardId = (action: string) => one<any>("SELECT twitch_reward_id FROM stage_rewards WHERE action = ?", action)?.twitch_reward_id as string;
 
     let evN = 0;
@@ -452,6 +575,7 @@ export async function world(opts: WorldOpts = {}) {
         env,
         room,
         twitch,
+        spotify,
         space,
         file,
         video,
@@ -471,6 +595,7 @@ export async function world(opts: WorldOpts = {}) {
         token,
         goLive,
         connectTwitch,
+        connectSpotify,
         rewardId,
         deliver,
         redemption,

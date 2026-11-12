@@ -7071,7 +7071,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^(summon|chaos|shuffle|pin|skip)$"
+              "pattern": "^(summon|chaos|shuffle|pin|skip|song)$"
             }
           }
         ],
@@ -7099,6 +7099,60 @@
       "post": {
         "operationId": "stage_owner.rotate",
         "summary": "POST /stage/rotate",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage/spotify": {
+      "delete": {
+        "operationId": "stage_owner.spotify_delete",
+        "summary": "DELETE /stage/spotify",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage/spotify/connect": {
+      "post": {
+        "operationId": "stage_owner.spotify_connect",
+        "summary": "POST /stage/spotify/connect",
         "tags": [
           "stage_owner"
         ],

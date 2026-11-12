@@ -100,6 +100,9 @@ export interface WorkerEnv {
     TWITCH_CLIENT_ID?: string;
     TWITCH_CLIENT_SECRET?: string;
     TWITCH_EVENTSUB_SECRET?: string;
+    // Stage music (section 56): the Spotify app's id and secret. Missing or empty: no music on the stage.
+    SPOTIFY_CLIENT_ID?: string;
+    SPOTIFY_CLIENT_SECRET?: string;
     // Editor (section 31): the EditRenderer Durable Object namespace (two instances, "r0" and "r1"). Absent: no editor,
     // every /edits route answers 404 error.edit.off and `features.editor` is false. With it, the flag also needs migration 0021.
     EDIT_RENDERER?: DurableObjectNamespace;

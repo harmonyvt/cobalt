@@ -1010,6 +1010,7 @@ describe("GET /capabilities", () => {
                 // no STAGE_BASE_URL in this world's env (section 30)
                 stage: false,
                 stage_twitch: false,
+                stage_spotify: false,
             },
             limits: {
                 max_webp_seconds: 30,

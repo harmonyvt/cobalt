@@ -19,6 +19,8 @@ import { publicUrlOf } from "./share-sets";
 import type { StudioReply } from "./studio";
 import { ITEM_COLUMNS, extOf, visSql, type MediaRow } from "./visibility";
 import { livePage, storeLockedPage, storePage } from "./stage-pages";
+import { duckOff, duckOn, musicPatch, musicShape, musicState, requestSong, songRetention, songSkip, spotifyCallback, spotifyConnect, spotifyDisconnect } from "./stage-music";
+import type { SpotifyConfig, SpotifyFetch } from "./stage-spotify";
 import {
     REWARD_SCOPE,
     TwitchError,
@@ -35,7 +37,7 @@ import {
 
 // ---- constants (30.2, 30.3, 30.9) ---------------------------------------------------------------------
 
-export const STAGE_ACTIONS = ["summon", "chaos", "shuffle", "pin", "skip"] as const;
+export const STAGE_ACTIONS = ["summon", "chaos", "shuffle", "pin", "skip", "song"] as const;
 export type StageAction = (typeof STAGE_ACTIONS)[number];
 export const POOL_MAX = 2000;
 export const POOL_TTL_MS = 10 * 60 * 1000;
@@ -75,7 +77,14 @@ const REWARD_DEFAULTS: Record<StageAction, { cost: number; cooldown: number; ena
     shuffle: { cost: 1000, cooldown: 120, enabled: 1, prompt: "wipe the canvas and refill it" },
     pin: { cost: 300, cooldown: 60, enabled: 0, prompt: "keep the spotlight up for 2 minutes" },
     skip: { cost: 200, cooldown: 15, enabled: 1, prompt: "clear the spotlight" },
+    // section 56: off until the owner connects Spotify and turns it on
+    song: { cost: 300, cooldown: 30, enabled: 0, prompt: "a spotify or youtube link, or the song and artist" },
 };
+
+// The title a reward gets on Twitch (and, prefixed "capystore ", when that one is taken): the action word, except song.
+export const rewardTitle = (a: StageAction): string => (a === "song" ? "song request" : a);
+// rewards whose redemption carries the viewer's text
+const NEEDS_INPUT: ReadonlySet<StageAction> = new Set<StageAction>(["summon", "song"]);
 
 // ---- deps ---------------------------------------------------------------------------------------------
 
@@ -89,8 +98,10 @@ export type CanvasEvent =
     | { type: "unpin" }
     | { type: "skip"; toast?: Toast | null }
     | { type: "rotated" }
+    // section 56: the music changed (a request queued, the owner skipped): pages fetch /music again now
+    | { type: "music" }
     // not in 30.6: a refunded summon's toast (30.9 asks for one but defines no event for it)
-    | { type: "toast"; toast: Toast & { refunded: true } };
+    | { type: "toast"; toast: Toast & { refunded?: true } };
 
 export type Toast = { by: string; action: StageAction; cost: number; detail: string };
 
@@ -176,6 +187,9 @@ export type StageDeps = {
     // the three Twitch secrets, or null (canvas and store still work)
     twitch: TwitchConfig | null;
     twitchFetch?: TwitchFetch;
+    // section 56: the Spotify app's two secrets, or null (no music); the fetch the Spotify and YouTube calls use
+    spotify?: SpotifyConfig | null;
+    spotifyFetch?: SpotifyFetch;
     embed: EmbedClient | null;
     room: RoomPort;
     now: () => number;
@@ -278,7 +292,7 @@ async function readBody(request: Request): Promise<Record<string, unknown> | nul
 type PoolKind = "library" | "collection" | "group" | "search";
 const POOL_KINDS: PoolKind[] = ["library", "collection", "group", "search"];
 
-type SettingsRow = {
+export type SettingsRow = {
     on_air: number;
     pool_kind: PoolKind;
     pool_ref: string | null;
@@ -298,6 +312,17 @@ type SettingsRow = {
     live_token: string;
     oauth_state: string | null;
     oauth_state_at: number | null;
+    // section 56 (migration 0039)
+    music_card: string;
+    music_up_next: number;
+    song_youtube: number;
+    song_max_seconds: number;
+    song_queue_max: number;
+    song_explicit: number;
+    duck: number;
+    duck_volume: number;
+    spotify_state: string | null;
+    spotify_state_at: number | null;
     updated_at: number;
 };
 
@@ -307,9 +332,9 @@ function rewardSeeds(d: StageDeps, now: number) {
     return STAGE_ACTIONS.map((a) =>
         d.db
             .prepare(
-                "INSERT OR IGNORE INTO stage_rewards (action, title, prompt, cost, cooldown_seconds, enabled, synced, updated_at) VALUES (?1, ?1, ?2, ?3, ?4, ?5, 0, ?6)",
+                "INSERT OR IGNORE INTO stage_rewards (action, title, prompt, cost, cooldown_seconds, enabled, synced, updated_at) VALUES (?1, ?7, ?2, ?3, ?4, ?5, 0, ?6)",
             )
-            .bind(a, REWARD_DEFAULTS[a].prompt, REWARD_DEFAULTS[a].cost, REWARD_DEFAULTS[a].cooldown, REWARD_DEFAULTS[a].enabled, now),
+            .bind(a, REWARD_DEFAULTS[a].prompt, REWARD_DEFAULTS[a].cost, REWARD_DEFAULTS[a].cooldown, REWARD_DEFAULTS[a].enabled, now, rewardTitle(a)),
     );
 }
 
@@ -323,9 +348,9 @@ async function ensureRewards(d: StageDeps): Promise<void> {
     for (const a of missing) {
         await d.db
             .prepare(
-                "INSERT OR IGNORE INTO stage_rewards (action, title, prompt, cost, cooldown_seconds, enabled, synced, updated_at) VALUES (?1, ?1, ?2, ?3, ?4, ?5, 0, ?6)",
+                "INSERT OR IGNORE INTO stage_rewards (action, title, prompt, cost, cooldown_seconds, enabled, synced, updated_at) VALUES (?1, ?7, ?2, ?3, ?4, ?5, 0, ?6)",
             )
-            .bind(a, REWARD_DEFAULTS[a].prompt, REWARD_DEFAULTS[a].cost, REWARD_DEFAULTS[a].cooldown, REWARD_DEFAULTS[a].enabled, now)
+            .bind(a, REWARD_DEFAULTS[a].prompt, REWARD_DEFAULTS[a].cost, REWARD_DEFAULTS[a].cooldown, REWARD_DEFAULTS[a].enabled, now, rewardTitle(a))
             .run();
     }
 }
@@ -365,9 +390,19 @@ const SETTING_COLUMNS = new Set([
     "live_token",
     "oauth_state",
     "oauth_state_at",
+    "music_card",
+    "music_up_next",
+    "song_youtube",
+    "song_max_seconds",
+    "song_queue_max",
+    "song_explicit",
+    "duck",
+    "duck_volume",
+    "spotify_state",
+    "spotify_state_at",
 ]);
 
-async function writeSettings(d: StageDeps, fields: Record<string, number | string | null>): Promise<void> {
+export async function writeSettings(d: StageDeps, fields: Record<string, number | string | null>): Promise<void> {
     const keys = Object.keys(fields).filter((k) => SETTING_COLUMNS.has(k));
     if (keys.length === 0) return;
     const sets = keys.map((k, i) => `${k} = ?${i + 1}`);
@@ -390,6 +425,10 @@ export type CanvasSettings = {
     video_max: number;
     store_hint: boolean;
     store_url: string | null;
+    // section 56: the now playing card ('full' | 'compact' | 'off'), up next under it, and turning the music down
+    music_card: string;
+    music_up_next: boolean;
+    duck: boolean;
 };
 
 const storeUrlOf = (d: Pick<StageDeps, "stageBaseUrl">) => `${d.stageBaseUrl}store`;
@@ -410,6 +449,9 @@ export function canvasSettings(d: Pick<StageDeps, "stageBaseUrl">, s: SettingsRo
         store_hint: s.store_hint === 1,
         // null while the store is locked, so the hint hides
         store_url: s.store_open === 1 ? storeUrlOf(d) : null,
+        music_card: ["full", "compact", "off"].includes(s.music_card) ? s.music_card : "full",
+        music_up_next: s.music_up_next === 1,
+        duck: s.duck === 1,
     };
 }
 
@@ -815,7 +857,7 @@ const rewardBody = (r: RewardRow): RewardBody => ({
     cost: r.cost,
     prompt: r.prompt,
     is_enabled: r.enabled === 1,
-    is_user_input_required: r.action === "summon",
+    is_user_input_required: NEEDS_INPUT.has(r.action),
     is_global_cooldown_enabled: r.cooldown_seconds > 0,
     ...(r.cooldown_seconds > 0 ? { global_cooldown_seconds: r.cooldown_seconds } : {}),
     should_redemptions_skip_request_queue: false,
@@ -832,7 +874,7 @@ async function syncReward(d: StageDeps, tw: TwitchClient, r: RewardRow, mine: Ma
     let id = r.twitch_reward_id;
     let title = r.title;
     if (!id) {
-        const adopt = [r.action, `capystore ${r.action}`].find((t) => mine.has(t));
+        const adopt = [rewardTitle(r.action), `capystore ${rewardTitle(r.action)}`].find((t) => mine.has(t));
         if (adopt) {
             id = mine.get(adopt)!;
             title = adopt;
@@ -850,11 +892,11 @@ async function syncReward(d: StageDeps, tw: TwitchClient, r: RewardRow, mine: Ma
     }
     const create = (t: string) => asBroadcaster(d, tw, (tok, b) => tw.createReward(tok, b, { ...rewardBody(r), title: t }));
     try {
-        const made = await create(r.action);
-        await store(made.id, made.title || r.action);
+        const made = await create(rewardTitle(r.action));
+        await store(made.id, made.title || rewardTitle(r.action));
     } catch (e) {
         if (!(e instanceof TwitchError) || e.status !== 400 || !/duplicate/i.test(e.detail)) throw e;
-        const prefixed = `capystore ${r.action}`;
+        const prefixed = `capystore ${rewardTitle(r.action)}`;
         const made = await create(prefixed);
         await store(made.id, made.title || prefixed);
     }
@@ -982,6 +1024,8 @@ async function stageShape(d: StageDeps, s: SettingsRow, tw: TwitchRow | null, ro
             ? { login: tw.login, display_name: tw.display_name, connected_at: tw.connected_at, status: tw.status, last_event_at: tw.last_event_at }
             : null,
         spotlight: await liveSpotlight(d, room, s.spotlight_seconds),
+        // section 56: the music settings, the Spotify connection, what is playing (as last seen) and up next
+        music: await musicShape(d, s),
         updated_at: s.updated_at,
     };
 }
@@ -1022,7 +1066,18 @@ async function poolItems(d: StageDeps, s: SettingsRow): Promise<Item[]> {
 
 // ---- owner routes (30.10) ---------------------------------------------------------------------------------------------------
 
-export type StageOp = "get" | "patch" | "rotate" | "action" | "pool" | "redemptions" | "reward" | "twitch_connect" | "twitch_delete";
+export type StageOp =
+    | "get"
+    | "patch"
+    | "rotate"
+    | "action"
+    | "pool"
+    | "redemptions"
+    | "reward"
+    | "twitch_connect"
+    | "twitch_delete"
+    | "spotify_connect"
+    | "spotify_delete";
 
 export async function stageKeyed(d: StageDeps, op: StageOp, request: Request, params: Record<string, string>, q: URLSearchParams): Promise<StudioReply> {
     try {
@@ -1046,6 +1101,10 @@ export async function stageKeyed(d: StageDeps, op: StageOp, request: Request, pa
                 return await ownerTwitchConnect(d);
             case "twitch_delete":
                 return await ownerTwitchDelete(d);
+            case "spotify_connect":
+                return await spotifyConnect(d);
+            case "spotify_delete":
+                return await ownerSpotifyDelete(d);
         }
     } catch (e) {
         log(`${op} failed`, e);
@@ -1093,6 +1152,10 @@ async function ownerPatch(d: StageDeps, request: Request): Promise<StudioReply> 
         // out of range is clamped, not refused
         set[n.key] = n.int ? clamp(Math.round(v), n.lo, n.hi) : Math.round(clamp(v, n.lo, n.hi) * 100) / 100;
     }
+    // section 56's keys
+    const music = musicPatch(b);
+    if (!music) return bad();
+    Object.assign(set, music);
 
     let spec: PoolSpec | null = null;
     if (b.pool !== undefined) {
@@ -1144,7 +1207,7 @@ async function ownerRotate(d: StageDeps): Promise<StudioReply> {
     return ok({ stage: await stageShape(d, s, await readTwitch(d), await roomState(d)) });
 }
 
-const ACTION_TYPES = ["skip", "pin", "unpin", "shuffle", "chaos", "spotlight"] as const;
+const ACTION_TYPES = ["skip", "pin", "unpin", "shuffle", "chaos", "spotlight", "song_skip"] as const;
 
 // chaos lasts 30 s; another one extends it to at most 60 s from now (30.9)
 export function nextChaosUntil(now: number, current: number): number {
@@ -1156,6 +1219,15 @@ async function ownerAction(d: StageDeps, request: Request): Promise<StudioReply>
     const type = b?.type;
     if (!b || typeof type !== "string" || !(ACTION_TYPES as readonly string[]).includes(type)) return err(400, "error.stage.bad_request");
     if (b.item_id !== undefined && typeof b.item_id !== "string") return err(400, "error.stage.bad_request");
+    // section 56: skip the song Spotify is playing (on air or not)
+    if (type === "song_skip") {
+        if (!d.spotify) return err(404, "error.stage.spotify_off");
+        const r = await songSkip(d);
+        if (r.status !== 200) return r;
+        await broadcast(d, { type: "music" });
+        const s0 = await readSettings(d);
+        return ok({ stage: await stageShape(d, s0, await readTwitch(d), await roomState(d)) });
+    }
     const s = await freshSettings(d);
     if (s.on_air !== 1) return err(409, "error.stage.off_air");
     const now = d.now();
@@ -1292,6 +1364,13 @@ async function ownerReward(d: StageDeps, request: Request, action: string): Prom
     return ok({ reward: rewardShape(row, !!tw) });
 }
 
+async function ownerSpotifyDelete(d: StageDeps): Promise<StudioReply> {
+    if (!d.spotify) return err(404, "error.stage.spotify_off");
+    await spotifyDisconnect(d);
+    const s = await readSettings(d);
+    return ok({ stage: await stageShape(d, s, await readTwitch(d), await roomState(d)) });
+}
+
 async function ownerTwitchConnect(d: StageDeps): Promise<StudioReply> {
     const tc = clientOf(d)!;
     await readSettings(d);
@@ -1368,6 +1447,15 @@ export async function stageSite(d: StageDeps, request: Request): Promise<Respons
     const path = url.pathname;
     try {
         if (path === "/twitch/eventsub") return request.method === "POST" ? await eventSub(d, request) : notFound();
+        // section 56.6: the canvas turning the music down and back up (POST, the canvas token in the path)
+        const duck = /^\/live\/([^/]+)\/duck$/.exec(path);
+        if (duck && request.method === "POST") {
+            const s = await readSettings(d);
+            if (!sameSecret(duck[1]!, s.live_token)) return jsonRes(err(404, "error.stage.not_found"));
+            const b = await readBody(request);
+            if (!b || typeof b.on !== "boolean") return jsonRes(err(400, "error.stage.bad_request"));
+            return jsonRes(ok(b.on ? await duckOn(d, s) : await duckOff(d)));
+        }
         if (request.method !== "GET" && request.method !== "HEAD") return notFound();
 
         if (path.startsWith("/live/")) {
@@ -1382,6 +1470,7 @@ export async function stageSite(d: StageDeps, request: Request): Promise<Respons
                 return new Response(livePage({ stageBaseUrl: d.stageBaseUrl, preview: url.searchParams.get("preview") === "1" }), { headers: HTML_HEADERS });
             }
             if (sub === "state") return jsonRes(await liveState(d));
+            if (sub === "music") return jsonRes(await musicState(d, s));
             if (sub === "ws") {
                 if ((request.headers.get("upgrade") ?? "").toLowerCase() !== "websocket") {
                     return new Response("expected a websocket\n", { status: 426, headers: { "content-type": "text/plain" } });
@@ -1403,9 +1492,11 @@ export async function stageSite(d: StageDeps, request: Request): Promise<Respons
             if (which === "pool") return jsonRes(await storePool(d, url.searchParams));
             if (which === "rewards") return jsonRes(await storeRewards(d));
             if (which === "me") return jsonRes(await storeMe(d, request));
+            if (which === "music") return jsonRes(await musicState(d, s));
             return jsonRes(err(404, "error.stage.not_found"));
         }
         if (path === "/twitch/callback") return await twitchCallback(d, url);
+        if (path === "/spotify/callback") return await spotifyCallback(d, url);
         return notFound();
     } catch (e) {
         // the canvas token is in the path and is a secret: never in a log line
@@ -1735,6 +1826,13 @@ async function redeem(d: StageDeps, ev: RedemptionEvent, reward: RewardRow): Pro
         const s = await freshSettings(d);
         if (s.on_air !== 1) return { status: "refunded", reason: "off_air", itemId: null };
         if (reward.enabled !== 1) return { status: "refunded", reason: "disabled", itemId: null };
+        if (reward.action === "song") {
+            const v = await requestSong(d, s, { id: ev.id, user_id: ev.user_id ?? "", user_name: by }, input);
+            if (v.status === "refunded") return await refund(v.reason ?? "error", "song", v.detail);
+            await send({ type: "toast", toast: { by, action: "song", cost, detail: v.detail } });
+            await send({ type: "music" });
+            return { status: "done", reason: null, itemId: null };
+        }
         if (reward.action === "summon") {
             const item = await findSummon(d, s, input);
             if (!item) return await refund("no_match", "summon", "no videos in the pool, points refunded");
@@ -1823,10 +1921,12 @@ async function redeem(d: StageDeps, ev: RedemptionEvent, reward: RewardRow): Pro
 // ---- retention -------------------------------------------------------------------------------------------------------------------------------
 
 // The daily cron: redemptions older than 30 days, and EventSub message ids past their 10 minutes.
-export async function stageRetention(db: D1Database, now: number): Promise<{ redemptions: number; seen: number }> {
+export async function stageRetention(db: D1Database, now: number): Promise<{ redemptions: number; seen: number; songs: number }> {
     const a = await db.prepare("DELETE FROM stage_redemptions WHERE created_at < ?1").bind(now - REDEMPTION_KEEP_MS).run();
     const b = await db.prepare("DELETE FROM stage_seen WHERE seen_at < ?1").bind(now - SEEN_TTL_MS).run();
-    return { redemptions: Number(a.meta?.changes ?? 0), seen: Number(b.meta?.changes ?? 0) };
+    // section 56: song requests, same 30 days (a database without migration 0039 has none)
+    const songs = await songRetention(db, now, REDEMPTION_KEEP_MS).catch(() => 0);
+    return { redemptions: Number(a.meta?.changes ?? 0), seen: Number(b.meta?.changes ?? 0), songs };
 }
 
 // ---- types the room and the pages share ------------------------------------------------------------------------------------------------------
