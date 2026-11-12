@@ -1633,14 +1633,17 @@ async function eventSub(d: StageDeps, request: Request): Promise<Response> {
 
 const wordsOf = (s: string) => s.replace(/\s+/g, " ").trim();
 
-// A summon's input to one pool item: a 3-4 char code, else the meaning search over the pool (the best pool
-// post, then its first public file), else a title substring. null = nothing matched.
+// A summon's input to one pool video (the spotlight is videos only). Always the closest video there is: a 3-4 char
+// code naming a video, else the meaning search over the pool (the best pool post with a video, then its first video
+// file), else a title substring, else the closest search hit below the score floor, else a random pool video.
+// null only when the pool has no video at all.
 export async function findSummon(d: StageDeps, s: SettingsRow, input: string): Promise<Item | null> {
     const words = wordsOf(input).slice(0, INPUT_MAX);
-    if (!words) return null;
-    const pool = await poolItems(d, s);
+    const pool = (await poolItems(d, s)).filter((i) => i.kind === "video");
     if (pool.length === 0) return null;
     const byId = new Map(pool.map((i) => [i.id, i]));
+    const anyVideo = () => pool[(rbytes(d)(4).reduce((a, b) => a * 256 + b, 0) >>> 0) % pool.length]!;
+    if (!words) return anyVideo();
 
     if (/^[A-Za-z0-9]{3,4}$/.test(words)) {
         const k = await d.db.prepare("SELECT item_id FROM stage_codes WHERE code = ?1").bind(words.toUpperCase()).first<{ item_id: string }>();
@@ -1648,6 +1651,7 @@ export async function findSummon(d: StageDeps, s: SettingsRow, input: string): P
         if (hit) return hit;
     }
 
+    let closest: Item | null = null;
     if (d.embed) {
         const found = await stageSearch(d, words, SEARCH_POOL_POSTS, d.limits?.searchMs ?? STAGE_SEARCH_MS);
         if (found.ok && found.hits.length > 0) {
@@ -1661,18 +1665,20 @@ export async function findSummon(d: StageDeps, s: SettingsRow, input: string): P
             const byPost = new Map<string, typeof results>();
             for (const r of results) byPost.set(r.post_key, [...(byPost.get(r.post_key) ?? []), r]);
             for (const h of found.hits) {
-                if (h.score < SEARCH_MIN_SCORE) break;
                 const files = (byPost.get(h.post_key) ?? []).sort(
                     (a, b) => (a.item_index ?? 0) - (b.item_index ?? 0) || a.created_at - b.created_at || (a.id < b.id ? -1 : 1),
                 );
                 const first = files.find((f) => byId.has(f.id));
-                if (first) return byId.get(first.id)!;
+                if (!first) continue;
+                if (h.score >= SEARCH_MIN_SCORE) return byId.get(first.id)!;
+                closest = byId.get(first.id)!;
+                break;
             }
         }
     }
 
     const needle = words.toLowerCase();
-    return pool.find((i) => i.title.toLowerCase().includes(needle)) ?? null;
+    return pool.find((i) => i.title.toLowerCase().includes(needle)) ?? closest ?? anyVideo();
 }
 
 type Verdict = { status: "done" | "refunded"; reason: string | null; itemId: string | null };
@@ -1705,8 +1711,7 @@ async function redeem(d: StageDeps, ev: RedemptionEvent, reward: RewardRow): Pro
         if (reward.enabled !== 1) return { status: "refunded", reason: "disabled", itemId: null };
         if (reward.action === "summon") {
             const item = await findSummon(d, s, input);
-            if (!item) return await refund("no_match", "summon", `nothing matched "${input}", points refunded`);
-            if (item.kind !== "video") return await refund("no_match", "summon", "the spotlight is videos only, points refunded");
+            if (!item) return await refund("no_match", "summon", "no videos in the pool, points refunded");
             await send({
                 type: "summon",
                 spotlight: { item, by, action: "summon", pinned_until: null, at: now },
