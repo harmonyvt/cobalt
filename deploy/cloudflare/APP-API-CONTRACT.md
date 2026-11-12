@@ -1128,6 +1128,28 @@ says "saved to capystore" (the widget's headline for an `origin: "share"` done w
 `saved` (the device or the render ends those, as before). The app's adopted-activity path (the woken app reports the
 push-started activity's update token) is what lets the server send the updates and the end.
 
+### 8.11 Agent and MCP jobs (addendum, 2026-11-12)
+
+A save or a make that the chat agent or an MCP client starts has no device following it, so before this nothing ever
+asked for an activity and none appeared, app open or closed. The server now push-starts the same save island
+(`CobaltActivityAttributes`, `origin: "share"`, no app change) and keeps it current from the studio's own events.
+
+- **Which jobs.** A save: `POST /studio` by a `chat:<thread>` key (`library.save`, `ytdlp.save`, MCP `save_link`; cobalt or
+  yt-dlp). A make on a saved post: `POST /studio/<sid>/render`, `/slideshow` and `/gallery-image` from the chat's make ops
+  (`registry/ops/make.ts` `startStudio`), marked by the internal header `x-cobalt-agent-live: 1`, which the Worker strips from
+  every client request (`headers.ts`). Only once the make is accepted (202 with a job). Editor renders (`edits.render`) and
+  uploads are not covered: their island type cannot be push-started by the app yet.
+- **Which devices.** `LiveService.startAgent`: every key whose start token was refreshed within 60 days, never a `chat:` key,
+  newest first, at most `LIVE_AGENT_MAX_DEVICES` (2). Each device gets its own run held by its own key; the session's owner
+  check of 8.2 is skipped for this server-made registration only. The app reports the update token as for any push-started
+  activity (no session in that call), so nothing changes on the device.
+- **State.** A save starts in `fetching` and ends on the save's `saved` (server-only run) or `failed`. A make starts in
+  `rendering` (rail 3, the post's title), pinned to its job: another job on the same post never moves it; its result ends it
+  ("webp ready" or the failure alert).
+- **Alert.** `capystore` / `your agent is saving from <service>` or `your agent is making something from <title>`.
+- **Never refuses the job.** No start token, the 10 s start window per key (a second agent job within 10 s gets no island on
+  that device), the run caps or an APNs error only mean no island; logged as `[live] agent save|make run=... started=...`.
+
 ## 9. Hark notification bridge (addendum, pinned 2026-10-04)
 
 **Off since 2026-10-23** (the owner doesn't want Hark pushes): the var `HARK_NOTIFY` is `"0"`, so

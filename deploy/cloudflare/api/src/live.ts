@@ -50,6 +50,8 @@ export const LIVE_START_MIN_GAP_MS = 10_000;
 // then after each further one): 3 retries over about a minute, then only a poll retries.
 export const LIVE_END_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 40_000];
 const START_WINDOW_PREFIX = "live:startat:";
+// Agent and MCP jobs (`startAgent`): the devices whose start tokens were refreshed most recently, at most this many.
+export const LIVE_AGENT_MAX_DEVICES = 2;
 
 export const STALE_S = 120;
 export const STALE_READY_S = 30 * 60;
@@ -180,6 +182,8 @@ export type LiveHooks = {
     hasActiveRuns(): Promise<boolean>;
     // `POST /studio` from the instant share (`live` field): push-start an activity for the new session
     startShare?(keyId: string, sid: string, raw: unknown, awaitsMake: boolean): Promise<void>;
+    // a save or make the chat agent or an MCP client started: push-start the island on the owner's devices (8.11)
+    startAgent?(sid: string, o: { kind: "save" | "make"; job?: string | null; service: string; ref: string; title?: string | null }): Promise<void>;
 };
 
 // What the merge consumes: the events reduced to the state they describe.
@@ -358,7 +362,7 @@ export function updatePayload(state: LiveState, now: number) {
     };
 }
 
-export function startPayload(a: RunAttributes, state: LiveState, now: number) {
+export function startPayload(a: RunAttributes, state: LiveState, now: number, alertBody?: string) {
     return {
         aps: {
             timestamp: secs(now),
@@ -368,9 +372,16 @@ export function startPayload(a: RunAttributes, state: LiveState, now: number) {
             "content-state": canonical(state),
             "stale-date": staleDate(state, now),
             "input-push-token": 1,
-            alert: { title: "capystore", body: a.input === "file" ? `uploading ${a.ref}` : `fetching from ${a.service}` },
+            alert: { title: "capystore", body: alertBody ?? (a.input === "file" ? `uploading ${a.ref}` : `fetching from ${a.service}`) },
         },
     };
+}
+
+// The lock-screen alert of an agent's push-start (section 8.11); undefined keeps the default.
+export function agentAlert(r: Pick<RunRecord, "agent" | "attributes">): string | undefined {
+    if (r.agent === "save") return r.attributes.service ? `your agent is saving from ${r.attributes.service}` : "your agent is saving a link";
+    if (r.agent === "make") return r.attributes.ref ? `your agent is making something from ${r.attributes.ref}` : "your agent is making something";
+    return undefined;
 }
 
 // `end`: a finished run dismisses after 15 minutes (done) or 5 (failed) with a short
@@ -429,6 +440,9 @@ export type RunRecord = {
     // render's result ends it then).
     serverOnly?: boolean;
     awaitsMake?: boolean;
+    // Started by the server for a job the chat agent or an MCP client began (`startAgent`, section 8.11): the alert
+    // that wakes the island says so.
+    agent?: "save" | "make";
 };
 // The small per-run index (`live:idx:<key id>:<run>`): everything the caps, the
 // cleanup, hasActiveRuns and the end retries need without reading run records.
@@ -461,6 +475,8 @@ export type LiveDeps = {
     now: () => number;
     // null: the APNs secrets are not configured (capability false, nothing is sent)
     apns: ApnsClient | null;
+    // a new run id for `startAgent` (tests pin it); crypto.randomUUID by default
+    uuid?: () => string;
     // arms the job sweep (index.ts: scheduleSweepSoon); called when an end push failed,
     // so the sweep retries it with nobody polling
     scheduleSweep?: () => Promise<void>;
@@ -911,11 +927,64 @@ export class LiveService implements LiveHooks {
         console.log(`[live] share start run=${run.slice(0, 8)} started=${b.started === true}${b.reason ? ` reason=${b.reason}` : ""}`);
     }
 
-    async putRun(keyId: string, run: string, raw: string): Promise<LiveReply> {
+    // Agent and MCP jobs (APP-API-CONTRACT.md section 8.11). A save (POST /studio by a `chat:` key) or a make on a saved
+    // post (render, slideshow, gallery image) that the chat agent or an MCP client started has no device following it,
+    // so nothing would ever ask for an activity. The server push-starts the same save island on the owner's devices:
+    // every key with a start token refreshed in the last 60 days (never a `chat:` key), newest first, at most
+    // LIVE_AGENT_MAX_DEVICES. Each device gets its own run held by its own key, so the update token the app reports
+    // for a push-started activity registers exactly as an instant share's does. The run is server-only: the save's
+    // "saved" ends a save; a make is pinned to its job, whose result ends it. Never refuses or slows the job:
+    // anything off (no start token, the 10 s start window, the run caps) just means no island.
+    async startAgent(sid: string, o: { kind: "save" | "make"; job?: string | null; service: string; ref: string; title?: string | null }): Promise<void> {
+        if (!this.d.apns || !STUDIO_SID_REGEX.test(sid)) return;
+        const now = this.d.now();
+        const starts = await this.d.storage.list<StartToken>({ prefix: "live:start:" });
+        const devices = [...starts]
+            .map(([k, t]) => ({ keyId: k.slice("live:start:".length), t }))
+            .filter(({ keyId, t }) => !keyId.startsWith("chat:") && now - t.updatedAt < LIVE_START_TOKEN_TTL_MS)
+            .sort((a, b) => b.t.updatedAt - a.t.updatedAt)
+            .slice(0, LIVE_AGENT_MAX_DEVICES);
+        const making = o.kind === "make";
+        const state: LiveState = making
+            ? { stage: "rendering", rail: RAIL.rendering!, since: secs(now), waking: false, packing: false }
+            : { stage: "fetching", rail: RAIL.fetching!, since: secs(now), waking: false, packing: false };
+        if (o.title) state.title = o.title.slice(0, MAX_STR);
+        for (const { keyId, t } of devices) {
+            const run = this.d.uuid?.() ?? crypto.randomUUID();
+            const body = {
+                environment: t.env,
+                session: sid,
+                start: true,
+                attributes: { run, input: "link", service: o.service.slice(0, 120), ref: o.ref.slice(0, 120), origin: "share" },
+                state,
+            };
+            try {
+                // the run is created and pinned to its job before the start push goes, so an event that races it
+                // (the render's first progress) already finds it
+                const reply = await this.putRun(keyId, run, JSON.stringify(body), { trusted: true, agent: o.kind });
+                const b = reply.body as { started?: boolean; reason?: string } | null;
+                if (reply.status === 200) {
+                    await this.withRun(run, async () => {
+                        const r = await this.getRun(run);
+                        if (!r) return;
+                        r.serverOnly = true;
+                        if (making && o.job) r.job = o.job;
+                        await this.saveRun(r);
+                    });
+                }
+                console.log(`[live] agent ${o.kind} run=${run.slice(0, 8)} key=${keyId.slice(0, 6)} status=${reply.status} started=${b?.started === true}${b?.reason ? ` reason=${b.reason}` : ""}`);
+            } catch (e) {
+                console.error("[live] agent start failed", String(e));
+            }
+        }
+    }
+
+    // `trusted`: the server's own registration for a session another key made (`startAgent`); never from a route.
+    async putRun(keyId: string, run: string, raw: string, opts: { trusted?: boolean; agent?: "save" | "make" } = {}): Promise<LiveReply> {
         const b = parseJson(raw);
         const reg = b && parseRegistration(run, b);
         if (!reg) return badRequest();
-        if (reg.session) {
+        if (reg.session && !opts.trusted) {
             const owned = await this.sessionOwnedBy(reg.session, keyId);
             if (owned === "error") return err(503, "error.api.generic");
             if (!owned) return notFound();
@@ -973,6 +1042,7 @@ export class LiveService implements LiveHooks {
                         startedAt: null,
                         endedAt: null,
                         createdAt: now,
+                        ...(opts.agent ? { agent: opts.agent } : {}),
                     };
                     // visible to the next caller's count at once
                     await this.saveRun(created);
@@ -1018,7 +1088,7 @@ export class LiveService implements LiveHooks {
                             event: "start",
                             priority: 10,
                             expiration: secs(now) + EXPIRE_STAGE_S,
-                            payload: startPayload(r.attributes, r.state, now),
+                            payload: startPayload(r.attributes, r.state, now, agentAlert(r)),
                         };
                         const dlv = await this.d.apns!.deliver(start.token, start.env, push, run);
                         if (dlv.kind === "sent") {

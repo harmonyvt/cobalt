@@ -8,7 +8,7 @@ import * as z from "zod";
 import { libraryStudio, POST_KEY_SQL } from "../../app-routes";
 import { editsKeyed, kickRenderers, parseEditTimeline, type EditsOp, type RendererNamespace } from "../../edits";
 import { EDIT_PROJECT_ID_REGEX, EDIT_RENDER_ID_REGEX, ITEM_ID_REGEX, STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "../../gate";
-import { KEY_ID_HEADER } from "../../headers";
+import { AGENT_LIVE_HEADER, KEY_ID_HEADER } from "../../headers";
 import { getSession, itemTypeOf, STILL_ADOPT_TYPES, type SessionRow } from "../../studio";
 import { studioStatus } from "../../studio-edge";
 import { HIDDEN_HINT, sessionPostKey } from "../../hidden";
@@ -307,7 +307,8 @@ async function startStudio(ctx: OpContext, call: string, sid: string, plan: Plan
     await takeRender(ctx, call);
     let res: Response;
     try {
-        const headers: Record<string, string> = { "content-type": "application/json" };
+        // the agent header: the Durable Object push-starts a Live Activity for this make (APP-API-CONTRACT.md 8.11)
+        const headers: Record<string, string> = { "content-type": "application/json", [AGENT_LIVE_HEADER]: "1" };
         if (plan.route !== "render") {
             const s = await getSession(ctx.db, sid);
             headers[KEY_ID_HEADER] = s?.key_id ?? ctx.keyId ?? "";
