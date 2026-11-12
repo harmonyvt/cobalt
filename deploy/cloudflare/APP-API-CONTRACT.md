@@ -3115,13 +3115,15 @@ points. points are spent on twitch."). Works at phone width.
     row `refunded`, reason `error`) and nothing more is shown on stream; settling on Twitch gets what is left of the
     30 s `waitUntil`. A decision that throws is that refund too; only a Helix failure while settling makes a row
     `failed`.
-  - `summon`: always lands on the closest pool **video** (the spotlight is videos only; pictures are never picked).
-    `user_input` trimmed; a 3-4 char code naming a pool video → that video; else the meaning search over the pool
-    (the best pool post above the score floor that has a video, then its first video file), else a title substring
-    match among the videos, else the closest search hit below the floor, else a random pool video (also for empty
-    input). Only a pool with no video at all is a refund, `no_match`, toast "no videos in the pool, points
+  - `summon`: always lands on a pool **video** (the spotlight is videos only; pictures are never picked).
+    `user_input` trimmed; a 3-4 char code naming a pool video → that video. Words pick **at random among the close
+    videos** (`SUMMON_PICK` 5): the meaning search's pool posts with a video, above the score floor and within
+    `SUMMON_NEAR` (0.1) of the best hit, each post's first video file; else the title substring matches among the
+    videos. The last summoned video is left out when another candidate exists, so the same words twice show two
+    different videos. Nothing close → the closest search hit below the floor, else a random pool video (also for
+    empty input). Only a pool with no video at all is a refund, `no_match`, toast "no videos in the pool, points
     refunded", and no spotlight event. A video → spotlight event, `FULFILLED`. (Changed 2026-11-12: an unmatched
-    summon or one landing on a picture used to be refunded.)
+    summon or one landing on a picture used to be refunded, and words always gave the single best hit.)
   - `chaos`: `until = now + 30 s` (another chaos extends it to at most 60 s from now). `shuffle`: event.
     `pin`: `pinned_until = now + 120 s` on the current spotlight (see 30.6 for which one it can hold).
     `skip`: the canvas `{ type: "skip" }` event (same as the owner's Skip button) with a toast "cleared the spotlight".
