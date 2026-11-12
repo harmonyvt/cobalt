@@ -13,15 +13,18 @@ import AppKit
 /// notification once the server sends its link: `AppModel.openRunLink`, CONTRACT-SHARE-QUICK.md),
 /// `open`, `library`, `jobs` (the Hark summary: the tray), and `copy?url=<https link>` (the Live Activity's "copy link": an activity cannot
 /// write to the pasteboard itself, so the link goes to the pasteboard, only if it is a web link, and
-/// the app opens on the save tab). Everything but `copy` is the model's.
+/// the app opens on the save tab), and `7tv-link?token=` (the 7TV bookmarklet: `AppModel.openSevenTvLink`). Everything but
+/// `copy` is the model's.
 @MainActor
 func handleAppLink(_ url: URL, model: AppModel) {
     #if DEBUG
-    DebugHooks.log("handleAppLink \(url.absoluteString)")
+    DebugHooks.log("handleAppLink \(SevenTvLink.redacted(url))")      // a 7tv-link carries a 7TV login: never logged
     defer { DebugHooks.log("handleAppLink done: \(DebugHooks.describe(model))") }
     #endif
     // the sign-in's return (APP-API-CONTRACT 42.3) belongs to the Access sheet; never navigate on it
     if AccountAuth.isCallback(url) { return }
+    // the 7TV bookmarklet (APP-API-CONTRACT 57.1): `7tv-link?token=` links the account; the studio tab's 7TV card says how it went
+    if model.openSevenTvLink(url) { return }
     if url.scheme?.lowercased() == "cobalt-apple", url.host(percentEncoded: false)?.lowercased() == "copy",
        let link = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
            .first(where: { $0.name == "url" })?.value,
@@ -115,7 +118,7 @@ final class LinkInbox {
         guard let handler else {
             pending.append(url)
             #if DEBUG
-            DebugHooks.log("link inbox: no handler yet, kept \(url.absoluteString)")
+            DebugHooks.log("link inbox: no handler yet, kept \(SevenTvLink.redacted(url))")
             #endif
             return
         }

@@ -114,6 +114,8 @@ public final class AppModel {
     public let searchNames: SearchNamesModel
     /// Settings › account (APP-API-CONTRACT 42): who is signed in, the devices and the keys for tools. Idle until `refresh()`.
     public let account: AccountStore
+    /// 7TV accounts (APP-API-CONTRACT 57; the studio tab's 7TV card): the linked account, its channels and their sets.
+    public let sevenTv: SevenTvStore
     /// The video editor (APP-API-CONTRACT 31): the projects, this key's renders and the open project. Idle until `refresh()`.
     public let editor: EditorStore
     /// Post frames (APP-API-CONTRACT 52): the details of the posts asked about and the framed copies being watched.
@@ -222,6 +224,7 @@ public final class AppModel {
         self.hiddenRules = HiddenRulesModel(context: context, library: library)
         self.searchNames = SearchNamesModel(context: context, library: library)
         self.account = AccountStore(context: context)
+        self.sevenTv = SevenTvStore(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
         let jobQueue = JobQueue(
@@ -476,6 +479,7 @@ public final class AppModel {
         hiddenRules.reset()
         searchNames.reset()
         account.reset()
+        sevenTv.reset()
     }
 
     // MARK: - Links, handoffs

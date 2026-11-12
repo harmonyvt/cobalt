@@ -165,7 +165,7 @@ struct CobaltApp: App {
         rootContent
             .onOpenURL { url in
                 #if DEBUG
-                DebugHooks.log("onOpenURL \(url.absoluteString)")
+                DebugHooks.log("onOpenURL \(SevenTvLink.redacted(url))")
                 #endif
                 handleAppLink(url, model: model)
             }
