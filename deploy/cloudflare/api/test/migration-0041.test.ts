@@ -1,4 +1,4 @@
-// d1/migrations/0039_stage_music.sql (APP-API-CONTRACT.md section 56): stage_rewards rebuilt so action may be 'song'
+// d1/migrations/0041_stage_music.sql (APP-API-CONTRACT.md section 56): stage_rewards rebuilt so action may be 'song'
 // (rows copied), the music settings columns with their defaults, stage_spotify and stage_songs. Apply before the API.
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -8,26 +8,26 @@ import { createFakeD1 } from "../../test-support/d1-sqlite";
 const dir = fileURLToPath(new URL("../../d1/migrations/", import.meta.url));
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
 const sql = (name: string) => readFileSync(dir + name, "utf8");
-const upTo38 = files.filter((f) => f < "0039").map(sql).join("\n");
-const m39 = sql("0039_stage_music.sql");
+const before = files.filter((f) => f < "0041").map(sql).join("\n");
+const m41 = sql("0041_stage_music.sql");
 
 const insert = (db: ReturnType<typeof createFakeD1>, action: string) =>
     db.raw
         .prepare("INSERT INTO stage_rewards (action, title, prompt, cost, cooldown_seconds, enabled, synced, updated_at) VALUES (?, ?, 'p', 10, 1, 1, 0, 5)")
         .run(action, action);
 
-describe("migration 0039", () => {
-    it("comes right after 0038", () => {
-        const at = files.indexOf("0039_stage_music.sql");
-        expect(files[at - 1]).toBe("0038_sync.sql");
+describe("migration 0041", () => {
+    it("is the only 0041 and comes after 0038 (0039 and 0040 are other open PRs')", () => {
+        expect(files.filter((f) => f.startsWith("0041"))).toEqual(["0041_stage_music.sql"]);
+        expect(files.indexOf("0041_stage_music.sql")).toBeGreaterThan(files.indexOf("0038_sync.sql"));
     });
 
     it("keeps the rewards and settings that are there, then allows song, with the music defaults", () => {
-        const db = createFakeD1(upTo38);
+        const db = createFakeD1(before);
         insert(db, "skip");
         db.raw.prepare("INSERT INTO stage_settings (id, live_token, updated_at, density) VALUES ('main', 't', 1, 0)").run();
         expect(() => insert(db, "song")).toThrow();
-        db.raw.exec(m39);
+        db.raw.exec(m41);
         expect(db.raw.prepare("SELECT action, cost, updated_at FROM stage_rewards").get()).toEqual({ action: "skip", cost: 10, updated_at: 5 });
         insert(db, "song");
         expect(() => insert(db, "nope")).toThrow();

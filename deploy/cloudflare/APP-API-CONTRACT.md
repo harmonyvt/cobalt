@@ -6323,21 +6323,21 @@ credential) and has an `OPTIONS` preflight, so a widget can upload from its sand
 The full contract (files, seams, wire shapes, tools, widgets, what a host sees, checks) is `MCP-APP-CONTRACT.md`; setup in
 each host, local tools and the prompt set are in `MCP-APP.md`.
 
-## 56. Stage music: now playing, song requests and turning the music down (addendum, 2026-11-12; owner: "could we have the ability for the studio to request queue youtube and spotify songs? and show the one I am listening on my account?", then, on the mockup, "on summon can like turn it down automatically temp", then "Build it"; plan and mockup in the project files `song-requests/`. Numbering: 55 needs no migration and 54 is 0038, so this is migration 0039)
+## 56. Stage music: now playing, song requests and turning the music down (addendum, 2026-11-12; owner: "could we have the ability for the studio to request queue youtube and spotify songs? and show the one I am listening on my account?", then, on the mockup, "on summon can like turn it down automatically temp", then "Build it"; plan and mockup in the project files `song-requests/`. Numbering: main ends at 0038; open PRs hold 0039 (browser extension, #135) and 0040 plus section 57 (7TV, #146), so this is migration 0041)
 
 The owner's own Spotify account is the music player. The studio reads what it plays (a card on the canvas and the
 store), adds viewers' requests to its queue (a sixth channel-point reward), and turns it down while a summoned video
 has the spotlight. Spotify's own queue cannot be read reliably (it holds autoplay) nor edited, so "up next" is the
 studio's list of requests. Viewer music is in the stream's audio and VODs like any music the owner plays.
 
-### 56.1 Config, capability, D1 (migration 0039)
+### 56.1 Config, capability, D1 (migration 0041)
 
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`: SECRETS from `~/.config/cobalt/secrets.json` (declared, so the keys must
   be in the file, empty is fine). A Spotify app at developer.spotify.com with the redirect URI
   `<STAGE_BASE_URL>spotify/callback` and the Web API. Spotify's development mode needs the app owner on Premium, and
   so do the queue and volume calls (February 2026 rules: 5 users; the studio has one).
 - `features.stage_spotify`: `stage` and both secrets.
-- Migration 0039: `stage_rewards` rebuilt so `action` may be `song` (rows copied); `stage_settings` gains `music_card`
+- Migration 0041: `stage_rewards` rebuilt so `action` may be `song` (rows copied); `stage_settings` gains `music_card`
   ('full'|'compact'|'off', default full), `music_up_next` (1), `song_youtube` (1), `song_max_seconds` (600, 60..3600),
   `song_queue_max` (5, 1..20), `song_explicit` (0), `duck` (1), `duck_volume` (20, 0..100), `spotify_state(_at)`;
   new `stage_spotify` (one row: the account, AES-GCM tokens keyed by SPOTIFY_CLIENT_SECRET like 30.2, status

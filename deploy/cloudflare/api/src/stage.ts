@@ -312,7 +312,7 @@ export type SettingsRow = {
     live_token: string;
     oauth_state: string | null;
     oauth_state_at: number | null;
-    // section 56 (migration 0039)
+    // section 56 (migration 0041)
     music_card: string;
     music_up_next: number;
     song_youtube: number;
@@ -1924,7 +1924,7 @@ async function redeem(d: StageDeps, ev: RedemptionEvent, reward: RewardRow): Pro
 export async function stageRetention(db: D1Database, now: number): Promise<{ redemptions: number; seen: number; songs: number }> {
     const a = await db.prepare("DELETE FROM stage_redemptions WHERE created_at < ?1").bind(now - REDEMPTION_KEEP_MS).run();
     const b = await db.prepare("DELETE FROM stage_seen WHERE seen_at < ?1").bind(now - SEEN_TTL_MS).run();
-    // section 56: song requests, same 30 days (a database without migration 0039 has none)
+    // section 56: song requests, same 30 days (a database without migration 0041 has none)
     const songs = await songRetention(db, now, REDEMPTION_KEEP_MS).catch(() => 0);
     return { redemptions: Number(a.meta?.changes ?? 0), seen: Number(b.meta?.changes ?? 0), songs };
 }

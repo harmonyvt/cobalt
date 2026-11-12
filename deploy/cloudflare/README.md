@@ -1061,12 +1061,12 @@ The owner's Spotify is the player: the canvas and store show what it plays, a si
 viewer's Spotify link, YouTube link (matched on Spotify by its title) or words to its queue, and the canvas turns it
 down while a summoned video with sound has the spotlight. Code: `src/stage-spotify.ts` (Spotify and YouTube calls,
 input parsing), `src/stage-music.ts` (connect, now playing, up next, the reward, duck); D1 `stage_spotify`,
-`stage_songs`, migration 0039. Spotify needs Premium (its development-mode rule since February 2026, and the queue and
+`stage_songs`, migration 0041. Spotify needs Premium (its development-mode rule since February 2026, and the queue and
 volume calls need it anyway).
 
 Owner steps (once):
 
-1. Apply migration 0039 (before the API deploy).
+1. Apply migration 0041 (before the API deploy).
 2. At <https://developer.spotify.com/dashboard> press **Create app**: any name (e.g. `capystore studio`), redirect URI
    `https://studio.capybaraharmony.com/spotify/callback`, tick **Web API**, save. Open **Settings** for the client id
    and the client secret.
