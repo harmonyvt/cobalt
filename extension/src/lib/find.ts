@@ -10,6 +10,8 @@ export type FoundPost = {
     url: string;
     mount: Element;
     variant: Variant;
+    // When set, the host is inserted immediately after this child of `mount` (the Share chip, not the end of the row).
+    after?: Element;
 };
 
 export type Scan = (doc: ParentNode, pageUrl: string) => FoundPost[];
@@ -102,16 +104,26 @@ function isThumbLink(a: Element): boolean {
     return !!a.querySelector("img, yt-image, yt-thumbnail-view-model");
 }
 
-// The title row of a lockup: a metadata element, or the parent of the title link (not the thumbnail, not the card).
+const AD_CTA = "ad-button-view-model, .ytAdButtonViewModelHost";
+
+function insideAdCta(el: Element): boolean {
+    return !!el.closest(AD_CTA);
+}
+
+function containsAdCta(el: Element): boolean {
+    return !!el.querySelector(AD_CTA);
+}
+
+// The title row of a lockup. Ad Watch/Download buttons also link to the video; they are not the title.
 function lockupRow(card: Element): Element | null {
-    const meta = deepQuery(card, YT_META);
-    if (meta && meta !== card) return meta;
-    const anchors = deepAll(card, YT_LINK);
-    const title = anchors.find((a) => !isThumbLink(a));
+    const meta = deepAll(card, YT_META).find((el) => el !== card && !insideAdCta(el) && !containsAdCta(el));
+    if (meta) return meta;
+    const title = deepAll(card, YT_LINK).find((a) => !isThumbLink(a) && !insideAdCta(a));
     const parent = title?.parentElement;
-    // The parent of a lone thumbnail link is the card itself. That is the gap between results, so skip it.
-    if (parent && parent !== card) return parent;
-    return null;
+    if (!title || !parent || parent === card) return null;
+    // The metadata block also holds Watch/Download. The title link is the row; the CTA container is not.
+    if (!insideAdCta(parent) && !containsAdCta(parent)) return parent;
+    return title;
 }
 
 export function scanYouTube(doc: ParentNode, pageUrl: string): FoundPost[] {
@@ -153,6 +165,18 @@ function isTwitchShare(el: Element): boolean {
     return /^share\b/i.test((el.getAttribute("aria-label") ?? "").trim());
 }
 
+// A one-button wrapper is the Share chip. Its parent, when that parent holds the other actions, is the row.
+function shareRow(share: Element): { mount: Element; after?: Element } | null {
+    const chip = share.parentElement;
+    if (!chip) return null;
+    const row = chip.parentElement;
+    const pageLevel = !row || row.tagName === "MAIN" || row.tagName === "BODY" || row.tagName === "HTML";
+    const chipButtons = chip.querySelectorAll("button").length;
+    const rowButtons = row?.querySelectorAll("button").length ?? 0;
+    if (!pageLevel && chipButtons <= 1 && rowButtons > chipButtons) return { mount: row, after: chip };
+    return { mount: chip };
+}
+
 function clipShareButton(doc: ParentNode): Element | null {
     for (const el of deepAll(doc, "button, [data-a-target='share-button'], [data-a-target='clip-share-button']")) {
         if (!isTwitchShare(el)) continue;
@@ -179,16 +203,21 @@ export function scanTwitch(doc: ParentNode, pageUrl: string): FoundPost[] {
     for (const [url, a] of chosen) out.push({ url, mount: a, variant: "icon" });
     const page = canonicalTwitch(pageUrl, pageUrl);
     if (page && !chosen.has(page)) {
-        // Wait for Share. Mounting on <main> before it exists leaves a full-width bar above the signup banner.
+        // The Share control sits in its own chip. The pill is a sibling of that chip, on the Edit/Share/like row.
         const share = clipShareButton(doc);
-        const mount = share?.parentElement;
-        if (share && mount) out.push({ url: page, mount, variant: "pill" });
+        const placed = share ? shareRow(share) : null;
+        if (placed) out.push({ url: page, mount: placed.mount, variant: "pill", ...(placed.after ? { after: placed.after } : {}) });
     }
     return out;
 }
 
 // Move a button that landed on a weak mount (the page, a card) once a tighter anchor exists.
-export function relocateHost(host: HTMLElement, mount: Element): boolean {
+export function relocateHost(host: HTMLElement, mount: Element, after?: Element | null): boolean {
+    if (after && after.parentElement === mount) {
+        if (host.parentElement === mount && host.previousElementSibling === after) return false;
+        mount.insertBefore(host, after.nextSibling);
+        return true;
+    }
     if (host.parentElement === mount) return false;
     mount.appendChild(host);
     return true;

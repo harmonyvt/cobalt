@@ -62,7 +62,7 @@ export function start(site: SiteId, scan: Scan): void {
     const ensure = (found: FoundPost) => {
         const prev = findHost(found.url);
         if (prev) {
-            relocateHost(prev, found.mount);
+            relocateHost(prev, found.mount, found.after);
             return;
         }
         const host = document.createElement("span");
@@ -96,7 +96,7 @@ export function start(site: SiteId, scan: Scan): void {
             stop(e);
             void onClick(record);
         });
-        found.mount.appendChild(host);
+        relocateHost(host, found.mount, found.after);
         buttons.add(record);
     };
 

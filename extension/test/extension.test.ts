@@ -103,9 +103,12 @@ describe("finding posts in a page", () => {
     it("mounts on a search lockup's title row, including a sponsored watch link, and skips an ad with no video", () => {
         const doc = page(
             "https://www.youtube.com/results?search_query=capy",
-            `<yt-lockup-view-model id="sponsored">
+             `<yt-lockup-view-model id="sponsored">
                <a class="ytLockupViewModelContentImage" href="/watch?v=sponsored01"><img alt=""></a>
-               <div class="yt-lockup-metadata-view-model-wiz" id="ad-meta"><a href="/watch?v=sponsored01">Sponsored</a></div>
+               <div class="yt-lockup-metadata-view-model-wiz" id="ad-meta">
+                 <h3 id="ad-title"><a href="/watch?v=sponsored01">Sponsored</a></h3>
+                 <ad-button-view-model id="cta"><a href="/watch?v=sponsored01">Watch</a><button>Download</button></ad-button-view-model>
+               </div>
              </yt-lockup-view-model>
              <yt-lockup-view-model id="plain">
                <a class="thumbnail" href="/watch?v=abcdefghijk"><img alt=""></a>
@@ -118,10 +121,11 @@ describe("finding posts in a page", () => {
         );
         const found = scanYouTube(doc, "https://www.youtube.com/results?search_query=capy");
         expect(found.map((f) => [f.url, f.variant, f.mount.id])).toEqual([
-            ["https://www.youtube.com/watch?v=sponsored01", "icon", "ad-meta"],
+            ["https://www.youtube.com/watch?v=sponsored01", "icon", "ad-title"],
             ["https://www.youtube.com/watch?v=abcdefghijk", "icon", "title-row"],
         ]);
-        expect(found.every((f) => f.mount !== doc.querySelector("#shop") && f.mount !== doc.querySelector("#plain"))).toBe(true);
+        expect(found[0]!.mount.closest("ad-button-view-model")).toBeNull();
+        expect(found.every((f) => f.mount !== doc.querySelector("#shop") && f.mount !== doc.querySelector("#plain") && f.mount !== doc.querySelector("#cta"))).toBe(true);
     });
 
     it("skips a YouTube lockup that has no title row, and mounts on the metadata when it has one", () => {
@@ -185,6 +189,28 @@ describe("finding posts in a page", () => {
         expect(found[0]!.variant).toBe("pill");
         const navOnly = page("https://clips.twitch.tv/FunnySlug", `<header><button aria-label="Share Clip: somewhere"></button></header><main id="shell"></main>`);
         expect(scanTwitch(navOnly, "https://clips.twitch.tv/FunnySlug")).toEqual([]);
+    });
+
+    it("sits on the Edit/Share/like row, after the Share chip, not inside it", () => {
+        const doc = page(
+            "https://www.twitch.tv/somechannel/clip/FunnySlug",
+            `<main id="shell">
+               <div id="clip-row">
+                 <div id="edit-chip"><button aria-label="Edit">Edit</button></div>
+                 <div id="share-chip"><button aria-label="Share Clip: Kevin Hart gets drenched">Share</button></div>
+                 <div id="like-chip"><button aria-label="Like">Like</button></div>
+               </div>
+             </main>`,
+        );
+        const found = scanTwitch(doc, "https://www.twitch.tv/somechannel/clip/FunnySlug");
+        expect(found).toHaveLength(1);
+        expect(found[0]!.mount.id).toBe("clip-row");
+        expect(found[0]!.after?.id).toBe("share-chip");
+        expect(found[0]!.mount.contains(doc.querySelector("#share-chip"))).toBe(true);
+        const host = doc.createElement("span");
+        expect(relocateHost(host, found[0]!.mount, found[0]!.after)).toBe(true);
+        expect(host.previousElementSibling?.id).toBe("share-chip");
+        expect(host.parentElement?.id).toBe("clip-row");
     });
 
     it("waits for Share on a Twitch clip page, then mounts beside it", () => {
