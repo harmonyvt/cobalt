@@ -312,6 +312,14 @@ export type ChatLiveTarget = {
     // the device that sent the message: it started its own activity (never push-started) and hands back its token
     sender?: boolean;
 };
+// A fresh target. `sender`: the device that sent the message. Its app already shows the card, so the server never
+// push-starts it (`started` is already true) and only waits for that card's token.
+function newTarget(keyId: string, env: Environment, sender: boolean): ChatLiveTarget {
+    const t: ChatLiveTarget = { keyId, env, started: sender, token: null, sent: null, sentAt: 0, ended: false };
+    if (sender) t.sender = true;
+    return t;
+}
+
 export type ChatLiveRecord = {
     thread: string;
     senderKeyId: string;
@@ -364,8 +372,10 @@ export function chatUpdatePayload(s: ChatLiveState, prompt: string, now: number)
 export function decideChatPush(t: Pick<ChatLiveTarget, "sent" | "sentAt">, next: ChatLiveState, prompt: string, now: number): ApnsPush | null {
     const terminal = isChatLiveTerminal(next);
     if (sameState(t.sent, next)) {
-        // the same state only as a keep-alive (a fresh stale-date), at low priority
-        if (terminal || now - t.sentAt < CHAT_LIVE_REFRESH_MS) return null;
+        // Nothing new. Only a keep-alive can go: the reply is still running and nothing went out for a while.
+        const quietTooLong = now - t.sentAt >= CHAT_LIVE_REFRESH_MS;
+        if (terminal || !quietTooLong) return null;
+        // Same card again with a fresh stale-date, at low priority.
         return { event: "update", priority: 5, expiration: secs(now) + 60, payload: chatUpdatePayload(next, prompt, now) };
     }
     const sent = t.sent;
@@ -451,18 +461,25 @@ export class ChatLiveService {
             const b = parse(raw);
             if (typeof b?.token !== "string" || !TOKEN_REGEX.test(b.token) || !isEnv(b.environment)) return bad();
             const rec = await this.d.storage.get<ChatLiveRecord>(`${CHAT_LIVE_PREFIX}${thread}`);
-            let target = rec?.targets.find((t) => t.keyId === keyId);
             if (!this.d.apns) return ok({ pushing: false });
-            if (!rec || (isChatLiveTerminal(rec.latest) && !target)) {
-                // the sender's own activity, ahead of the reply's first hand-over: kept for when it begins
+            let target = rec?.targets.find((t) => t.keyId === keyId);
+
+            // Case 1: no reply under way yet (the phone asks for its card the moment you hit send, so its token can
+            // arrive before the server has heard about the reply). Park the token; the reply picks it up when it begins.
+            const noReplyYet = !rec || (isChatLiveTerminal(rec.latest) && !target);
+            if (noReplyYet) {
                 await this.d.storage.put(`${CHAT_PENDING_PREFIX}${thread}:${keyId}`, { token: b.token, env: b.environment, at: this.d.now() });
                 return ok({ pushing: true });
             }
-            if (!target && rec.senderKeyId === keyId) {
-                // the sender's own activity, for a reply already under way (a device without a chat start token)
-                target = { keyId, env: b.environment, started: true, token: null, sent: null, sentAt: 0, ended: false, sender: true };
-                rec.targets.push(target);
+
+            // Case 2: a reply is under way and this device sent it, but it isn't a target yet (it has no chat start
+            // token). Add it now.
+            if (!target && rec!.senderKeyId === keyId) {
+                target = newTarget(keyId, b.environment, true);
+                rec!.targets.push(target);
             }
+
+            // Case 3: some other device's reply. Nothing to do here.
             if (!target) return ok({ pushing: false });
             if (target.token !== b.token) {
                 target.token = b.token;
@@ -493,24 +510,28 @@ export class ChatLiveService {
                 // for that activity's update token (PUT /live/chats/<thread>), and from then on the server writes it
                 // too: the activity stays current while the phone is locked.
                 const targets: ChatLiveTarget[] = [];
+
+                // Step 1: one target per device that registered for chat cards (old registrations are dropped).
                 for (const [k, v] of await this.d.storage.list<ChatStartToken>({ prefix: CHAT_START_PREFIX })) {
                     const keyId = k.slice(CHAT_START_PREFIX.length);
-                    if (now - v.updatedAt > CHAT_START_TOKEN_TTL_MS) {
+                    const tooOld = now - v.updatedAt > CHAT_START_TOKEN_TTL_MS;
+                    if (tooOld) {
                         await this.d.storage.delete(k);
                         continue;
                     }
-                    const sender = keyId === b.key_id;
-                    targets.push({ keyId, env: v.env, started: sender, token: null, sent: null, sentAt: 0, ended: false, ...(sender ? { sender: true } : {}) });
+                    targets.push(newTarget(keyId, v.env, keyId === b.key_id));
                 }
-                // the sender's activity token, if it came first
+
+                // Step 2: did the sending phone's card token arrive before this reply began? Then use it now.
                 const pendingKey = `${CHAT_PENDING_PREFIX}${thread}:${b.key_id}`;
                 const pending = await this.d.storage.get<{ token: string; env: Environment; at: number }>(pendingKey);
                 if (pending) {
                     await this.d.storage.delete(pendingKey);
-                    if (now - pending.at <= CHAT_PENDING_TTL_MS) {
+                    const fresh = now - pending.at <= CHAT_PENDING_TTL_MS;
+                    if (fresh) {
                         let me = targets.find((t) => t.sender);
                         if (!me) {
-                            me = { keyId: b.key_id, env: pending.env, started: true, token: null, sent: null, sentAt: 0, ended: false, sender: true };
+                            me = newTarget(b.key_id, pending.env, true);
                             targets.push(me);
                         }
                         me.token = pending.token;
@@ -523,6 +544,7 @@ export class ChatLiveService {
                 }
                 // the reply this replaces never ended on those devices: it simply stops being updated (it goes stale)
                 rec = { thread, senderKeyId: b.key_id, prompt, since: state.since, latest: state, targets, createdAt: now, seenAt: now };
+                // Step 3: the sending phone gets an update (its card exists); every other device gets a new card.
                 for (const t of targets) {
                     if (t.sender) await this.pushTarget(rec, t);
                     else await this.start(rec, t, now);
@@ -552,27 +574,43 @@ export class ChatLiveService {
     watch(now: number = this.d.now()): Promise<{ nextInMs: number | null }> {
         return this.serial(async () => {
             if (!this.d.apns) return { nextInMs: null };
+            // When the sweep should come back (the soonest of everything below).
             let next: number | null = null;
+            const comeBackIn = (ms: number) => {
+                next = next === null ? ms : Math.min(next, ms);
+            };
+
+            // Tidy up: parked tokens that no reply picked up.
             for (const [k, p] of await this.d.storage.list<{ at: number }>({ prefix: CHAT_PENDING_PREFIX })) {
                 if (now - p.at > CHAT_PENDING_TTL_MS) await this.d.storage.delete(k);
             }
+
             for (const [, rec] of await this.d.storage.list<ChatLiveRecord>({ prefix: CHAT_LIVE_PREFIX })) {
-                const open = rec.targets.some((t) => !t.ended);
-                if (!open) continue;
+                // Every card of this reply has already ended: nothing to do.
+                const anyCardOpen = rec.targets.some((t) => !t.ended);
+                if (!anyCardOpen) continue;
+
                 if (!isChatLiveTerminal(rec.latest)) {
-                    const seen = rec.seenAt ?? rec.createdAt;
-                    if (now - seen < CHAT_LIVE_SILENT_MS) {
-                        const inMs = seen + CHAT_LIVE_SILENT_MS - now;
-                        next = next === null ? inMs : Math.min(next, inMs);
+                    // The reply is still "running". Has the Worker gone quiet for too long?
+                    const lastHeard = rec.seenAt ?? rec.createdAt;
+                    const silentFor = now - lastHeard;
+                    if (silentFor < CHAT_LIVE_SILENT_MS) {
+                        // Still within the limit: check again when it would run out.
+                        comeBackIn(CHAT_LIVE_SILENT_MS - silentFor);
                         continue;
                     }
+                    // Silent too long: the reply's Worker is gone. Mark it interrupted.
                     console.log(`[chat-live] reply went silent, ending it thread=${rec.thread.slice(0, 6)}`);
                     rec.latest = canonicalChat({ ...rec.latest, status: "failed", code: "error.chat.interrupted" });
                 }
+
+                // Push the final card to every device (this also retries an end that failed before).
                 for (const t of rec.targets) await this.pushTarget(rec, t);
                 await this.save(rec);
-                // an end that did not go out (APNs down): try again on a later pass, for as long as the record lives
-                if (rec.targets.some((t) => !t.ended && t.token)) next = next === null ? 15_000 : Math.min(next, 15_000);
+
+                // A card that still didn't end (Apple unreachable): try again in 15 s.
+                const stillOpen = rec.targets.some((t) => !t.ended && t.token);
+                if (stillOpen) comeBackIn(15_000);
             }
             return { nextInMs: next };
         });

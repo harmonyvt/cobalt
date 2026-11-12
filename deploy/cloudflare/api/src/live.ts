@@ -689,8 +689,12 @@ export class LiveService implements LiveHooks {
         const s = r.state;
         const terminal = isTerminal(s);
         const now = this.d.now();
-        // the same content again only as a keep-alive: a run still waiting on the server, quiet for LIVE_REFRESH_MS
-        const refresh = !terminal && SERVER_WAIT_STAGES.includes(s.stage) && r.lastPushAt > 0 && now - r.lastPushAt >= LIVE_REFRESH_MS;
+        // Keep-alive: is this run still waiting on the server, and has nothing gone to Apple for a while?
+        const stillWorking = !terminal && SERVER_WAIT_STAGES.includes(s.stage);
+        const pushedBefore = r.lastPushAt > 0;
+        const quietTooLong = now - r.lastPushAt >= LIVE_REFRESH_MS;
+        const refresh = stillWorking && pushedBefore && quietTooLong;
+        // Nothing new to show and no keep-alive due: send nothing.
         if (sameState(s, r.sent) && !refresh) return;
         // an end that failed waits for its backoff (the sweep, or a later poll, retries it)
         if (terminal && !catchup && r.endRetryAt && now < r.endRetryAt) return;

@@ -336,10 +336,12 @@ export class CobaltContainer extends Container<Env> {
             hasActiveRuns: () => live.hasActiveRuns(),
             cleanup: (now) => live.cleanup(now),
             retryEnds: async (now) => {
-                const [a, b] = await Promise.all([live.retryEnds(now), chat.watch(now)]);
-                if (a.nextInMs === null) return b;
-                if (b.nextInMs === null) return a;
-                return { nextInMs: Math.min(a.nextInMs, b.nextInMs) };
+                // Both run in the same sweep pass.
+                const runs = await live.retryEnds(now);
+                const chats = await chat.watch(now);
+                // The sweep comes back for whichever needs it first (null: neither needs it).
+                const times = [runs.nextInMs, chats.nextInMs].filter((ms): ms is number => ms !== null);
+                return { nextInMs: times.length > 0 ? Math.min(...times) : null };
             },
         };
     }
