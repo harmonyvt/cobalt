@@ -82,30 +82,47 @@ const YT_CARDS = [
     "yt-lockup-view-model",
 ].join(", ");
 
-// A lockup card has no #metadata. These are the title row YouTube actually renders there.
+// A lockup card has no #metadata. Search results use the wiz metadata row, or just the title link's parent.
 const YT_META = [
     "#metadata",
     "#meta",
     "h3",
     "yt-lockup-metadata-view-model",
     ".yt-lockup-metadata-view-model",
+    ".yt-lockup-metadata-view-model-wiz",
     ".ytLockupViewModelMeta",
     ".yt-lockup-metadata-view-model-wiz__title",
     "a.yt-lockup-metadata-view-model-wiz__title",
 ].join(", ");
+const YT_LINK = 'a[href*="/watch"], a[href*="/shorts/"], a[href*="youtu.be"]';
+
+function isThumbLink(a: Element): boolean {
+    const cls = `${a.id} ${a.getAttribute("class") ?? ""}`.toLowerCase();
+    if (/thumb|image|contentimage/.test(cls)) return true;
+    return !!a.querySelector("img, yt-image, yt-thumbnail-view-model");
+}
+
+// The title row of a lockup: a metadata element, or the parent of the title link (not the thumbnail, not the card).
+function lockupRow(card: Element): Element | null {
+    const meta = deepQuery(card, YT_META);
+    if (meta && meta !== card) return meta;
+    const anchors = deepAll(card, YT_LINK);
+    const title = anchors.find((a) => !isThumbLink(a));
+    const parent = title?.parentElement;
+    // The parent of a lone thumbnail link is the card itself. That is the gap between results, so skip it.
+    if (parent && parent !== card) return parent;
+    return null;
+}
 
 export function scanYouTube(doc: ParentNode, pageUrl: string): FoundPost[] {
     const out: FoundPost[] = [];
     for (const card of doc.querySelectorAll?.(YT_CARDS) ?? []) {
-        const href = deepQuery(card, 'a[href*="/watch"], a[href*="/shorts/"], a[href*="youtu.be"]')?.getAttribute("href");
+        const href = deepQuery(card, YT_LINK)?.getAttribute("href");
         const url = href ? canonicalYouTube(href, pageUrl) : null;
+        // An ad or sponsored card with no /watch or /shorts link is not a post.
         if (!url) continue;
-        const meta = deepQuery(card, YT_META);
         const lockup = card.tagName.toLowerCase() === "yt-lockup-view-model";
-        // A lockup with no title row would put the button on the whole card, in the gap between results.
-        if (lockup && !meta) continue;
-        const link = deepQuery(card, 'a[href*="/watch"], a[href*="/shorts/"], a[href*="youtu.be"]');
-        const mount = meta ?? link;
+        const mount = lockup ? lockupRow(card) : (deepQuery(card, YT_META) ?? deepQuery(card, YT_LINK));
         if (!mount || mount === card) continue;
         out.push({ url, mount, variant: "icon" });
     }
@@ -126,7 +143,24 @@ export function scanYouTube(doc: ParentNode, pageUrl: string): FoundPost[] {
     return out;
 }
 
-const TWITCH_SHARE = "[data-a-target='share-button'], [data-a-target='clip-share-button'], button[aria-label='Share']";
+// Live Share is <button aria-label="Share Clip: …"> with no data-a-target. The top nav also has Share buttons.
+const TWITCH_CHROME = "nav, header, [role='navigation'], [data-a-target='top-nav-container'], [data-a-target='navigation-bar']";
+
+function isTwitchShare(el: Element): boolean {
+    const target = el.getAttribute("data-a-target");
+    if (target === "share-button" || target === "clip-share-button") return true;
+    if (el.tagName !== "BUTTON") return false;
+    return /^share\b/i.test((el.getAttribute("aria-label") ?? "").trim());
+}
+
+function clipShareButton(doc: ParentNode): Element | null {
+    for (const el of deepAll(doc, "button, [data-a-target='share-button'], [data-a-target='clip-share-button']")) {
+        if (!isTwitchShare(el)) continue;
+        if (el.closest(TWITCH_CHROME)) continue;
+        return el;
+    }
+    return null;
+}
 
 function isPreviewLink(a: Element): boolean {
     return a.getAttribute("data-a-target") === "preview-card-image-link" || a.closest("[data-a-target='preview-card-image-link']") === a;
@@ -146,7 +180,7 @@ export function scanTwitch(doc: ParentNode, pageUrl: string): FoundPost[] {
     const page = canonicalTwitch(pageUrl, pageUrl);
     if (page && !chosen.has(page)) {
         // Wait for Share. Mounting on <main> before it exists leaves a full-width bar above the signup banner.
-        const share = deepQuery(doc, TWITCH_SHARE);
+        const share = clipShareButton(doc);
         const mount = share?.parentElement;
         if (share && mount) out.push({ url: page, mount, variant: "pill" });
     }

@@ -100,6 +100,30 @@ describe("finding posts in a page", () => {
         expect(twitch[0]!.mount.tagName).toBe("A");
     });
 
+    it("mounts on a search lockup's title row, including a sponsored watch link, and skips an ad with no video", () => {
+        const doc = page(
+            "https://www.youtube.com/results?search_query=capy",
+            `<yt-lockup-view-model id="sponsored">
+               <a class="ytLockupViewModelContentImage" href="/watch?v=sponsored01"><img alt=""></a>
+               <div class="yt-lockup-metadata-view-model-wiz" id="ad-meta"><a href="/watch?v=sponsored01">Sponsored</a></div>
+             </yt-lockup-view-model>
+             <yt-lockup-view-model id="plain">
+               <a class="thumbnail" href="/watch?v=abcdefghijk"><img alt=""></a>
+               <div id="title-row"><a href="/watch?v=abcdefghijk">title</a></div>
+             </yt-lockup-view-model>
+             <yt-lockup-view-model id="shop">
+               <a href="https://shop.example/sale">Shop now</a>
+               <span>Sponsored</span>
+             </yt-lockup-view-model>`,
+        );
+        const found = scanYouTube(doc, "https://www.youtube.com/results?search_query=capy");
+        expect(found.map((f) => [f.url, f.variant, f.mount.id])).toEqual([
+            ["https://www.youtube.com/watch?v=sponsored01", "icon", "ad-meta"],
+            ["https://www.youtube.com/watch?v=abcdefghijk", "icon", "title-row"],
+        ]);
+        expect(found.every((f) => f.mount !== doc.querySelector("#shop") && f.mount !== doc.querySelector("#plain"))).toBe(true);
+    });
+
     it("skips a YouTube lockup that has no title row, and mounts on the metadata when it has one", () => {
         const doc = page(
             "https://www.youtube.com/results?search_query=capy",
@@ -143,6 +167,24 @@ describe("finding posts in a page", () => {
             `<main><section><h2>Sorry, this page isn't available.</h2><p>The link may be broken, or the post may have been removed.</p></section></main>`,
         );
         expect(scanInstagram(doc, "https://www.instagram.com/p/AAAAAAAAAAA/")).toEqual([]);
+    });
+
+    it("mounts beside Share Clip and ignores the same words in the top nav", () => {
+        const doc = page(
+            "https://www.twitch.tv/somechannel/clip/FunnySlug",
+            `<nav><button aria-label="Share">Share</button></nav>
+             <main id="shell">
+               <div id="signup">Sign up</div>
+               <div id="clip-actions"><button aria-label="Share Clip: Kevin Hart gets drenched">Share</button></div>
+             </main>`,
+        );
+        const url = "https://www.twitch.tv/somechannel/clip/FunnySlug";
+        const found = scanTwitch(doc, url);
+        expect(found.map((f) => f.url)).toEqual([url]);
+        expect(found[0]!.mount.id).toBe("clip-actions");
+        expect(found[0]!.variant).toBe("pill");
+        const navOnly = page("https://clips.twitch.tv/FunnySlug", `<header><button aria-label="Share Clip: somewhere"></button></header><main id="shell"></main>`);
+        expect(scanTwitch(navOnly, "https://clips.twitch.tv/FunnySlug")).toEqual([]);
     });
 
     it("waits for Share on a Twitch clip page, then mounts beside it", () => {
