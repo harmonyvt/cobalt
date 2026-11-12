@@ -288,10 +288,13 @@ export async function upNext(d: StageDeps, limit = UP_NEXT_MAX): Promise<UpNext[
     return results.map((r) => ({ id: r.id, title: r.title, artist: r.artist, art_url: r.art_url, duration_ms: r.duration_ms, by: r.user_name, source: r.source }));
 }
 
-function cachedNowPlaying(row: Pick<SpotifyRow, "np_json" | "np_at">, now: number, maxAge: number): NowPlaying | null {
-    if (!row.np_json || now - row.np_at > maxAge) return null;
+// The stored answer while it was read from Spotify within `maxAge` (its own `at`, not np_at: np_at moves when a refresh
+// is claimed, also one that then fails).
+function cachedNowPlaying(row: Pick<SpotifyRow, "np_json">, now: number, maxAge: number): NowPlaying | null {
+    if (!row.np_json) return null;
     try {
-        return JSON.parse(row.np_json) as NowPlaying;
+        const np = JSON.parse(row.np_json) as NowPlaying;
+        return now - np.at <= maxAge ? np : null;
     } catch {
         return null;
     }
@@ -323,7 +326,7 @@ export async function nowPlaying(d: StageDeps): Promise<{ connected: boolean; no
     const row = await readSpotify(d);
     if (!row || row.status === "reconnect") return { connected: false, now_playing: null };
     const now = d.now();
-    if (now - row.np_at < NOW_PLAYING_TTL_MS) return { connected: true, now_playing: cachedNowPlaying(row, now, Number.MAX_SAFE_INTEGER) };
+    if (now - row.np_at < NOW_PLAYING_TTL_MS) return { connected: true, now_playing: cachedNowPlaying(row, now, 60_000) };
     // one caller refreshes; the others keep the answer they have
     const claim = await d.db.prepare("UPDATE stage_spotify SET np_at = ?1 WHERE id = 'main' AND np_at = ?2").bind(now, row.np_at).run();
     if (Number(claim.meta?.changes ?? 0) !== 1) return { connected: true, now_playing: cachedNowPlaying(row, now, 60_000) };
