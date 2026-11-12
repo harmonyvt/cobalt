@@ -2,6 +2,7 @@
 import * as z from "zod";
 import { OpError } from "../../registry/op";
 import { PostOut } from "../shapes";
+import { timecode } from "../../transcripts";
 import type { AppTool } from "../types";
 import { arr, clock, cut, num, plural, readPosts, rec, signThumbs, str, summaryOf } from "./common";
 
@@ -65,13 +66,23 @@ export const showPost: AppTool<z.infer<typeof Input>> = {
         let signed = summary.status !== "public" && !!read.posts.get(id)?.thumb_source;
 
         const t = rec(transcript);
-        const lines =
+        const timed =
             t.state === "done"
-                ? arr(t.lines)
-                      .map((l) => str(rec(l).text)?.trim() ?? "")
-                      .filter(Boolean)
+                ? arr(t.lines).flatMap((l) => {
+                      const line = rec(l);
+                      const text = str(line.text)?.trim() ?? "";
+                      const start = num(line.start);
+                      return text && start !== null ? [{ start, end: num(line.end) ?? start, timecode: timecode(start), text }] : [];
+                  })
                 : [];
-        const excerpt = lines.length > 0 ? cut(lines.join(" "), EXCERPT_CHARS) : null;
+        const excerpt = timed.length > 0 ? cut(timed.map((l) => l.text).join(" "), EXCERPT_CHARS) : null;
+        // the lines the excerpt was cut from, with their times, as far as EXCERPT_CHARS of text goes
+        let room = EXCERPT_CHARS;
+        const transcriptLines = timed.filter((l) => {
+            if (room <= 0) return false;
+            room -= l.text.length + 1;
+            return true;
+        });
 
         const files = arr(post.files).map(rec);
         const fileList = (
@@ -120,6 +131,7 @@ export const showPost: AppTool<z.infer<typeof Input>> = {
                 source_link: str(post.link),
                 caption,
                 transcript_excerpt: excerpt,
+                transcript_lines: transcriptLines,
                 share_url: shareUrl,
                 private_url: privateUrl,
                 private_file_url: privateFileUrl,
@@ -140,7 +152,9 @@ export const showPost: AppTool<z.infer<typeof Input>> = {
             caption && caption !== summary.title ? `Caption: ${caption}` : null,
             str(post.link) ? `Saved from: ${str(post.link)}` : summary.source_host ? `Saved from: ${summary.source_host}` : null,
             shareUrl ? `Share link: ${shareUrl}` : privateUrl ? `Private link: ${privateUrl}` : "No share link yet.",
-            excerpt ? `Says: ${excerpt}` : null,
+            transcriptLines.length > 0
+                ? `Says (library_transcript has every line with its time):\n${transcriptLines.map((l) => `[${l.timecode}] ${cut(l.text, EXCERPT_CHARS)}`).join("\n")}`
+                : null,
             fileList.length > 0 ? `Files:\n${fileList.map(fileLine).join("\n")}` : null,
         ]
             .filter(Boolean)

@@ -83,10 +83,13 @@ optional and the defaults stay widget-sized.
   `mode` is `"meaning"`, `"text"` or `"list"`. `within` (a collection, a link or a list of posts) is meaning search only:
   it errors rather than being ignored while meaning search is off or failing. `match: "text"` forces the title/name/link/
   caption substring match. At most 500 rows by meaning, 1000 by list. Items carry `score`, `why`, `said`, `source_link`
-  and `caption` (null when the search did not give them).
+  and `caption` (null when the search did not give them). Each `said` entry has `at`/`end` (seconds) and `timecode`
+  (`at` as `"m:ss"`).
 - `show_post { id: string }`: every file with `id`, `role`, `name`, `url`, `share_url`, `private_url`, `private_file_url`
   (what `library.post` gave the caller; a hidden post is an error and gives no URL), plus the post's `preview_expires_at`.
   For a file that is not public its signed links are in `_meta["capystore/preview"]` under the file's `id` (section 9).
+  A video also has `transcript_excerpt` (the first 45 s of speech as plain text, 280 characters, for the widget) and
+  `transcript_lines` (the same lines as `{ start, end, timecode, text }`); the text answer lists them as `[0:03] …`.
 - `show_edit { id?: string, query?: string }`: an id, or a title to find; neither, or several matches: `project: null`
   and the list in `projects` (up to 100). A project carries its raw `timeline` (what `edits_update` takes back; its
   `sources`, with names and pictures, are not passed on). For the timeline player each main clip also has `video_url`

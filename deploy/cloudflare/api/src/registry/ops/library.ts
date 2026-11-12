@@ -7,7 +7,7 @@ import { LIBRARY_MAX_LIMIT, loadPosts, RANK_MAX, SEARCH_MAX } from "../../chat-t
 import { libraryAbout, libraryAboutSet } from "../../about";
 import { USER_TAGS_MAX } from "../../about-store";
 import { libraryMap, librarySearch } from "../../embed";
-import { transcriptOf, TranscriptNotFound } from "../../transcripts";
+import { timecode, transcriptOf, TranscriptNotFound } from "../../transcripts";
 import { WITHIN_POSTS_MAX } from "../../within";
 import { queueSnapshot } from "../../queue";
 import { defineOp, ok, OpError, type OpContext } from "../op";
@@ -455,12 +455,22 @@ export const libraryTranscriptOp = defineOp({
     http: (ctx) => ({ key: ctx.query.get("key") ?? "", from: seconds(ctx.query.get("from")), to: seconds(ctx.query.get("to")) }),
     ai: {
         tier: "free",
-        summary: "What is said in a video, line by line with times in seconds (from/to: only that part). state says why there are no lines.",
+        summary:
+            "What is said in a video, line by line with times (start/end in seconds, timecode: the start as m:ss to cite; from/to: only that part). state says why there are no lines.",
         params: ["key"],
         options: true,
+        // every line also carries `timecode`, its start as a timecode ("1:23"), so an answer can cite the moment as is
         result: (body: unknown) => {
-            const { status: _s, ...rest } = (body ?? {}) as Record<string, unknown>;
-            return rest;
+            const { status: _s, lines, ...rest } = (body ?? {}) as Record<string, unknown>;
+            return {
+                ...rest,
+                lines: Array.isArray(lines)
+                    ? lines.map((l) => {
+                          const line = (l ?? {}) as Record<string, unknown>;
+                          return typeof line.start === "number" ? { timecode: timecode(line.start), ...line } : line;
+                      })
+                    : lines,
+            };
         },
     },
     handler: async (ctx, input) => {

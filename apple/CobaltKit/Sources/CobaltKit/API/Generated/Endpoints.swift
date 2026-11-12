@@ -31,7 +31,7 @@ enum Endpoints {
         APIEndpoint(op: "library.about.set", method: "PATCH", path: "/library/about", auth: .key)
     }
 
-    /// `GET /library/transcript` (op `library.transcript`, auth key_or_service): What is said in a video, line by line with times in seconds (from/to: only that part). state says why there are no lines.
+    /// `GET /library/transcript` (op `library.transcript`, auth key_or_service): What is said in a video, line by line with times (start/end in seconds, timecode: the start as m:ss to cite; from/to: only that part). state says why there are no lines.
     static func libraryTranscript() -> APIEndpoint<LibraryTranscriptResponse> {
         APIEndpoint(op: "library.transcript", method: "GET", path: "/library/transcript", auth: .keyOrService)
     }
