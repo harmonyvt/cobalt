@@ -224,14 +224,27 @@ describe("POST /studio with notify", () => {
 });
 
 describe("origin: share", () => {
-    it("is remembered for GET /studio/recent; only \"share\" is accepted", async () => {
+    it("share is remembered for GET /studio/recent; extension is saved and left out of that list", async () => {
+        const ext = asBody(await w.studio.create(KEY_ID, json({ url: LINK, origin: "extension" })));
+        expect(ext.status).toBe("success");
+        expect(w.kv.m.get(`share:${ext.id}`)).toBeUndefined();
         const sid = asBody(await w.studio.create(KEY_ID, json(shareBody()))).id as string;
         expect(w.kv.m.get(`share:${sid}`)).toEqual({ keyId: KEY_ID, at: w.clock.t });
-        for (const origin of ["app", "", 1, true, {}, ["share"]]) {
+        for (const origin of ["app", "", 1, true, {}, ["share"], "Extension"]) {
             const r = await w.studio.create(KEY_ID, json({ url: LINK, origin }));
             expect(r).toEqual({ status: 400, body: { status: "error", error: { code: "error.studio.invalid_params" } } });
         }
-        expect(w.sessions()).toHaveLength(1);
+        expect(w.sessions()).toHaveLength(2);
+    });
+
+    it("an extension save is refused as busy unless it asks to queue, and it is never a share", async () => {
+        const first = asBody(await w.studio.create(KEY_ID, json({ url: LINK }))).id as string;
+        expect(first).toBeTruthy();
+        const refused = await w.studio.create(KEY_ID, json({ url: LINK, origin: "extension" }));
+        expect(refused).toEqual({ status: 429, body: { status: "error", error: { code: "error.studio.busy" } } });
+        const queued = asBody(await w.studio.create(KEY_ID, json({ url: LINK, origin: "extension", queue: true })));
+        expect(queued.status).toBe("success");
+        expect(w.kv.m.has(`share:${queued.id}`)).toBe(false);
     });
 
     it("a share is never refused as busy: it queues behind the running save; an app save still gets 429", async () => {
@@ -283,6 +296,7 @@ describe("GET /studio/recent", () => {
         await w.addKey(OTHER_KEY_ID, OTHER_CLIENT);
         const mine = asBody(await w.studio.create(KEY_ID, json(shareBody()))).id as string;
         await w.studio.create(KEY_ID, json({ url: LINK })); // an app save
+        await w.studio.create(KEY_ID, json({ url: LINK, origin: "extension", queue: true }));
         const theirs = asBody(await w.studio.create(OTHER_KEY_ID, json(shareBody()))).id as string;
         expect(await ids(await recent())).toEqual([mine]);
         expect(await ids(await recent("", { authorization: `Api-Key ${OTHER_CLIENT}` }))).toEqual([theirs]);

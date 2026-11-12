@@ -1,4 +1,5 @@
 import { handleAuth } from "./auth";
+import { handleConnect } from "./connect";
 import { handleKeys, type Env } from "./keys";
 import { handleLibrary } from "./library";
 import { handleLogs } from "./logs";
@@ -7,9 +8,9 @@ import { handleStudio } from "./studio";
 
 export type { Env };
 
-// `assets.runWorkerFirst` routes only /api/keys(/*), /api/auth(/*), /api/mcp(/*), /studio(/*), /library(/*),
-// /api/library(/*), /logs and /api/logs(/*) here; every other request is answered by the static assets
-// without invoking this Worker.
+// `assets.runWorkerFirst` routes only /api/keys(/*), /api/auth(/*), /api/mcp(/*), /connect/extension,
+// /studio(/*), /library(/*), /api/library(/*), /logs and /api/logs(/*) here; every other request is answered
+// by the static assets without invoking this Worker.
 // The fallthrough below is a safety net in case that routing is ever widened.
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
@@ -19,6 +20,9 @@ export default {
         }
         if (pathname === "/api/auth" || pathname.startsWith("/api/auth/")) {
             return handleAuth(request, env);
+        }
+        if (pathname === "/connect" || pathname.startsWith("/connect/")) {
+            return handleConnect(request, env);
         }
         if (pathname === "/api/mcp" || pathname.startsWith("/api/mcp/")) {
             return handleMcp(request, env);

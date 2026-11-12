@@ -180,6 +180,10 @@ export const PATHS: string[] = [
     "/mcp/upload/bad",
     // added with accounts (section 42): device sessions and the owner's keys
     "/auth/exchange",
+    // browser extension sign-in (section 55): Safari polls; Chrome trades the code at /auth/exchange
+    "/auth/extension/begin",
+    "/auth/extension/poll",
+    "/auth/extension/other",
     "/auth/me",
     "/auth/sessions",
     "/auth/sessions/0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a99",

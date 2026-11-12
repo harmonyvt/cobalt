@@ -1,0 +1,88 @@
+{
+    "manifest_version": 3,
+    "name": "Save to Capystore",
+    "version": "1.0.0",
+    "description": "Save a post to Capystore from X, YouTube, Twitch and Instagram.",
+    "action": {
+        "default_title": "Save to Capystore",
+        "default_popup": "popup.html",
+        "default_icon": {
+            "16": "assets/icons/idle-16.png",
+            "32": "assets/icons/idle-32.png",
+            "48": "assets/icons/idle-48.png",
+            "128": "assets/icons/idle-128.png"
+        }
+    },
+    "icons": {
+        "16": "assets/icons/idle-16.png",
+        "32": "assets/icons/idle-32.png",
+        "48": "assets/icons/idle-48.png",
+        "128": "assets/icons/idle-128.png"
+    },
+    "background": {
+        "service_worker": "background.js"
+    },
+    "options_ui": {
+        "page": "options.html",
+        "open_in_tab": true
+    },
+    "permissions": ["storage", "identity", "tabs", "alarms"],
+    "host_permissions": [
+        "https://api.capybaraharmony.com/*",
+        "https://cobalt.capybaraharmony.com/*",
+        "https://x.com/*",
+        "https://twitter.com/*",
+        "https://mobile.twitter.com/*",
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://www.twitch.tv/*",
+        "https://m.twitch.tv/*",
+        "https://clips.twitch.tv/*",
+        "https://www.instagram.com/*",
+        "https://instagram.com/*"
+    ],
+    "content_scripts": [
+        {
+            "matches": ["https://x.com/*", "https://twitter.com/*", "https://mobile.twitter.com/*"],
+            "js": ["content/x.js"],
+            "run_at": "document_idle"
+        },
+        {
+            "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+            "js": ["content/youtube.js"],
+            "run_at": "document_idle"
+        },
+        {
+            "matches": ["https://www.twitch.tv/*", "https://m.twitch.tv/*", "https://clips.twitch.tv/*"],
+            "js": ["content/twitch.js"],
+            "run_at": "document_idle"
+        },
+        {
+            "matches": ["https://www.instagram.com/*", "https://instagram.com/*"],
+            "js": ["content/instagram.js"],
+            "run_at": "document_idle"
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": ["assets/capy-sprites.png"],
+            "matches": [
+                "https://x.com/*",
+                "https://twitter.com/*",
+                "https://mobile.twitter.com/*",
+                "https://www.youtube.com/*",
+                "https://m.youtube.com/*",
+                "https://www.twitch.tv/*",
+                "https://m.twitch.tv/*",
+                "https://clips.twitch.tv/*",
+                "https://www.instagram.com/*",
+                "https://instagram.com/*"
+            ]
+        }
+    ],
+    "browser_specific_settings": {
+        "safari": {
+            "strict_min_version": "16.4"
+        }
+    }
+}

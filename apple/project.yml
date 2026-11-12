@@ -1,8 +1,10 @@
 name: Cobalt
 
 # One multiplatform SwiftUI app (iPhone, iPad, Mac) plus an iOS share extension, an iOS keyboard
-# extension, an iOS widget extension (the Live Activity), and a Mac File Provider extension
-# (the Capystore location in the Finder sidebar).
+# extension, an iOS widget extension (the Live Activity), a Mac File Provider extension
+# (the Capystore location in the Finder sidebar), and a separate Mac app that hosts the
+# Safari Web Extension (CapystoreSafari). That app is not embedded in Cobalt, so the iOS and
+# Mac TestFlight builds do not include it. See extension/README.md.
 # Generated project is gitignored: `cd apple && xcodegen generate`.
 # Info.plists in Config/ are generated from this file and committed; the entitlements are hand-written.
 
@@ -254,3 +256,79 @@ targets:
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
         CODE_SIGN_ENTITLEMENTS: Config/CobaltFileProvider.entitlements
+
+  # A small Mac app whose only job is to carry the Safari Web Extension. Not a dependency of
+  # Cobalt, so `xcodebuild -scheme Cobalt` does not build it. Build the JS first (extension/README.md);
+  # the extension target's script copies extension/dist into the appex.
+  CapystoreSafari:
+    type: application
+    # supportedDestinations fills the scheme's platform list. `platform: macOS` alone leaves it empty,
+    # and Xcode warns that the scheme has no supported platforms.
+    supportedDestinations: [macOS]
+    sources:
+      - path: CapystoreSafari
+    dependencies:
+      - target: CapystoreSafariExtension
+        embed: true
+    info:
+      path: Config/CapystoreSafari-Info.plist
+      properties:
+        CFBundleDisplayName: Save to Capystore
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.utilities
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_NAME: CapystoreSafari
+        PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt.safari
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_ENTITLEMENTS: Config/CapystoreSafari.entitlements
+        ENABLE_PREVIEWS: YES
+
+  CapystoreSafariExtension:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: CapystoreSafariExtension
+    info:
+      path: Config/CapystoreSafariExtension-Info.plist
+      properties:
+        CFBundleDisplayName: Save to Capystore
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.Safari.web-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
+    postCompileScripts:
+      - name: Embed Save to Capystore web extension
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(SRCROOT)/../extension/dist/manifest.json
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/manifest.json
+        script: |
+          set -euo pipefail
+          SRC="${SRCROOT}/../extension/dist"
+          DEST="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          if [[ ! -f "${SRC}/manifest.json" ]]; then
+            echo "error: extension/dist is missing. From the repo root: cd extension && npm ci && npm run build" >&2
+            exit 1
+          fi
+          mkdir -p "${DEST}"
+          rsync -a --delete --exclude '.DS_Store' "${SRC}/" "${DEST}/"
+    settings:
+      base:
+        PRODUCT_NAME: CapystoreSafariExtension
+        PRODUCT_MODULE_NAME: CapystoreSafariExtension
+        PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt.safari.extension
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        CODE_SIGN_ENTITLEMENTS: Config/CapystoreSafariExtension.entitlements
+        # The project turns script sandboxing on. This script has to create the appex Resources
+        # directory, which that sandbox rejects (mkdir: Operation not permitted). This target only.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO

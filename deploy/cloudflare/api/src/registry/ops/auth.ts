@@ -384,4 +384,121 @@ const ROUTES = [
     }),
 ];
 
-export const AUTH_OPS = [exchangeOp, ...ROUTES];
+// ---- extension pairing (55) ------------------------------------------------------------------------------------------
+// Safari cannot finish chrome.identity.launchWebAuthFlow, so it polls. Chrome's redirect sign-in does not use this
+// table: the approve page writes an auth_handoffs row and the existing POST /auth/exchange mints the session.
+// Codes are 32 random bytes, base64url (43 characters), the same shape as an app handoff code. Only the hash is stored.
+
+export const PAIRING_TTL_MS = 5 * 60 * 1000;
+export const PAIRING_INTERVAL_S = 2;
+const MAX_PAIRINGS = 30;
+const STATE_REGEX = /^[A-Za-z0-9_-]{16,128}$/;
+
+const newSecret = () => b64url(crypto.getRandomValues(new Uint8Array(32)).buffer);
+
+const Pending = z.object({
+    status: z.literal("pending"),
+    interval: z.number().int().describe("seconds the extension should wait before polling again"),
+});
+
+export const extensionBeginOp = defineOp({
+    name: "auth.extension.begin",
+    route: { method: "POST", path: "/auth/extension/begin" },
+    auth: "open",
+    runs: "worker",
+    cors: false,
+    noStore: true,
+    input: z.object({
+        challenge: z.string().max(64).describe("base64url(SHA-256(verifier)), PKCE S256"),
+        state: z.string().max(160),
+    }),
+    badRequest: CODE_INVALID,
+    output: z.object({
+        status: z.literal("pending"),
+        device_code: z.string().describe("the extension's secret for POST /auth/extension/poll; shown once"),
+        user_code: z.string().describe("goes in the approve page URL; useless without the device code and the verifier"),
+        expires_at: z.number().int(),
+        interval: z.number().int(),
+    }),
+    ai: { tier: "hidden", summary: "Start a browser-extension sign-in (POST /auth/extension/begin). The owner approves it on the web app." },
+    handler: async (ctx, input) => {
+        if (!CODE_REGEX.test(input.challenge) || !STATE_REGEX.test(input.state)) throw new OpError(400, CODE_INVALID);
+        const now = ctx.now();
+        // Expired and already-traded rows are dead weight. Then a soft cap, so a flood of begins can't grow the table.
+        await ctx.db.prepare("DELETE FROM extension_pairings WHERE expires_at < ?1 OR used_at IS NOT NULL").bind(now).run();
+        const count = await ctx.db.prepare("SELECT COUNT(*) AS n FROM extension_pairings").first<{ n: number }>();
+        const extra = Number(count?.n ?? 0) - (MAX_PAIRINGS - 1);
+        if (extra > 0) {
+            await ctx.db
+                .prepare("DELETE FROM extension_pairings WHERE device_hash IN (SELECT device_hash FROM extension_pairings ORDER BY created_at ASC, device_hash ASC LIMIT ?1)")
+                .bind(extra)
+                .run();
+        }
+        const deviceCode = newSecret();
+        const userCode = newSecret();
+        const expiresAt = now + PAIRING_TTL_MS;
+        await ctx.db
+            .prepare(
+                "INSERT INTO extension_pairings (device_hash, user_hash, challenge, state, device, email, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, 'Browser extension', NULL, ?5, ?6)",
+            )
+            .bind(await hashKey(deviceCode), await hashKey(userCode), input.challenge, input.state, now, expiresAt)
+            .run();
+        return ok({ status: "pending", device_code: deviceCode, user_code: userCode, expires_at: expiresAt, interval: PAIRING_INTERVAL_S }, 201);
+    },
+});
+
+export const extensionPollOp = defineOp({
+    name: "auth.extension.poll",
+    route: { method: "POST", path: "/auth/extension/poll" },
+    auth: "open",
+    runs: "worker",
+    cors: false,
+    noStore: true,
+    input: z.object({
+        device_code: z.string().max(64),
+        verifier: z.string().max(160),
+        state: z.string().max(160),
+    }),
+    badRequest: CODE_INVALID,
+    output: z.union([
+        Pending,
+        z.object({ status: z.literal("success"), key: z.string().describe("the session token: send it as Api-Key"), session: SessionShape }),
+    ]),
+    ai: { tier: "hidden", summary: "Poll a browser-extension sign-in (POST /auth/extension/poll). Pending until the owner approves, then a device session." },
+    handler: async (ctx, input) => {
+        if (!CODE_REGEX.test(input.device_code) || !VERIFIER_REGEX.test(input.verifier) || !STATE_REGEX.test(input.state)) {
+            throw new OpError(400, CODE_INVALID);
+        }
+        const now = ctx.now();
+        const row = await ctx.db
+            .prepare("SELECT challenge, state, device, email, approved_at, used_at, expires_at FROM extension_pairings WHERE device_hash = ?1")
+            .bind(await hashKey(input.device_code))
+            .first<{ challenge: string; state: string; device: string; email: string | null; approved_at: number | null; used_at: number | null; expires_at: number }>();
+        // One answer for unknown, expired, used, or a verifier/state that does not match, so a guess learns nothing.
+        if (!row || row.used_at || row.expires_at <= now) throw new OpError(400, CODE_INVALID);
+        if (row.challenge !== (await challengeOf(input.verifier)) || row.state !== input.state) throw new OpError(400, CODE_INVALID);
+        if (!row.approved_at || !row.email) return ok({ status: "pending", interval: PAIRING_INTERVAL_S }, 202);
+        const claimed = await ctx.db
+            .prepare(
+                `UPDATE extension_pairings SET used_at = ?1
+                 WHERE device_hash = ?2 AND used_at IS NULL AND approved_at IS NOT NULL AND expires_at > ?1
+                 RETURNING device, email`,
+            )
+            .bind(now, await hashKey(input.device_code))
+            .first<{ device: string; email: string }>();
+        if (!claimed?.email) throw new OpError(400, CODE_INVALID);
+        const minted = await mintSession(
+            ctx.db,
+            {
+                device: cleanDevice(claimed.device) ?? "Browser extension",
+                platform: "extension",
+                email: claimed.email,
+                country: ctx.country ?? countryOf(ctx.request),
+            },
+            now,
+        );
+        return ok({ status: "success", key: minted.key, session: minted.session });
+    },
+});
+
+export const AUTH_OPS = [exchangeOp, extensionBeginOp, extensionPollOp, ...ROUTES];

@@ -46,6 +46,7 @@
         ipados: IconDeviceTablet,
         mac: IconDeviceDesktop,
         web: IconBrowser,
+        extension: IconBrowser,
     };
 
     const formatDate = (ms: number) => {
