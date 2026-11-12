@@ -7,7 +7,9 @@ import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
 import type { ChatModel, CodeRunner, ModelTurn } from "../src/chat";
 import { sandboxModule } from "../src/chat-loader-module";
 import { hashKey } from "../src/keys";
-import { REGISTRY } from "../src/registry/index";
+import { runOp } from "../src/registry/ai";
+import { forCall } from "../src/registry/context";
+import { opBase, REGISTRY } from "../src/registry/index";
 import { dailySaves } from "../src/registry/ops/library-writes";
 import { handleChatPendingRoute } from "../src/registry/pending";
 import { handleRequest, type WorkerEnv } from "../src/worker";
@@ -248,6 +250,33 @@ describe("cobalt.library.save", () => {
         clock += 60_000 + 1;
         const next = await ask(t, `return (await cobalt.library.save("https://x.com/a/status/10")).status;`);
         expect(next.run.result).toBe("ready");
+    });
+
+    it("an MCP caller saves past the daily cap: no count is read, saves_left_today is null; the chat keeps the cap", async () => {
+        const t = await newThread();
+        const row = db.raw.prepare("INSERT INTO studio_sessions (id, key_id, link, service, status, created_at, expires_at) VALUES (?, ?, 'https://x.com/', 'x', 'ready', ?, ?)");
+        for (let i = 0; i < 25; i++) row.run(`Mcp${String(i).padStart(19, "0")}`, `chat:${t}`, clock - 60_000 + i, clock + DAY);
+        const edge = { now: () => clock, sleep: async () => {} };
+        const as = (mcp: boolean) =>
+            forCall(opBase(env, container, edge, REGISTRY), {
+                keyId: `chat:${t}`,
+                caller: "chat",
+                chat: { threadId: t, collect: { look: [], show: [], collage: null }, tools: {}, ...(mcp ? { mcp: { origin: API, clientKeyId: "key-1" } } : {}) } as never,
+            });
+        const queries: string[] = [];
+        const prepare = db.prepare.bind(db);
+        (db as any).prepare = (sql: string) => (queries.push(sql), prepare(sql));
+        try {
+            for (let i = 0; i < 3; i++) {
+                const r = (await runOp(REGISTRY.op("library.save")!, as(true), { url: `https://x.com/a/status/${i}` })) as any;
+                expect(r).toMatchObject({ status: "ready", saves_left_today: null });
+            }
+            expect(queries.filter((q) => q.includes("FROM studio_sessions WHERE key_id"))).toEqual([]);
+            // the same thread through the in-app chat is over its cap
+            await expect(runOp(REGISTRY.op("library.save")!, as(false), { url: "https://x.com/a/status/9" })).rejects.toThrow(/already saved \d+ links today \(the cap is 20\)/);
+        } finally {
+            (db as any).prepare = prepare;
+        }
     });
 
     it("reads CHAT_DAILY_SAVES: a number, 0 turns chat saves off, junk is the default", () => {

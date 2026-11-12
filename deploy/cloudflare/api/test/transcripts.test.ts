@@ -18,10 +18,12 @@ import {
     segmentsFromVtt,
     segmentsOf,
     timeTranscripts,
+    timecode,
     transcriptModel,
     transcriptOf,
     type Line,
 } from "../src/transcripts";
+import { libraryTranscriptOp } from "../src/registry/ops/library";
 import { handleRequest, type WorkerEnv } from "../src/worker";
 import { type FakeD1 } from "../../test-support/d1-sqlite";
 import { createBatchD1 } from "./d1-batch";
@@ -404,6 +406,36 @@ describe("moments and search (47.4, 47.5)", () => {
 });
 
 // ---- 47.3: GET /library/transcript --------------------------------------------------------------------------------------------
+
+describe("timecodes for the chat AI and MCP agents", () => {
+    it("timecode writes m:ss, h:mm:ss past an hour, rounding down", () => {
+        expect(timecode(0)).toBe("0:00");
+        expect(timecode(3.99)).toBe("0:03");
+        expect(timecode(83.4)).toBe("1:23");
+        expect(timecode(599.9)).toBe("9:59");
+        expect(timecode(3725)).toBe("1:02:05");
+        expect(timecode(-4)).toBe("0:00");
+        expect(timecode(NaN)).toBe("0:00");
+    });
+
+    it("the chat/MCP answer of library.transcript gives every line its timecode and drops status", () => {
+        const out = libraryTranscriptOp.ai!.result!({
+            status: "success",
+            post_key: "p",
+            state: "done",
+            lines: [
+                { start: 3.49, end: 6.35, text: "It's the mask." },
+                { start: 131.28, end: 135.7, text: "later" },
+            ],
+        }) as any;
+        expect(out).not.toHaveProperty("status");
+        expect(out.lines).toEqual([
+            { timecode: "0:03", start: 3.49, end: 6.35, text: "It's the mask." },
+            { timecode: "2:11", start: 131.28, end: 135.7, text: "later" },
+        ]);
+        expect((libraryTranscriptOp.ai!.result!({ status: "success", state: "pending", lines: [] }) as any).lines).toEqual([]);
+    });
+});
 
 describe("GET /library/transcript (47.3)", () => {
     async function http(withAi = true) {

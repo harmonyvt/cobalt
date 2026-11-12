@@ -20,7 +20,7 @@
 
 import { raceCeiling } from "./ceiling";
 import { Crop, HELPER_UPLOAD_MS, JobRecord, KV, MEDIA_NAME_LENGTH, Quality, WebpParams, WebpService, mintId, num, randomBase62, serviceFromUrl } from "./webp";
-import { KEY_ID_HEADER } from "./headers";
+import { AGENT_LIVE_HEADER, KEY_ID_HEADER } from "./headers";
 import { cropToPixels, parseCrop } from "../helper/crop.js";
 import { STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "./gate";
 import { SERVICE_KEY_ID, insertMediaItem, mediaNameFromUrl, pageLink, releasePoster, stripLinkSecrets } from "./library";
@@ -192,6 +192,18 @@ export type RenderRow = {
     kind?: string | null;
     plan?: string | null;
 };
+
+// A short name for a link on the lock screen: its last path part (a post id, a video id), else its host.
+export function agentRef(link: string): string {
+    try {
+        const u = new URL(link);
+        const parts = u.pathname.split("/").filter(Boolean);
+        const v = u.searchParams.get("v");
+        return (v ?? parts[parts.length - 1] ?? u.hostname).slice(0, 120);
+    } catch {
+        return "";
+    }
+}
 
 export async function getSession(db: D1Database, sid: string): Promise<SessionRow | null> {
     const res = await db
@@ -1185,6 +1197,24 @@ export class StudioService {
         await this.liveCall("save progress", (l) => l.onSave(sid, { kind: "progress", progress: p, ...extra }));
     }
 
+    // A make (render, slideshow, gallery image) the chat agent or an MCP client started on a saved post (8.11): the
+    // route saw the agent header on a 202. Best effort, like every live hook.
+    async startAgentMake(sid: string, job: string): Promise<void> {
+        if (!this.d.live?.startAgent) return;
+        let row: SessionRow | null = null;
+        try {
+            row = await getSession(this.d.db, sid);
+        } catch {
+            return;
+        }
+        if (!row) return;
+        const link = row.link ?? "";
+        const title = typeof row.title === "string" && row.title ? row.title : null;
+        await this.liveCall("agent make", (l) =>
+            l.startAgent!(sid, { kind: "make", job, service: link ? serviceFromUrl(link) : "file", ref: title ?? (link ? agentRef(link) : ""), title }),
+        );
+    }
+
     private async liveRender(sid: string, job: string, e: LiveRenderEvent): Promise<void> {
         await this.liveCall("render", (l) => l.onRender(sid, job, e));
     }
@@ -2151,6 +2181,12 @@ export class StudioService {
         // Before the kick, so the first save step already finds the run. Never refuses the save.
         if (fromShare && liveField !== undefined && liveField !== null) {
             await this.liveCall("share start", (l) => l.startShare?.(keyId, sid, liveField, make !== null) ?? Promise.resolve());
+        }
+        // A save the chat agent or an MCP client started (key `chat:<thread>`): no device follows it, so the server
+        // push-starts the island on the owner's devices (APP-API-CONTRACT.md 8.11). Same place as the share start.
+        if (keyId.startsWith("chat:")) {
+            const ref = agentRef(link);
+            await this.liveCall("agent start", (l) => l.startAgent?.(sid, { kind: "save", service: serviceFromUrl(link), ref, title }) ?? Promise.resolve());
         }
         // The opt-in goes in before the save can move, so even an instant save is announced.
         const notifyBody = optIn === null ? undefined : await this.optInAtCreate(keyId, sid, optIn);
@@ -5038,6 +5074,14 @@ const toResponse = (r: StudioReply) =>
 // and GET /studio/<sid>/render/<job>. The Worker
 // answers everything else itself; ids were already checked there and are
 // checked again here.
+// A make the chat's make ops started (they set AGENT_LIVE_HEADER; the Worker strips it from every client request):
+// once it is accepted (202 with a job), its Live Activity is push-started (8.11).
+async function agentMake(service: StudioService, request: Request, sid: string, reply: StudioReply): Promise<void> {
+    if (request.headers.get(AGENT_LIVE_HEADER) !== "1" || reply.status !== 202) return;
+    const job = (reply.body as { job?: unknown } | null)?.job;
+    if (typeof job === "string") await service.startAgentMake(sid, job);
+}
+
 export async function handleStudioRoute(
     service: StudioService,
     request: Request,
@@ -5175,19 +5219,22 @@ export async function handleStudioRoute(
         const sid = parts[2];
         if (!STUDIO_SID_REGEX.test(sid)) return toResponse(studioErr(404, "error.studio.not_found"));
         const body = await request.text();
-        return toResponse(
+        const reply =
             parts[3] === "slideshow"
                 ? await service.slideshow(keyId, sid, body)
                 : parts[3] === "gallery-image"
                   ? await service.galleryImage(keyId, sid, body)
-                  : await service.retryItems(keyId, sid, body),
-        );
+                  : await service.retryItems(keyId, sid, body);
+        if (parts[3] !== "items") await agentMake(service, request, sid, reply);
+        return toResponse(reply);
     }
     if (parts.length >= 4 && parts[1] === "studio" && parts[3] === "render") {
         const sid = parts[2];
         if (!STUDIO_SID_REGEX.test(sid)) return toResponse(studioErr(404, "error.studio.not_found"));
         if (request.method === "POST" && parts.length === 4) {
-            return toResponse(await service.render(sid, await request.text()));
+            const reply = await service.render(sid, await request.text());
+            await agentMake(service, request, sid, reply);
+            return toResponse(reply);
         }
         if (request.method === "GET" && parts.length === 5) {
             const job = parts[4];

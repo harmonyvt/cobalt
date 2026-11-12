@@ -143,7 +143,7 @@ export type ChatDeps = {
     waitUntil?: (p: Promise<unknown>) => void;
     pingMs?: number;
     // the reply's Live Activity on the owner's other devices (section 27.9, chat-live.ts); absent when push is off
-    liveFor?: (thread: string, prompt: string) => { event(name: string, data: unknown): void; close(): Promise<void> };
+    liveFor?: (thread: string, prompt: string) => { event(name: string, data: unknown): void; tick?(): void; close(): Promise<void> };
     // The op registry (section 33): the model's `cobalt` API and cheat sheet come from it. Without it (older callers)
     // the read tools of chat-tools.ts are called directly, under their flat names.
     registry?: Registry;
@@ -757,11 +757,14 @@ function streamReply(d: ChatDeps, c: Omit<ReplyCtx, "emit">, first?: { event: st
             open = false; // the app went away; the reply carries on and is saved
         });
     };
-    const ping = setInterval(() => write(": ping\n\n"), d.pingMs ?? PING_MS);
-    if (first) write(sse(first.event, first.data));
-
     // the Live Activity follows replies to a new message (not the reply that goes on after a confirm card)
     const live = c.userRow ? d.liveFor?.(c.thread.id, c.text) : undefined;
+    // the ping also tells the Live Activity the reply is still alive (a long tool call says nothing new)
+    const ping = setInterval(() => {
+        write(": ping\n\n");
+        live?.tick?.();
+    }, d.pingMs ?? PING_MS);
+    if (first) write(sse(first.event, first.data));
     const emit = (e: string, v: unknown) => {
         write(sse(e, v));
         live?.event(e, v);

@@ -8,6 +8,7 @@ import { resumeAfterJobs, type ChatModel, type CodeRunner, type ModelTurn } from
 import { CHAT_JOBS_TICK_MS, ChatJobsCore, handleChatJobsRoute } from "../src/chat-jobs";
 import { chatKeyId } from "../src/registry/ai";
 import { forCall } from "../src/registry/context";
+import { runOp } from "../src/registry/ai";
 import { chatDepsFrom } from "../src/registry/ops/chat";
 import { waitJob } from "../src/registry/ops/make";
 import { sandboxModule } from "../src/chat-loader-module";
@@ -383,6 +384,41 @@ describe("the daily cap", () => {
         clock += DAY;
         await cobalt("make.webp", "VideoFile0000001", { start: 0, end: 2 });
         expect(rendersUsed()).toBe(1);
+    });
+
+    // MCP calls (ctx.chat.mcp) have no render cap and never touch the counter; the in-app chat and a sub-agent keep it
+    const callAs = (op: string, input: unknown, extra: { mcp?: boolean; agent?: boolean } = {}) => {
+        const chat = {
+            threadId: THREAD,
+            collect: { look: [], show: [], collage: null },
+            tools: {},
+            ...(extra.mcp ? { mcp: { origin: API, clientKeyId: "key-1" } } : {}),
+            ...(extra.agent ? { agent: { id: "AgentAAAAAAAAAAAA", parent: THREAD } } : {}),
+        };
+        const ctx = forCall(opBase(env, container, edge, REGISTRY), { keyId: chatKeyId(THREAD), caller: "chat", chat: chat as never });
+        return runOp(REGISTRY.op(op)!, ctx, input);
+    };
+
+    it("an MCP caller starts more than the daily cap without the budget being touched", async () => {
+        for (let i = 0; i < 14; i++) await callAs("make.webp", { id: "VideoFile0000001", start: 0, end: 2 }, { mcp: true });
+        await callAs("make.still", { id: "PhotoFile0000001" }, { mcp: true });
+        expect(storage.has(`chat:budget:${THREAD}:renders`)).toBe(false);
+        expect([...storage.keys()].filter((k) => k.startsWith("chat:budget:"))).toEqual([]);
+        // a refused start gives nothing back (nothing was taken)
+        renderAnswers = [{ status: 500, body: { status: "error", error: { code: "error.api.generic" } } }];
+        await expect(callAs("make.webp", { id: "VideoFile0000001", start: 0, end: 2 }, { mcp: true })).rejects.toBeTruthy();
+        expect(storage.has(`chat:budget:${THREAD}:renders`)).toBe(false);
+    });
+
+    it("the same calls from the in-app chat or a sub-agent still stop at the cap", async () => {
+        for (const extra of [{}, { agent: true }]) {
+            storage.clear();
+            env.CHAT_DAILY_RENDERS = "2";
+            await callAs("make.webp", { id: "VideoFile0000001", start: 0, end: 2 }, extra);
+            await callAs("make.webp", { id: "VideoFile0000001", start: 0, end: 2 }, extra);
+            await expect(callAs("make.webp", { id: "VideoFile0000001", start: 0, end: 2 }, extra)).rejects.toThrow(/already made 2 files today/);
+            expect(rendersUsed()).toBe(2);
+        }
     });
 
     it("reads the var as a whole number, else 10", () => {

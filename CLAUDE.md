@@ -102,9 +102,17 @@ the files and a real run before anything is called done.
   After changing an op run `npm run gen` in `deploy/cloudflare/api`: it rewrites `openapi.json`, the contract's route
   index and `apple/CobaltKit/.../API/Generated/Endpoints.swift` (section 33.13); `npm test` fails while they are stale.
 - MCP server (`APP-API-CONTRACT.md` section 35): `POST /mcp` on the API host serves the chat AI's ops as MCP tools
-  (`src/mcp.ts`, `src/registry/ops/mcp.ts`), auth `Bearer <client key>`, each key one MCP "thread" (`chat:<thread>`, same
-  caps). `upload_begin` mints a 15-minute `PUT /mcp/upload/<token>` link for local files. A new chat op appears there too;
-  hide chat-only calls in `MCP_SKIPPED_CALLS`, MCP-only ops use `when: (f) => f.mcp === true`.
+  (`src/mcp.ts`, `src/registry/ops/mcp.ts`), auth `Bearer <client key>`, each key one MCP "thread" (`chat:<thread>`; MCP calls
+  have no daily render or save cap, the in-app chat keeps both). `upload_files` (op `upload.begin`) mints a 15-minute `PUT /mcp/upload/<token>` link for local files. A new chat op appears there too;
+  hide chat-only calls in `MCP_SKIPPED_CALLS`, MCP-only ops use `when: (f) => f.mcp === true`. Twelve ops that the app
+  tools replaced are listed in `MCP_RETIRED_CALLS` (not listed, still answered by their app tool via `src/mcp-app/retired.ts`, which helps only raw JSON-RPC clients: hosts only call listed
+  tools, so saved prompts, skills and permission allowlists naming the old tools must switch to the new names);
+  every listed tool also answers `structuredContent`, and a few write tools end on a widget (`src/mcp-app/follow.ts`).
+- MCP app (`MCP-APP-CONTRACT.md`, setup per host in `MCP-APP.md`): the same `/mcp` is an MCP App for Claude, ChatGPT and
+  Grok. Core = the official SDK (`@modelcontextprotocol/server`, `src/mcp-app/server.ts`, loaded lazily); app tools in
+  `src/mcp-app/tools/` (text + `structuredContent`, shapes in `shapes.ts`, not registry ops); widgets in `src/mcp-app/widgets/`
+  (one bundle, nine views): after editing them run `npm run widgets`. `npm run widgets:test` clicks through them in Chromium;
+  `npm run mcp:dev` serves the real MCP code over demo data for a tunnel.
 - Workbench (`APP-API-CONTRACT.md` section 33.11, ffmpeg editing 33.11.1): the chat AI and MCP Linux box (`cobalt.box.run`/`pull`/`save`), the
   `Workbench` DO (`api/src/workbench*.ts`) on container app `cobalt-api-workbench` (`deploy/cloudflare/workbench/`, standard-1,
   one instance). No secrets, no own internet: every HTTP(S) request passes the Worker's outbound rule (19.2 + our own zone

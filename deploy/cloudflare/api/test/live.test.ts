@@ -13,6 +13,7 @@ import {
     LIVE_MAX_OPEN_RUNS_PER_KEY,
     LIVE_MAX_RUNS_PER_KEY,
     LIVE_MAX_RUNS_PER_SID,
+    LIVE_REFRESH_MS,
     LIVE_RUN_TTL_MS,
     LIVE_START_MIN_GAP_MS,
     LIVE_START_TOKEN_TTL_MS,
@@ -682,16 +683,34 @@ describe("rate limiting and coalescing", () => {
         expect(w.apple.pushes).toHaveLength(n + 1);
     });
 
-    it("an equal state is never re-sent, however often it is reported", async () => {
+    it("an equal state is not re-sent inside LIVE_REFRESH_MS, however often it is reported", async () => {
         const w = await world();
         await w.armed();
         await w.live.onSave(SID, saving(100));
         const n = w.apple.pushes.length;
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 8; i++) {
             w.tick(5000);
             await w.live.onSave(SID, saving(100));
         }
         expect(w.apple.pushes).toHaveLength(n);
+    });
+
+    it("a quiet server step is pushed again after LIVE_REFRESH_MS with a fresh stale-date, so it never shows as stale", async () => {
+        const w = await world();
+        await w.armed();
+        await w.live.onSave(SID, saving(100));
+        const n = w.apple.pushes.length;
+        w.tick(LIVE_REFRESH_MS);
+        await w.live.onSave(SID, saving(100));
+        expect(w.apple.pushes).toHaveLength(n + 1);
+        const keep = w.apple.pushes.at(-1)!;
+        expect(keep.priority).toBe(5);
+        expect(keep.payload.aps).toMatchObject({ event: "update", "content-state": { stage: "saving", bytes: 100 } });
+        expect(keep.payload.aps["stale-date"]).toBe(Math.floor((T0 + LIVE_REFRESH_MS) / 1000) + 120);
+        // and again only after another LIVE_REFRESH_MS
+        w.tick(LIVE_REFRESH_MS - 1);
+        await w.live.onSave(SID, saving(100));
+        expect(w.apple.pushes).toHaveLength(n + 1);
     });
 
     it("priorities and expirations: counters 5 and now+60 s; stage changes, start, end 10 and now+3600 s", async () => {
@@ -1863,5 +1882,107 @@ describe("instant share (startShare: POST /studio with `live`, APP-API-CONTRACT 
         const w = await world({ configured: false });
         await w.live.startShare(KEY, SID, LIVE, false);
         expect(w.run()).toBeUndefined();
+    });
+});
+
+describe("agent and MCP jobs (startAgent, APP-API-CONTRACT 8.11)", () => {
+    const START2 = "ab".repeat(32);
+    const JOB = "J0b1d2f3h4j5l6n7p8r9";
+    // a save the chat made: its session belongs to the chat's key, not to any device
+    const agentWorld = async () => {
+        const w = await world();
+        w.db.raw
+            .prepare("INSERT INTO studio_sessions (id, key_id, link, service, status, created_at, expires_at) VALUES (?, ?, ?, ?, 'saving', ?, ?)")
+            .run("cHaTsEsSiOn00000000001", "chat:t1", "https://x.com/a/status/1", "twitter", T0, T0 + 1e9);
+        return w;
+    };
+    const CHAT_SID = "cHaTsEsSiOn00000000001";
+    const runsOf = (w: World, sid = CHAT_SID) => ((w.kv.m.get(`live:sid:${sid}`) as string[] | undefined) ?? []).map((id) => w.run(id)!);
+
+    it("push-starts a save island on each device with a start token, held by the device's key", async () => {
+        const w = await agentWorld();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        w.tick(1000);
+        await w.live.putStartToken(OTHER, JSON.stringify({ token: START2, environment: "production" }));
+        await w.live.putStartToken("chat:t1", JSON.stringify({ token: "ee".repeat(32), environment: "sandbox" }));
+        await w.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1", title: null });
+        expect(w.apple.pushes.map((p) => p.token).sort()).toEqual([START, START2].sort());
+        for (const p of w.apple.pushes) {
+            expect(p.payload.aps.event).toBe("start");
+            expect(p.payload.aps.alert).toEqual({ title: "capystore", body: "your agent is saving from twitter" });
+            expect(p.payload.aps["content-state"]).toMatchObject({ stage: "fetching", rail: 0 });
+            expect(p.payload.aps.attributes).toMatchObject({ input: "link", service: "twitter", ref: "1", origin: "share" });
+        }
+        const runs = runsOf(w);
+        expect(runs.map((r) => r.keyId).sort()).toEqual([KEY, OTHER].sort());
+        for (const r of runs) {
+            expect(r.serverOnly).toBe(true);
+            expect(r.agent).toBe("save");
+            expect(r.sid).toBe(CHAT_SID);
+        }
+    });
+
+    it("the save's progress and `saved` reach the island once the app reports the token", async () => {
+        const w = await agentWorld();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
+        const [r] = runsOf(w);
+        await w.live.putRun(KEY, r!.run, JSON.stringify(reg({ update_token: UPDATE, attributes: { ...ATTRS, run: r!.run, origin: "share" } })));
+        w.apple.pushes.length = 0;
+        w.tick(4000);
+        await w.live.onSave(CHAT_SID, saving(500));
+        expect(w.apple.pushes.at(-1)!.payload.aps["content-state"]).toMatchObject({ stage: "saving" });
+        w.tick(4000);
+        await w.live.onSave(CHAT_SID, { kind: "saved", bytes: 9_000, width: 10, height: 10, seconds: 1 });
+        expect(w.apple.pushes.at(-1)!.payload.aps.event).toBe("end");
+        expect(w.apple.pushes.at(-1)!.payload.aps.alert).toMatchObject({ title: "saved to capystore" });
+        expect(w.run(r!.run)!.endedAt).not.toBeNull();
+    });
+
+    it("a make starts in `rendering`, pinned to its job, and its result ends it", async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.startAgent(SID_OTHER, { kind: "make", job: JOB, service: "instagram", ref: "a cat", title: "a cat" });
+        const p = w.apple.pushes[0]!;
+        expect(p.payload.aps.alert).toEqual({ title: "capystore", body: "your agent is making something from a cat" });
+        expect(p.payload.aps["content-state"]).toMatchObject({ stage: "rendering", rail: 3, title: "a cat" });
+        const [r] = runsOf(w, SID_OTHER);
+        expect(r!.job).toBe(JOB);
+        expect(r!.keyId).toBe(KEY); // SID_OTHER belongs to another key: trusted, never refused
+        await w.live.putRun(KEY, r!.run, JSON.stringify(reg({ update_token: UPDATE, attributes: { ...ATTRS, run: r!.run, origin: "share" } })));
+        w.apple.pushes.length = 0;
+        // another job's result on the same post leaves it alone
+        await w.live.onRender(SID_OTHER, "Xx1d2f3h4j5l6n7p8r9z", { kind: "failed", code: "error.webp.failed" });
+        expect(w.run(r!.run)!.state.stage).toBe("rendering");
+        w.tick(5000);
+        await w.live.onRender(SID_OTHER, JOB, { kind: "success", url: "https://media.capybaraharmony.com/PrEvIeW001.webp", bytes: 4500000, width: 480, height: 854, seconds: 10.1 });
+        expect(w.apple.pushes.at(-1)!.payload.aps.event).toBe("end");
+        expect(w.run(r!.run)!.endedAt).not.toBeNull();
+    });
+
+    it("at most two devices, newest token first; stale tokens, no tokens and no APNs start nothing", async () => {
+        const w = await agentWorld();
+        await w.live.putStartToken("key-row-3", JSON.stringify({ token: "11".repeat(32), environment: "sandbox" }));
+        w.tick(1000);
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        w.tick(1000);
+        await w.live.putStartToken(OTHER, JSON.stringify({ token: START2, environment: "sandbox" }));
+        await w.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
+        expect(w.apple.pushes.map((p) => p.token).sort()).toEqual([START, START2].sort());
+
+        const stale = await agentWorld();
+        await stale.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        stale.tick(61 * 24 * 60 * 60 * 1000);
+        await stale.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
+        expect(stale.apple.pushes).toHaveLength(0);
+
+        const none = await agentWorld();
+        await none.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
+        expect(none.apple.calls).toHaveLength(0);
+        expect(runsOf(none)).toHaveLength(0);
+
+        const off = await world({ configured: false });
+        await off.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
+        expect(off.kv.m.size).toBe(0);
     });
 });

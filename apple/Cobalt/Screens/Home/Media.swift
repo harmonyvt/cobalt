@@ -91,31 +91,45 @@ actor FlipbookLoader {
 /// previews, the focused planet while muted) is `.ambient`, so it mixes with whatever the owner is
 /// listening to and never interrupts it. Only a planet the owner has unmuted takes `.playback`, and
 /// muting, closing or switching to the webp gives the session back.
+///
+/// The session calls are made on one serial queue, never the main thread: `setActive` waits on the media server, and
+/// deactivating while a player still had its audio running held the main thread long enough to freeze the app on the
+/// way back from a video (owner, 2026-11-11). The queue keeps the calls in the order they were asked for.
 @MainActor
 enum AudioPolicy {
+    #if os(iOS)
+    private nonisolated static let queue = DispatchQueue(label: "com.capybaraharmony.cobalt.audio-session", qos: .userInitiated)
+    #endif
+
     /// Ambient, mixing: called whenever a player is created.
     static func ambient() {
         #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        if session.category != .ambient { try? session.setCategory(.ambient, mode: .default) }
+        queue.async {
+            let session = AVAudioSession.sharedInstance()
+            if session.category != .ambient { try? session.setCategory(.ambient, mode: .default) }
+        }
         #endif
     }
 
     /// The owner unmuted a planet: it plays through the silent switch and takes the audio focus.
     static func playback() {
         #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback)
-        try? session.setActive(true)
+        queue.async {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, mode: .moviePlayback)
+            try? session.setActive(true)
+        }
         #endif
     }
 
-    /// Back to ambient, and tell whoever was interrupted that they may resume.
+    /// Back to ambient, and tell whoever was interrupted that they may resume. Callers pause their player first.
     static func release() {
         #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.ambient, mode: .default)
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        queue.async {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.ambient, mode: .default)
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        }
         #endif
     }
 }

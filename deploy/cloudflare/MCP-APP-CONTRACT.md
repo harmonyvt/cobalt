@@ -1,0 +1,297 @@
+# capystore as an MCP app (APP-API-CONTRACT.md section 55)
+
+Owner (2026-11-11): "Add a single MCP server that works as an app in Claude, ChatGPT, and Grok, using the open MCP Apps UI
+standard (tools + ui:// HTML widgets)", then "I want studio possibly? the timeline? and like when i convert to webp,
+collections, share links and when it uploads files to capystore", then "I want you to implement and delegate please".
+Mockup: https://claude.ai/artifact/HULkU9NF2qdercxogPdtDu (source `/mnt/project-files/capystore-mcp-app/mockup.html`).
+
+The existing MCP server (section 35: `POST /mcp`, `POST /mcp/k/<secret>`, the registry's chat ops as tools) stays where it
+is, with the same URLs, keys, private link and threads, and no daily render or save cap. Three things change:
+
+1. Its hand-written JSON-RPC core is replaced by the official MCP TypeScript SDK (`@modelcontextprotocol/server` 2.x, the
+   successor of `@modelcontextprotocol/sdk`, which is what `@modelcontextprotocol/ext-apps` 2.x pairs with) inside the same
+   Worker. Stateless: one server per request, JSON answers, no sessions, no SSE.
+2. It gains **app tools**: a few narrow tools that return a text answer plus `structuredContent`, each tied to a widget.
+3. It gains **widgets**: `ui://capystore/<view>.html` resources (`text/html;profile=mcp-app`), drawn by hosts that
+   support MCP Apps (Claude, ChatGPT). A host that draws nothing (Grok, the xAI API, Claude Code) still gets the text.
+
+Nothing here needs a migration, a new binding or a new secret.
+
+## 1. Files and who owns them
+
+All under `deploy/cloudflare/api/`.
+
+| Files | Owner |
+| - | - |
+| `src/mcp-app/types.ts`, `src/mcp-app/shapes.ts` (initial version), this document | the main thread |
+| `src/mcp.ts`, `src/registry/ops/mcp.ts`, `src/mcp-app/server.ts` (if wanted), `test/mcp.test.ts`, `test/mcp-link.test.ts`, `test/mcp-app-core.test.ts`, `package.json`, `package-lock.json` | **core lane** |
+| `src/mcp-app/tools.ts`, `src/mcp-app/tools/**`, `test/mcp-app-tools.test.ts`; may add optional fields to `shapes.ts` | **tools lane** |
+| `src/mcp-app/widgets/**`, `scripts/build-widgets.mjs`, `src/mcp-app/widgets.generated.ts`, `test/mcp-app-widgets.test.ts`, `widgets-dev/**` | **widgets lane** |
+
+Lanes never commit or push, never touch another lane's files, and say in their report anything they needed from another
+lane. `package.json` belongs to the core lane: another lane that needs a script or a dev dependency names it in its report.
+
+## 2. Seams (`src/mcp-app/types.ts`)
+
+- The core imports `APP_TOOLS` from `src/mcp-app/tools.ts` and `WIDGETS` from `src/mcp-app/widgets.generated.ts`. Both
+  exist as empty stubs, so each lane compiles alone.
+- An `AppTool` has a zod `input`, a zod `output`, `readOnly`, a `view`, and `run(ctx, input)` returning
+  `{ text, structured }`. The core turns that into `{ content: [{ type: "text", text }], structuredContent: structured }`.
+  A thrown `OpError` (or any error) becomes `{ content: [text], isError: true }`, worded as the existing tools word it.
+- `AppToolCtx.call(callName, input)` runs a registry chat op as the MCP thread, exactly as an existing MCP tool call does
+  (same `runOp`, same thread key; no daily render or save cap for MCP calls). App tools are compositions of existing ops plus read-only D1 reads
+  through `ctx.op.db`; they are **not** registry ops, so `openapi.json`, the route snapshot and `npm run gen` do not move.
+- A `Widget` is `{ view, uri, title, html }`.
+
+## 3. Wire shapes (`src/mcp-app/shapes.ts`)
+
+The zod schemas there are the contract between tools and widgets. Rules:
+
+- Every result carries `view`. Objects are loose. Anything that can be missing is `null`, never absent.
+- URLs handed to a widget must be loadable by a browser with no credentials: public `media.capybaraharmony.com` files,
+  `share.capybaraharmony.com` links, and for a file that is not public a signed one-hour preview link on the API host, which
+  travels in the tool result's `_meta["capystore/preview"]` and never in `structuredContent` or the text (section 9). A private
+  or off post's `thumb_url` is `null`; its signed thumbnail is in `_meta` under the post's id.
+  Share links are always `share.capybaraharmony.com` links, never raw media links, wherever a link is for a person.
+- The tools lane may add optional (nullable) fields; it lists them in its report. Widgets ignore fields they don't know.
+
+## 4. Tools
+
+The older tools keep their names, except the twelve that the app tools replaced (section 6.3). App tool names must not
+collide with the listed older tools.
+
+| Tool | Kind | View | Built on |
+| - | - | - | - |
+| `search_library` | read | `search` | `library.search` when offered, else `library.list` with `query` |
+| `show_post` | read | `post` | `library.post` (+ transcript start, caption) |
+| `show_edit` | read | `edit` | `edits.get`, `edits.list` |
+| `list_collections` | read | `collections` | `collections.list`, `links.list` |
+| `list_share_links` | read | `links` | `links.list`, `collections.list` |
+| `convert_to_webp` | write | `webp` | `make.webp` |
+| `upload_files` | write | `upload` | `upload.begin` |
+| `create_share_link` | write | `links` | `links.create`, `collections.add` |
+| `save_link` | write | `save` | `library.save` |
+| `job_status` | write (it can move a job on) | none | `jobs.wait` with a short wait; a save by its session |
+
+Inputs (zod, all objects):
+
+Since the migration (section 6.3) each tool also takes every option of the older tool it replaced; all added fields are
+optional and the defaults stay widget-sized.
+
+- `search_library { query?: string 1..200, kind?, since?, until? (ISO date or ms), source? (a host), within?, match?:
+  "meaning"|"text", limit?: 1..1000 = 12 }`: with no `query` it lists newest first (`mode: "list"`, `query: ""`);
+  `mode` is `"meaning"`, `"text"` or `"list"`. `within` (a collection, a link or a list of posts) is meaning search only:
+  it errors rather than being ignored while meaning search is off or failing. `match: "text"` forces the title/name/link/
+  caption substring match. At most 500 rows by meaning, 1000 by list. Items carry `score`, `why`, `said`, `source_link`
+  and `caption` (null when the search did not give them). Each `said` entry has `at`/`end` (seconds) and `timecode`
+  (`at` as `"m:ss"`).
+- `show_post { id: string }`: every file with `id`, `role`, `name`, `url`, `share_url`, `private_url`, `private_file_url`
+  (what `library.post` gave the caller; a hidden post is an error and gives no URL), plus the post's `preview_expires_at`.
+  For a file that is not public its signed links are in `_meta["capystore/preview"]` under the file's `id` (section 9).
+  A video also has `transcript_excerpt` (the first 45 s of speech as plain text, 280 characters, for the widget) and
+  `transcript_lines` (the same lines as `{ start, end, timecode, text }`); the text answer lists them as `[0:03] …`.
+- `show_edit { id?: string, query?: string }`: an id, or a title to find; neither, or several matches: `project: null`
+  and the list in `projects` (up to 100). A project carries its raw `timeline` (what `edits_update` takes back; its
+  `sources`, with names and pictures, are not passed on). For the timeline player each main clip also has `video_url`
+  (the source file: public, or `null` with `private: true`; then its signed links are in `_meta` under `file_id`), `media_kind`, `poster_url`, `src_w`, `src_h`, `file_id`
+  next to `in`, `out`, `speed`, `muted`; each overlay has `in`, `out`, `frame {x, y, w, h}` (fractions of the canvas; `h` from the
+  source's shape), `opacity`, `url`, `media_kind`, `poster_url`, `private`, `file_id`; the render has `video_url` once it is done
+  (and `file_id`; `private` renders have their links in `_meta` like a clip). `preview_expires_at` says when the signed links end.
+- `list_collections { name?: string, limit?: 1..500 = 20 }`: collections carry `link_ids` and `post_ids`.
+- `list_share_links { collection?: string, query?: string, limit?: 1..500 = 20 }`: links carry `post_ids` and a private
+  link's `file_urls`.
+- `convert_to_webp { id: string, start?: number, end?: number, crop?: {x,y,w,h}, width?: 320|480 = 480, quality?:
+  "low"|"med"|"high" = "med" }`: without both `start` and `end` nothing runs and the answer is `state: "pick"` (for a
+  source of 10 s or less the whole clip is the default range and it runs).
+- `upload_files { files?: [{ name?: string, title?: string }] 1..10, name?, title?, public?: boolean, queue?: boolean }`:
+  no `files`: one link; the flat `name` and `title` are the single-file form of `upload_begin`.
+- `create_share_link { ids: string[] | string (no tool limit; the op allows 10 files), title?: string, private?: boolean, collection?: string }`
+- `save_link { url: http(s) URL, engine?: "auto"|"cobalt"|"ytdlp" = "auto", items?, public?, title?, wait?: 0..60 = 8 }`
+  (`auto` leaves the op's engine unset); the answer carries `save_id` and `saves_left_today` (`null`: no cap here).
+- `job_status { job: string, seconds?: 0..25 = 8 }`: besides state and post, `file_id`, `post_id`, `queue_ahead`, a finished
+  render's `file`, and for a helper (`agent:<id>`) its `agent` report.
+
+Every read tool has `annotations.readOnlyHint: true`; write tools `readOnlyHint: false`, `destructiveHint: false` (they
+only add things), and `openWorldHint: false` except `save_link`. `job_status` is visible to the model too, so a host
+with no widgets can follow a job. Every tool has `outputSchema` (from `output`) and a `title`.
+
+The **text** must stand alone: a count line, then numbered rows with title, kind, id and (where there is one) the share
+link, one compact line each; 10 rows, or as many as the caller asked for with `limit` (cut at `MCP_RESULT_MAX` with the
+usual note); for a job, what is running and what the user will get. No JSON dump in the text (the one exception is a
+project's timeline, which an agent hands back to `edits_update`).
+
+Not in this step: deletes, status changes, rendering an edit, rerolling links (they stay on the existing tools, marked
+`destructiveHint`), and changing a timeline from the chat.
+
+## 5. Widgets
+
+- One bundle, nine views (the ninth, `terminal`, is section 5.1). `scripts/build-widgets.mjs` inlines `src/mcp-app/widgets/` (shared bridge, shared CSS, one
+  renderer per view) into self-contained HTML and writes `WIDGETS` (one entry per view, the same bundle with that view as
+  the default) to `widgets.generated.ts`. `--check` fails when the generated file is stale, like `gen:check`.
+- No framework, no remote script, no remote font. Light and dark from the host's theme (host context), falling back to
+  `prefers-color-scheme`.
+- **Compact by default, phone first** (designed for 360 to 400 px, scaling up to about 680): 12.5 px text, 11 px meta, a
+  32 px one-line header, dense rows. Mockup: `/mnt/project-files/capystore-mcp-app/compact-mockup.png`. Every list (search
+  results, edit list, share links, collections, upload rows) shows its **first 3 rows** and a "show N more" button that reveals the
+  rest inline ("show less" folds them); a tile grid shows its **first row** (3 tiles on a phone, 6 from 560 px). The host's full
+  screen (`displayMode: "fullscreen"`, the expand button in every header) is the roomy view: larger type, every row shown, no
+  show-more button. Search has a grid and a list toggle.
+- **Private media plays.** A file that is not public arrives with a signed preview link in the result's `_meta` (section 9; the widget keeps them by id from every result it receives, and ignores one past its `expires_at`); the post player,
+  search thumbnails and the timeline use it and show a lock badge, "private · link valid 1 h" (and "until <time>"). If a link
+  has run out the player says so and "refresh preview" calls the tool again.
+- **Timeline (`edit`)**: a real preview on top plays the source under the playhead (the video seeks to
+  `in + (t - start) * speed`, speed is the playback rate, the source switches at clip boundaries, one clock for the playhead);
+  scrubbing the tracks seeks; each overlay in range is drawn as a dashed box at its frame `{x, y, w, h}`; the main track is a
+  filmstrip (the clip's poster repeated, since there are no frames), overlay lanes are thin and stacked, a timecode, frame
+  step and play buttons. A finished render with a `video_url` can be played instead ("render" in the switch).
+- The bridge is the MCP Apps one: JSON-RPC over `postMessage` (`ui/initialize`, `ui/notifications/initialized`,
+  tool input and tool result notifications, `tools/call`, open link, size changes, host context). Message names and
+  shapes come from `node_modules/@modelcontextprotocol/ext-apps` (its spec types), not from memory. `window.openai` is
+  used only behind a feature check, and only for what the standard lacks (full screen).
+- A view draws from the tool result's `structuredContent` by its `view` field. Buttons call tools through the bridge:
+  a tapped post calls `show_post` and the bundle swaps to the post view; the webp view calls `convert_to_webp` with the
+  picked range, then `job_status` until done; the save view polls `job_status`; a collection opens `list_share_links`.
+  A result with no view is a neutral "done" (not an error).
+- The upload view sends each chosen file with `PUT` straight to its `upload_url` (XHR, for progress) and shows the item
+  the PUT answers.
+- Copy buttons use `navigator.clipboard` from a click, with a visible fallback (select the text) when it is refused.
+
+### 5.1 The box terminal (`terminal`)
+
+Owner (2026-11-11), on the mockup `/mnt/project-files/capystore-mcp-app/box-terminal-mockup.png`: "Implement, please."
+The workbench box tools `box_run`, `box_pull` and `box_save` (registry ops, listed only while the box is on) end on
+`ui://capystore/terminal.html` through `src/mcp-app/follow.ts` (section 6.5). Their text stays the op's JSON;
+`structuredContent` is that JSON plus `view: "terminal"`, `tool` (`run`, `pull`, `save`) and `sleeps_at` (the call's time
+plus the box's 2-minute idle sleep, when its files are wiped unless another box call comes first); shapes `TerminalOut`
+in `shapes.ts`.
+
+- `box_run` adds `cmd` (the input), `ms` (now in the op's own answer too: how long the command ran) and `stdout_cut` /
+  `stderr_cut` (the stream was over 8 KB and holds the `… (N bytes cut) …` line). The widget: a dark monospace panel,
+  `/workspace $` and the wrapped command (program, flags and quoted strings lightly marked), stdout plain, stderr amber,
+  red when the exit code is not 0 (a timeout keeps it amber and shows a "timed out" chip instead of the code), ANSI SGR
+  colours (16 colours, bold, dim, underline; 256-colour 0..15; other escapes dropped), a line rewritten with `\r` keeps its
+  last part, tail first (the last 8 lines, "show all N lines"; full screen shows all), the exit chip (green 0, red
+  otherwise, "command not found" for 127), the duration, "stdout cut to 8 KB", copy buttons for the command and the
+  output (plain text, no escapes).
+- `box_pull`: an `ls -lh` list (name with a dim extension, size as `ls -h` writes it, kind), first 3 and "show N more".
+- `box_save`: one row, "saved to library": the post's picture (a post that is not public: the lock, and its signed
+  thumbnail in `_meta["capystore/preview"]` under the post id, as `show_post` files it), title, kind · size · private or
+  public · processing, and "open" (calls `show_post`). `post` is the post as search shows it (null when it cannot be read
+  or is hidden).
+- A status line over each: "box awake · wiped in m:ss if idle", counting down to `sleeps_at` on the widget's clock
+  (amber under a minute), then "box asleep · files wiped, unless used since" (a later call in the chat may have kept it).
+- The call's arguments arrive before its result (`ui/notifications/tool-input`): the command and a running line show
+  until the result comes. A failed call (the box off, its daily minutes used, a file it cannot read) is one red line,
+  under the command when there was one; no retry button.
+- Output is untrusted: `src/mcp-app/widgets/term.js` only splits and classifies it (no DOM; unit tests in
+  `test/mcp-app-terminal.test.ts`) and every piece goes in with `textContent`. No new origin.
+- Not done: a history of several runs in one terminal. Each tool result is its own widget frame, and a widget only sees
+  its own result, so earlier runs cannot be stacked inside one; every run draws its own panel.
+
+## 6. Core: what a host sees
+
+- `initialize`: capabilities `tools` and `resources`; the instructions gain two lines on the app tools.
+- `tools/list`: the app tools first, then the older tools that are not retired (6.3). `?tools=app` on the URL lists the
+  app tools only (and the retired names do not answer there). An app tool with a view carries `_meta.ui.resourceUri` (and
+  the legacy `_meta["ui/resourceUri"]`), as `registerAppTool` writes them; so do the older tools of 6.5.
+- `resources/list`, `resources/read`: the widgets, `mimeType: "text/html;profile=mcp-app"`, with `_meta.ui.csp`:
+  `resourceDomains` = the media and share origins and the API origin (signed previews are played and drawn from it),
+  `connectDomains` = the API origin (the upload PUT).
+  `_meta.ui.domain`: only if a host needs it; if set, it is worked out per request from the URL the host connected to
+  (for the private link that URL holds the secret) and only for that host.
+- `PUT /mcp/upload/<token>` answers CORS for any origin (the token is the credential; a widget's sandbox origin is not
+  knowable ahead of time), with its `OPTIONS` preflight.
+- Existing behaviour that must not change: auth and the 401/403/404/405/503 answers, the private link, batches, the
+  per-key thread, `look` returning images, result cutting at `MCP_RESULT_MAX`, tool names, input schemas and annotations
+  of the older tools that stay listed, `test/route-snapshot.test.ts`.
+
+### 6.3 Retired tools
+
+The chat AI keeps every op; only the MCP stops listing twelve (`MCP_RETIRED_CALLS` in `src/mcp.ts`), because each duplicates
+an app tool and models kept picking the old one, which draws no widget. `src/mcp-app/retired.ts` maps each old tool name
+to its replacement; a `tools/call` of an old name is answered by that app tool (not listed, not offered under
+`?tools=app`), with the arguments mapped as below. Hosts (Claude, Claude Code, ChatGPT, Grok) only let the model call tools
+that `tools/list` shows, so the aliases help only raw JSON-RPC clients and scripts. Saved prompts, skills and permission
+allowlists (for example Claude Code's `mcp__Capystore__library_search`) that name an old tool must be changed to the new
+names. Delete the map when no script still calls the old names.
+
+| Old tool | App tool | Arguments |
+| - | - | - |
+| `library_search` | `search_library` | as they are |
+| `library_list` | `search_library` | as they are, `limit` 100 when absent (as library_list); a non-empty `query` adds `match: "text"` (library_list was the substring match), an empty one is dropped |
+| `library_post` | `show_post` | as they are |
+| `edits_get`, `edits_list` | `show_edit` | `{ id }`, `{}` |
+| `collections_list`, `links_list` | `list_collections`, `list_share_links` | `{ limit: 500 }` (they answered every row) |
+| `links_create` | `create_share_link` | as they are |
+| `make_webp` | `convert_to_webp` | as they are |
+| `upload_begin` | `upload_files` | as they are (the flat `name`, `title`, `public`, `queue`) |
+| `library_save` | `save_link` | as they are |
+| `jobs_wait` | `job_status` | as they are (`seconds` default 8, not 15) |
+
+The app tools still call the retired ops through `ctx.call`, so the registry, `openapi.json` and the route snapshot do not
+move.
+
+### 6.4 structuredContent on every tool
+
+Every other tool answers `structuredContent` too: the op's JSON when it is a plain object, `{ items: [...] }` for an array,
+none for a string or null (and none when the JSON is past `MCP_RESULT_MAX`, or for `look`, which answers images). The
+text is exactly the op's JSON as before. No `outputSchema` is advertised for them.
+
+### 6.5 Widgets after a write
+
+`src/mcp-app/follow.ts` gives some older write tools a widget, without touching their ops: the op runs and answers its
+text as always, then the view is built from a fresh read with the app tools' own helpers and sent as `structuredContent`;
+the tool carries `_meta.ui.resourceUri` in `tools/list`. Any failure of the read falls back to 6.4.
+
+| Tools | View | Built from |
+| - | - | - |
+| `collections_create`, `collections_add`, `collections_update` | `collections` | that collection, as `list_collections` builds it |
+| `links_update`; `links_private`, `links_rotate` on a gallery link | `links` | that link, `created` set to it |
+| `library_title`; `library_visibility`, `library_status` on one post | `post` | that post, as `show_post` builds it |
+| `box_run`, `box_pull`, `box_save` (while the box is on) | `terminal` | the op's own answer (section 5.1); `box_save` reads the new post |
+
+A private link of a single file, several posts, or a hidden result have no view. Ask-tier tools keep `destructiveHint`.
+
+## 7. Sign-in
+
+Step 1 (this change): the private link `POST /mcp/k/<secret>` is the "no authentication" URL for Claude, ChatGPT and
+Grok; a client key as `Bearer` still works for clients that send headers (Claude Code, the xAI API's `authorization`).
+Step 2 (later, its own change): OAuth 2.1 with the API Worker as the authorization server and Cloudflare Access as the
+login, one session row per host.
+
+## 8. Checks
+
+- `npm test && npm run typecheck && npm run gen:check` in `deploy/cloudflare/api`.
+- The official client (`@modelcontextprotocol/client`) against the server in a test: initialize, list tools and resources,
+  read a widget, call each app tool on a seeded database.
+- The widgets in Chromium (Playwright) inside a test host built on ext-apps' `app-bridge`: each view renders from a
+  fixture, a tap calls the right tool, light and dark.
+- By hand, after a deploy: MCP Inspector, then the prompt set in `deploy/cloudflare/MCP-APP.md` per host.
+
+## 9. Signed previews (`GET /mcp/media/<token>`)
+
+A widget runs in a sandboxed iframe and sends no headers, so a private file cannot play from `share.../p/<key>` (that needs a
+private link the file may not have) or from R2. The app tools mint short-lived links instead (`src/mcp-preview.ts`):
+
+- **Token**: `base64url({ k, i, e, p }).base64url(HMAC-SHA256)`: `k` the client credential (key id, or `link:<id>` for the private
+  link), `i` the file id, `e` the expiry (1 hour after the tool call), `p` 1 when the token opens the file's poster only and 0 when
+  it opens the file itself. Signed with a key derived from the internal `COBALT_API_KEY` under its own domain label (an upload
+  token is not a preview token). Nothing is stored. A token with no `p` is not valid.
+- **Routes** (ops `mcp.media`, `mcp.media.poster`, hidden, method any): `/mcp/media/<token>` streams the file,
+  `/mcp/media/<token>/poster` its poster. A poster token on the file path, or a file token on the poster path, is a 403: a poster
+  link never opens the original. Bytes come from R2 (`originals` for a private file, `media` for a public one) with
+  Range support (206, 416; HEAD; open `OPTIONS` preflight), the file's content type, `cache-control: private, no-store`,
+  `access-control-allow-origin: *` (also on refusals). An invalid, tampered or expired token, or one whose credential is gone (key
+  revoked or its session expired, private link rotated, the MCP mode changed), is a 403; a hidden, deleted or unknown file, or a
+  poster it has not, is a 404. When the hidden-posts check cannot be answered the route fails closed: 503, nothing is served.
+- **Who gets one**: only files of posts that `readPosts` returned (so never a hidden post): `show_post` (every file that is not
+  public, plus the post's thumbnail), `search_library` (the thumbnail of each private or off post that is shown), `show_edit` (every
+  clip and overlay source that is not public, a finished private render, and the poster of a private render in the project list).
+  `AppToolCtx.preview(key, fileId, slot, poster?)` signs one and files it in the result.
+- **In `_meta`, not in the content.** The result carries `_meta["capystore/preview"]`: `{ <id>: { url?, poster?, thumb?, expires_at } }`
+  where `<id>` is a file id (`url` its bytes, `poster` its poster), a post id (`thumb`, its picture) or an edit project id
+  (`poster`, in the list). `expires_at` is ISO 8601. Neither `structuredContent` nor the text contains a signed link, so the
+  model never sees one (and a transcript or a saved conversation does not keep a working one). The widget reads it from the
+  CallToolResult it receives (`ui/notifications/tool-result` params, and the answer to its own `tools/call`; ChatGPT's
+  `window.openai.toolResponseMetadata`). Widgets after a write (section 6.5) carry it too. The output schemas have no field for it.
+- **Logs**: the path is masked like every credential-in-path route (`maskPath`).

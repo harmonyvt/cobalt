@@ -31,7 +31,7 @@ enum Endpoints {
         APIEndpoint(op: "library.about.set", method: "PATCH", path: "/library/about", auth: .key)
     }
 
-    /// `GET /library/transcript` (op `library.transcript`, auth key_or_service): What is said in a video, line by line with times in seconds (from/to: only that part). state says why there are no lines.
+    /// `GET /library/transcript` (op `library.transcript`, auth key_or_service): What is said in a video, line by line with times (start/end in seconds, timecode: the start as m:ss to cite; from/to: only that part). state says why there are no lines.
     static func libraryTranscript() -> APIEndpoint<LibraryTranscriptResponse> {
         APIEndpoint(op: "library.transcript", method: "GET", path: "/library/transcript", auth: .keyOrService)
     }
@@ -739,6 +739,11 @@ enum Endpoints {
     /// `PUT /mcp/upload/:token` (op `mcp.upload`, auth capability): The bytes of an MCP upload link (PUT /mcp/upload/<token>).
     static func mcpUpload(token: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "mcp.upload", method: "PUT", path: "/mcp/upload/\(HTTPCobaltClient.encode(token))", auth: .capability)
+    }
+
+    /// `OPTIONS /mcp/upload/:token` (op `mcp.upload.preflight`, auth open): The preflight of an MCP upload link's PUT (OPTIONS /mcp/upload/<token>).
+    static func mcpUploadPreflight(token: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp.upload.preflight", method: "OPTIONS", path: "/mcp/upload/\(HTTPCobaltClient.encode(token))", auth: .open)
     }
 
     /// `GET /mcp/settings` (op `mcp.settings`, auth key_or_service): How agents reach the MCP: the mode and the private link's use (GET /mcp/settings).

@@ -101,6 +101,7 @@ struct CobaltApp: App {
         #if os(macOS)
         FinderDomain.install(model)
         MenuBarFinderWiring.connect(model)
+        QuickSave.install(model)
         #endif
         // Shortcuts, Siri and Spotlight run in this process, before any scene (CONTRACT-PARALLEL 15.2)
         IntentDependencies.register(model)

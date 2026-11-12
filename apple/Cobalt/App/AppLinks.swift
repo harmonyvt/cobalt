@@ -170,6 +170,13 @@ extension CobaltAppDelegate: NSApplicationDelegate {
         UNUserNotificationCenter.current().delegate = self
     }
 
+    /// The right-click service ("save to capystore"). Here, not later: a service that launched the app is delivered
+    /// as soon as launching ends.
+    @MainActor
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        QuickSave.registerService()
+    }
+
     /// Closing the main window quits the app (one `Window` scene), except while the studio wallpaper is on
     /// (it lives in this process) or the menu bar icon is showing: the icon is the app, and the Dock reopens the window.
     @MainActor

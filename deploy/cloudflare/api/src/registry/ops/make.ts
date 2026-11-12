@@ -1,14 +1,14 @@
 // Make ops (APP-API-CONTRACT.md 33.8, plan T4): the routes that make files (the webp render of one video, the slideshow,
 // the gallery image, reopening a library file, the editor) moved onto the registry unchanged, and the chat AI's calls
 // that use them: cobalt.make.webp / still / trim / crop / slideshow / galleryImage, cobalt.edits.*, and
-// cobalt.jobs.wait / jobs.onDone. Everything the AI starts counts against a per-thread daily cap (CHAT_DAILY_RENDERS, default 10).
+// cobalt.jobs.wait / jobs.onDone. Everything the AI starts counts against a per-thread daily cap (CHAT_DAILY_RENDERS, default 10); MCP calls have no cap.
 //
 // The route ops wrap the old handlers: same parsing, same error codes, same headers (the route snapshot pins them).
 import * as z from "zod";
 import { libraryStudio, POST_KEY_SQL } from "../../app-routes";
 import { editsKeyed, kickRenderers, parseEditTimeline, type EditsOp, type RendererNamespace } from "../../edits";
 import { EDIT_PROJECT_ID_REGEX, EDIT_RENDER_ID_REGEX, ITEM_ID_REGEX, STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "../../gate";
-import { KEY_ID_HEADER } from "../../headers";
+import { AGENT_LIVE_HEADER, KEY_ID_HEADER } from "../../headers";
 import { getSession, itemTypeOf, STILL_ADOPT_TYPES, type SessionRow } from "../../studio";
 import { studioStatus } from "../../studio-edge";
 import { HIDDEN_HINT, sessionPostKey } from "../../hidden";
@@ -274,7 +274,10 @@ export const JobSchema = z
     .meta({ id: "Job" });
 type Job = z.infer<typeof JobSchema>;
 
-export const rendersCap = (ctx: OpContext) => dailyCap(ctx.env.CHAT_DAILY_RENDERS, CHAT_DAILY_RENDERS_DEFAULT);
+// The daily render cap of this call, or null when there is none: MCP calls (every Claude conversation on one client key
+// shares one MCP "thread", so a per-thread cap ran out across all of Claude) are not capped. The in-app chat keeps its cap,
+// and so does a sub-agent (its ctx carries no `mcp`).
+export const rendersCap = (ctx: OpContext): number | null => (ctx.chat?.mcp ? null : dailyCap(ctx.env.CHAT_DAILY_RENDERS, CHAT_DAILY_RENDERS_DEFAULT));
 
 function threadOf(ctx: OpContext, call: string): string {
     if (!ctx.chat) throw new OpError(404, "error.chat.off", `cobalt.${call}: only the chat can call this`);
@@ -285,11 +288,16 @@ function threadOf(ctx: OpContext, call: string): string {
 // One unit of today's render cap for this thread, or a refusal the model can read.
 export async function takeRender(ctx: OpContext, call: string): Promise<void> {
     const cap = rendersCap(ctx);
+    if (cap === null) return; // uncapped: no counter is touched
     if (!(await budgetPort(ctx.container).take(threadOf(ctx, call), "renders", cap))) {
         throw new OpError(429, "error.chat.render_cap", `cobalt.${call}: this chat already made ${cap} files today, the most it may make in a day. Tell Harmony it can make more tomorrow.`);
     }
 }
-export const refundRender = (ctx: OpContext, call: string) => budgetPort(ctx.container).refund(threadOf(ctx, call), "renders");
+// Gives back what takeRender took: nothing when the call is uncapped (nothing was taken).
+export const refundRender = async (ctx: OpContext, call: string): Promise<void> => {
+    if (rendersCap(ctx) === null) return;
+    await budgetPort(ctx.container).refund(threadOf(ctx, call), "renders");
+};
 
 // Start a studio make (render, slideshow, gallery image) on an open session. The keyed ones run as the session's owner:
 // the chat is Harmony's own, and the Durable Object only lets the key that made a session add to it.
@@ -299,7 +307,8 @@ async function startStudio(ctx: OpContext, call: string, sid: string, plan: Plan
     await takeRender(ctx, call);
     let res: Response;
     try {
-        const headers: Record<string, string> = { "content-type": "application/json" };
+        // the agent header: the Durable Object push-starts a Live Activity for this make (APP-API-CONTRACT.md 8.11)
+        const headers: Record<string, string> = { "content-type": "application/json", [AGENT_LIVE_HEADER]: "1" };
         if (plan.route !== "render") {
             const s = await getSession(ctx.db, sid);
             headers[KEY_ID_HEADER] = s?.key_id ?? ctx.keyId ?? "";

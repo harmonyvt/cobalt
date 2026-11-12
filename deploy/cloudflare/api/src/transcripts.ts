@@ -175,6 +175,16 @@ export function linesOf(segments: Segment[]): Line[] {
 
 export const linesText = (lines: Line[]): string => lines.map((l) => l.t).join(" ");
 
+// A time in the clip as a reader writes it: 83.4 -> "1:23", 3725 -> "1:02:05" (rounded down, so it never points past
+// the moment). For the chat AI and MCP agents, which cite and seek to moments.
+export function timecode(seconds: number): string {
+    const t = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const ss = String(t % 60).padStart(2, "0");
+    return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
 // ---- D1 ----------------------------------------------------------------------------------------------------------------
 
 export type TranscriptState = "done" | "no_speech" | "failed";

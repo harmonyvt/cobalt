@@ -8,6 +8,16 @@ extension Copy {
         static let showIcon = "show in the menu bar"
         static let showIconFooter = "the icon stays up while capystore is open, including with the window closed. turn it off and closing the window quits, as before."
 
+        // saving from other apps: the global keys and the right-click service (`QuickSave`)
+        static let quickSection = "from other apps"
+        static let quickPaste = "paste from anywhere"
+        static let quickSet = "set keys"
+        static let quickRecording = "press the keys…"
+        static let quickClear = "remove the keys"
+        static let quickNeedsModifier = "use ⌘, ⌃ or ⌥ with a key."
+        static let quickTaken = "those keys are taken. try others."
+        static let quickFooter = "the keys save the link or file on your clipboard from any app while capystore is running. or right-click: select a link, or a video or image file in finder, then services › save to capystore. that one can have its own keys in system settings › keyboard › keyboard shortcuts › services."
+
         static let pasteLink = "paste link"
         static let pasteHint = "reads your clipboard and saves it"
         static let activity = "activity"
