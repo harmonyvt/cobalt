@@ -1,8 +1,9 @@
 // The capystore MCP server (APP-API-CONTRACT.md section 35): the chat AI's tools, served to any MCP client (Claude Code,
 // Claude Desktop, other agents) over Streamable HTTP at POST /mcp on the API host. The tools ARE the op registry's chat
-// calls (src/registry/): same ops, same zod checks, same handlers, same daily caps, so the MCP and the chat never drift.
+// calls (src/registry/): same ops, same zod checks, same handlers, same daily caps (except renders and saves, which the MCP does not cap), so the MCP and the chat never drift.
 //
-// Stateless: every POST is one JSON-RPC message (or a batch) answered with JSON; no session id, no SSE stream.
+// Stateless: every POST is one JSON-RPC message (or a batch) answered with JSON; no session id, no SSE stream. The
+// protocol itself is the official SDK (src/mcp-app/server.ts); this file holds the tool mapping and the upload tokens.
 // Each client key gets its own stable "thread" (mcpThreadId): its calls run as that thread's chat key, so the per-thread
 // caps (saves, renders) and the workbench box behave as they do for one chat thread.
 // Free of Cloudflare imports: the tests run it under node.
@@ -19,10 +20,27 @@ import { workbenchOn } from "./workbench-rules";
 
 export const MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] as const;
 export const MCP_SERVER_NAME = "capystore";
-export const MCP_SERVER_VERSION = "1.0.0";
+export const MCP_SERVER_VERSION = "2.0.0";
 
 // Chat calls that only mean something inside the chat app's own reply (thumbnails, the collage, continuing a chat).
 export const MCP_SKIPPED_CALLS = new Set(["show", "collage", "jobs.onDone"]);
+
+// The twelve chat calls the app tools replaced (src/mcp-app/retired.ts maps each to its app tool). They are not listed;
+// a call by their old name is answered by the app tool. App tools still run them through `ctx.call`, so `mcpOps` keeps them.
+export const MCP_RETIRED_CALLS = new Set([
+    "library.search",
+    "library.list",
+    "library.post",
+    "edits.get",
+    "edits.list",
+    "collections.list",
+    "links.list",
+    "links.create",
+    "make.webp",
+    "upload.begin",
+    "library.save",
+    "jobs.wait",
+]);
 
 // A tool's text result is cut here (the chat cuts its own results too).
 export const MCP_RESULT_MAX = 200_000;
@@ -49,126 +67,131 @@ export function mcpFlags(ctx: Pick<OpContext, "env" | "embed">): AiFlags {
     return { search: ctx.embed() !== null, box: workbenchOn(ctx.env), mcp: true, agents: agentsOn(ctx.env), ytdlp: !!ctx.env.YTDLP };
 }
 
+// Everything the MCP can run: what is listed plus the retired calls, which the app tools use.
 export function mcpOps(registry: Registry, flags: AiFlags): Op[] {
     return registry.toolsFor("chat", flags).filter((op) => !MCP_SKIPPED_CALLS.has(op.callName));
+}
+
+// The ops that are listed as tools of their own.
+export function mcpListedOps(registry: Registry, flags: AiFlags): Op[] {
+    return mcpOps(registry, flags).filter((op) => !MCP_RETIRED_CALLS.has(op.callName));
 }
 
 const ASK_NOTE =
     "Changes or removes things for good (in the capystore chat this asks Harmony first): check with the user before calling it.";
 
+// What the chat's cheat-sheet summaries say that means nothing here: the app tools' names for the retired calls, and the
+// chat's own job hook. (The registry's summaries stay as they are; the chat AI reads them.)
+const SAY_INSTEAD: [RegExp, string][] = [
+    [/\bHand its job to jobs\.onDone to get its report when it finishes\./g, "Check on its job with job_status (it waits a few seconds at most; call it again until the job is done) to get its report."],
+    [/\bSame answer as library\.save\./g, "Answers the save's own JSON (status, save_id, post_id...), not save_link's."],
+    [/\n?The in-app chat may save at most \d+ a day per thread \(the MCP has no daily cap\)\./g, ""],
+    [/\bhand (?:it|a job that is still going) to jobs\.onDone(?: instead)?\.?/gi, "check it with job_status."],
+    [/\bNever call it again in later runs to poll: [^.]*\./g, "Call it again to follow a job that is still going."],
+    [/\bcobalt\.jobs\.onDone\b|\bjobs\.onDone\b/g, "job_status"],
+    [/\blibrary\.(?:list|search)\/(?:search|list)\b/g, "search_library"],
+    [/\b(?:library\.(?:search|list)|library_(?:search|list))\b/g, "search_library"],
+    [/\b(?:library\.post|library_post)\b/g, "show_post"],
+    [/\b(?:edits\.(?:get|list)|edits_(?:get|list))\b/g, "show_edit"],
+    [/\b(?:collections\.list|collections_list)\b/g, "list_collections"],
+    [/\b(?:links\.list|links_list)\b/g, "list_share_links"],
+    [/\b(?:links\.create|links_create)\b/g, "create_share_link"],
+    [/\b(?:make\.webp|make_webp)\b/g, "convert_to_webp"],
+    [/\b(?:upload\.begin|upload_begin)\b/g, "upload_files"],
+    [/\b(?:library\.save|library_save)\b/g, "save_link"],
+    [/\b(?:jobs\.wait|jobs_wait)\b/g, "job_status"],
+];
+
+// "cobalt.make.crop(...)" and "make.crop" are the chat's spelling; a tool here is make_crop
+const toolSpelling = (text: string, names: Set<string>) =>
+    text.replace(/\b(?:cobalt\.)?([a-z]+)\.([A-Za-z]+)\b/g, (whole, a: string, b: string) => (names.has(`${a}.${b}`) ? `${a}_${b}` : whole));
+
 // The MCP description of a call: its cheat-sheet summary, with the chat's wording made general.
-function describeOp(op: Op): string {
+function describeOp(op: Op, callNames: Set<string>): string {
     let text = op.ai.summary.replace(/\n/g, " ");
     if (op.callName === "look")
         text = `See these posts' pictures (poster or image, private ones too), returned as images. grid: labelled lines every 0.1 to read off a crop box; box: draws a crop you are about to make so you can check it; frames: up to 3 frames across a video. Max ${MCP_LOOK_MAX} per call.`;
+    for (const [from, to] of SAY_INSTEAD) text = text.replace(from, to);
+    text = toolSpelling(text, callNames);
     if (op.ai.tier === "ask") text += ` ${ASK_NOTE}`;
     return text;
 }
 
 type Json = Record<string, unknown>;
 
-// The JSON Schema of an op's input, as the client sends it (`io: "input"`), always an object.
-export function inputSchemaOf(op: Op): Json {
-    let schema: Json;
+// The JSON Schema of a zod schema, as a client reads it (`io: "input"` for what it sends), always an object.
+export function jsonSchemaOf(schema: z.ZodType, io: "input" | "output"): Json {
+    let out: Json;
     try {
-        schema = z.toJSONSchema(op.input, { target: "draft-2020-12", unrepresentable: "any", io: "input" }) as Json;
+        out = z.toJSONSchema(schema, { target: "draft-2020-12", unrepresentable: "any", io }) as Json;
     } catch {
-        schema = { type: "object" };
+        out = { type: "object" };
     }
-    delete schema.$schema;
-    if (schema.type !== "object") return { type: "object", additionalProperties: true };
-    return schema;
+    delete out.$schema;
+    if (out.type !== "object") return { type: "object", additionalProperties: true };
+    return out;
 }
+
+// The JSON Schema of an op's input, as the client sends it, always an object.
+export const inputSchemaOf = (op: Op): Json => jsonSchemaOf(op.input, "input");
 
 export type McpTool = { name: string; description: string; inputSchema: Json; annotations?: Json };
 
 export function mcpToolList(registry: Registry, flags: AiFlags): McpTool[] {
-    return mcpOps(registry, flags).map((op) => ({
+    const all = mcpOps(registry, flags);
+    const callNames = new Set(all.map((o) => o.callName));
+    return mcpListedOps(registry, flags).map((op) => ({
         name: mcpToolName(op.callName),
-        description: describeOp(op),
+        description: describeOp(op, callNames),
         inputSchema: inputSchemaOf(op),
         ...(op.ai.tier === "ask" ? { annotations: { destructiveHint: true, readOnlyHint: false } } : {}),
     }));
 }
 
-const INSTRUCTIONS = [
+export const INSTRUCTIONS = [
     "capystore is Harmony's media library: videos, images and galleries saved from links or uploaded, with public share links.",
-    "Posts are found with library_list or library_search (meaning search) and opened with library_post; use the post `id` they return.",
-    "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with library_save. Upload a local file with upload_begin, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
-    "Make ops (make_*, edits_render, chat_video) answer a job: check on it with jobs_wait. Share links: links_create; collections and sets group them.",
+    "Posts are found with search_library (meaning search; with no query it lists the library newest first) and opened with show_post; use the post `id` they return.",
+    "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with save_link. Upload a local file with upload_files, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
+    "Make ops (make_*, edits_render, chat_video, convert_to_webp) answer a job: check on it with job_status. Share links: create_share_link; collections and sets group them.",
     "Cropping (make_cropImage for pictures, make_crop for videos): never guess the position or assume the centre. Look at the source with grid: true (a video: frames: true, or make_frames for frames at chosen seconds), read the box off the labelled grid, check it with look's box option before making it, and look at the result after. A moving subject needs a box that covers it in every frame, or several clips with their own crops. Plain crop by default: cutout only for a subject on a plain background, never for banners, bars or text. Then edits_addOverlay to use it in a video.",
-    "When offered, agents_spawn starts a helper (another capystore agent with these tools) on one task in the background; follow it with agents_get or jobs_wait on its job, message it with agents_send, read what helpers sent you with agents_inbox.",
+    "When offered, agents_spawn starts a helper (another capystore agent with these tools) on one task in the background; follow it with agents_get or job_status on its job, message it with agents_send, read what helpers sent you with agents_inbox.",
     "Tools marked destructive delete or change things for good: confirm with the user first.",
+    "Some tools show a picture answer (a widget) where the host draws one: search_library, show_post, show_edit, list_collections, list_share_links, convert_to_webp, upload_files, create_share_link and save_link, and after a change the collections_*, links_update, links_private, links_rotate, library_title, library_visibility and library_status tools, and (when offered) box_run, box_pull and box_save as a terminal. Every tool also answers in text, and with structuredContent (the same JSON) where it has one.",
+    "The other tools (make_*, edits_*, library_*, links_*...) cover everything else, deletes and edits included.",
 ].join("\n");
 
-// ---- JSON-RPC ---------------------------------------------------------------------------------------------------------
-
-type RpcRequest = { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: unknown };
-type RpcReply = { jsonrpc: "2.0"; id: unknown; result?: unknown; error?: { code: number; message: string } };
-
-const rpcError = (id: unknown, code: number, message: string): RpcReply => ({ jsonrpc: "2.0", id, error: { code, message } });
+// ---- calling a tool ---------------------------------------------------------------------------------------------------
 
 // Who is calling and how to reach the rest of the server. `ctx` is the POST /mcp op's context (its key already checked).
 // `threadKey` names the MCP thread when it is not the client key's own (every private link shares one, section 35.5).
 export type McpCaller = { ctx: OpContext; clientKeyId: string; threadKey?: string; origin: string; fetch?: typeof fetch };
 
-// One JSON-RPC message in, its reply out (null for a notification).
-export async function mcpMessage(registry: Registry, caller: McpCaller, msg: RpcRequest): Promise<RpcReply | null> {
-    const isRequest = msg && typeof msg === "object" && "id" in msg && msg.id !== null && msg.id !== undefined;
-    const id = isRequest ? msg.id : null;
-    if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
-        return rpcError(id, -32600, "invalid request");
-    }
-    if (!isRequest) return null; // notifications (initialized, cancelled...) need no answer
-    const params = (msg.params && typeof msg.params === "object" ? msg.params : {}) as Json;
-    switch (msg.method) {
-        case "initialize": {
-            const asked = typeof params.protocolVersion === "string" ? params.protocolVersion : "";
-            const version = (MCP_PROTOCOL_VERSIONS as readonly string[]).includes(asked) ? asked : MCP_PROTOCOL_VERSIONS[0];
-            return {
-                jsonrpc: "2.0",
-                id,
-                result: {
-                    protocolVersion: version,
-                    capabilities: { tools: { listChanged: false } },
-                    serverInfo: { name: MCP_SERVER_NAME, title: "capystore", version: MCP_SERVER_VERSION },
-                    instructions: INSTRUCTIONS,
-                },
-            };
-        }
-        case "ping":
-            return { jsonrpc: "2.0", id, result: {} };
-        case "tools/list":
-            return { jsonrpc: "2.0", id, result: { tools: mcpToolList(registry, mcpFlags(caller.ctx)) } };
-        case "tools/call": {
-            const name = params.name;
-            if (typeof name !== "string") return rpcError(id, -32602, "tools/call needs a name");
-            const op = mcpOps(registry, mcpFlags(caller.ctx)).find((o) => mcpToolName(o.callName) === name);
-            if (!op) return rpcError(id, -32602, `unknown tool ${name}`);
-            const args = params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments) ? params.arguments : {};
-            return { jsonrpc: "2.0", id, result: await callTool(op, caller, args as Json) };
-        }
-        default:
-            return rpcError(id, -32601, `method ${msg.method} is not supported`);
-    }
-}
-
 type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
-type ToolResult = { content: Content[]; isError?: boolean };
+export type ToolResult = { content: Content[]; isError?: boolean; structuredContent?: Json; _meta?: Json };
 
-const textResult = (value: unknown, isError = false): ToolResult => {
-    let text = typeof value === "string" ? value : JSON.stringify(value ?? null, null, 1);
-    if (text.length > MCP_RESULT_MAX) text = `${text.slice(0, MCP_RESULT_MAX)}… (cut: ask for less, e.g. a smaller limit)`;
+export const cutText = (text: string) => (text.length > MCP_RESULT_MAX ? `${text.slice(0, MCP_RESULT_MAX)}… (cut: ask for less, e.g. a smaller limit)` : text);
+
+export const textResult = (value: unknown, isError = false): ToolResult => {
+    const text = cutText(typeof value === "string" ? value : JSON.stringify(value ?? null, null, 1));
     return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
 };
 
-// Run one tool as the client's MCP thread. Its arguments are the op's input object, checked by the op's own schema.
-async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResult> {
+// The words an agent reads for a failed call.
+export const errorText = (name: string, e: unknown) => {
+    if (e instanceof OpError) return e.message === e.code ? `${name} failed: ${e.code}` : e.message;
+    return e instanceof Error ? e.message : String(e);
+};
+
+const issuesText = (name: string, error: z.ZodError) =>
+    `${name}: ${error.issues.slice(0, 4).map((i) => `${i.path.length ? i.path.join(".") : "input"}: ${i.message}`).join("; ")}`;
+
+// The context a chat op runs in for this MCP thread: its chat key, its tools, no request of its own.
+async function threadContext(caller: McpCaller): Promise<OpContext> {
     const collect: ChatCollect = { look: [], show: [], collage: null };
     const threadId = await mcpThreadId(caller.threadKey ?? caller.clientKeyId);
     // the MCP request itself never reaches the op (no request, url or query of its own, like a chat call)
     const { request: _r, url: _u, query: _q, params: _p, chat: _c, keyId: _k, caller: _w, durableObject: _d, ...base } = caller.ctx;
-    const ctx = forCall(base, {
+    return forCall(base, {
         keyId: chatKeyId(threadId),
         caller: "chat",
         chat: {
@@ -178,23 +201,59 @@ async function callTool(op: Op, caller: McpCaller, args: Json): Promise<ToolResu
             mcp: { origin: caller.origin, clientKeyId: caller.clientKeyId },
         },
     });
-    // an op with its own argument mapping (collage) takes the object as its options
-    const raw = op.ai.args ? argsToInput(op, [args]) : args;
-    const parsed = op.input.safeParse(raw);
-    if (!parsed.success) {
-        const parts = parsed.error.issues.slice(0, 4).map((i) => `${i.path.length ? i.path.join(".") : "input"}: ${i.message}`);
-        return textResult(`${mcpToolName(op.callName)}: ${parts.join("; ")}`, true);
+}
+
+// The input of an MCP call. MCP clients always send the op's input object, so an object its schema accepts as it is runs
+// as it is. An op with its own argument mapping (`ai.args`, written for the chat's positional calls: search(query, limit))
+// is mapped only when that is what makes the call valid; when neither parses, the error is about the object as sent.
+export function mcpInput(op: Op, args: unknown): z.ZodSafeParseResult<unknown> {
+    const direct = op.input.safeParse(args);
+    if (direct.success || !op.ai.args) return direct;
+    const mapped = op.input.safeParse(argsToInput(op, [args]));
+    return mapped.success ? mapped : direct;
+}
+
+// Run a chat op for an app tool: the same context, argument mapping, checks and runner as a tool call. Throws OpError.
+export async function runChatOp(op: Op, caller: McpCaller, args: unknown): Promise<unknown> {
+    const ctx = await threadContext(caller);
+    const parsed = mcpInput(op, args);
+    if (!parsed.success) throw new OpError(400, "error.api.bad_request", issuesText(mcpToolName(op.callName), parsed.error));
+    return runOp(op, ctx, parsed.data);
+}
+
+// The JSON of an op's answer as `structuredContent`: a plain object as it is, a list as { items }, a string or null none.
+// An answer too big for the text (cut at MCP_RESULT_MAX) is left out here too.
+export function structuredOf(value: unknown): Json | undefined {
+    const wrapped = Array.isArray(value) ? { items: value } : value && typeof value === "object" ? (value as Json) : null;
+    if (!wrapped) return undefined;
+    try {
+        const json = JSON.stringify(wrapped);
+        return json.length > MCP_RESULT_MAX ? undefined : (JSON.parse(json) as Json);
+    } catch {
+        return undefined;
     }
+}
+
+// Run one tool as the client's MCP thread. Its arguments are the op's input object, checked by the op's own schema.
+// `follow` may build a widget's structuredContent (and the signed preview links for its `_meta`) from the op's answer (src/mcp-app/follow.ts); the text stays the op's.
+export async function callTool(op: Op, caller: McpCaller, args: Json, follow?: (value: unknown, input: unknown) => Promise<{ structured: Json; meta?: Json } | null>): Promise<ToolResult> {
+    const ctx = await threadContext(caller);
+    const parsed = mcpInput(op, args);
+    if (!parsed.success) return textResult(issuesText(mcpToolName(op.callName), parsed.error), true);
     try {
         if (op.callName === "look") {
             const l = parsed.data as { ids: string[]; grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number } };
             return await look(ctx, caller, l.ids, { grid: l.grid === true, frames: l.frames === true, ...(l.box ? { box: l.box } : {}) });
         }
         // the chat's own runner, so a route op goes through the Durable Object exactly as the chat's does
-        return textResult((await runOp(op, ctx, parsed.data)) ?? null);
+        const value = (await runOp(op, ctx, parsed.data)) ?? null;
+        const result = textResult(value);
+        // a throw in the view (even a synchronous one) must not turn the write that succeeded into an error
+        const viewed = follow ? await Promise.resolve().then(() => follow(value, parsed.data)).catch(() => null) : null;
+        const structured = viewed?.structured ?? structuredOf(value);
+        return structured ? { ...result, structuredContent: structured, ...(viewed?.meta ? { _meta: viewed.meta } : {}) } : result;
     } catch (e) {
-        if (e instanceof OpError) return textResult(e.message === e.code ? `${mcpToolName(op.callName)} failed: ${e.code}` : e.message, true);
-        return textResult(e instanceof Error ? e.message : String(e), true);
+        return textResult(errorText(mcpToolName(op.callName), e), true);
     }
 }
 
@@ -255,8 +314,8 @@ export const UPLOAD_TOKEN_REGEX = /^[A-Za-z0-9_-]{16,400}\.[A-Za-z0-9_-]{43}$/;
 
 export type UploadClaims = { k: string; t: string; e: number };
 
-const b64url = (bytes: Uint8Array) => toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const fromB64url = (s: string) => {
+export const b64url = (bytes: Uint8Array) => toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+export const fromB64url = (s: string) => {
     const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4));
     return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 };

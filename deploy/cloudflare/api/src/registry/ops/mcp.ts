@@ -1,16 +1,17 @@
 // The MCP server's routes and its one MCP-only call (APP-API-CONTRACT.md section 35). The protocol and the tool mapping
 // live in src/mcp.ts; the tools themselves are the chat's ops.
-//  - POST /mcp: JSON-RPC over Streamable HTTP (stateless, JSON answers). The client key comes as `Api-Key <uuid>` or
+//  - POST /mcp: JSON-RPC over Streamable HTTP (the official SDK, src/mcp-app/server.ts; stateless, JSON answers). The client key comes as `Api-Key <uuid>` or
 //    `Bearer <uuid>`; a browser origin other than the web app's is refused.
 //  - POST /mcp/k/<secret>: the same, through the private link (section 35.5); the mode decides which of the two answers.
 //  - GET and DELETE /mcp (and /mcp/k/<secret>): 405 (no SSE stream, no sessions to end).
 //  - GET/POST /mcp/settings, POST /mcp/settings/rotate: the owner's switch and the link's rotation.
-//  - PUT /mcp/upload/<token>: the bytes of an upload_begin link, the same upload code as PUT /studio/upload.
+//  - PUT /mcp/upload/<token>: the bytes of an upload_begin link, the same upload code as PUT /studio/upload. It answers CORS
+//    for any origin (and its OPTIONS preflight): a widget's sandbox runs on an origin nobody knows ahead; the token is the credential.
 //  - upload.begin (MCP only): mints that link.
 import * as z from "zod";
 import { MAX_UPLOAD_BYTES, studioUpload, UPLOAD_TYPES, uploadLogInfo } from "../../app-routes";
 import { countryOf, lookupKey } from "../../keys";
-import { mcpAuthorization, mcpMessage, signUploadToken, UPLOAD_TOKEN_REGEX, UPLOAD_TOKEN_TTL_MS, verifyUploadToken, type McpCaller } from "../../mcp";
+import { mcpAuthorization, signUploadToken, UPLOAD_TOKEN_REGEX, UPLOAD_TOKEN_TTL_MS, verifyUploadToken, type McpCaller } from "../../mcp";
 import {
     linkClientId,
     linkLive,
@@ -25,6 +26,7 @@ import {
     setMcpMode,
 } from "../../mcp-link";
 import { background } from "../../background";
+import { previewRefusal, PREVIEW_CORS, PREVIEW_TOKEN_REGEX, servePreview, verifyPreviewToken } from "../../mcp-preview";
 import { logRequest } from "../../request-log";
 import { chatKeyId } from "../ai";
 import { defineOp, ok, OpError, type OpContext } from "../op";
@@ -39,6 +41,10 @@ const errBody = (code: string) => ({ status: "error", error: { code } });
 export const MCP_BODY_MAX = 1_000_000;
 
 const notHere = () => json(404, errBody("error.mcp.not_found"));
+
+// The protocol side (the SDK, ~70 ms of CPU to load) is loaded by the first MCP request, not by every cold start of the
+// Worker: the bundler keeps it in the one file but runs its module code only when this import is first awaited.
+const serveMcpRequest = async (...args: Parameters<typeof import("../../mcp-app/server").serveMcpRequest>) => (await import("../../mcp-app/server")).serveMcpRequest(...args);
 
 // The JSON-RPC body of a POST, answered. `caller` is who the calls run as (already checked); `linkId` is set for a
 // private link, whose client name is noted from its initialize.
@@ -64,15 +70,66 @@ async function serveMcp(ctx: OpContext, caller: McpCaller, linkId: string | null
     }
     if (Array.isArray(body)) {
         if (body.length === 0) return json(400, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "empty batch" } });
-        const replies = [];
+        // a batch (cut to its first 20) is answered message by message, in order; a notification has no reply
+        const replies: unknown[] = [];
         for (const m of body.slice(0, 20)) {
-            const r = await mcpMessage(ctx.registry, caller, m);
-            if (r) replies.push(r);
+            const next = prepareMessage(m);
+            if ("reply" in next) {
+                replies.push(next.reply);
+                continue;
+            }
+            const res = await serveMcpRequest(ctx.registry, caller, request, next.message);
+            if (res.status !== 202) replies.push(await res.json());
         }
         return replies.length ? json(200, replies) : new Response(null, { status: 202 });
     }
-    const reply = await mcpMessage(ctx.registry, caller, body as object);
-    return reply ? json(200, reply) : new Response(null, { status: 202 });
+    const next = prepareMessage(body);
+    if ("reply" in next) return json(200, next.reply);
+    return serveMcpRequest(ctx.registry, caller, request, next.message);
+}
+
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const rpcFail = (id: unknown, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
+
+// The first server was lenient where the SDK is strict; keep that, so a client that worked still works, and no schema
+// dump ever reaches it. `reply` answers the message here; otherwise `message` goes on to the SDK.
+//  - not JSON-RPC at all: -32600; params that are not an object are dropped
+//  - initialize: missing or null capabilities, client info or version are filled in
+//  - tools/call: no name is -32602; arguments that are not an object are {}
+function prepareMessage(m: unknown): { reply: object } | { message: unknown } {
+    const bad = invalidMessage(m);
+    if (bad) return { reply: bad };
+    const msg = m as { id?: unknown; method: string; params?: unknown };
+    const { params: given, ...rest } = msg;
+    const params: Record<string, unknown> = isObject(given) ? given : {};
+    const hasId = msg.id !== undefined && msg.id !== null;
+    if (msg.method === "initialize") {
+        const info = isObject(params.clientInfo) ? params.clientInfo : {};
+        return {
+            message: {
+                ...rest,
+                params: {
+                    ...params,
+                    protocolVersion: typeof params.protocolVersion === "string" ? params.protocolVersion : "",
+                    capabilities: isObject(params.capabilities) ? params.capabilities : {},
+                    clientInfo: { ...info, name: typeof info.name === "string" ? info.name : "unknown", version: typeof info.version === "string" ? info.version : "0" },
+                },
+            },
+        };
+    }
+    if (msg.method === "tools/call" && hasId) {
+        if (typeof params.name !== "string") return { reply: rpcFail(msg.id, -32602, "tools/call needs a name") };
+        return { message: { ...rest, params: { ...params, arguments: isObject(params.arguments) ? params.arguments : {} } } };
+    }
+    return { message: isObject(given) || given === undefined ? m : rest };
+}
+
+// A message that is not JSON-RPC 2.0 at all is answered here with -32600 (the SDK would call it a parse error).
+function invalidMessage(m: unknown): object | null {
+    const msg = m as { jsonrpc?: unknown; id?: unknown; method?: unknown } | null;
+    if (msg && typeof msg === "object" && msg.jsonrpc === "2.0" && typeof msg.method === "string") return null;
+    const id = msg && typeof msg === "object" && msg.id !== undefined ? msg.id : null;
+    return rpcFail(id, -32600, "invalid request");
 }
 
 // DNS rebinding: a browser page may only call the MCP from the web app's origin.
@@ -165,6 +222,9 @@ export const mcpLinkEndOp = mcpNotHere("mcp.link.end", "DELETE", "/mcp/k/:secret
 // PUT /mcp/upload/<token>: the token is the credential (its client key must still be live). Uploaded as the MCP
 // thread's chat key, like the chat's box.save, through PUT /studio/upload's own code (types, sniffing, 100 MB cap,
 // ?name ?title ?public ?queue).
+const UPLOAD_CORS = { "access-control-allow-origin": "*" };
+const uploadJson = (status: number, body: unknown) => json(status, body, UPLOAD_CORS);
+
 export const mcpUploadOp = defineOp({
     name: "mcp.upload",
     route: { method: "PUT", path: "/mcp/upload/:token", params: { token: UPLOAD_TOKEN_REGEX } },
@@ -180,7 +240,7 @@ export const mcpUploadOp = defineOp({
         const request = ctx.request!;
         const refuse = (status: number, code: string) => {
             void request.body?.cancel().catch(() => {});
-            return json(status, errBody(code));
+            return uploadJson(status, errBody(code));
         };
         const claims = await verifyUploadToken(ctx.env.COBALT_API_KEY, ctx.params.token!, ctx.now());
         if (!claims) return refuse(401, "error.mcp.upload_link");
@@ -194,7 +254,7 @@ export const mcpUploadOp = defineOp({
                 live = await linkLive(ctx.db, claims.k.slice(5));
             } else {
                 if (mode !== "public") return refuse(404, "error.mcp.not_found");
-                live = (await ctx.db.prepare("SELECT id FROM api_keys WHERE id = ?1 AND revoked_at IS NULL").bind(claims.k).first<{ id: string }>()) !== null;
+                live = (await ctx.db.prepare("SELECT id FROM api_keys WHERE id = ?1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?2)").bind(claims.k, ctx.now()).first<{ id: string }>()) !== null;
             }
         } catch {
             return refuse(503, "error.api.generic");
@@ -202,11 +262,81 @@ export const mcpUploadOp = defineOp({
         if (!live) return refuse(401, "error.api.auth.key.invalid");
         const keyId = chatKeyId(claims.t);
         const r = await studioUpload(ctx.app(), request, keyId, ctx.query);
-        const res = json(r.status, r.body);
+        const res = uploadJson(r.status, r.body);
         await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "PUT /mcp/upload", keyId, request, uploadLogInfo(request), res));
         return res;
     },
 });
+
+// OPTIONS /mcp/upload/<token>: the preflight of a widget's PUT, from any origin. The registry hands it to this op only
+// when it carries Access-Control-Request-Method (any other OPTIONS stays with the gate).
+export const mcpUploadPreflightOp = defineOp({
+    name: "mcp.upload.preflight",
+    route: { method: "OPTIONS", path: "/mcp/upload/:token", params: { token: UPLOAD_TOKEN_REGEX } },
+    auth: "open",
+    runs: "worker",
+    cors: false,
+    raw: true,
+    input: NoInput,
+    http: none,
+    ai: { tier: "hidden", summary: "The preflight of an MCP upload link's PUT (OPTIONS /mcp/upload/<token>)." },
+    handler: async () =>
+        new Response(null, {
+            status: 204,
+            headers: {
+                ...UPLOAD_CORS,
+                "access-control-allow-methods": "PUT, OPTIONS",
+                "access-control-allow-headers": "content-type",
+                "access-control-max-age": "600",
+            },
+        }),
+});
+
+// GET /mcp/media/<token> and /mcp/media/<token>/poster: a file (or its poster) for a widget to play (section 9 of
+// MCP-APP-CONTRACT.md). The signed token is the credential; its client key (or private link) must still be live and the
+// mode must still be the way in. HEAD and the preflight answer too; CORS is open to any origin (a sandbox's origin is unknowable).
+const previewOp = (name: string, path: string, poster: boolean) =>
+    defineOp({
+        name,
+        route: { method: "ANY", path, params: { token: PREVIEW_TOKEN_REGEX } },
+        auth: "capability",
+        runs: "worker",
+        cors: false,
+        noStore: true,
+        raw: true,
+        input: NoInput,
+        http: none,
+        ai: { tier: "hidden", summary: `${path.replace(":token", "<token>")}: a signed one-hour preview of a library file for MCP widgets.` },
+        handler: async (ctx) => {
+            const request = ctx.request!;
+            if (request.method === "OPTIONS") {
+                return new Response(null, { status: 204, headers: { ...PREVIEW_CORS, "access-control-allow-methods": "GET, HEAD, OPTIONS", "access-control-allow-headers": "range", "access-control-max-age": "600" } });
+            }
+            if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { ...PREVIEW_CORS, allow: "GET, HEAD, OPTIONS" } });
+            const claims = await verifyPreviewToken(ctx.env.COBALT_API_KEY, ctx.params.token!, ctx.now());
+            // a poster token opens the poster only, a file token the file only: the original never rides on a poster link
+            if (!claims || claims.p !== (poster ? 1 : 0)) return previewRefusal(403);
+            try {
+                const mode = await mcpMode(ctx.db);
+                let live: boolean;
+                if (claims.k.startsWith("link:")) {
+                    live = mode === "private" && (await linkLive(ctx.db, claims.k.slice(5)));
+                } else {
+                    live =
+                        mode === "public" &&
+                        (await ctx.db.prepare("SELECT id FROM api_keys WHERE id = ?1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?2)").bind(claims.k, ctx.now()).first<{ id: string }>()) !== null;
+                }
+                if (!live) return previewRefusal(403);
+                const env = ctx.env as { ORIGINALS?: unknown; MEDIA?: unknown };
+                return await servePreview({ db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl, media: env.MEDIA as never, originals: env.ORIGINALS as never }, request, claims, poster);
+            } catch (e) {
+                console.error("[mcp] preview failed", String(e));
+                return new Response("try again\n", { status: 503, headers: { ...PREVIEW_CORS, "cache-control": "no-store", "retry-after": "5" } });
+            }
+        },
+    });
+export const mcpMediaOp = previewOp("mcp.media", "/mcp/media/:token", false);
+export const mcpMediaPosterOp = previewOp("mcp.media.poster", "/mcp/media/:token/poster", true);
 
 const UploadLinkSchema = z.object({
     upload_url: z.string().describe("PUT the file's bytes here (any HTTP client; no other header is needed)"),
@@ -359,6 +489,9 @@ export const MCP_OPS = [
     mcpLinkStreamOp,
     mcpLinkEndOp,
     mcpUploadOp,
+    mcpUploadPreflightOp,
+    mcpMediaOp,
+    mcpMediaPosterOp,
     uploadBeginOp,
     mcpSettingsOp,
     mcpSetModeOp,

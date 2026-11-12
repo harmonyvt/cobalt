@@ -263,6 +263,14 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
     private var resizeRedraw = false
     /// False while the view has no window (iOS) or its window is minimised or fully covered (Mac).
     private var showing = true
+    /// Drawables handed to the screen and not yet back (presented or dropped), and since when the count has been full.
+    private var inFlight = 0
+    private var fullSince: TimeInterval?
+    /// At most this many drawables out at once. `currentDrawable` blocks the main thread (up to a second, every frame)
+    /// when the layer has none left to give, which is what a band the compositor is not taking frames from does:
+    /// with library sync on, the app froze for good on the way back from a video (owner, 2026-11-12). A frame that
+    /// would have to wait is skipped instead.
+    private static let maxInFlight = 2
     private let started = CACurrentMediaTime()
 
     override init() {
@@ -364,7 +372,27 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
         defer { drawing = false }
         guard drawState.visible, showing, drawState.sceneActive, drawState.state != .off else { return }
         guard let pipeline = resources.pipeline else { return }
+        guard view.window != nil, view.bounds.width > 0, view.bounds.height > 0 else { return }
+        let clock = CACurrentMediaTime()
+        if inFlight >= Self.maxInFlight {
+            // A handler that never came (a drawable the system threw away without a word) must not stop the band for
+            // good: after two seconds the count starts again.
+            guard let since = fullSince, clock - since > 2 else {
+                if fullSince == nil { fullSince = clock }
+                return
+            }
+            inFlight = 0
+            fullSince = nil
+        }
         guard let drawable = view.currentDrawable, let command = resources.queue?.makeCommandBuffer() else { return }
+        inFlight += 1
+        drawable.addPresentedHandler { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.inFlight = max(0, self.inFlight - 1)
+                if self.inFlight < Self.maxInFlight { self.fullSince = nil }
+            }
+        }
         let width = drawable.texture.width
         let height = drawable.texture.height
         guard width > 0, height > 0 else { return }

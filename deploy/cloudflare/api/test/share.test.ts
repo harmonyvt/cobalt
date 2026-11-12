@@ -1,6 +1,8 @@
 // Rich link pages (APP-API-CONTRACT.md section 22): https://share.../<name> for every public file, with
 // the Open Graph / Twitter card tags link unfurlers read. The Worker and the real SQL (node:sqlite on
 // every migration) run together; the container must never be reached from the share host.
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
 import { escapeHtml, shareUrlFor } from "../src/share";
@@ -112,7 +114,44 @@ describe("a public video", () => {
         expect(meta(html, "og:url")).toBe(`${SHARE}AbCdEfGh12`);
         expect(meta(html, "og:title")).toBe("x_2105237035271258436");
         expect(meta(html, "og:description")).toBe("0:10");
-        expect(html).toContain(`<video src="${MEDIA}AbCdEfGh12.mp4" poster="${MEDIA}PoStEr0001.jpg"`);
+        expect(html).toContain(`<video poster="${MEDIA}PoStEr0001.jpg" controls autoplay muted loop playsinline><source src="${MEDIA}AbCdEfGh12.mp4" type='video/mp4'></video>`);
+        expect(containerCalls).toEqual([]);
+    });
+
+    it("offers public HDR alternates first, then the original's codecs, and keeps og:video on the HEVC file", async () => {
+        const hevc = new Uint8Array(readFileSync(path.join(import.meta.dirname, "fixtures/hdr/hevc.mp4")));
+        const stored = db.raw.prepare("SELECT r2_key FROM media_items WHERE public_key = 'AbCdEfGh12.mp4'").get() as { r2_key: string };
+        (env.ORIGINALS as MemoryOriginals).objects.set(stored.r2_key, { bytes: hevc, contentType: "video/mp4", meta: {} });
+        db.raw.prepare("UPDATE media_items SET width = 64, height = 64, duration = 0.2 WHERE public_key = 'AbCdEfGh12.mp4'").run();
+        const alt = (id: string, name: string, type: string, codecs: string, at: number, visibility = "public") => {
+            db.raw
+                .prepare(
+                    `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, key_id, created_at, visibility, public_key, role, made_spec, post_key)
+                     VALUES (?, 'private', 'made', 'originals', ?, ?, ?, ?, 100, 64, 64, 'k', ?, ?, ?, 'alt', ?, 'SessionOne')`,
+                )
+                .run(id, `made/${id}.${name.split(".").pop()}`, visibility === "public" ? `${MEDIA}${name}` : null, name, type, at, visibility, visibility === "public" ? name : null, JSON.stringify({ kind: "hdr_alt", codecs }));
+        };
+        alt("AltWebmHd0000001", "AltVp9Hdr1.webm", "video/webm", "vp09.02.10.10.01.09.16.09.01", 4_000);
+        alt("AltAv1Hdr0000001", "AltAv1Hdr1.mp4", "video/mp4", "av01.0.00M.10.0.110.09.16.09.0", 5_000);
+        alt("AltPrivHdr000001", "AltPrivHdr1.mp4", "video/mp4", "av01.0.08M.10", 9_000, "private");
+        const html = await (await get(`${SHARE}AbCdEfGh12`)).text();
+        const video = html.slice(html.indexOf("<video"), html.indexOf("</video>") + "</video>".length);
+        expect(video).toBe(
+            `<video poster="${MEDIA}PoStEr0001.jpg" controls autoplay muted loop playsinline>` +
+                `<source src="${MEDIA}AltAv1Hdr1.mp4" type='video/mp4; codecs="av01.0.00M.10.0.110.09.16.09.0"'>` +
+                `<source src="${MEDIA}AltVp9Hdr1.webm" type='video/webm; codecs="vp09.02.10.10.01.09.16.09.01"'>` +
+                `<source src="${MEDIA}AbCdEfGh12.mp4" type='video/mp4; codecs="hvc1.2.4.L30.90"'>` +
+                `<source src="${MEDIA}AbCdEfGh12.mp4" type='video/mp4'></video>`,
+        );
+        expect(html).not.toContain("AltPrivHdr1");
+        expect(meta(html, "og:video")).toBe(`${MEDIA}AbCdEfGh12.mp4`);
+        expect(meta(html, "og:video:type")).toBe("video/mp4");
+        expect(meta(html, "og:video:width")).toBe("64");
+        expect(meta(html, "og:video:height")).toBe("64");
+        expect(meta(html, "og:image:width")).toBe("64");
+        expect(meta(html, "og:image:height")).toBe("64");
+        expect(meta(html, "twitter:player:width")).toBe("64");
+        expect(meta(html, "twitter:player:height")).toBe("64");
         expect(containerCalls).toEqual([]);
     });
 

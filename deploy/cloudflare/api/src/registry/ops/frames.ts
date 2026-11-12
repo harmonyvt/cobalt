@@ -101,7 +101,7 @@ export const makeFramesOp = defineOp({
 
         const cap = rendersCap(ctx);
         const budget = budgetPort(ctx.container);
-        if (!(await budget.take(thread, "renders", cap))) {
+        if (cap !== null && !(await budget.take(thread, "renders", cap))) {
             throw new OpError(429, "error.chat.render_cap", `cobalt.${call}: this chat already made ${cap} files today, the most it may make in a day. Tell Harmony it can make more tomorrow.`);
         }
         try {
@@ -147,7 +147,7 @@ export const makeFramesOp = defineOp({
             if (frames.length === 0) throw stop("no frame came out (are the times inside the video?)");
             return ok({ frames });
         } catch (e) {
-            await budget.refund(thread, "renders").catch(() => {});
+            if (cap !== null) await budget.refund(thread, "renders").catch(() => {});
             throw e;
         }
     },

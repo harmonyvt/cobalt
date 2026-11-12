@@ -63,6 +63,13 @@ test("posterTime and posterArgs are 13.3's recipe", () => {
     const a = posterArgs({ input: "in.mp4", output: "p.jpg", at: 1 });
     assert.deepEqual(a.slice(a.indexOf("-q:v"), a.indexOf("-q:v") + 2), ["-q:v", "4"]);
     assert.ok(a.join(" ").includes("min(720,iw)"));
+    assert.equal(a.join(" ").includes("zscale"), false);
+    const pq = posterArgs({ input: "in.mp4", output: "p.jpg", at: 1, transfer: "smpte2084" }).join(" ");
+    assert.match(pq, /zscale=tin=smpte2084.*tonemap=mobius:param=0\.3:desat=0/);
+    assert.match(pq, /format=yuvj420p/);
+    const hlg = posterArgs({ input: "in.mp4", output: "p.jpg", at: 0, transfer: "arib-std-b67" }).join(" ");
+    assert.match(hlg, /zscale=tin=arib-std-b67.*tonemap=clip/);
+    assert.equal(posterArgs({ input: "in.mp4", output: "p.jpg", at: 0, transfer: "bt709" }).join(" ").includes("zscale"), false);
     assert.equal(keyMatches("a", "a"), true);
     assert.equal(keyMatches("a", ""), false);
     assert.equal(keyMatches(undefined, "a"), false);

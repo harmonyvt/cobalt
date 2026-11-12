@@ -122,7 +122,20 @@ export function openApi(): Json {
     const paths: Json = {};
     for (const op of apiRoutes()) {
         const p = openApiPath(op.route!.path);
-        (paths[p] ??= {})[op.route!.method.toLowerCase()] = operation(op, components);
+        // ANY (a route that answers methods itself) is listed as the methods a client can use: GET (the op), HEAD and OPTIONS
+        // (same op, own operationId because those must be unique; `x-cobalt.same_op` names it)
+        if (op.route!.method !== "ANY") {
+            (paths[p] ??= {})[op.route!.method.toLowerCase()] = operation(op, components);
+            continue;
+        }
+        for (const method of ["get", "head", "options"]) {
+            const o = operation(op, components);
+            if (method !== "get") {
+                o.operationId = `${op.name}.${method}`;
+                (o["x-cobalt"] as Json).same_op = op.name;
+            }
+            (paths[p] ??= {})[method] = o;
+        }
     }
     const sorted: Json = {};
     for (const k of Object.keys(paths).sort()) sorted[k] = paths[k];
@@ -306,7 +319,8 @@ export function swiftClient(): string {
     const cx: SwiftCtx = { components, structs: [], named: new Set() };
     const funcs: string[] = [];
     const names = new Set<string>();
-    for (const op of apiRoutes()) {
+    // an ANY route (a signed link the browser opens, answered by the handler itself) has no typed endpoint
+    for (const op of apiRoutes().filter((o) => o.route!.method !== "ANY")) {
         const fn = swiftFuncName(op.name);
         if (names.has(fn)) throw new Error(`two ops make the Swift endpoint ${fn}`);
         names.add(fn);

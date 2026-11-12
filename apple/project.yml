@@ -21,7 +21,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: "7.9"
+    MARKETING_VERSION: "8.2"
     CURRENT_PROJECT_VERSION: "26"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
@@ -101,6 +101,22 @@ targets:
         # is `<bundle id>.run.*`; the launch handler registers the wildcard (ContinuedProcessing.swift).
         BGTaskSchedulerPermittedIdentifiers:
           - com.capybaraharmony.cobalt.run.*
+        # Mac: "save to capystore" in the right-click Services menu of every app (QuickSave.swift), on selected text
+        # that holds a link and on video, image and sound files. NSPortName is the executable's name. Ignored on iOS.
+        NSServices:
+          - NSMenuItem:
+              default: save link to capystore
+            NSMessage: saveToCapystore
+            NSPortName: cobalt
+            NSSendTypes: [public.utf8-plain-text, NSStringPboardType, public.url, NSURLPboardType]
+            NSRequiredContext:
+              NSTextContent: URL
+          - NSMenuItem:
+              default: save to capystore
+            NSMessage: saveToCapystore
+            NSPortName: cobalt
+            NSSendFileTypes: [public.movie, public.image, public.audio]
+            NSRequiredContext: {}
     settings:
       base:
         PRODUCT_NAME: cobalt

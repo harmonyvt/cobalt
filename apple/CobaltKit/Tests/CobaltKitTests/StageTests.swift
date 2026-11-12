@@ -272,15 +272,15 @@ struct StagePatchTests {
     private func live() throws -> StageSettings { try decode(StageSettings.self, wireStage) }
 
     @Test func theRangesAreTheContracts() {
-        #expect(StageRule.densityRange == 5...100 && StageRule.tileSecondsRange == 3...120)
+        #expect(StageRule.densityRange == 0...100 && StageRule.tileSecondsRange == 3...120)
         #expect(StageRule.tileScaleRange == 0.5...1.6 && StageRule.spotlightSecondsRange == 10...120)
         #expect(StageRule.videoMaxRange == 0...24 && StageRule.costRange == 1...1_000_000 && StageRule.cooldownRange == 0...604_800)
         #expect(StageRule.debounce == 0.3 && StageRule.pollInterval == 4)
     }
 
     @Test func clampingHoldsEveryNumberInItsRange() {
-        let p = StagePatch(density: 4, tileSeconds: 999, tileScale: 0.1, spotlightSeconds: 1, videoMax: 99).clamped()
-        #expect(p.density == 5 && p.tileSeconds == 120 && p.tileScale == 0.5 && p.spotlightSeconds == 10 && p.videoMax == 24)
+        let p = StagePatch(density: -4, tileSeconds: 999, tileScale: 0.1, spotlightSeconds: 1, videoMax: 99).clamped()
+        #expect(p.density == 0 && p.tileSeconds == 120 && p.tileScale == 0.5 && p.spotlightSeconds == 10 && p.videoMax == 24)
         #expect(StagePatch(tileSeconds: 99).clamped().tileSeconds == 99, "a tile life past the old 30 s cap is kept")
         let q = StagePatch(density: 500, tileSeconds: -3, tileScale: 9, spotlightSeconds: 500, videoMax: -1).clamped()
         #expect(q.density == 100 && q.tileSeconds == 3 && q.tileScale == 1.6 && q.spotlightSeconds == 120 && q.videoMax == 0)
@@ -334,8 +334,8 @@ struct StagePatchTests {
 
     @Test func aPatchShowsOnAStageClampedAndWithoutTheServersPool() throws {
         let s = try live()
-        let shown = s.applying(StagePatch(pool: .library, density: 3, tileScale: 5, sound: false))
-        #expect(shown.density == 5 && shown.tileScale == 1.6 && !shown.sound)
+        let shown = s.applying(StagePatch(pool: .library, density: -3, tileScale: 5, sound: false))
+        #expect(shown.density == 0 && shown.tileScale == 1.6 && !shown.sound)
         #expect(shown.pool == s.pool, "the pool's name and count are the server's")
         #expect(shown.tileSeconds == s.tileSeconds)
     }

@@ -31,7 +31,7 @@ enum Endpoints {
         APIEndpoint(op: "library.about.set", method: "PATCH", path: "/library/about", auth: .key)
     }
 
-    /// `GET /library/transcript` (op `library.transcript`, auth key_or_service): What is said in a video, line by line with times in seconds (from/to: only that part). state says why there are no lines.
+    /// `GET /library/transcript` (op `library.transcript`, auth key_or_service): What is said in a video, line by line with times (start/end in seconds, timecode: the start as m:ss to cite; from/to: only that part). state says why there are no lines.
     static func libraryTranscript() -> APIEndpoint<LibraryTranscriptResponse> {
         APIEndpoint(op: "library.transcript", method: "GET", path: "/library/transcript", auth: .keyOrService)
     }
@@ -169,6 +169,11 @@ enum Endpoints {
     /// `POST /library/search/index` (op `library.search.index`, auth key_or_service): Index the posts not yet indexed.
     static func librarySearchIndex() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "library.search.index", method: "POST", path: "/library/search/index", auth: .keyOrService)
+    }
+
+    /// `POST /library/videos/dimensions` (op `library.videos.dimensions`, auth key_or_service): Fill width, height and duration on videos that lack them.
+    static func libraryVideosDimensions() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.videos.dimensions", method: "POST", path: "/library/videos/dimensions", auth: .keyOrService)
     }
 
     /// `POST /library/posters/backfill` (op `library.posters.backfill`, auth key_or_service): Queue the missing posters.
@@ -734,6 +739,11 @@ enum Endpoints {
     /// `PUT /mcp/upload/:token` (op `mcp.upload`, auth capability): The bytes of an MCP upload link (PUT /mcp/upload/<token>).
     static func mcpUpload(token: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "mcp.upload", method: "PUT", path: "/mcp/upload/\(HTTPCobaltClient.encode(token))", auth: .capability)
+    }
+
+    /// `OPTIONS /mcp/upload/:token` (op `mcp.upload.preflight`, auth open): The preflight of an MCP upload link's PUT (OPTIONS /mcp/upload/<token>).
+    static func mcpUploadPreflight(token: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp.upload.preflight", method: "OPTIONS", path: "/mcp/upload/\(HTTPCobaltClient.encode(token))", auth: .open)
     }
 
     /// `GET /mcp/settings` (op `mcp.settings`, auth key_or_service): How agents reach the MCP: the mode and the private link's use (GET /mcp/settings).

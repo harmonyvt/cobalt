@@ -128,6 +128,7 @@ export const PATHS: string[] = [
     `/library/names/${ID16}`,
     "/library/names/bad",
     "/library/search/index",
+    "/library/videos/dimensions",
     "/library/posters/backfill",
     "/library/visibility/migrate",
     `/library/items/${ID16}`,
@@ -178,6 +179,10 @@ export const PATHS: string[] = [
     "/mcp",
     `/mcp/upload/eyJrIjoia2V5LTEiLCJ0IjoiQUFBQUFBQUFBQUFBQUFBQSIsImUiOjF9.${"A".repeat(43)}`,
     "/mcp/upload/bad",
+    // signed previews for the MCP app's widgets (MCP-APP-CONTRACT.md section 9)
+    `/mcp/media/eyJrIjoia2V5LTEiLCJpIjoiQUFBQUFBQUFBQUFBQUFBQSIsImUiOjF9.${"A".repeat(43)}`,
+    `/mcp/media/eyJrIjoia2V5LTEiLCJpIjoiQUFBQUFBQUFBQUFBQUFBQSIsImUiOjF9.${"A".repeat(43)}/poster`,
+    "/mcp/media/bad",
     // added with accounts (section 42): device sessions and the owner's keys
     "/auth/exchange",
     "/auth/me",

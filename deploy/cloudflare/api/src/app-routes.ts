@@ -16,7 +16,8 @@
 //   POST /library/items/<id>/studio[?queue=1] open a studio session for a private video
 //   DELETE /library/items/<id>/post          delete a whole post: every file and its sessions (section 12)
 //   DELETE /library/items/<id>                delete one item or made file of a post (section 18.4)
-//   PUT  /library/items/<id>/made             a crop or an export made on the device (section 18.6)
+//   PUT  /library/items/<id>/made             a crop, an export, or an HDR alternate (role=alt) made on the device (section 18.6)
+//   POST /library/videos/dimensions          fill width/height/duration on video rows that lack them (keyed; not run by the cron)
 
 // Read at bundle time from upstream's package.json (reading is fine, editing is
 // not); the fork's Worker bundles this one field.
@@ -89,6 +90,7 @@ import {
     type StudioReply,
 } from "./studio";
 import { serviceFromUrl } from "./webp";
+import { readMp4Info, VIDEO_PROBE_BYTES, VP9_HDR_CODECS, webmInfo, type Mp4Info } from "./mp4-info";
 import { sniffSave, type SniffedSave } from "./workbench-rules";
 
 export const MAX_UPLOAD_BYTES = 100_000_000;
@@ -503,6 +505,23 @@ async function sniffUpload(
     return { type, body: fls.readable, short: () => sent < size };
 }
 
+// A ranged read of one stored object, then `moov` if it sits past the first window. Never throws.
+async function probeStoredVideo(
+    bucket: { get: (key: string, options?: { range?: { offset: number; length?: number } }) => Promise<{ body: ReadableStream; size: number } | null> },
+    key: string,
+): Promise<Mp4Info | null> {
+    try {
+        return await readMp4Info(async (offset, length) => {
+            const obj = await bucket.get(key, { range: { offset, length } });
+            if (!obj) return null;
+            return { bytes: new Uint8Array(await new Response(obj.body).arrayBuffer()), size: obj.size };
+        }, VIDEO_PROBE_BYTES);
+    } catch (e) {
+        console.error("[video] reading the header failed", key, String(e));
+        return null;
+    }
+}
+
 export async function studioUpload(
     d: AppDeps,
     request: Request,
@@ -585,15 +604,27 @@ export async function studioUpload(
         return err(400, "error.library.incomplete");
     }
 
+    // A video's header fills the row the share page's og:video:width/height tags read. A miss (moov
+    // unreadable, not an mp4) leaves them null; the upload still stands.
+    let width: number | null = null;
+    let height: number | null = null;
+    let duration: number | null = null;
+    if (type.startsWith("video/")) {
+        const info = await probeStoredVideo(d.originals, key);
+        width = info?.width ?? null;
+        height = info?.height ?? null;
+        duration = info?.duration ?? null;
+    }
+
     let row: MediaRow | null = null;
     let inserted = false;
     try {
         await d.db
             .prepare(
-                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, key_id, created_at, visibility, post_key)
-                 VALUES (?1, 'private', 'upload', 'originals', ?2, NULL, ?3, ?4, ?5, ?6, ?7, 'private', ?1)`,
+                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, key_id, created_at, visibility, post_key)
+                 VALUES (?1, 'private', 'upload', 'originals', ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'private', ?1)`,
             )
-            .bind(id, key, name, type, size, keyId, now)
+            .bind(id, key, name, type, size, width, height, duration, keyId, now)
             .run();
         inserted = true;
         row = await getItem(d.db, id);
@@ -739,7 +770,7 @@ const LEAD_ITEM_SQL = `COALESCE(
     (SELECT i.id FROM media_items i WHERE i.session_id = m.session_id AND i.role = 'item' AND i.deleted_at IS NULL AND i.content_type LIKE 'video/%' ORDER BY i.item_index, i.id LIMIT 1),
     (SELECT i.id FROM media_items i WHERE i.session_id = m.session_id AND i.role = 'item' AND i.deleted_at IS NULL ORDER BY i.item_index, i.id LIMIT 1))`;
 // GET /library without v=3 (section 18.3): made rows and the items after the lead are left out
-const LEGACY_GALLERY_HIDE = ` AND COALESCE(m.role, '') NOT IN ('slideshow', 'crop', 'export') AND (COALESCE(m.role, '') <> 'item' OR m.id = ${LEAD_ITEM_SQL})`;
+const LEGACY_GALLERY_HIDE = ` AND COALESCE(m.role, '') NOT IN ('slideshow', 'crop', 'export', 'alt') AND (COALESCE(m.role, '') <> 'item' OR m.id = ${LEAD_ITEM_SQL})`;
 
 const b64urlEncode = (s: string): string => {
     const bytes = new TextEncoder().encode(s);
@@ -797,7 +828,7 @@ const isStill = (type: string | null) => !!type && type.startsWith("image/") && 
 // v=3 file order (section 18.3): the items by item_index (a single original with them), then slideshows,
 // crops, exports, webps; each group but the items newest first
 const v3Rank = (f: FileRow) =>
-    f.role === "slideshow" ? 1 : f.role === "crop" ? 2 : f.role === "export" ? 3 : f.role === "item" || (f.bucket === "originals" && isOriginalSource(f.source)) ? 0 : 4;
+    f.role === "slideshow" ? 1 : f.role === "crop" ? 2 : f.role === "export" ? 3 : f.role === "alt" ? 4 : f.role === "item" || (f.bucket === "originals" && isOriginalSource(f.source)) ? 0 : 5;
 function sortV3(fs: FileRow[]): FileRow[] {
     return [...fs].sort((a, b) => {
         const ra = v3Rank(a);
@@ -1941,6 +1972,56 @@ export async function libraryPostTitle(
     }
 }
 
+// ---- POST /library/videos/dimensions ---------------------------------------------------------
+
+const DIMENSION_BACKFILL_DEFAULT = 25;
+const DIMENSION_BACKFILL_MAX = 100;
+
+// Keyed, and not on the cron: fill width/height/duration for video rows that don't have them yet.
+// One batch per call (`limit`, `offset`) so a header that will not parse can be stepped past. No new column.
+export async function libraryVideoDimensions(d: AppDeps, limit?: number, offset = 0): Promise<StudioReply> {
+    const n = limit == null || !Number.isFinite(limit) ? DIMENSION_BACKFILL_DEFAULT : Math.max(1, Math.min(DIMENSION_BACKFILL_MAX, Math.floor(limit)));
+    const skip = Number.isFinite(offset) ? Math.max(0, Math.min(100_000, Math.floor(offset))) : 0;
+    let rows: { id: string; bucket: string; r2_key: string }[];
+    try {
+        rows = (
+            await d.db
+                .prepare(
+                    `SELECT id, bucket, r2_key FROM media_items
+                      WHERE deleted_at IS NULL AND content_type LIKE 'video/%'
+                        AND (width IS NULL OR height IS NULL OR duration IS NULL)
+                      ORDER BY created_at, id
+                      LIMIT ?1 OFFSET ?2`,
+                )
+                .bind(n, skip)
+                .all<{ id: string; bucket: string; r2_key: string }>()
+        ).results;
+    } catch (e) {
+        console.error("[library] video dimensions failed", String(e));
+        return err(503, "error.api.generic");
+    }
+    let updated = 0;
+    for (const row of rows) {
+        const bucket = row.bucket === "media" ? d.media : d.originals;
+        const info = await probeStoredVideo(bucket, row.r2_key);
+        if (!info || (info.width == null && info.height == null && info.duration == null)) continue;
+        try {
+            await d.db
+                .prepare(
+                    `UPDATE media_items
+                        SET width = COALESCE(width, ?1), height = COALESCE(height, ?2), duration = COALESCE(duration, ?3)
+                      WHERE id = ?4 AND deleted_at IS NULL`,
+                )
+                .bind(info.width ?? null, info.height ?? null, info.duration ?? null, row.id)
+                .run();
+            updated++;
+        } catch (e) {
+            console.error("[library] video dimensions update failed", row.id, String(e));
+        }
+    }
+    return { status: 200, body: { status: "success", scanned: rows.length, updated, offset: skip } };
+}
+
 // ---- 13. POST /library/posters/backfill ------------------------------------------------------
 
 // Queues up to `limit` (default 25, at most 100) saved videos that have no poster yet and were
@@ -2003,7 +2084,7 @@ export async function libraryItemDelete(d: AppDeps, id: string): Promise<StudioR
         return err(503, "error.api.generic");
     }
     if (!row) return err(404, "error.library.not_found");
-    if (row.role !== "item" && row.role !== "slideshow" && row.role !== "crop" && row.role !== "export") {
+    if (row.role !== "item" && row.role !== "slideshow" && row.role !== "crop" && row.role !== "export" && row.role !== "alt") {
         return err(409, "error.library.not_deletable");
     }
     if (row.role === "item") {
@@ -2086,7 +2167,7 @@ export async function libraryMade(
         return err(status, code);
     };
     const role = q.get("role");
-    if (role !== "crop" && role !== "export") return reject(400, "error.library.bad_request");
+    if (role !== "crop" && role !== "export" && role !== "alt") return reject(400, "error.library.bad_request");
     // spec: a URL-encoded JSON object, at most 512 bytes
     const rawSpec = q.get("spec");
     if (rawSpec === null || new TextEncoder().encode(rawSpec).length > MAX_MADE_SPEC_BYTES) return reject(400, "error.library.bad_request");
@@ -2098,10 +2179,18 @@ export async function libraryMade(
     } catch {
         return reject(400, "error.library.bad_request");
     }
-    // the type the body must have: a crop and the long image are JPEGs, the PDF is a PDF
+    // the type the body must have: a crop and the long image are JPEGs, the PDF is a PDF, an HDR alternate is
+    // AV1 in an mp4 or VP9.2 in a WebM. An alternate uses the upload cap, not the 50 MB made cap.
     const type = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-    let ext: "jpg" | "pdf";
-    if (role === "crop") {
+    let ext: "jpg" | "pdf" | "mp4" | "webm";
+    let maxBytes = MAX_MADE_BYTES;
+    if (role === "alt") {
+        if (spec.kind !== "hdr_alt") return reject(400, "error.library.bad_request");
+        if (type === "video/mp4") ext = "mp4";
+        else if (type === "video/webm") ext = "webm";
+        else return reject(400, "error.library.bad_request");
+        maxBytes = MAX_UPLOAD_BYTES;
+    } else if (role === "crop") {
         if (type !== "image/jpeg") return reject(400, "error.library.bad_request");
         ext = "jpg";
     } else if (spec.kind === "long" && type === "image/jpeg") {
@@ -2114,7 +2203,7 @@ export async function libraryMade(
     const declared = request.headers.get("content-length");
     if (declared === null || !/^\d{1,15}$/.test(declared)) return reject(400, "error.library.bad_request");
     const size = Number(declared);
-    if (size > MAX_MADE_BYTES) return reject(413, "error.studio.too_large");
+    if (size > maxBytes) return reject(413, "error.studio.too_large");
     if (size === 0 || !request.body) return reject(400, "error.library.bad_request");
     const rawName = q.get("name");
     const name = rawName !== null ? cleanName(rawName, ext) : `${role}.${ext}`;
@@ -2151,30 +2240,63 @@ export async function libraryMade(
         return err(400, "error.library.bad_request");
     }
 
-    // the head of what was stored: it must be what the headers said, and a JPEG tells its size
+    // the head of what was stored: it must be what the headers said. A JPEG tells its size; an alternate's
+    // codecs string is parsed (AV1 from the mp4, VP9 from the WebM or from spec.codecs) and kept on the spec.
     let width: number | null = null;
     let height: number | null = null;
+    let duration: number | null = null;
+    let codecs: string | null = null;
+    const codecsToken = (v: unknown): string | null => (typeof v === "string" && /^[A-Za-z0-9.]{1,80}$/.test(v) ? v : null);
     try {
-        const stored = await d.originals.get(key, { range: { offset: 0, length: HEAD_BYTES } });
-        if (stored) {
-            const head = new Uint8Array(await new Response(stored.body).arrayBuffer());
-            if (ext === "jpg") {
-                if (head[0] !== 0xff || head[1] !== 0xd8) {
-                    await d.originals.delete(key).catch(() => {});
-                    return err(400, "error.library.bad_request");
-                }
-                const dim = jpegSize(head);
-                width = dim?.width ?? null;
-                height = dim?.height ?? null;
-            } else if (new TextDecoder().decode(head.subarray(0, 5)) !== "%PDF-") {
+        const stored = await d.originals.get(key, { range: { offset: 0, length: role === "alt" ? Math.min(VIDEO_PROBE_BYTES, size) : HEAD_BYTES } });
+        const head = stored ? new Uint8Array(await new Response(stored.body).arrayBuffer()) : new Uint8Array();
+        if (ext === "jpg") {
+            if (head[0] !== 0xff || head[1] !== 0xd8) {
                 await d.originals.delete(key).catch(() => {});
                 return err(400, "error.library.bad_request");
             }
+            const dim = jpegSize(head);
+            width = dim?.width ?? null;
+            height = dim?.height ?? null;
+        } else if (ext === "pdf") {
+            if (new TextDecoder().decode(head.subarray(0, 5)) !== "%PDF-") {
+                await d.originals.delete(key).catch(() => {});
+                return err(400, "error.library.bad_request");
+            }
+        } else if (ext === "mp4") {
+            if (head.length < 8 || String.fromCharCode(head[4]!, head[5]!, head[6]!, head[7]!) !== "ftyp") {
+                await d.originals.delete(key).catch(() => {});
+                return err(400, "error.library.bad_request");
+            }
+            const info = await probeStoredVideo(d.originals, key);
+            if (!info?.codecs?.startsWith("av01.")) {
+                await d.originals.delete(key).catch(() => {});
+                return err(400, "error.library.bad_request");
+            }
+            codecs = info.codecs;
+            width = info.width ?? null;
+            height = info.height ?? null;
+            duration = info.duration ?? null;
+        } else if (ext === "webm") {
+            if (head.length < 4 || head[0] !== 0x1a || head[1] !== 0x45 || head[2] !== 0xdf || head[3] !== 0xa3) {
+                await d.originals.delete(key).catch(() => {});
+                return err(400, "error.library.bad_request");
+            }
+            const info = webmInfo(head);
+            const given = codecsToken(spec.codecs);
+            codecs = given?.startsWith("vp09.") ? given : (info?.codecs ?? VP9_HDR_CODECS);
+            width = info?.width ?? null;
+            height = info?.height ?? null;
+            duration = info?.duration ?? null;
         }
     } catch (e) {
-        // the size is a nicety: the row is written without it
         console.error("[made] reading the head failed", String(e));
+        if (role === "alt") {
+            await d.originals.delete(key).catch(() => {});
+            return err(503, "error.api.generic");
+        }
     }
+    const storedSpec = codecs ? { ...spec, codecs } : spec;
 
     // an export lists the photos of the post at this moment; a crop, the photo it was cut from
     let madeFrom: string[] = [anchor.id];
@@ -2195,9 +2317,9 @@ export async function libraryMade(
         await d.db
             .prepare(
                 `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, width, height, duration, link, session_id, key_id, created_at, visibility, role, made_from, made_spec, post_key)
-                 VALUES (?1, 'private', 'made', 'originals', ?2, NULL, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11, 'private', ?12, ?13, ?14, ?15)`,
+                 VALUES (?1, 'private', 'made', 'originals', ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'private', ?13, ?14, ?15, ?16)`,
             )
-            .bind(newId, key, name, type, size, width, height, anchor.link, anchor.session_id, keyId, now, role, JSON.stringify(madeFrom), JSON.stringify(spec), anchor.post_key)
+            .bind(newId, key, name, type, size, width, height, duration, anchor.link, anchor.session_id, keyId, now, role, JSON.stringify(madeFrom), JSON.stringify(storedSpec), anchor.post_key)
             .run();
     } catch (e) {
         console.error("[made] media_items insert failed", String(e));
@@ -2217,21 +2339,21 @@ export async function libraryMade(
         console.error("[made] making the new file public failed", newId, String(e));
     }
 
-    // one export of a kind per post: the earlier one goes once the new one is stored
+    // one export of a kind per post, and one HDR alternate of a kind per post: the earlier one goes once the new one is stored
     const replaced: string[] = [];
-    if (role === "export") {
+    if (role === "export" || role === "alt") {
         try {
-            const old = postRows.filter((f) => f.role === "export" && f.id !== newId && (parseJson(f.made_spec) as { kind?: unknown } | null)?.kind === spec.kind);
+            const old = postRows.filter((f) => f.role === role && f.id !== newId && (parseJson(f.made_spec) as { kind?: unknown } | null)?.kind === spec.kind);
             for (const f of old) {
                 try {
                     await removeFile(d, f);
                     replaced.push(f.id);
                 } catch (e) {
-                    console.error("[made] replacing the earlier export failed", f.id, String(e));
+                    console.error("[made] replacing the earlier file failed", f.id, String(e));
                 }
             }
         } catch (e) {
-            console.error("[made] replacing the earlier export failed", String(e));
+            console.error("[made] replacing the earlier file failed", String(e));
         }
     }
 

@@ -1132,3 +1132,21 @@ query and errors, debounce and cancel, fallback, waking retry, off, clearing, a 
   new line), ⌘Return sends from an iPad keyboard.
 - "ask about this": in the library post menu and the detail's more menu (only with `features.chat` and a post); makes a thread with the
   post on its draft, opens the chat tab on it with the keyboard up.
+
+## 15. Saving from other apps on the Mac (added 2026-11-09)
+
+Two ways in with nothing of capystore on screen, both in `App/QuickSave.swift` and both running the menu bar's paste
+(`PasteRouter`): one new link, or several files, are queued silently (the menu bar ring and the Dock badge show them, a
+beep says "no link" or "already saving"); what the window has to ask about (several links, one file's name, a post with
+several items) opens the window through `MenuBarHandoff`.
+
+- Right-click: two `NSServices` entries in `Config/Cobalt-Info.plist` (from `project.yml`), message `saveToCapystore`.
+  "save link to capystore" shows on selected text that holds a link (`NSTextContent: URL`); "save to capystore" shows on
+  video, image and sound files. Keys for either are the system's (System Settings › Keyboard › Keyboard Shortcuts ›
+  Services). A browser's own menu on a link that is not selected is the browser's: only an extension could add to it.
+- "paste from anywhere": one system-wide hot key (`GlobalHotKey`, Carbon `RegisterEventHotKey`, no accessibility
+  permission, sandbox-safe) that saves the clipboard. Off by default; recorded in Settings › "from other apps"
+  (`QuickSaveSettingsSection`), stored as `Settings.pasteShortcut` (`GlobalShortcut`, defaults key `mac.pasteShortcut`).
+  It needs ⌘, ⌃ or ⌥ (a function key can stand alone) and only works while capystore is running.
+
+Tests: `CobaltKitTests/GlobalShortcutTests.swift`.

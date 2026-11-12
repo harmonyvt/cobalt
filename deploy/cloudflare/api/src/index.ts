@@ -11,7 +11,7 @@ import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from 
 import { handleStudioRoute, isStudioRoute, parseSaveEngineMode, StudioService, type YtDlpDeps } from "./studio";
 import { YTDLP_START_PATH } from "./ytdlp-path";
 import { fetchWithStartRetry } from "./start-retry";
-import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
+import { runSweep, scheduleSweepSoon, type SweepLive, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
 import { purgeFrom } from "./visibility";
 import { releaseHeld } from "./hidden";
@@ -223,7 +223,7 @@ export class CobaltContainer extends Container<Env> {
         // editor renders (section 32): the app's token, pushes from the EditRenderer's ticks
         this.editLive = new EditLiveService({ storage: this.ctx.storage, db: env.DB, now: webpDeps.now, apns });
         // chat replies shown on the owner's other devices (section 27.9): the start tokens, pushes from the chat route
-        this.chatLive = new ChatLiveService({ storage: this.ctx.storage, now: webpDeps.now, apns });
+        this.chatLive = new ChatLiveService({ storage: this.ctx.storage, now: webpDeps.now, apns, scheduleSweep: () => this.scheduleSweepSoon() });
 
         // Hark notification bridge (APP-API-CONTRACT.md section 9). HARK_WEBHOOK_URL is a
         // secret read only here (the Worker reads it for the capability flag); it never goes
@@ -327,9 +327,28 @@ export class CobaltContainer extends Container<Env> {
         await scheduleSweepSoon(this.sweepScheduler());
     }
 
-    // The schedule's callback (public: the library looks the method up by name).
+    // What the sweep asks of the Live Activity services: the run store's housekeeping and end retries, plus the chat
+    // replies' watchdog (a reply whose Worker went silent is ended as interrupted).
+    private sweepLive(): SweepLive {
+        const live = this.live;
+        const chat = this.chatLive;
+        return {
+            hasActiveRuns: () => live.hasActiveRuns(),
+            cleanup: (now) => live.cleanup(now),
+            retryEnds: async (now) => {
+                // Both run in the same sweep pass.
+                const runs = await live.retryEnds(now);
+                const chats = await chat.watch(now);
+                // The sweep comes back for whichever needs it first (null: neither needs it).
+                const times = [runs.nextInMs, chats.nextInMs].filter((ms): ms is number => ms !== null);
+                return { nextInMs: times.length > 0 ? Math.min(...times) : null };
+            },
+        };
+    }
+
+        // The schedule's callback (public: the library looks the method up by name).
     async sweepJobs(): Promise<void> {
-        await runSweep(this.sweepScheduler(), () => this.studio.sweep(), undefined, this.live, this.notify);
+        await runSweep(this.sweepScheduler(), () => this.studio.sweep(), undefined, this.sweepLive(), this.notify);
     }
 
     // A container rollout restarts the running instance with the env it was
