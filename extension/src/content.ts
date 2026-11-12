@@ -1,9 +1,9 @@
 // Injects one Save button per post. Re-scans on DOM changes so a feed that scrolls in more posts,
-// and a site that redraws itself without a navigation, both get buttons. A post that already has a
-// button for the same URL is left alone.
+// and a site that redraws itself without a navigation, both get buttons. A button that was mounted
+// before its real anchor existed is moved there on the next scan.
 
 import { getExt, type Ext } from "./lib/browser";
-import type { FoundPost, Scan } from "./lib/find";
+import { deepAll, relocateHost, type FoundPost, type Scan } from "./lib/find";
 import { spriteCss, type SiteId, type SpriteState } from "./lib/view";
 
 const HOST = "capystore-save";
@@ -40,7 +40,8 @@ export function start(site: SiteId, scan: Scan): void {
     let signedIn = true;
 
     const sheet = document.createElement("style");
-    sheet.textContent = `.${HOST}{display:inline-flex;align-items:center;vertical-align:middle;}`;
+    // Shrink to the button. A flex or grid parent (a card, <main>, a results row) would otherwise stretch this into a full-width bar.
+    sheet.textContent = `.${HOST}{display:inline-flex;align-items:center;vertical-align:middle;width:max-content;max-width:max-content;flex:0 0 auto;align-self:center;box-sizing:border-box;}`;
     document.documentElement.appendChild(sheet);
 
     const paint = (b: Button, state: SpriteState) => {
@@ -51,10 +52,17 @@ export function start(site: SiteId, scan: Scan): void {
         b.button.title = label;
     };
 
+    const findHost = (url: string): HTMLElement | null => {
+        for (const el of deepAll(document, `.${HOST}`)) {
+            if ((el as HTMLElement).dataset.url === url) return el as HTMLElement;
+        }
+        return null;
+    };
+
     const ensure = (found: FoundPost) => {
-        const prev = found.mount.querySelector(`:scope > .${HOST}`) as HTMLElement | null;
+        const prev = findHost(found.url);
         if (prev) {
-            if (prev.dataset.url !== found.url) prev.dataset.url = found.url;
+            relocateHost(prev, found.mount);
             return;
         }
         const host = document.createElement("span");

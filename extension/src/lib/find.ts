@@ -82,13 +82,31 @@ const YT_CARDS = [
     "yt-lockup-view-model",
 ].join(", ");
 
+// A lockup card has no #metadata. These are the title row YouTube actually renders there.
+const YT_META = [
+    "#metadata",
+    "#meta",
+    "h3",
+    "yt-lockup-metadata-view-model",
+    ".yt-lockup-metadata-view-model",
+    ".ytLockupViewModelMeta",
+    ".yt-lockup-metadata-view-model-wiz__title",
+    "a.yt-lockup-metadata-view-model-wiz__title",
+].join(", ");
+
 export function scanYouTube(doc: ParentNode, pageUrl: string): FoundPost[] {
     const out: FoundPost[] = [];
     for (const card of doc.querySelectorAll?.(YT_CARDS) ?? []) {
         const href = deepQuery(card, 'a[href*="/watch"], a[href*="/shorts/"], a[href*="youtu.be"]')?.getAttribute("href");
         const url = href ? canonicalYouTube(href, pageUrl) : null;
         if (!url) continue;
-        const mount = deepQuery(card, "#metadata, #meta, h3") ?? card;
+        const meta = deepQuery(card, YT_META);
+        const lockup = card.tagName.toLowerCase() === "yt-lockup-view-model";
+        // A lockup with no title row would put the button on the whole card, in the gap between results.
+        if (lockup && !meta) continue;
+        const link = deepQuery(card, 'a[href*="/watch"], a[href*="/shorts/"], a[href*="youtu.be"]');
+        const mount = meta ?? link;
+        if (!mount || mount === card) continue;
         out.push({ url, mount, variant: "icon" });
     }
     let page: URL | null = null;
@@ -108,42 +126,64 @@ export function scanYouTube(doc: ParentNode, pageUrl: string): FoundPost[] {
     return out;
 }
 
+const TWITCH_SHARE = "[data-a-target='share-button'], [data-a-target='clip-share-button'], button[aria-label='Share']";
+
+function isPreviewLink(a: Element): boolean {
+    return a.getAttribute("data-a-target") === "preview-card-image-link" || a.closest("[data-a-target='preview-card-image-link']") === a;
+}
+
 export function scanTwitch(doc: ParentNode, pageUrl: string): FoundPost[] {
     const out: FoundPost[] = [];
-    const seen = new Set<string>();
+    const chosen = new Map<string, Element>();
     for (const a of deepAll(doc, 'a[href*="/clip/"]')) {
         const url = canonicalTwitch(a.getAttribute("href") ?? "", pageUrl);
-        if (!url || seen.has(url)) continue;
-        seen.add(url);
-        const mount = a.closest("[data-a-target='preview-card-image-link'], article") ?? a.parentElement ?? a;
-        out.push({ url, mount, variant: "icon" });
+        if (!url) continue;
+        const prev = chosen.get(url);
+        // The preview image is a big link. A later title link for the same clip is the compact one.
+        if (!prev || (isPreviewLink(prev) && !isPreviewLink(a))) chosen.set(url, a);
     }
+    for (const [url, a] of chosen) out.push({ url, mount: a, variant: "icon" });
     const page = canonicalTwitch(pageUrl, pageUrl);
-    if (page && !seen.has(page)) {
-        const share = deepQuery(doc, "[data-a-target='share-button']");
-        const mount = share?.parentElement ?? deepQuery(doc, "[data-a-target='player-clip-title'], main");
-        if (mount) out.push({ url: page, mount, variant: "pill" });
+    if (page && !chosen.has(page)) {
+        // Wait for Share. Mounting on <main> before it exists leaves a full-width bar above the signup banner.
+        const share = deepQuery(doc, TWITCH_SHARE);
+        const mount = share?.parentElement;
+        if (share && mount) out.push({ url: page, mount, variant: "pill" });
     }
     return out;
 }
+
+// Move a button that landed on a weak mount (the page, a card) once a tighter anchor exists.
+export function relocateHost(host: HTMLElement, mount: Element): boolean {
+    if (host.parentElement === mount) return false;
+    mount.appendChild(host);
+    return true;
+}
+
+const IG_LINK = 'a[href*="/p/"], a[href*="/reel"], a[href*="/tv/"]';
+const IG_LIKE = 'svg[aria-label="Like"], svg[aria-label="Unlike"], svg[aria-label="Comment"]';
 
 export function scanInstagram(doc: ParentNode, pageUrl: string): FoundPost[] {
     const out: FoundPost[] = [];
     const seen = new Set<string>();
     for (const article of doc.querySelectorAll?.("article") ?? []) {
-        const href = deepQuery(article, 'a[href*="/p/"], a[href*="/reel"], a[href*="/tv/"]')?.getAttribute("href");
-        const url = (href ? canonicalInstagram(href, pageUrl) : null) ?? canonicalInstagram(pageUrl, pageUrl);
+        const link = deepQuery(article, IG_LINK);
+        const like = deepQuery(article, IG_LIKE);
+        const url = (link ? canonicalInstagram(link.getAttribute("href") ?? "", pageUrl) : null) ?? (like ? canonicalInstagram(pageUrl, pageUrl) : null);
         if (!url || seen.has(url)) continue;
+        const mount = like?.parentElement ?? link;
+        if (!mount) continue;
         seen.add(url);
-        const like = deepQuery(article, 'svg[aria-label="Like"], svg[aria-label="Unlike"], svg[aria-label="Comment"]');
-        const mount = like?.parentElement ?? deepQuery(article, "section") ?? article;
         out.push({ url, mount, variant: "icon" });
     }
     const page = canonicalInstagram(pageUrl, pageUrl);
     if (page && !seen.has(page)) {
-        const like = deepQuery(doc, 'svg[aria-label="Like"], svg[aria-label="Unlike"]');
-        const mount = like?.parentElement ?? deepQuery(doc, "section, main");
-        if (mount) out.push({ url: page, mount, variant: "icon" });
+        // A removed post still has a permalink and a <main>. Only a like control or a post link is a real anchor.
+        const like = deepQuery(doc, IG_LIKE);
+        const link = deepQuery(doc, IG_LINK);
+        const mount = like?.parentElement ?? link;
+        const url = (link ? canonicalInstagram(link.getAttribute("href") ?? "", pageUrl) : null) ?? (like ? page : null);
+        if (url && mount) out.push({ url, mount, variant: "icon" });
     }
     return out;
 }

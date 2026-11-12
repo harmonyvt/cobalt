@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { describe, expect, it } from "vitest";
 import { wire } from "../src/background";
 import type { Ext, StorageArea } from "../src/lib/browser";
-import { scanInstagram, scanTwitch, scanX, scanYouTube } from "../src/lib/find";
+import { relocateHost, scanInstagram, scanTwitch, scanX, scanYouTube } from "../src/lib/find";
 import { createSave, followSave, pollSave } from "../src/lib/save";
 import { chromeApproveUrl, parseRedirect, pkceChallenge, prefersWebAuthFlow, runSignIn, safariApproveUrl } from "../src/lib/signin";
 import { popupView, publicAuth, spriteCss } from "../src/lib/view";
@@ -92,11 +92,27 @@ describe("finding posts in a page", () => {
 
         const clips = page(
             "https://www.twitch.tv/directory/clips",
-            `<a data-a-target="preview-card-image-link" href="/somechannel/clip/FunnySlug"></a>`,
+            `<article id="card"><a data-a-target="preview-card-image-link" href="/somechannel/clip/FunnySlug"></a><a id="title" href="/somechannel/clip/FunnySlug">title</a></article>`,
         );
         const twitch = scanTwitch(clips, "https://www.twitch.tv/directory/clips");
         expect(twitch.map((f) => f.url)).toEqual(["https://www.twitch.tv/somechannel/clip/FunnySlug"]);
-        expect(twitch[0]!.url).not.toBe("https://www.twitch.tv/directory/clips");
+        expect(twitch[0]!.mount.id).toBe("title");
+        expect(twitch[0]!.mount.tagName).toBe("A");
+    });
+
+    it("skips a YouTube lockup that has no title row, and mounts on the metadata when it has one", () => {
+        const doc = page(
+            "https://www.youtube.com/results?search_query=capy",
+            `<yt-lockup-view-model id="bare"><a href="/watch?v=abcdefghijk">thumb</a></yt-lockup-view-model>
+             <yt-lockup-view-model id="full">
+               <a href="/watch?v=dQw4w9WgXcQ">thumb</a>
+               <yt-lockup-metadata-view-model id="meta"><a href="/watch?v=dQw4w9WgXcQ">title</a></yt-lockup-metadata-view-model>
+             </yt-lockup-view-model>`,
+        );
+        const found = scanYouTube(doc, "https://www.youtube.com/results?search_query=capy");
+        expect(found.map((f) => f.url)).toEqual(["https://www.youtube.com/watch?v=dQw4w9WgXcQ"]);
+        expect(found[0]!.mount.id).toBe("meta");
+        expect(found[0]!.mount).not.toBe(doc.querySelector("#full"));
     });
 
     it("finds each Instagram post in the feed, and a reel permalink that has no card link", () => {
@@ -121,11 +137,36 @@ describe("finding posts in a page", () => {
         ]);
     });
 
-    it("adds the button on a Twitch clip page that has no card", () => {
-        const doc = page("https://clips.twitch.tv/FunnySlug", `<main><button data-a-target="share-button"></button></main>`);
-        const found = scanTwitch(doc, "https://clips.twitch.tv/FunnySlug");
-        expect(found.map((f) => f.url)).toEqual(["https://clips.twitch.tv/FunnySlug"]);
+    it("does not inject on an Instagram page that only says the post is unavailable", () => {
+        const doc = page(
+            "https://www.instagram.com/p/AAAAAAAAAAA/",
+            `<main><section><h2>Sorry, this page isn't available.</h2><p>The link may be broken, or the post may have been removed.</p></section></main>`,
+        );
+        expect(scanInstagram(doc, "https://www.instagram.com/p/AAAAAAAAAAA/")).toEqual([]);
+    });
+
+    it("waits for Share on a Twitch clip page, then mounts beside it", () => {
+        const doc = page("https://www.twitch.tv/somechannel/clip/FunnySlug", `<main id="shell"><div id="signup">Sign up</div></main>`);
+        const url = "https://www.twitch.tv/somechannel/clip/FunnySlug";
+        expect(scanTwitch(doc, url)).toEqual([]);
+        const actions = doc.createElement("div");
+        actions.id = "actions";
+        actions.innerHTML = `<button data-a-target="share-button">Share</button>`;
+        doc.querySelector("#shell")!.appendChild(actions);
+        const found = scanTwitch(doc, url);
+        expect(found.map((f) => f.url)).toEqual([url]);
+        expect(found[0]!.mount).toBe(actions);
         expect(found[0]!.variant).toBe("pill");
+    });
+
+    it("moves a host off <main> once Share's row exists", () => {
+        const doc = page("https://www.twitch.tv/somechannel/clip/FunnySlug", `<main id="shell"></main><div id="actions"></div>`);
+        const host = doc.createElement("span");
+        host.className = "capystore-save";
+        doc.querySelector("#shell")!.appendChild(host);
+        expect(relocateHost(host, doc.querySelector("#actions")!)).toBe(true);
+        expect(host.parentElement?.id).toBe("actions");
+        expect(relocateHost(host, doc.querySelector("#actions")!)).toBe(false);
     });
 });
 

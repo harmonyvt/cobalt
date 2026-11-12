@@ -262,8 +262,9 @@ targets:
   # the extension target's script copies extension/dist into the appex.
   CapystoreSafari:
     type: application
-    platform: macOS
-    deploymentTarget: "26.0"
+    # supportedDestinations fills the scheme's platform list. `platform: macOS` alone leaves it empty,
+    # and Xcode warns that the scheme has no supported platforms.
+    supportedDestinations: [macOS]
     sources:
       - path: CapystoreSafari
     dependencies:
@@ -304,6 +305,10 @@ targets:
     postCompileScripts:
       - name: Embed Save to Capystore web extension
         basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(SRCROOT)/../extension/dist/manifest.json
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/manifest.json
         script: |
           set -euo pipefail
           SRC="${SRCROOT}/../extension/dist"
@@ -324,3 +329,6 @@ targets:
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
         CODE_SIGN_ENTITLEMENTS: Config/CapystoreSafariExtension.entitlements
+        # The project turns script sandboxing on. This script has to create the appex Resources
+        # directory, which that sandbox rejects (mkdir: Operation not permitted). This target only.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
