@@ -104,7 +104,7 @@ extension Copy {
         // MARK: sliders
 
         static let howCrazy = "how crazy"
-        static func onScreen(_ count: Int) -> String { "\(count) on screen" }
+        static func onScreen(_ count: Int) -> String { count == 0 ? "redeems only" : "\(count) on screen" }
         static let calm = "calm"
         static let chaosWord = "chaos"
         static let tileLife = "tile life"

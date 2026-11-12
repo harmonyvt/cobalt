@@ -2870,7 +2870,7 @@ alone.
 Approved mockup: https://claude.ai/artifact/ANXn8CohVKhHrGWuuW1Tsd (boards: stream canvas, Mac studio, iPhone studio, store).
 Owner decisions (2026-10-19 thread): the canvas is a web page at a URL with a secret token that OBS loads as a
 Browser Source, and the token can be rotated; tiles land at random spots and sizes and overlap, with a "how crazy"
-slider from 5 to 100 tiles on screen; the pool is a collection, a set, a search or the whole library; one spotlight
+slider from 0 to 100 tiles on screen (0 = no scatter, so with auto spotlight off only redeems show); the pool is a collection, a set, a search or the whole library; one spotlight
 tile at a time is big and has sound, and it is a video (pictures stay in the scatter); viewers spend real Twitch channel points on summon, chaos, shuffle, pin and skip, with
 no approval step; viewer-submitted links are out; viewers can sign in with Twitch on the store page, client side only;
 the store has a lock that turns the whole store off, sign-in included.
@@ -2905,7 +2905,7 @@ the store has a lock that turns the whole store off, sign-in included.
 - `stage_settings`: exactly one row, `id = 'main'`, created on first read with the defaults below. Columns:
   `on_air` (0/1, default 0), `pool_kind` (`'library'|'collection'|'group'|'search'`, default `'library'`),
   `pool_ref` (collection or group id, or the search words; NULL for library), `pool_ids` (JSON array of
-  `media_items` ids: the resolved pool, see 30.3), `pool_at` (ms), `density` (5..100, default 30), `tile_seconds`
+  `media_items` ids: the resolved pool, see 30.3), `pool_at` (ms), `density` (0..100, default 30; 0 = no scatter tiles, chaos still fills the screen), `tile_seconds`
   (3..120, default 10; was 3..30, see 30.12), `tile_scale` (0.5..1.6, default 1.0), `spotlight_auto` (0/1, default 1),
   `spotlight_seconds` (10..120, default 20), `sound` (0/1, default 1), `video_max` (0..24, default 12),
   `store_open` (0/1, default 0: the store starts locked), `store_hint` (0/1, default 1), `live_token` (32 random
@@ -3177,7 +3177,7 @@ then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "ena
   "stop"); the preview (a non-interactive web view of `live_url?preview=1`, 16:9, "preview · what obs sees"); the
   spotlight bar (current spotlight, sound toggle, pin, skip, "pick" which opens the pool sheet); pool picker
   (collection · set · search · whole library, using the links tab's collections and sets, the search words in a
-  field, "private items never show"); "how crazy" slider (5..100, "N on screen") and "tile life" slider (3..30 s),
+  field, "private items never show"); "how crazy" slider (0..100, "N on screen", "redeems only" at 0) and "tile life" slider (3..30 s),
   sent after the drag settles (debounced 300 ms); Twitch card (connect / reconnect / disconnect, status line,
   "channel points need an affiliate channel" when `not_affiliate`); rewards rows for summon, chaos, shuffle, pin and
   skip (cost, cooldown, on/off); the
