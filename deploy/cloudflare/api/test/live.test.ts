@@ -13,6 +13,7 @@ import {
     LIVE_MAX_OPEN_RUNS_PER_KEY,
     LIVE_MAX_RUNS_PER_KEY,
     LIVE_MAX_RUNS_PER_SID,
+    LIVE_REFRESH_MS,
     LIVE_RUN_TTL_MS,
     LIVE_START_MIN_GAP_MS,
     LIVE_START_TOKEN_TTL_MS,
@@ -682,16 +683,34 @@ describe("rate limiting and coalescing", () => {
         expect(w.apple.pushes).toHaveLength(n + 1);
     });
 
-    it("an equal state is never re-sent, however often it is reported", async () => {
+    it("an equal state is not re-sent inside LIVE_REFRESH_MS, however often it is reported", async () => {
         const w = await world();
         await w.armed();
         await w.live.onSave(SID, saving(100));
         const n = w.apple.pushes.length;
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 8; i++) {
             w.tick(5000);
             await w.live.onSave(SID, saving(100));
         }
         expect(w.apple.pushes).toHaveLength(n);
+    });
+
+    it("a quiet server step is pushed again after LIVE_REFRESH_MS with a fresh stale-date, so it never shows as stale", async () => {
+        const w = await world();
+        await w.armed();
+        await w.live.onSave(SID, saving(100));
+        const n = w.apple.pushes.length;
+        w.tick(LIVE_REFRESH_MS);
+        await w.live.onSave(SID, saving(100));
+        expect(w.apple.pushes).toHaveLength(n + 1);
+        const keep = w.apple.pushes.at(-1)!;
+        expect(keep.priority).toBe(5);
+        expect(keep.payload.aps).toMatchObject({ event: "update", "content-state": { stage: "saving", bytes: 100 } });
+        expect(keep.payload.aps["stale-date"]).toBe(Math.floor((T0 + LIVE_REFRESH_MS) / 1000) + 120);
+        // and again only after another LIVE_REFRESH_MS
+        w.tick(LIVE_REFRESH_MS - 1);
+        await w.live.onSave(SID, saving(100));
+        expect(w.apple.pushes).toHaveLength(n + 1);
     });
 
     it("priorities and expirations: counters 5 and now+60 s; stage changes, start, end 10 and now+3600 s", async () => {
