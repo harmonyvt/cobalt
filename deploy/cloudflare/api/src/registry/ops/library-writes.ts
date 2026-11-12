@@ -594,7 +594,7 @@ export const libraryDeleteFileOp = defineOp({
     ai: {
         tier: "ask",
         only: true,
-        summary: "Delete one file of a post: a gallery item or a made file (a crop, export, slideshow). The post's last item can't go this way: delete the post.",
+        summary: "Delete one file of a post: a gallery item or a made file (a crop, export, slideshow, or HDR alternate). The post's last item can't go this way: delete the post.",
         params: ["id"],
         preview: async (ctx, input) => {
             const f = await ctx.db
@@ -605,7 +605,7 @@ export const libraryDeleteFileOp = defineOp({
                 .bind(input.id)
                 .first<PostFileRow & { post_key: string }>();
             if (!f) throw new OpError(404, "error.library.not_found", `no file ${input.id}`);
-            if (f.role !== "item" && f.role !== "slideshow" && f.role !== "crop" && f.role !== "export") {
+            if (f.role !== "item" && f.role !== "slideshow" && f.role !== "crop" && f.role !== "export" && f.role !== "alt") {
                 throw new OpError(409, "error.library.not_deletable", "that is a post's original: delete the whole post with cobalt.library.delete");
             }
             const [post] = await loadPosts({ db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl }, [f.post_key]);

@@ -3,7 +3,7 @@
 // maintenance routes (search index, posters backfill, the visibility data step). All tier hidden. Each wraps the code
 // worker.ts ran for it, unchanged.
 import * as z from "zod";
-import { libraryFile, libraryPostersBackfill, libraryVisibilityMigrate } from "../../app-routes";
+import { libraryFile, libraryPostersBackfill, libraryVideoDimensions, libraryVisibilityMigrate } from "../../app-routes";
 import { librarySearchIndex, librarySearchPost } from "../../embed";
 import { ITEM_ID_REGEX, STUDIO_SID_REGEX } from "../../gate";
 import { background } from "../../background";
@@ -116,6 +116,14 @@ export const LIBRARY_ADMIN_OPS = [
     maintenance("library.search.index", "POST", "/library/search/index", "Index the posts not yet indexed.", async (ctx) =>
         reply(await librarySearchIndex({ ...ctx.app(), embed: ctx.embed() }, ctx.query)),
     ),
+    // Fill width/height/duration on video rows that have none. Not on the cron; nothing is migrated.
+    maintenance("library.videos.dimensions", "POST", "/library/videos/dimensions", "Fill width, height and duration on videos that lack them.", async (ctx) => {
+        const raw = ctx.query.get("limit");
+        const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
+        const off = ctx.query.get("offset");
+        const offset = off !== null && /^\d{1,6}$/.test(off) ? Number(off) : 0;
+        return reply(await libraryVideoDimensions(ctx.app(), limit, offset));
+    }),
     // section 13: queue the server-made posters still missing
     maintenance("library.posters.backfill", "POST", "/library/posters/backfill", "Queue the missing posters.", async (ctx) => {
         const raw = ctx.query.get("limit");

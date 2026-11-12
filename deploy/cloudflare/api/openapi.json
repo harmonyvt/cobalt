@@ -4410,6 +4410,33 @@
         }
       }
     },
+    "/library/videos/dimensions": {
+      "post": {
+        "operationId": "library.videos.dimensions",
+        "summary": "Fill width, height and duration on videos that lack them.",
+        "tags": [
+          "library"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/library/visibility/migrate": {
       "post": {
         "operationId": "library.visibility.migrate",
