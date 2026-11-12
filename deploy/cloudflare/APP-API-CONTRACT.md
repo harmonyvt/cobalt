@@ -3117,8 +3117,8 @@ points. points are spent on twitch."). Works at phone width.
     `failed`.
   - `summon`: always lands on a pool **video** (the spotlight is videos only; pictures are never picked).
     `user_input` trimmed; a 3-4 char code naming a pool video → that video. Words pick **at random among the close
-    videos** (`SUMMON_PICK` 5): the meaning search's pool posts with a video, above the score floor and within
-    `SUMMON_NEAR` (0.1) of the best hit, each post's first video file; else the title substring matches among the
+    videos** (`SUMMON_PICK` 4): the meaning search's pool posts with a video, above the score floor and within
+    `SUMMON_NEAR` (0.02: the scores sit in a narrow band, so only near-ties) of the best hit, each post's first video file; else the title substring matches among the
     videos. The last summoned video is left out when another candidate exists, so the same words twice show two
     different videos. Nothing close → the closest search hit below the floor, else a random pool video (also for
     empty input). Only a pool with no video at all is a refund, `no_match`, toast "no videos in the pool, points

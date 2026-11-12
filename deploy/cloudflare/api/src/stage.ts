@@ -1634,9 +1634,11 @@ async function eventSub(d: StageDeps, request: Request): Promise<Response> {
 const wordsOf = (s: string) => s.replace(/\s+/g, " ").trim();
 
 // How many close videos a summon by words picks from, and how far below the best score a hit may be and still count
-// as close: "cat" gets a random one of the few closest cat videos, not the same one every time.
-export const SUMMON_PICK = 5;
-export const SUMMON_NEAR = 0.1;
+// as close: "cat" gets a random one of the few closest cat videos, not the same one every time. The library's scores
+// sit in a narrow band (0.72-0.79 for most queries), so only near-ties count: 0.02, measured on live data 2026-11-12
+// ("2slimey": the right post at 0.748 vs 0.776 for the next-best; "a cat being silly": four cat clips 0.777-0.789).
+export const SUMMON_PICK = 4;
+export const SUMMON_NEAR = 0.02;
 
 // A summon's input to one pool video (the spotlight is videos only). Always a video: a 3-4 char code naming a video
 // is that video; words pick at random among the closest few (the meaning search over the pool above the score floor
@@ -1669,6 +1671,7 @@ export async function findSummon(d: StageDeps, s: SettingsRow, input: string): P
     let closest: Item | null = null;
     if (d.embed) {
         const found = await stageSearch(d, words, SEARCH_POOL_POSTS, d.limits?.searchMs ?? STAGE_SEARCH_MS);
+        if (!found.ok) log(`summon search "${words.slice(0, 40)}" gave no answer: ${found.code}`);
         if (found.ok && found.hits.length > 0) {
             const { results } = await d.db
                 .prepare(
@@ -1697,6 +1700,7 @@ export async function findSummon(d: StageDeps, s: SettingsRow, input: string): P
                 near.push(item);
                 if (near.length >= SUMMON_PICK) break;
             }
+            log(`summon search "${words.slice(0, 40)}": best ${best?.toFixed(3) ?? "none"}, ${near.length} close`);
             if (near.length > 0) return await pick(near);
         }
     }
