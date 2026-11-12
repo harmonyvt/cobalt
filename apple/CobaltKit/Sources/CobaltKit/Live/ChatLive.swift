@@ -6,8 +6,9 @@ import ActivityKit
 // Live Activities for chat replies (APP-API-CONTRACT 27, apple/CONTRACT-PARALLEL.md 15.10): while the chat AI works on a
 // reply sent from this device (the chat tab or the "Ask chat" Shortcuts action), the Dynamic Island and the Lock Screen show
 // what it is doing: thinking, which tool it is using, writing, and the reply once it is done. The app writes it from the
-// reply stream; there is no server push yet, so an activity whose app was suspended mid-reply goes stale until the app runs
-// again. Kept apart from the run activities (`LiveActivityManager`) and the render ones (`EditLiveManager`).
+// reply stream and, when the server pushes, hands the activity's update token to the server, which follows the same reply
+// and keeps the activity current while the app is suspended (and ends it as interrupted if the reply's server work dies).
+// Kept apart from the run activities (`LiveActivityManager`) and the render ones (`EditLiveManager`).
 
 /// What a reply's activity shows. JSON keys are the Swift property names, absent optionals are omitted, times are unix
 /// seconds (the same shape a future server push would send). Kept small: ActivityKit caps a state at 4 KB.
@@ -345,7 +346,8 @@ protocol ChatLiveHandle: AnyObject, Sendable {
 protocol ChatLiveAdapter: AnyObject {
     var isAvailable: Bool { get }
     var activities: [any ChatLiveHandle] { get }
-    func request(_ attributes: ChatLiveAttributes, state: ChatLiveContentState, staleDate: Date) throws -> any ChatLiveHandle
+    /// `push`: the activity gets an update token, so the server can keep it current while the app is suspended.
+    func request(_ attributes: ChatLiveAttributes, state: ChatLiveContentState, staleDate: Date, push: Bool) throws -> any ChatLiveHandle
     /// The push-to-start token for chat activities, lowercase hex: the current value first, then every change.
     func startTokens() -> AsyncStream<String>
     /// Activities the system created (a push-to-start from the server).
@@ -393,11 +395,11 @@ final class ActivityKitChatAdapter: ChatLiveAdapter {
     init() {}
     var isAvailable: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
     var activities: [any ChatLiveHandle] { Activity<CobaltChatActivityAttributes>.activities.map { ActivityKitChatHandle($0) } }
-    func request(_ attributes: ChatLiveAttributes, state: ChatLiveContentState, staleDate: Date) throws -> any ChatLiveHandle {
+    func request(_ attributes: ChatLiveAttributes, state: ChatLiveContentState, staleDate: Date, push: Bool) throws -> any ChatLiveHandle {
         let activity = try Activity.request(
             attributes: CobaltChatActivityAttributes(attributes),
             content: ActivityContent(state: state, staleDate: staleDate),
-            pushType: nil)
+            pushType: push ? .token : nil)
         return ActivityKitChatHandle(activity)
     }
 
@@ -534,7 +536,8 @@ public final class ChatLiveManager {
                 self.tokensSent.append((thread, token))
                 try? await client.putChatLiveToken(threadID: thread, token: token, environment: environment)
             }
-            self?.tokenTasks[thread] = nil
+            // a follower replaced by a newer reply's (`began`) must not clear the newer one's entry
+            if !Task.isCancelled { self?.tokenTasks[thread] = nil }
         }
     }
 
@@ -553,9 +556,16 @@ public final class ChatLiveManager {
             // refused (the app is in the background and no Live Activity intent is running): the reply simply has none
             handle = try? adapter.request(
                 ChatLiveAttributes(thread: thread, prompt: prompt, source: source), state: tracker.state,
-                staleDate: now().addingTimeInterval(Self.staleAfter))
+                staleDate: now().addingTimeInterval(Self.staleAfter), push: pushAvailable)
         }
         runs[thread] = Run(handle: handle, tracker: tracker, source: source, lastPush: now())
+        // With push, the server follows the same reply and writes this activity too (APP-API-CONTRACT 27.9): the app's own
+        // writes stop when iOS suspends it, the server's do not, so a locked phone still sees the reply arrive.
+        if let handle, pushAvailable {
+            tokenTasks[thread]?.cancel()
+            tokenTasks[thread] = nil
+            watchTokens(handle)
+        }
     }
 
     /// One event of the reply.

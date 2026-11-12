@@ -902,7 +902,9 @@ equals the job id. Events for a run that has `endedAt` are ignored.
 on a stage change reset `bytes`, `total`, `framesDone`, `framesTotal`, `packing` and set `since`
 = now (`fetching` keeps the registered `since`); carry `title`/`duration`. Then:
 
-- next state deep-equals `sent` → nothing;
+- next state deep-equals `sent` → nothing, unless the run waits on a server stage (`fetching`, `saving`, `rendering`)
+  and nothing went out for `LIVE_REFRESH_MS` (45 s, 2026-11-12): then the same state again, `apns-priority: 5`, with a
+  fresh `stale-date`, so a slow fetch or decode never shows as stale ("waiting for cobalt…") while it is fine;
 - stage changed, or terminal → push now, `apns-priority: 10`;
 - else if `now - lastPushAt < 1000` → store `state`, no push (the next poll or sweep sends the latest);
 - else push, `apns-priority: 5`.
@@ -2828,8 +2830,16 @@ through APNs, with the same APNs secrets as section 8 (`src/chat-live.ts`).
   `tool?` (what the running or last code run does, from its `cobalt.<tool>(` calls: "searching your library"; a tool added
   later reads "using <name>"), `reply?` (plain text: the last 160 characters while writing, the first 160 once done),
   `shown` (files shown plus the collage's size), `code?` (failed).
-- Not done: no push while the iPhone itself is the sender and the app is suspended mid-reply (its own activity then goes
-  stale until the app runs again).
+- The sender's own activity (2026-11-12): the app asks for it with `pushType: .token` when `chat_live_push` is on and
+  hands its update token over with the same `PUT /live/chats/<thread>`. The DO keeps the sender as a target that is never
+  push-started (`sender: true`): on a new reply when the sender has a chat start token, or when its token arrives first
+  (kept as `live:chatpending:<thread>:<key id>` for 2 min and taken up when the reply begins), or mid-reply. From then on
+  the server writes that activity too, so a locked phone sees the reply arrive; the app still writes it while it runs
+  and still ends it itself. `PUT /live/chats/<thread>` answers `pushing: true` for a token kept for later.
+- Keep-alive and watchdog (2026-11-12): the chat route's 15 s ping hands the same state over again when nothing went for
+  30 s; the DO pushes it again (priority 5, fresh stale-date) once nothing went out for 45 s. A reply with no hand-over for
+  100 s (the Worker running it was cut off or crashed) is ended on every device as `failed`, `error.chat.interrupted`,
+  by the sweep's watchdog (`ChatLiveService.watch`); a late hand-over never revives a finished reply.
 
 ## 28. Collection sets (addendum, built 2026-10-19; owner: "a new primitive called sets which has groups of collections")
 

@@ -34,6 +34,10 @@ export const LIVE_ENDED_TTL_MS = 60 * 60 * 1000;
 export const LIVE_START_TOKEN_TTL_MS = 60 * 24 * 60 * 60 * 1000;
 export const LIVE_HEALTH_MS = 10 * 60 * 1000;
 export const LIVE_COALESCE_MS = 1000;
+// A run waiting on a server step whose content has not changed (a slow fetch, a long decode) is pushed again after
+// this long with a fresh stale-date, so the island never says "waiting for cobalt…" while the work is fine.
+// Well inside STALE_S (120 s): a lost refresh still leaves room for the next one.
+export const LIVE_REFRESH_MS = 45_000;
 export const LIVE_MAX_BODY_BYTES = 4096;
 // Caps (error.live.too_many_runs, 429): runs a key may hold that have not ended, runs a
 // key may hold at all (ended ones stay for LIVE_ENDED_TTL_MS), runs per studio session.
@@ -683,9 +687,15 @@ export class LiveService implements LiveHooks {
         const apns = this.d.apns;
         if (!apns || !r.updateToken || r.endedAt) return;
         const s = r.state;
-        if (sameState(s, r.sent)) return;
         const terminal = isTerminal(s);
         const now = this.d.now();
+        // Keep-alive: is this run still waiting on the server, and has nothing gone to Apple for a while?
+        const stillWorking = !terminal && SERVER_WAIT_STAGES.includes(s.stage);
+        const pushedBefore = r.lastPushAt > 0;
+        const quietTooLong = now - r.lastPushAt >= LIVE_REFRESH_MS;
+        const refresh = stillWorking && pushedBefore && quietTooLong;
+        // Nothing new to show and no keep-alive due: send nothing.
+        if (sameState(s, r.sent) && !refresh) return;
         // an end that failed waits for its backoff (the sweep, or a later poll, retries it)
         if (terminal && !catchup && r.endRetryAt && now < r.endRetryAt) return;
         const stageChanged = r.sent === null || r.sent.stage !== s.stage;

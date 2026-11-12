@@ -118,6 +118,7 @@ private final class FakeChatHandle: ChatLiveHandle {
 private final class FakeChatAdapter: ChatLiveAdapter {
     var isAvailable = true
     var made: [FakeChatHandle] = []
+    var madeWithPush: [Bool] = []
     var pushed: [FakeChatHandle] = []
     let startStream: AsyncStream<String>
     let startSink: AsyncStream<String>.Continuation
@@ -130,9 +131,10 @@ private final class FakeChatAdapter: ChatLiveAdapter {
     }
 
     var activities: [any ChatLiveHandle] { made + pushed }
-    func request(_ attributes: ChatLiveAttributes, state: ChatLiveContentState, staleDate: Date) throws -> any ChatLiveHandle {
+    func request(_ attributes: ChatLiveAttributes, state: ChatLiveContentState, staleDate: Date, push: Bool) throws -> any ChatLiveHandle {
         let h = FakeChatHandle(thread: attributes.thread, source: attributes.source)
         made.append(h)
+        madeWithPush.append(push)
         return h
     }
     func startTokens() -> AsyncStream<String> { startStream }
@@ -223,10 +225,42 @@ struct ChatLiveManagerTests {
         for _ in 0..<50 where client.tokens.isEmpty || client.startTokens.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         #expect(client.startTokens == ["ab12"])
         #expect(client.tokens.map(\.0) == ["AbCdEfGh12345678"] && client.tokens.map(\.1) == ["cd34"])
-        // a local activity is never handed over (the server does not push to the sender)
+        // the system's list of new activities only brings push-started ones here; the app's own are followed from `began`
         adapter.createdSink.yield(FakeChatHandle(thread: "ZZZZZZZZZZZZZZZZ", source: .app))
         try await Task.sleep(for: .milliseconds(30))
         #expect(client.tokens.count == 1)
+    }
+
+    @Test func aReplySentFromThisPhoneHandsItsTokenToTheServerWhenItPushes() async throws {
+        let adapter = FakeChatAdapter()
+        let client = FakeChatLiveClient()
+        var caps = Capabilities.unknown
+        caps.chat = true
+        caps.chatLivePush = true
+        let manager = ChatLiveManager(
+            adapter: adapter, now: { Date() }, isAppActive: { false }, environment: .production,
+            capabilities: { caps }, client: { client })
+        manager.began(thread: "AbCdEfGh12345678", prompt: "find my cats", source: .shortcut)
+        #expect(adapter.madeWithPush == [true], "asked with a push type, so the server can keep it current while locked")
+        let own = try #require(adapter.made.first)
+        own.tokenSink.yield("ee56")
+        for _ in 0..<50 where client.tokens.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(client.tokens.map(\.0) == ["AbCdEfGh12345678"] && client.tokens.map(\.1) == ["ee56"])
+        // the app still writes it while it runs, and still ends it itself
+        manager.ended(thread: "AbCdEfGh12345678", final: nil)
+        await manager.settle()
+        #expect(own.ended?.state.status == .failed)
+    }
+
+    @Test func withoutPushTheReplyActivityIsLocalAndHandsNothingOver() async throws {
+        let adapter = FakeChatAdapter()
+        let client = FakeChatLiveClient()
+        let manager = ChatLiveManager(adapter: adapter, now: { Date() }, isAppActive: { false }, environment: nil, client: { client })
+        manager.began(thread: "AbCdEfGh12345678", prompt: "find my cats", source: .app)
+        #expect(adapter.madeWithPush == [false])
+        adapter.made.first?.tokenSink.yield("ee56")
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(client.tokens.isEmpty)
     }
 }
 

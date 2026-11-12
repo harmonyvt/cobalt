@@ -100,6 +100,39 @@ ios_release() { # script [options]
     return "$status"
 }
 
+# Warn before an API deploy when an APNs secret is empty in the secrets file.
+# Empty secrets get uploaded empty, which quietly turns Live Activity pushes off
+# (the island then freezes whenever the app is in the background).
+apns_check() { # dir
+    local dir="$1"
+
+    # Only the API deploy uses these secrets.
+    case "$dir" in
+        *cloudflare/api) ;;
+        *) return 0 ;;
+    esac
+
+    # jq reads the JSON file; without it, skip the check.
+    command -v jq >/dev/null || return 0
+
+    # Collect the names of the APNs secrets that are missing or blank.
+    local empty="" name value
+    for name in APNS_KEY_P8 APNS_KEY_ID APNS_TEAM_ID; do
+        value="$(jq -r --arg k "$name" '.[$k] // ""' "$SECRETS")"
+        if [ -z "${value//[[:space:]]/}" ]; then
+            empty="$empty $name"
+        fi
+    done
+
+    # All three filled in: nothing to say.
+    [ -z "$empty" ] && return 0
+
+    # Warn, but carry on (push may be off on purpose).
+    echo "cobalt-deploy: WARNING: empty in $SECRETS:$empty" >&2
+    echo "cobalt-deploy: Live Activity pushes will be OFF (the island freezes when the app is in the background)." >&2
+    echo "cobalt-deploy: fill them from ~/.config/cobalt/AuthKey_<key id>.p8 (deploy/apple/README.md)." >&2
+}
+
 cf_deploy() { # dir [--dry-run]
     local dir="$1" dry=()
     shift
@@ -112,6 +145,7 @@ cf_deploy() { # dir [--dry-run]
     done
     command -v cf >/dev/null || die "missing tool: cf (the global Cloudflare CLI)"
     [ -f "$SECRETS" ] || die "missing $SECRETS (see CLAUDE.md, Secrets)"
+    apns_check "$dir"
     (cd "$dir" && cf deploy --secrets-file "$SECRETS" ${dry[@]+"${dry[@]}"})
 }
 
