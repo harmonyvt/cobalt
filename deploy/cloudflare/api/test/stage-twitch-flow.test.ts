@@ -543,27 +543,31 @@ describe("summon (30.9)", () => {
         expect(w.room.last("summon")!.spotlight.item.id).not.toBe(g2.id);
     });
 
-    it("a summon that resolves to an image is refunded: the spotlight is videos only", async () => {
-        const { w } = await live();
+    it("a summon that would land on an image gets the closest video instead (the spotlight is videos only)", async () => {
+        const { w, files } = await live();
         const picture = w.file({ name: "still life.webp" });
         w.tick(11 * 60_000);
         await w.siteJson(`/live/${await w.token()}/state`);
+        const videos = new Set(files.map((f) => f.id));
         const code = itemCode(w, picture.id);
         await w.redeem("summon", code, { user: "Ann", cost: 500 });
-        expect(w.room.last("summon")).toBeUndefined();
-        expect(w.room.last("toast")!.toast).toMatchObject({
-            by: "Ann",
-            action: "summon",
-            cost: 0,
-            refunded: true,
-            detail: "the spotlight is videos only, points refunded",
-        });
-        expect(w.twitch.redemptions.at(-1)!.status).toBe("CANCELED");
-        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "no_match", item_id: null, input: code });
+        expect(videos.has(w.room.last("summon")!.spotlight.item.id)).toBe(true);
+        expect(w.twitch.redemptions.at(-1)!.status).toBe("FULFILLED");
         await w.redeem("summon", "still life");
-        expect(w.room.types().filter((t) => t === "summon")).toEqual([]);
-        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "no_match", input: "still life" });
-        expect(w.room.last("toast")!.toast.detail).toBe("the spotlight is videos only, points refunded");
+        expect(w.room.last("summon")!.spotlight.item.id).not.toBe(picture.id);
+        expect(lastRow(w)).toMatchObject({ status: "done", input: "still life" });
+    });
+
+    it("a pool of only pictures is refunded: no videos to summon", async () => {
+        const { w, files } = await live();
+        for (const f of files) w.db.raw.prepare("UPDATE media_items SET visibility = 'private' WHERE id = ?").run(f.id);
+        w.file({ name: "still life.webp" });
+        w.tick(11 * 60_000);
+        await w.redeem("summon", "anything", { user: "Ann", cost: 500 });
+        expect(w.room.last("summon")).toBeUndefined();
+        expect(w.room.last("toast")!.toast).toMatchObject({ by: "Ann", action: "summon", cost: 0, refunded: true, detail: "no videos in the pool, points refunded" });
+        expect(w.twitch.redemptions.at(-1)!.status).toBe("CANCELED");
+        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "no_match", item_id: null });
     });
 
     it("by words that look like a code but are not one still search", async () => {
@@ -574,15 +578,16 @@ describe("summon (30.9)", () => {
         expect(w.room.last("summon")!.spotlight.item.id).toBe(files[0]!.id);
     });
 
-    it("a post outside the pool is not summoned", async () => {
+    it("a post outside the pool is not summoned: the closest pool video is", async () => {
         const { w, files } = await live({ search: true });
         w.space.axes = { stuff: 5 };
         const hidden = w.file({ private: true, name: "secret" });
         w.embedding(hidden.id, 5);
         w.embedding(files[0]!.id, 6);
         await w.redeem("summon", "stuff");
-        expect(w.room.last("summon")).toBeUndefined();
-        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "no_match" });
+        expect(w.room.last("summon")!.spotlight.item.id).not.toBe(hidden.id);
+        expect(new Set(files.map((f) => f.id)).has(w.room.last("summon")!.spotlight.item.id)).toBe(true);
+        expect(lastRow(w)).toMatchObject({ status: "done" });
     });
 
     it("by a piece of a title when the search is off", async () => {
@@ -593,28 +598,29 @@ describe("summon (30.9)", () => {
         expect(w.room.last("summon")!.spotlight.item.id).toBe(files[0]!.id);
     });
 
-    it("nothing matches: refunded (CANCELED), a toast, no spotlight", async () => {
-        const { w } = await live();
+    it("nothing matches: still a video from the pool, FULFILLED", async () => {
+        const { w, files } = await live();
         await w.redeem("summon", "zzzz nothing like it", { user: "Bob", cost: 500 });
-        expect(w.room.last("summon")).toBeUndefined();
-        expect(w.room.last("toast")!.toast).toMatchObject({ by: "Bob", action: "summon", refunded: true, detail: 'nothing matched "zzzz nothing like it", points refunded' });
-        expect(w.twitch.redemptions.map((r) => r.status)).toEqual(["CANCELED"]);
-        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "no_match", item_id: null, input: "zzzz nothing like it" });
+        const ev = w.room.last("summon")!;
+        expect(new Set(files.map((f) => f.id)).has(ev.spotlight.item.id)).toBe(true);
+        expect(ev.toast).toMatchObject({ by: "Bob", action: "summon", cost: 500 });
+        expect(w.twitch.redemptions.map((r) => r.status)).toEqual(["FULFILLED"]);
+        expect(lastRow(w)).toMatchObject({ status: "done", input: "zzzz nothing like it" });
     });
 
-    it("an empty input is a refund too", async () => {
+    it("an empty input gets a video too", async () => {
         const { w } = await live();
         await w.redeem("summon", "");
-        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "no_match" });
+        expect(lastRow(w)).toMatchObject({ status: "done" });
     });
 
-    it("a file made private since the pool was resolved cannot be summoned by its code", async () => {
+    it("a file made private since the pool was resolved is never summoned by its code", async () => {
         const { w, files } = await live();
         const code = itemCode(w, files[0]!.id);
         w.db.raw.prepare("UPDATE media_items SET visibility = 'private' WHERE id = ?").run(files[0]!.id);
         await w.redeem("summon", code);
-        expect(w.room.last("summon")).toBeUndefined();
-        expect(lastRow(w)).toMatchObject({ status: "refunded", reason: "no_match" });
+        expect(w.room.last("summon")!.spotlight.item.id).not.toBe(files[0]!.id);
+        expect(lastRow(w)).toMatchObject({ status: "done" });
     });
 
     it("the input is trimmed and kept to 200 characters", async () => {
