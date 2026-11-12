@@ -68,8 +68,8 @@ extension PreviewData {
         }
     }
 
-    /// The five rewards (30.2): summon 500 / 30 s on, chaos 2,000 / 300 s on, shuffle 1,000 / 120 s on, pin 300 / 60 s off,
-    /// skip 200 / 15 s on.
+    /// The six rewards (30.2, 56.4): summon 500 / 30 s on, chaos 2,000 / 300 s on, shuffle 1,000 / 120 s on, pin 300 / 60 s off,
+    /// skip 200 / 15 s on, song 300 / 30 s off.
     static func stageRewards(synced: Bool) -> [StageReward] {
         [
             StageReward(action: .summon, cost: 500, cooldownSeconds: 30, enabled: true, synced: synced),
@@ -77,7 +77,31 @@ extension PreviewData {
             StageReward(action: .shuffle, cost: 1_000, cooldownSeconds: 120, enabled: true, synced: synced),
             StageReward(action: .pin, cost: 300, cooldownSeconds: 60, enabled: false, synced: synced),
             StageReward(action: .skip, cost: 200, cooldownSeconds: 15, enabled: true, synced: synced),
+            StageReward(action: .song, cost: 300, cooldownSeconds: 30, enabled: false, synced: synced),
         ]
+    }
+
+    /// The music of a stage scenario (56.5): a connected premium Spotify with a song playing and two requests waiting; before
+    /// Twitch is connected the same settings with no account.
+    static func stageMusic(for scenario: PreviewScenario, now: Date) -> StageMusic {
+        let connected = scenario != .stageNotConnected
+        return StageMusic(
+            card: .full, upNext: true, songYouTube: true, songMaxSeconds: 600, songQueueMax: 5, songExplicit: false, duck: true,
+            duckVolume: 20,
+            spotify: connected
+                ? StageMusic.Spotify(displayName: "capybaraharmony", product: "premium", status: .ok, connectedAt: now.addingTimeInterval(-2 * 86_400))
+                : nil,
+            nowPlaying: connected
+                ? StageMusic.NowPlaying(
+                    playing: true, title: "Space Song", artist: "Beach House", artURL: mediaBase.appendingPathComponent("PrEvIeWart001.jpg"),
+                    progressMs: 71_000, durationMs: 320_000, by: "mochi")
+                : nil,
+            queue: connected
+                ? [
+                    StageMusic.Song(id: "PrEvIeWsong0001", title: "Dreams", artist: "Fleetwood Mac", by: "zeph", source: .spotify),
+                    StageMusic.Song(id: "PrEvIeWsong0002", title: "Windowlicker", artist: "Aphex Twin", by: "pebble", source: .youtube),
+                ]
+                : [])
     }
 
     /// The stage of a stage scenario (`now` is when the preview server started).
@@ -97,6 +121,7 @@ extension PreviewData {
                     status: .ok, lastEventAt: now.addingTimeInterval(-20))
                 : nil,
             spotlight: connected ? StageSpotlight(item: cat, by: "mochi", action: .summon, at: now.addingTimeInterval(-20)) : nil,
+            music: stageMusic(for: scenario, now: now),
             updatedAt: now.addingTimeInterval(-20))
     }
 
@@ -135,6 +160,8 @@ final class PreviewStageState: Sendable {
         var searchUnavailable = false
         /// `connect` was asked: the next read finds Twitch connected (the callback the web session would have made).
         var connecting = false
+        /// The same for Spotify: the next read finds an account.
+        var connectingSpotify = false
         var counter = 0
     }
 
@@ -182,6 +209,12 @@ final class PreviewStageState: Sendable {
                 s.stage.twitch = StageTwitch(login: "capybaraharmony", displayName: "capybaraharmony", connectedAt: now, status: .ok)
                 s.rewards = s.rewards.map { r in var r = r; r.synced = true; return r }
             }
+            if s.connectingSpotify {
+                s.connectingSpotify = false
+                var music = PreviewData.stageMusic(for: .happy, now: now)
+                music.card = s.stage.music?.card ?? music.card
+                s.stage.music = music
+            }
             return StageSnapshot(stage: s.stage, rewards: s.rewards)
         }
     }
@@ -223,6 +256,24 @@ final class PreviewStageState: Sendable {
     /// An owner action: needs the stage on air; a pick must be in the pool; each is a "you" line in the feed.
     func act(_ action: StageAction, at now: Date) throws -> StageSettings {
         try state.withLock { s in
+            if case .songSkip = action {
+                // works on air or not; needs an account and something to play
+                guard let spotify = s.stage.music?.spotify else { throw StageError.spotifyNotConnected }
+                guard spotify.status == .ok else { throw StageError.spotifyReconnect }
+                guard spotify.isPremium else { throw StageError.spotifyPremium }
+                var music = s.stage.music ?? StageMusic()
+                if music.queue.isEmpty {
+                    music.nowPlaying = nil
+                } else {
+                    let next = music.queue.removeFirst()
+                    music.nowPlaying = StageMusic.NowPlaying(
+                        playing: true, title: next.title, artist: next.artist, artURL: next.artURL, progressMs: 0, durationMs: 200_000,
+                        by: next.by)
+                }
+                s.stage.music = music
+                s.stage.updatedAt = now
+                return s.stage
+            }
             guard s.stage.onAir else { throw StageError.offAir }
             let pool = Array(s.items.prefix(s.stage.pool.missing ? 0 : s.stage.pool.count))
             var shown: StageItem?
@@ -235,7 +286,7 @@ final class PreviewStageState: Sendable {
                 s.stage.spotlight?.pinnedUntil = now.addingTimeInterval(120)
             case .unpin:
                 s.stage.spotlight?.pinnedUntil = nil
-            case .shuffle, .chaos:
+            case .shuffle, .chaos, .songSkip:
                 break
             case .spotlight(let id):
                 guard let item = pool.first(where: { $0.id == id }) else { throw StageError.notFound }
@@ -281,6 +332,21 @@ final class PreviewStageState: Sendable {
 
     func connect() {
         state.withLock { $0.connecting = true }
+    }
+
+    func connectSpotify() {
+        state.withLock { $0.connectingSpotify = true }
+    }
+
+    func disconnectSpotify(at now: Date) -> StageSettings {
+        state.withLock { s in
+            s.connectingSpotify = false
+            s.stage.music?.spotify = nil
+            s.stage.music?.nowPlaying = nil
+            s.stage.music?.queue = []
+            s.stage.updatedAt = now
+            return s.stage
+        }
     }
 
     func disconnect(at now: Date) -> StageSettings {
@@ -366,6 +432,23 @@ extension PreviewClient {
         guard scenario.hasStage else { throw PipelineFailure.unsupported }
         stageState.connect()
         return URL(string: "https://id.twitch.tv/oauth2/authorize?response_type=code&client_id=PrEvIeW&redirect_uri=https%3A%2F%2Fstudio.capybaraharmony.com%2Ftwitch%2Fcallback&scope=channel%3Amanage%3Aredemptions&state=PrEvIeWstate&force_verify=true")!
+    }
+
+    /// `POST /stage/spotify/connect`: the authorize URL; the next `GET /stage` finds a Spotify account.
+    public func connectStageSpotify() async throws -> URL {
+        stageState.record("POST spotify connect")
+        try await stageLatency()
+        guard scenario.hasStage else { throw PipelineFailure.unsupported }
+        stageState.connectSpotify()
+        return URL(string: "https://accounts.spotify.com/authorize?response_type=code&client_id=PrEvIeW&redirect_uri=https%3A%2F%2Fstudio.capybaraharmony.com%2Fspotify%2Fcallback&scope=user-read-currently-playing&state=PrEvIeWstate&show_dialog=true")!
+    }
+
+    /// `DELETE /stage/spotify`.
+    public func disconnectStageSpotify() async throws -> StageSettings {
+        stageState.record("DELETE spotify")
+        try await stageLatency()
+        guard scenario.hasStage else { throw PipelineFailure.unsupported }
+        return stageState.disconnectSpotify(at: clock.now())
     }
 
     /// `DELETE /stage/twitch`.

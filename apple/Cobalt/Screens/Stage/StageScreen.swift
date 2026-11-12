@@ -117,6 +117,9 @@ private struct StageBody: View {
 
     private var store: StageStore { controller.store }
 
+    /// The music group is there only where the server has Spotify (and says what it holds).
+    private var showsMusic: Bool { model.capabilities.stageSpotify && stage.music != nil }
+
     private var wide: Bool {
         if width > 0 { return width >= 780 }
         return tier != .compact
@@ -149,6 +152,7 @@ private struct StageBody: View {
                     VStack(spacing: 14) {
                         StageTwitchCard(model: model, stage: stage, controller: controller)
                         StageRewardsCard(store: store, controller: controller)
+                        if showsMusic { StageMusicCard(model: model, stage: stage, controller: controller) }
                         StageFeedCard(store: store)
                         StageLinksCard(stage: stage, controller: controller)
                     }
@@ -196,6 +200,7 @@ private struct StageBody: View {
         case .rewards:
             StageTwitchCard(model: model, stage: stage, controller: controller)
             StageRewardsCard(store: store, controller: controller)
+            if showsMusic { StageMusicCard(model: model, stage: stage, controller: controller) }
         case .feed:
             StageFeedCard(store: store)
         case .links:

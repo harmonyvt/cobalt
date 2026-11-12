@@ -51,6 +51,14 @@ extension Symbol {
     static let stageConnect = "link.badge.plus"
     static let stageDisconnect = "xmark.circle"
 
+    // MARK: music
+
+    static let stageMusic = "music.note"
+    static let stageMusicQueue = "music.note.list"
+    static let stageMusicWarn = "exclamationmark.triangle"
+    /// "skip current".
+    static let stageMusicSkip = "forward.end.fill"
+
     // MARK: rewards and the feed
 
     static let stageRewardSummon = "sparkle.magnifyingglass"

@@ -310,6 +310,11 @@ public protocol CobaltClient: Sendable {
     func connectStageTwitch() async throws -> URL
     /// `DELETE /stage/twitch`: the EventSub subscription, the rewards on Twitch and the connection go; the stage as it is now.
     func disconnectStageTwitch() async throws -> StageSettings
+    /// `POST /stage/spotify/connect` (56.2): the Spotify authorize URL for an `ASWebAuthenticationSession` with callback scheme
+    /// `cobalt-apple`. `404 error.stage.spotify_off` without `features.stage_spotify`.
+    func connectStageSpotify() async throws -> URL
+    /// `DELETE /stage/spotify`: lifts a duck in progress and forgets the account; the stage as it is now.
+    func disconnectStageSpotify() async throws -> StageSettings
     // Hidden posts and auto-hide rules (APP-API-CONTRACT 37; keyed; only when `features.hidden`). Defaulted below
     // (`.unsupported`) so older fakes compile. The server's refusals (`error.hidden.bad_rule`, `error.hidden.too_many`,
     // `error.hidden.not_found`, `error.library.bad_request`) are `CobaltError.api(code:httpStatus:)`.
@@ -492,6 +497,8 @@ extension CobaltClient {
     }
     public func connectStageTwitch() async throws -> URL { throw PipelineFailure.unsupported }
     public func disconnectStageTwitch() async throws -> StageSettings { throw PipelineFailure.unsupported }
+    public func connectStageSpotify() async throws -> URL { throw PipelineFailure.unsupported }
+    public func disconnectStageSpotify() async throws -> StageSettings { throw PipelineFailure.unsupported }
     public func setStatus(ids: [String], status: PostStatus) async throws -> StatusChange { throw PipelineFailure.unsupported }
     public func hiddenLibrary(cursor: String?, limit: Int) async throws -> LibraryPage { throw PipelineFailure.unsupported }
     public func hiddenRules() async throws -> HiddenRules { throw PipelineFailure.unsupported }

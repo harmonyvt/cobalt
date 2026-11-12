@@ -131,6 +131,7 @@ enum PreviewData {
         if scenario.hasStage && caps.kind == .fork {
             caps.stage = true
             caps.stageTwitch = true
+            caps.stageSpotify = true
         }
         if scenario.hasEditor && caps.kind == .fork {
             caps.editor = true

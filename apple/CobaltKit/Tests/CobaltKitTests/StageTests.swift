@@ -610,7 +610,7 @@ struct StageStoreTests {
         #expect(stage.onAir && stage.pool.kind == .collection && stage.pool.name == "memes" && stage.density == 30)
         #expect(!stage.storeOpen, "the store starts locked")
         #expect(stage.twitch?.status == .ok && stage.spotlight?.by == "mochi")
-        #expect(app.stage.rewards.map(\.action) == [.summon, .chaos, .shuffle, .pin, .skip])
+        #expect(app.stage.rewards.map(\.action) == [.summon, .chaos, .shuffle, .pin, .skip, .song])
         #expect(app.stage.reward(.pin)?.enabled == false && app.stage.reward(.summon)?.cost == 500)
     }
 
@@ -619,7 +619,7 @@ struct StageStoreTests {
         await app.stage.load()
         let stage = try #require(app.stage.stage)
         #expect(!stage.onAir && stage.twitch == nil && stage.spotlight == nil && stage.pool.kind == .library)
-        #expect(app.stage.rewards.count == 5 && app.stage.rewards.allSatisfy { !$0.synced })
+        #expect(app.stage.rewards.count == 6 && app.stage.rewards.allSatisfy { !$0.synced })
     }
 
     @Test func aFailingServerGivesTheFailedState() async {
@@ -633,7 +633,7 @@ struct StageStoreTests {
         await app.stage.load()
         try server(app).loadFails = true
         await app.stage.load()
-        #expect(app.stage.state == .failed(.unavailable) && app.stage.stage?.onAir == true && app.stage.rewards.count == 5)
+        #expect(app.stage.state == .failed(.unavailable) && app.stage.stage?.onAir == true && app.stage.rewards.count == 6)
     }
 
     @Test func aServerChangeForgetsTheStage() async {
@@ -833,7 +833,7 @@ struct StageStoreTests {
         #expect(app.stage.reward(.pin)?.enabled == true)
         try await app.stage.updateReward(.shuffle, cost: 0, cooldownSeconds: 99_999_999)
         #expect(app.stage.reward(.shuffle)?.cost == 1 && app.stage.reward(.shuffle)?.cooldownSeconds == 604_800)
-        #expect(app.stage.rewards.map(\.action) == [.summon, .chaos, .shuffle, .pin, .skip], "the order holds")
+        #expect(app.stage.rewards.map(\.action) == [.summon, .chaos, .shuffle, .pin, .skip, .song], "the order holds")
     }
 
     @Test func aRewardNotSyncedToTwitchSaysSo() async throws {
@@ -861,7 +861,7 @@ struct StageStoreTests {
         await app.stage.load()
         try await app.stage.disconnectTwitch()
         #expect(app.stage.stage?.twitch == nil)
-        #expect(app.stage.rewards.count == 5 && app.stage.rewards.allSatisfy { !$0.synced })
+        #expect(app.stage.rewards.count == 6 && app.stage.rewards.allSatisfy { !$0.synced })
     }
 
     @Test func theTwitchReturnLinkOpensTheStudioTab() async throws {
@@ -1027,5 +1027,158 @@ struct StageTimingTests {
         let next = try #require(rig.clock.nextWake)
         #expect(abs(next - (rig.clock.elapsed + 8)) < 0.001, "4 s doubled after the first failure")
         rig.app.stage.stopPolling()
+    }
+}
+
+// MARK: - music (APP-API-CONTRACT 56)
+
+private let wireMusic = """
+{"card":"compact","up_next":false,"song_youtube":false,"song_max_seconds":300,"song_queue_max":8,"song_explicit":true,
+ "duck":false,"duck_volume":35,
+ "spotify":{"display_name":"Harmony","product":"free","status":"reconnect","connected_at":1790000000000},
+ "now_playing":{"playing":true,"title":"Space Song","artist":"Beach House","art_url":"https://i.scdn.co/image/abc","uri":"spotify:track:1",
+  "progress_ms":71000,"duration_ms":320000,"by":"mochi","at":1790000900000},
+ "queue":[{"id":"r1","title":"Dreams","artist":"Fleetwood Mac","art_url":null,"duration_ms":257000,"by":"zeph","source":"spotify"},
+          {"id":"r2","title":"Windowlicker","artist":"Aphex Twin","art_url":null,"duration_ms":368000,"by":"pebble","source":"youtube"},
+          {"title":"no id"}]}
+"""
+
+private func stageJSON(music: String?) -> String {
+    let extra = music.map { #","music":\#($0)"# } ?? ""
+    return """
+    {"on_air":true,"pool":{"kind":"library","ref":null,"name":"whole library","count":3,"missing":false},
+     "live_url":"https://studio.capybaraharmony.com/live/Zk7Q2abcdefghijklmnopqrstuvwxk7Q2",
+     "store_url":"https://studio.capybaraharmony.com/store"\(extra)}
+    """
+}
+
+struct StageMusicTests {
+    @Test func theMusicDecodesFromTheWire() throws {
+        let s = try decode(StageSettings.self, stageJSON(music: wireMusic))
+        let m = try #require(s.music)
+        #expect(m.card == .compact && !m.upNext && !m.songYouTube && m.songMaxSeconds == 300 && m.songQueueMax == 8)
+        #expect(m.songExplicit && !m.duck && m.duckVolume == 35)
+        let spotify = try #require(m.spotify)
+        #expect(spotify.displayName == "Harmony" && spotify.product == "free" && spotify.status == .reconnect && !spotify.isPremium)
+        #expect(spotify.connectedAt == Date(timeIntervalSince1970: 1_790_000_000))
+        let np = try #require(m.nowPlaying)
+        #expect(np.playing && np.title == "Space Song" && np.artist == "Beach House" && np.by == "mochi")
+        #expect(np.progressMs == 71_000 && np.durationMs == 320_000 && np.artURL?.absoluteString == "https://i.scdn.co/image/abc")
+        #expect(m.queue.map(\.id) == ["r1", "r2"], "a row without an id is skipped")
+        #expect(m.queue[1].source == .youtube && m.queue[1].by == "pebble" && m.queue[0].artURL == nil)
+    }
+
+    @Test func aStageWithoutMusicDecodesWithNone() throws {
+        let s = try decode(StageSettings.self, stageJSON(music: nil))
+        #expect(s.music == nil)
+        let bare = try decode(StageSettings.self, stageJSON(music: #"{"spotify":null,"now_playing":null,"queue":[]}"#))
+        let m = try #require(bare.music)
+        #expect(m.card == .full && m.upNext && m.songYouTube && m.songMaxSeconds == 600 && m.songQueueMax == 5)
+        #expect(!m.songExplicit && m.duck && m.duckVolume == 20 && m.spotify == nil && m.nowPlaying == nil && m.queue.isEmpty)
+    }
+
+    @Test func anUnknownCardIsTheFullOne() throws {
+        let s = try decode(StageSettings.self, stageJSON(music: #"{"card":"hologram","duck_volume":900,"song_queue_max":0}"#))
+        let m = try #require(s.music)
+        #expect(m.card == .full && m.duckVolume == 100 && m.songQueueMax == 1)
+        #expect(StageMusic.Card.allCases == [.full, .compact, .off])
+    }
+
+    @Test func aSpotifyStatusThatIsUnknownIsNotHealthy() throws {
+        let s = try decode(StageMusic.Spotify.self, #"{"display_name":"a","product":"premium","status":"quantum"}"#)
+        #expect(s.status == .reconnect && s.isPremium)
+        let ok = try decode(StageMusic.Spotify.self, #"{"display_name":"a","product":"premium","status":"ok"}"#)
+        #expect(ok.status == .ok)
+    }
+
+    @Test func theSongRewardIsASixthKind() throws {
+        #expect(StageRewardKind.allCases.last == .song && StageRewardKind(rawValue: "song") == .song)
+        let json = #"{"stage":\#(stageJSON(music: nil)),"rewards":[{"action":"song","title":"song request","cost":300,"cooldown_seconds":30,"enabled":false,"synced":true}]}"#
+        let snapshot = try decode(StageSnapshot.self, json)
+        #expect(snapshot.rewards.map(\.action) == [.song] && snapshot.rewards[0].title == "song request" && !snapshot.rewards[0].enabled)
+    }
+
+    @Test func theMusicKeysAreSentInTheWiresWordsAndClamped() {
+        let body = StagePatch(
+            musicCard: .off, musicUpNext: false, songYouTube: true, songMaxSeconds: 5, songQueueMax: 99, songExplicit: true, duck: false,
+            duckVolume: 150).body()
+        #expect(body["music_card"] as? String == "off" && body["music_up_next"] as? Bool == false && body["song_youtube"] as? Bool == true)
+        #expect(body["song_max_seconds"] as? Int == 60 && body["song_queue_max"] as? Int == 20 && body["song_explicit"] as? Bool == true)
+        #expect(body["duck"] as? Bool == false && body["duck_volume"] as? Int == 100 && body.count == 8)
+        #expect(StagePatch(duckVolume: 10).body().count == 1)
+    }
+
+    @Test func aMusicPatchShowsAndPutsBack() throws {
+        let s = try decode(StageSettings.self, stageJSON(music: wireMusic))
+        let patch = StagePatch(musicCard: .full, duckVolume: 5)
+        let shown = s.applying(patch)
+        #expect(shown.music?.card == .full && shown.music?.duckVolume == 5 && shown.music?.songQueueMax == 8)
+        let back = shown.applying(patch.values(in: s))
+        #expect(back.music == s.music)
+        #expect(StagePatch(duck: true).merging(StagePatch(duckVolume: 3)).duckVolume == 3)
+    }
+
+    @Test func theSpotifyReturnLinkParses() throws {
+        #expect(StageSpotifyReturn(url: try #require(URL(string: "cobalt-apple://stage?spotify=connected"))) == .connected)
+        #expect(StageSpotifyReturn(url: try #require(URL(string: "cobalt-apple://stage?spotify=failed&reason=premium"))) == .failed(reason: "premium"))
+        #expect(StageSpotifyReturn(url: try #require(URL(string: "cobalt-apple://stage?twitch=connected"))) == nil)
+        #expect(StageSpotifyReturn(url: try #require(URL(string: "https://example.com/stage?spotify=connected"))) == nil)
+    }
+
+    @Test func spotifyErrorsAreClassified() {
+        #expect(StageError(code: "error.stage.spotify_off") == .spotifyOff)
+        #expect(StageError(code: "error.stage.spotify_not_connected") == .spotifyNotConnected)
+        #expect(StageError(code: "error.stage.spotify_no_device") == .spotifyNoDevice)
+        #expect(StageError(code: "error.stage.spotify_premium") == .spotifyPremium)
+        #expect(StageError(code: "error.stage.spotify_reconnect") == .spotifyReconnect)
+        #expect(StageError.from(CobaltError.api(code: "error.stage.spotify", httpStatus: 409)) == .spotify)
+    }
+
+    @Test func theCapabilityNeedsTheStage() throws {
+        func caps(_ features: String) throws -> Capabilities {
+            let json = #"{"server":"cobalt-cloudflare","features":\#(features),"key":"valid"}"#
+            return try #require(HTTPCobaltClient.parseForkCapabilities(Data(json.utf8)))
+        }
+        #expect(try caps(#"{"stage":true,"stage_spotify":true}"#).stageSpotify)
+        #expect(try !caps(#"{"stage":false,"stage_spotify":true}"#).stageSpotify)
+        #expect(try !caps(#"{"stage":true}"#).stageSpotify)
+        #expect(PreviewData.capabilities(for: .happy).stageSpotify && !PreviewData.capabilities(for: .plainCobalt).stageSpotify)
+    }
+
+    @Test func theRoutesAreKeyedAndSkipIsAnAction() async throws {
+        let authorize = "https://accounts.spotify.com/authorize?response_type=code&client_id=abc&state=xyz&show_dialog=true"
+        let server = try await LoopbackServer.start { req in
+            switch (req.method, req.path) {
+            case ("POST", "/stage/spotify/connect"): return .json(#"{"status":"success","authorize_url":"\#(authorize)"}"#)
+            case ("DELETE", "/stage/spotify"): return .json(#"{"status":"success","stage":\#(stageJSON(music: nil))}"#)
+            case ("POST", "/stage/action"): return .json(#"{"status":"success","stage":\#(stageJSON(music: wireMusic))}"#)
+            default: return .init(status: 404)
+            }
+        }
+        defer { server.stop() }
+        let c = HTTPCobaltClient(baseURL: server.base, apiKey: { stageKey })
+        #expect(try await c.connectStageSpotify().absoluteString == authorize)
+        _ = try await c.disconnectStageSpotify()
+        let after = try await c.stageAction(.songSkip)
+        #expect(after.music?.queue.count == 2)
+        #expect(server.requests.map(\.method) == ["POST", "DELETE", "POST"])
+        #expect(server.requests.allSatisfy { $0.headers["authorization"] == "Api-Key \(stageKey)" })
+        let body = try #require(JSONSerialization.jsonObject(with: server.requests[2].body) as? [String: Any])
+        #expect(body["type"] as? String == "song_skip" && body.count == 1)
+    }
+
+    @MainActor
+    @Test func thePreviewServerHasMusicAndSkipsAlongTheQueue() async throws {
+        let app = AppModel.makePreview(.happy, timeScale: 0.01, clock: SystemClock())
+        await app.stage.load()
+        let m = try #require(app.stage.stage?.music)
+        #expect(m.spotify?.status == .ok && m.nowPlaying?.title == "Space Song" && m.queue.count == 2)
+        try await app.stage.skipSong()
+        let after = try #require(app.stage.stage?.music)
+        #expect(after.nowPlaying?.title == "Dreams" && after.queue.count == 1)
+        try await app.stage.apply(StagePatch(musicCard: .off, duckVolume: 40))
+        #expect(app.stage.stage?.music?.card == .off && app.stage.stage?.music?.duckVolume == 40)
+        try await app.stage.disconnectSpotify()
+        #expect(app.stage.stage?.music?.spotify == nil && app.stage.stage?.music?.queue.isEmpty == true)
     }
 }

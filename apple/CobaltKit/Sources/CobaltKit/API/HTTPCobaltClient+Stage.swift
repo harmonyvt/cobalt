@@ -81,6 +81,21 @@ extension HTTPCobaltClient {
         return try stageSettingsAnswer(data, http)
     }
 
+    /// `POST /stage/spotify/connect` (keyed, no body): the authorize URL.
+    public func connectStageSpotify() async throws -> URL {
+        let req = try makeRequest("POST", "/stage/spotify/connect", keyed: true, timeout: 30)
+        let (data, http) = try await send(req)
+        struct Wire: Decodable { var authorizeUrl: URL }
+        return try stageAnswer(Wire.self, data, http).authorizeUrl
+    }
+
+    /// `DELETE /stage/spotify` (keyed).
+    public func disconnectStageSpotify() async throws -> StageSettings {
+        let req = try makeRequest("DELETE", "/stage/spotify", keyed: true, timeout: 45)
+        let (data, http) = try await send(req)
+        return try stageSettingsAnswer(data, http)
+    }
+
     // MARK: answers
 
     /// A 2xx whose body decodes as `T`; a refusal as `StageError`; an unreadable answer as `.invalidResponse`.

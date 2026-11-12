@@ -19,6 +19,12 @@ public enum StageRule {
     /// A reward's cost in channel points, and its global cooldown in seconds.
     public static let costRange = 1...1_000_000
     public static let cooldownRange = 0...604_800
+    /// Song requests (56.4): the longest song in seconds, how many may wait, and how far the music goes down on a summon.
+    public static let songSecondsRange = 60...3_600
+    public static let songQueueRange = 1...20
+    public static let duckVolumeRange = 0...100
+    /// The choices "longest song" offers, in seconds (3, 5, 10, 15 and 30 minutes).
+    public static let songSecondsChoices = [180, 300, 600, 900, 1_800]
     /// The search pool's words: the field is capped at this many code points (cut, never refused).
     public static let searchLimit = 120
 
@@ -325,9 +331,199 @@ extension StageTwitch: Decodable {
     }
 }
 
-/// The five rewards viewers spend channel points on (30.2). Also the `action` of a reward.
+// MARK: - music
+
+/// The studio's music settings and what Spotify is playing (56.5), `stage.music`; nil on a server that predates them.
+public struct StageMusic: Sendable, Equatable {
+    /// The card on the canvas.
+    public enum Card: String, Sendable, Equatable, CaseIterable, Identifiable {
+        case full, compact, off
+
+        public var id: String { rawValue }
+    }
+
+    public enum SpotifyStatus: String, Sendable, Equatable {
+        case ok
+        /// The token could not be refreshed: connect again.
+        case reconnect
+    }
+
+    /// The connected Spotify account (`null` on the wire while nothing is connected).
+    public struct Spotify: Sendable, Equatable {
+        public var displayName: String
+        /// Spotify's plan: "premium", "free", ... Requests and turning the music down need premium.
+        public var product: String?
+        public var status: SpotifyStatus
+        public var connectedAt: Date?
+
+        public init(displayName: String, product: String? = "premium", status: SpotifyStatus = .ok, connectedAt: Date? = nil) {
+            self.displayName = displayName
+            self.product = product
+            self.status = status
+            self.connectedAt = connectedAt
+        }
+
+        /// The account is not known to be free: only a plan that is named and is not premium is "not premium".
+        public var isPremium: Bool { product.map { $0.lowercased() == "premium" } ?? true }
+    }
+
+    /// What is playing now (`<np>` in 56.3).
+    public struct NowPlaying: Sendable, Equatable {
+        public var playing: Bool
+        public var title: String
+        public var artist: String
+        public var artURL: URL?
+        public var progressMs: Int
+        public var durationMs: Int
+        /// The viewer who asked for it; nil for the owner's own.
+        public var by: String?
+
+        public init(
+            playing: Bool = true, title: String, artist: String = "", artURL: URL? = nil, progressMs: Int = 0, durationMs: Int = 0,
+            by: String? = nil
+        ) {
+            self.playing = playing
+            self.title = title
+            self.artist = artist
+            self.artURL = artURL
+            self.progressMs = progressMs
+            self.durationMs = durationMs
+            self.by = by
+        }
+    }
+
+    /// One waiting request (`<song>` in 56.3), oldest first.
+    public struct Song: Sendable, Equatable, Identifiable {
+        public enum Source: String, Sendable, Equatable {
+            case spotify, youtube, words
+        }
+
+        public var id: String
+        public var title: String
+        public var artist: String
+        public var artURL: URL?
+        public var by: String
+        public var source: Source
+
+        public init(id: String, title: String, artist: String = "", artURL: URL? = nil, by: String = "", source: Source = .spotify) {
+            self.id = id
+            self.title = title
+            self.artist = artist
+            self.artURL = artURL
+            self.by = by
+            self.source = source
+        }
+    }
+
+    public var card: Card
+    /// The card lists the requests waiting ("show up next").
+    public var upNext: Bool
+    /// Links from YouTube are accepted as requests.
+    public var songYouTube: Bool
+    /// The longest song a request may be, in seconds (60...3600).
+    public var songMaxSeconds: Int
+    /// How many requests may wait at once (1...20).
+    public var songQueueMax: Int
+    public var songExplicit: Bool
+    /// The music goes down while a summoned video has the spotlight.
+    public var duck: Bool
+    /// How far it goes down, 0...100 percent.
+    public var duckVolume: Int
+    public var spotify: Spotify?
+    public var nowPlaying: NowPlaying?
+    public var queue: [Song]
+
+    public init(
+        card: Card = .full, upNext: Bool = true, songYouTube: Bool = true, songMaxSeconds: Int = 600, songQueueMax: Int = 5,
+        songExplicit: Bool = false, duck: Bool = true, duckVolume: Int = 20, spotify: Spotify? = nil,
+        nowPlaying: NowPlaying? = nil, queue: [Song] = []
+    ) {
+        self.card = card
+        self.upNext = upNext
+        self.songYouTube = songYouTube
+        self.songMaxSeconds = songMaxSeconds
+        self.songQueueMax = songQueueMax
+        self.songExplicit = songExplicit
+        self.duck = duck
+        self.duckVolume = duckVolume
+        self.spotify = spotify
+        self.nowPlaying = nowPlaying
+        self.queue = queue
+    }
+}
+
+extension StageMusic.Spotify: Decodable {
+    enum CodingKeys: String, CodingKey { case displayName, product, status, connectedAt }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let shown = (try? c.decodeIfPresent(String.self, forKey: .displayName)) ?? nil
+        displayName = shown ?? ""
+        let plan = (try? c.decodeIfPresent(String.self, forKey: .product)) ?? nil
+        product = (plan?.isEmpty ?? true) ? nil : plan
+        // an unknown status is not claimed to be healthy
+        status = (try? c.decodeIfPresent(String.self, forKey: .status)).flatMap(StageMusic.SpotifyStatus.init(rawValue:)) ?? .reconnect
+        connectedAt = try? c.decodeIfPresent(Date.self, forKey: .connectedAt)
+    }
+}
+
+extension StageMusic.NowPlaying: Decodable {
+    enum CodingKeys: String, CodingKey { case playing, title, artist, artUrl, progressMs, durationMs, by }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        playing = (try? c.decodeIfPresent(Bool.self, forKey: .playing)) ?? false
+        title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? ""
+        artist = (try? c.decodeIfPresent(String.self, forKey: .artist)) ?? ""
+        artURL = (try? c.decodeIfPresent(URL.self, forKey: .artUrl)) ?? nil
+        progressMs = max(0, (try? c.decodeIfPresent(Int.self, forKey: .progressMs)) ?? 0)
+        durationMs = max(0, (try? c.decodeIfPresent(Int.self, forKey: .durationMs)) ?? 0)
+        let viewer = (try? c.decodeIfPresent(String.self, forKey: .by)) ?? nil
+        by = (viewer?.isEmpty ?? true) ? nil : viewer
+    }
+}
+
+extension StageMusic.Song: Decodable {
+    enum CodingKeys: String, CodingKey { case id, title, artist, artUrl, by, source }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? ""
+        artist = (try? c.decodeIfPresent(String.self, forKey: .artist)) ?? ""
+        artURL = (try? c.decodeIfPresent(URL.self, forKey: .artUrl)) ?? nil
+        by = (try? c.decodeIfPresent(String.self, forKey: .by)) ?? ""
+        source = (try? c.decodeIfPresent(String.self, forKey: .source)).flatMap(Source.init(rawValue:)) ?? .spotify
+    }
+}
+
+extension StageMusic: Decodable {
+    enum CodingKeys: String, CodingKey {
+        case card, upNext, songYoutube, songMaxSeconds, songQueueMax, songExplicit, duck, duckVolume, spotify, nowPlaying, queue
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // an unknown card is the full one
+        card = (try? c.decodeIfPresent(String.self, forKey: .card)).flatMap(Card.init(rawValue:)) ?? .full
+        upNext = (try? c.decodeIfPresent(Bool.self, forKey: .upNext)) ?? true
+        songYouTube = (try? c.decodeIfPresent(Bool.self, forKey: .songYoutube)) ?? true
+        songMaxSeconds = StageRule.clamp(
+            (try? c.decodeIfPresent(Int.self, forKey: .songMaxSeconds)) ?? 600, to: StageRule.songSecondsRange)
+        songQueueMax = StageRule.clamp((try? c.decodeIfPresent(Int.self, forKey: .songQueueMax)) ?? 5, to: StageRule.songQueueRange)
+        songExplicit = (try? c.decodeIfPresent(Bool.self, forKey: .songExplicit)) ?? false
+        duck = (try? c.decodeIfPresent(Bool.self, forKey: .duck)) ?? true
+        duckVolume = StageRule.clamp((try? c.decodeIfPresent(Int.self, forKey: .duckVolume)) ?? 20, to: StageRule.duckVolumeRange)
+        spotify = (try? c.decodeIfPresent(Spotify.self, forKey: .spotify)) ?? nil
+        nowPlaying = (try? c.decodeIfPresent(NowPlaying.self, forKey: .nowPlaying)) ?? nil
+        let listed = (try? c.decodeIfPresent([Lossy<Song>].self, forKey: .queue)) ?? []
+        queue = listed.compactMap(\.value)
+    }
+}
+
+/// The rewards viewers spend channel points on (30.2; `song` is the sixth, 56.4). Also the `action` of a reward.
 public enum StageRewardKind: String, Sendable, Equatable, CaseIterable, Identifiable {
-    case summon, chaos, shuffle, pin, skip
+    case summon, chaos, shuffle, pin, skip, song
 
     public var id: String { rawValue }
 }
@@ -469,13 +665,16 @@ public struct StageSettings: Sendable, Equatable {
     public var storeURL: URL
     public var twitch: StageTwitch?
     public var spotlight: StageSpotlight?
+    /// The music settings and what Spotify plays (56.5); nil on a server that predates them.
+    public var music: StageMusic?
     public var updatedAt: Date?
 
     public init(
         onAir: Bool = false, pool: StagePool = StagePool(), density: Int = 30, tileSeconds: Int = 10, tileScale: Double = 1,
         spotlightAuto: Bool = true, spotlightSeconds: Int = 20, sound: Bool = true, soundAll: Bool = false,
         playThrough: Bool = false, videoMax: Int = 12, storeOpen: Bool = false, storeHint: Bool = true, liveURL: URL,
-        storeURL: URL, twitch: StageTwitch? = nil, spotlight: StageSpotlight? = nil, updatedAt: Date? = nil
+        storeURL: URL, twitch: StageTwitch? = nil, spotlight: StageSpotlight? = nil, music: StageMusic? = nil,
+        updatedAt: Date? = nil
     ) {
         self.onAir = onAir
         self.pool = pool
@@ -494,6 +693,7 @@ public struct StageSettings: Sendable, Equatable {
         self.storeURL = storeURL
         self.twitch = twitch
         self.spotlight = spotlight
+        self.music = music
         self.updatedAt = updatedAt
     }
 
@@ -537,6 +737,17 @@ public struct StageSettings: Sendable, Equatable {
         if let v = p.videoMax { out.videoMax = v }
         if let v = p.storeOpen { out.storeOpen = v }
         if let v = p.storeHint { out.storeHint = v }
+        if var m = out.music {
+            if let v = p.musicCard { m.card = v }
+            if let v = p.musicUpNext { m.upNext = v }
+            if let v = p.songYouTube { m.songYouTube = v }
+            if let v = p.songMaxSeconds { m.songMaxSeconds = v }
+            if let v = p.songQueueMax { m.songQueueMax = v }
+            if let v = p.songExplicit { m.songExplicit = v }
+            if let v = p.duck { m.duck = v }
+            if let v = p.duckVolume { m.duckVolume = v }
+            out.music = m
+        }
         return out
     }
 }
@@ -544,7 +755,7 @@ public struct StageSettings: Sendable, Equatable {
 extension StageSettings: Decodable {
     enum CodingKeys: String, CodingKey {
         case onAir, pool, density, tileSeconds, tileScale, spotlightAuto, spotlightSeconds, sound, soundAll, playThrough
-        case videoMax, storeOpen, storeHint, twitch, spotlight, updatedAt
+        case videoMax, storeOpen, storeHint, twitch, spotlight, music, updatedAt
         case liveURL = "liveUrl"              // `live_url` after convertFromSnakeCase
         case storeURL = "storeUrl"            // `store_url`
     }
@@ -569,6 +780,7 @@ extension StageSettings: Decodable {
         storeURL = try c.decode(URL.self, forKey: .storeURL)
         twitch = try? c.decodeIfPresent(StageTwitch.self, forKey: .twitch)
         spotlight = try? c.decodeIfPresent(StageSpotlight.self, forKey: .spotlight)
+        music = (try? c.decodeIfPresent(StageMusic.self, forKey: .music)) ?? nil
         updatedAt = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
     }
 }
@@ -609,11 +821,22 @@ public struct StagePatch: Sendable, Equatable {
     public var videoMax: Int?
     public var storeOpen: Bool?
     public var storeHint: Bool?
+    // the music keys (56.4)
+    public var musicCard: StageMusic.Card?
+    public var musicUpNext: Bool?
+    public var songYouTube: Bool?
+    public var songMaxSeconds: Int?
+    public var songQueueMax: Int?
+    public var songExplicit: Bool?
+    public var duck: Bool?
+    public var duckVolume: Int?
 
     public init(
         onAir: Bool? = nil, pool: StagePoolChoice? = nil, density: Int? = nil, tileSeconds: Int? = nil, tileScale: Double? = nil,
         spotlightAuto: Bool? = nil, spotlightSeconds: Int? = nil, sound: Bool? = nil, soundAll: Bool? = nil,
-        playThrough: Bool? = nil, videoMax: Int? = nil, storeOpen: Bool? = nil, storeHint: Bool? = nil
+        playThrough: Bool? = nil, videoMax: Int? = nil, storeOpen: Bool? = nil, storeHint: Bool? = nil,
+        musicCard: StageMusic.Card? = nil, musicUpNext: Bool? = nil, songYouTube: Bool? = nil, songMaxSeconds: Int? = nil,
+        songQueueMax: Int? = nil, songExplicit: Bool? = nil, duck: Bool? = nil, duckVolume: Int? = nil
     ) {
         self.onAir = onAir
         self.pool = pool
@@ -628,6 +851,14 @@ public struct StagePatch: Sendable, Equatable {
         self.videoMax = videoMax
         self.storeOpen = storeOpen
         self.storeHint = storeHint
+        self.musicCard = musicCard
+        self.musicUpNext = musicUpNext
+        self.songYouTube = songYouTube
+        self.songMaxSeconds = songMaxSeconds
+        self.songQueueMax = songQueueMax
+        self.songExplicit = songExplicit
+        self.duck = duck
+        self.duckVolume = duckVolume
     }
 
     public var isEmpty: Bool { self == StagePatch() }
@@ -640,6 +871,9 @@ public struct StagePatch: Sendable, Equatable {
         out.tileScale = tileScale.map { StageRule.clamp($0, to: StageRule.tileScaleRange) }
         out.spotlightSeconds = spotlightSeconds.map { StageRule.clamp($0, to: StageRule.spotlightSecondsRange) }
         out.videoMax = videoMax.map { StageRule.clamp($0, to: StageRule.videoMaxRange) }
+        out.songMaxSeconds = songMaxSeconds.map { StageRule.clamp($0, to: StageRule.songSecondsRange) }
+        out.songQueueMax = songQueueMax.map { StageRule.clamp($0, to: StageRule.songQueueRange) }
+        out.duckVolume = duckVolume.map { StageRule.clamp($0, to: StageRule.duckVolumeRange) }
         return out
     }
 
@@ -659,6 +893,16 @@ public struct StagePatch: Sendable, Equatable {
         if videoMax != nil { out.videoMax = settings.videoMax }
         if storeOpen != nil { out.storeOpen = settings.storeOpen }
         if storeHint != nil { out.storeHint = settings.storeHint }
+        if let m = settings.music {
+            if musicCard != nil { out.musicCard = m.card }
+            if musicUpNext != nil { out.musicUpNext = m.upNext }
+            if songYouTube != nil { out.songYouTube = m.songYouTube }
+            if songMaxSeconds != nil { out.songMaxSeconds = m.songMaxSeconds }
+            if songQueueMax != nil { out.songQueueMax = m.songQueueMax }
+            if songExplicit != nil { out.songExplicit = m.songExplicit }
+            if duck != nil { out.duck = m.duck }
+            if duckVolume != nil { out.duckVolume = m.duckVolume }
+        }
         return out
     }
 
@@ -678,6 +922,14 @@ public struct StagePatch: Sendable, Equatable {
         if let v = later.videoMax { out.videoMax = v }
         if let v = later.storeOpen { out.storeOpen = v }
         if let v = later.storeHint { out.storeHint = v }
+        if let v = later.musicCard { out.musicCard = v }
+        if let v = later.musicUpNext { out.musicUpNext = v }
+        if let v = later.songYouTube { out.songYouTube = v }
+        if let v = later.songMaxSeconds { out.songMaxSeconds = v }
+        if let v = later.songQueueMax { out.songQueueMax = v }
+        if let v = later.songExplicit { out.songExplicit = v }
+        if let v = later.duck { out.duck = v }
+        if let v = later.duckVolume { out.duckVolume = v }
         return out
     }
 
@@ -702,6 +954,14 @@ public struct StagePatch: Sendable, Equatable {
         if let v = p.videoMax { out["video_max"] = v }
         if let v = p.storeOpen { out["store_open"] = v }
         if let v = p.storeHint { out["store_hint"] = v }
+        if let v = p.musicCard { out["music_card"] = v.rawValue }
+        if let v = p.musicUpNext { out["music_up_next"] = v }
+        if let v = p.songYouTube { out["song_youtube"] = v }
+        if let v = p.songMaxSeconds { out["song_max_seconds"] = v }
+        if let v = p.songQueueMax { out["song_queue_max"] = v }
+        if let v = p.songExplicit { out["song_explicit"] = v }
+        if let v = p.duck { out["duck"] = v }
+        if let v = p.duckVolume { out["duck_volume"] = v }
         return out
     }
 }
@@ -719,6 +979,8 @@ public enum StageAction: Sendable, Equatable {
     case chaos
     /// Put this pool item in the spotlight (the owner's own pick).
     case spotlight(itemID: String)
+    /// Skip the song that is playing (56.4); on air or not.
+    case songSkip
 
     var type: String {
         switch self {
@@ -728,6 +990,7 @@ public enum StageAction: Sendable, Equatable {
         case .shuffle: return "shuffle"
         case .chaos: return "chaos"
         case .spotlight: return "spotlight"
+        case .songSkip: return "song_skip"
         }
     }
 
@@ -747,6 +1010,28 @@ public enum StageTwitchReturn: Sendable, Equatable {
         guard url.scheme?.lowercased() == "cobalt-apple", url.host(percentEncoded: false)?.lowercased() == "stage",
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
               let result = items.first(where: { $0.name == "twitch" })?.value
+        else { return nil }
+        switch result {
+        case "connected":
+            self = .connected
+        case "failed":
+            self = .failed(reason: items.first(where: { $0.name == "reason" })?.value)
+        default:
+            return nil
+        }
+    }
+}
+
+/// Where the Spotify sign-in came back to: `cobalt-apple://stage?spotify=connected` or `?spotify=failed&reason=<code>` (56.2;
+/// reasons `state|denied|scope|exchange|error|off`).
+public enum StageSpotifyReturn: Sendable, Equatable {
+    case connected
+    case failed(reason: String?)
+
+    public init?(url: URL) {
+        guard url.scheme?.lowercased() == "cobalt-apple", url.host(percentEncoded: false)?.lowercased() == "stage",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let result = items.first(where: { $0.name == "spotify" })?.value
         else { return nil }
         switch result {
         case "connected":
@@ -780,6 +1065,18 @@ public enum StageError: Error, Sendable, Equatable {
     case searchUnavailable
     /// `503 error.api.generic`: the server cannot take it right now.
     case unavailable
+    /// `404 error.stage.spotify_off`: the server has no Spotify secrets.
+    case spotifyOff
+    /// `409 error.stage.spotify_not_connected`.
+    case spotifyNotConnected
+    /// `409 error.stage.spotify_no_device`: Spotify isn't playing anywhere.
+    case spotifyNoDevice
+    /// `409 error.stage.spotify_premium`: the account is not Premium.
+    case spotifyPremium
+    /// `409 error.stage.spotify_reconnect`: the sign-in ran out.
+    case spotifyReconnect
+    /// `409 error.stage.spotify`: Spotify refused for another reason.
+    case spotify
     /// The server could not be reached.
     case offline
     /// Anything else.
@@ -795,6 +1092,12 @@ public enum StageError: Error, Sendable, Equatable {
         case "error.stage.off_air": self = .offAir
         case "error.stage.videos_only": self = .videosOnly
         case "error.stage.search_unavailable": self = .searchUnavailable
+        case "error.stage.spotify_off": self = .spotifyOff
+        case "error.stage.spotify_not_connected": self = .spotifyNotConnected
+        case "error.stage.spotify_no_device": self = .spotifyNoDevice
+        case "error.stage.spotify_premium": self = .spotifyPremium
+        case "error.stage.spotify_reconnect": self = .spotifyReconnect
+        case "error.stage.spotify": self = .spotify
         default: return nil
         }
     }

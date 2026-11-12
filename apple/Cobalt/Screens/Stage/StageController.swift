@@ -38,6 +38,7 @@ final class StageController {
     /// The rotate confirm and the disconnect confirm.
     var confirmingRotate = false
     var confirmingDisconnect = false
+    var confirmingSpotifyDisconnect = false
     /// The reward editor's sheet.
     var editingReward: StageRewardKind?
     /// What is in flight (a second tap does nothing): "air", "action", "pool", "sound", "soundAll", "playThrough", "auto",
@@ -45,6 +46,8 @@ final class StageController {
     private(set) var busy: Set<String> = []
     /// The Twitch sign-in is open.
     private(set) var connecting = false
+    /// The Spotify sign-in is open.
+    private(set) var connectingSpotify = false
     private(set) var copied: Copied?
     /// +1 when a call lands (success haptic) or fails (error haptic).
     private(set) var doneTick = 0
@@ -212,6 +215,53 @@ final class StageController {
     func disconnectTwitch(shell: ShellActions) {
         run("twitch", shell: shell, success: Copy.Stage.disconnectedToast) { try await self.store.disconnectTwitch() }
     }
+
+    // MARK: music
+
+    /// A music setting (`PATCH /stage`), sent at once and put back if the server refuses it. One at a time per `key`.
+    func setMusic(_ patch: StagePatch, key: String, shell: ShellActions) {
+        run("music-\(key)", shell: shell) { try await self.store.apply(patch) }
+    }
+
+    /// The Spotify sign-in, as Twitch's: the server's authorize URL in a web authentication session whose callback is
+    /// `cobalt-apple://stage?spotify=…`. Whatever the session ends with, the stage is read again.
+    func connectSpotify(using session: WebAuthenticationSession, shell: ShellActions) {
+        guard !connectingSpotify else { return }
+        connectingSpotify = true
+        Task {
+            defer { connectingSpotify = false }
+            do {
+                let authorize = try await store.connectSpotify()
+                let callback = try await session.authenticate(using: authorize, callbackURLScheme: "cobalt-apple")
+                await store.load()
+                switch StageSpotifyReturn(url: callback) {
+                case .connected?:
+                    shell.showStatus(Copy.Stage.spotifyConnectedToast)
+                    doneTick += 1
+                case .failed(let reason)?:
+                    shell.showStatus(Copy.Stage.spotifyConnectFailed(reason: reason))
+                    failTick += 1
+                case nil:
+                    break
+                }
+            } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
+                await store.load()                       // closed on purpose; it may have gone through anyway
+            } catch {
+                await store.load()
+                shell.showStatus(Copy.Stage.message(for: error))
+                failTick += 1
+            }
+        }
+    }
+
+    func disconnectSpotify(shell: ShellActions) {
+        run("spotify", shell: shell, success: Copy.Stage.spotifyDisconnectedToast) { try await self.store.disconnectSpotify() }
+    }
+
+    /// "skip current": the next song plays.
+    func skipSong(shell: ShellActions) {
+        run("song-skip", shell: shell) { try await self.store.skipSong() }
+    }
 }
 
 // MARK: - confirms and sheets
@@ -238,6 +288,14 @@ private struct StagePresentations: ViewModifier {
                 Button(Copy.Stage.keep, role: .cancel) {}
             } message: {
                 Text(Copy.Stage.disconnectMessage)
+            }
+            .confirmationDialog(
+                Copy.Stage.disconnectSpotifyTitle, isPresented: $controller.confirmingSpotifyDisconnect, titleVisibility: .visible
+            ) {
+                Button(Copy.Stage.disconnect, role: .destructive) { controller.disconnectSpotify(shell: shell) }
+                Button(Copy.Stage.keep, role: .cancel) {}
+            } message: {
+                Text(Copy.Stage.disconnectSpotifyMessage)
             }
             .sheet(isPresented: $controller.pickShown) {
                 StagePickSheet(controller: controller)
