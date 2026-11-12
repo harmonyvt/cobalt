@@ -35,9 +35,12 @@ extension Rendition {
     var hasFileHere: Bool { local?.fileURL != nil }
 
     /// The aspect of the picture: its own size, else 9:16.
-    var aspect: CGFloat {
+    var aspect: CGFloat { knownAspect ?? 9.0 / 16.0 }
+
+    /// The aspect of the picture from its own size; nil when the record has none (an upload measured nowhere yet).
+    var knownAspect: CGFloat? {
         if let w = width, let h = height, w > 0, h > 0 { return CGFloat(w) / CGFloat(h) }
-        return 9.0 / 16.0
+        return nil
     }
 
     /// The lowercase file type for the corner capsule: from the stored file, then the public link, then

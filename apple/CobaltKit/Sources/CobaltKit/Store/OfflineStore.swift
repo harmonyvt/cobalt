@@ -1309,14 +1309,17 @@ public final class OfflineStore {
         /// What is left of the entry when its file goes: poster and flipbook.
         var keptCost: Int64 { cost - (hasFile ? bytes : 0) }
 
+        /// Runs on the main actor for every record after each write (`adopt`), so it never touches the disk: a path
+        /// component without a directory hint makes Foundation stat the file to find out, and 467 of those per promote
+        /// were the main-thread hangs in the app's own hang reports (8.0 build 84).
         func video(root: URL, visibleRoot: URL? = nil) -> StoredVideo {
             let fileURL: URL?
             let place: StoredVideo.Place?
             if let fileName {
-                fileURL = root.appendingPathComponent("files/\(fileName)")
+                fileURL = root.appendingPathComponent("files/\(fileName)", isDirectory: false)
                 place = .cache
             } else if let visiblePath {
-                fileURL = visibleRoot.map { $0.appendingPathComponent(visiblePath) }
+                fileURL = visibleRoot.map { $0.appendingPathComponent(visiblePath, isDirectory: false) }
                 place = .offline
             } else {
                 fileURL = nil
@@ -1324,10 +1327,10 @@ public final class OfflineStore {
             }
             return StoredVideo(
                 id: id, kind: kind, fileURL: fileURL,
-                posterURL: posterName.map { root.appendingPathComponent("posters/\($0)") },
+                posterURL: posterName.map { root.appendingPathComponent("posters/\($0)", isDirectory: false) },
                 name: name, duration: duration, width: width, height: height, bytes: bytes,
                 sessionID: sessionID, link: link, remoteURL: remoteURL, createdAt: createdAt,
-                previewFrameURLs: (previewNames ?? []).map { root.appendingPathComponent("previews/\($0)") },
+                previewFrameURLs: (previewNames ?? []).map { root.appendingPathComponent("previews/\($0)", isDirectory: false) },
                 publicURL: publicURL, mediaID: media, clip: clip, title: title, place: place, keep: keep == true,
                 role: role, itemIndex: itemIndex, madeFrom: madeFrom, madeSpec: madeSpec, libraryID: libraryID,
                 postItems: postItems)
