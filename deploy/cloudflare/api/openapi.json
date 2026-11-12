@@ -143,6 +143,189 @@
         }
       }
     },
+    "/auth/extension/begin": {
+      "post": {
+        "operationId": "auth.extension.begin",
+        "summary": "Start a browser-extension sign-in (POST /auth/extension/begin). The owner approves it on the web app.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "challenge": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "base64url(SHA-256(verifier)), PKCE S256"
+                  },
+                  "state": {
+                    "type": "string",
+                    "maxLength": 160
+                  }
+                },
+                "required": [
+                  "challenge",
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "pending"
+                    },
+                    "device_code": {
+                      "type": "string",
+                      "description": "the extension's secret for POST /auth/extension/poll; shown once"
+                    },
+                    "user_code": {
+                      "type": "string",
+                      "description": "goes in the approve page URL; useless without the device code and the verifier"
+                    },
+                    "expires_at": {
+                      "type": "integer"
+                    },
+                    "interval": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "device_code",
+                    "user_code",
+                    "expires_at",
+                    "interval"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/auth/extension/poll": {
+      "post": {
+        "operationId": "auth.extension.poll",
+        "summary": "Poll a browser-extension sign-in (POST /auth/extension/poll). Pending until the owner approves, then a device session.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "device_code": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "verifier": {
+                    "type": "string",
+                    "maxLength": 160
+                  },
+                  "state": {
+                    "type": "string",
+                    "maxLength": 160
+                  }
+                },
+                "required": [
+                  "device_code",
+                  "verifier",
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "const": "pending"
+                        },
+                        "interval": {
+                          "type": "integer",
+                          "description": "seconds the extension should wait before polling again"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "interval"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "const": "success"
+                        },
+                        "key": {
+                          "type": "string",
+                          "description": "the session token: send it as Api-Key"
+                        },
+                        "session": {
+                          "$ref": "#/components/schemas/AuthSessionRow"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "key",
+                        "session"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/auth/keys": {
       "get": {
         "operationId": "auth.keys.list",
@@ -7895,7 +8078,8 @@
               "ios",
               "ipados",
               "mac",
-              "web"
+              "web",
+              "extension"
             ]
           },
           "created_at": {

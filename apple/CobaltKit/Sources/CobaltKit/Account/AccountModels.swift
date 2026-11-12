@@ -8,7 +8,7 @@ public struct AccountSession: Sendable, Equatable, Identifiable, Decodable {
     public var id: String
     /// "harmony's iphone", "safari on mac".
     public var device: String
-    /// `ios`, `ipados`, `mac` or `web` (anything else reads as `web`).
+    /// `ios`, `ipados`, `mac`, `web` or `extension` (anything else reads as `web`).
     public var platform: String
     public var createdAt: Date
     public var lastUsedAt: Date?
@@ -54,7 +54,7 @@ public struct AccountSession: Sendable, Equatable, Identifiable, Decodable {
 
 /// Where a session was signed in.
 public enum AccountPlatform: String, Sendable, Equatable, CaseIterable {
-    case ios, ipados, mac, web
+    case ios, ipados, mac, web, extension
 }
 
 /// One key for tools (`<key>` in 42.5): the client keys made on the web, and the keys pasted into apps before accounts.

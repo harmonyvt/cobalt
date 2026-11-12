@@ -47,3 +47,19 @@ describe("deviceFromUserAgent (42.4)", () => {
         expect(web.cleanDevice(web.deviceFromUserAgent(ua))).toBe(want);
     });
 });
+
+describe("extensionDeviceName (55)", () => {
+    const CHROME_MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+    const SAFARI_MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Safari/605.1.15";
+    it("names the browser from the approve page, and the name fits a device", () => {
+        expect(web.extensionDeviceName(CHROME_MAC)).toBe("Browser extension \u2013 Chrome on Mac");
+        expect(web.extensionDeviceName(SAFARI_MAC)).toBe("Browser extension \u2013 Safari on Mac");
+        expect(web.extensionDeviceName("curl/8.0")).toBe("Browser extension");
+        expect(web.extensionDeviceName(null)).toBe("Browser extension");
+        for (const ua of [CHROME_MAC, SAFARI_MAC, "curl/8.0", null]) {
+            const name = web.extensionDeviceName(ua);
+            expect(web.cleanDevice(name)).toBe(name);
+            expect([...name].length).toBeLessThanOrEqual(40);
+        }
+    });
+});

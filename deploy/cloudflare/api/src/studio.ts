@@ -2022,8 +2022,11 @@ export class StudioService {
             return studioErr(400, "error.studio.invalid_params");
         }
         const wantsPublic = publicFlag === true;
-        // `origin: "share"` (section 14): a share sheet's background save. Nothing else is accepted.
-        if (originField !== undefined && originField !== null && originField !== "share") {
+        // `origin: "share"` (section 14): a share sheet's background save.
+        // `origin: "extension"` (section 55): a browser extension's save. Accepted, then treated as an
+        // ordinary save: not remembered for GET /studio/recent, not queued unless `queue` is set, and
+        // not on the short share kick. Anything else is refused.
+        if (originField !== undefined && originField !== null && originField !== "share" && originField !== "extension") {
             return studioErr(400, "error.studio.invalid_params");
         }
         const fromShare = originField === "share";

@@ -6,7 +6,8 @@ import { hashKey } from "./keys";
 export const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const MAX_SESSIONS = 50;
 export const MAX_DEVICE_LENGTH = 40;
-export const PLATFORMS = ["ios", "ipados", "mac", "web"] as const;
+// `extension` is a browser extension (section 55): the same kind of session, named for the browser.
+export const PLATFORMS = ["ios", "ipados", "mac", "web", "extension"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 export const ACTIVE_SESSION_SQL = "kind = 'session' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?1)";
@@ -87,4 +88,33 @@ export function deviceFromUserAgent(ua: string | null): string {
     else if (/Windows/.test(u)) os = "windows";
     else if (/Linux/.test(u)) os = "linux";
     return os ? `${browser} on ${os}` : browser;
+}
+
+const BROWSER_LABEL: Record<string, string> = {
+    firefox: "Firefox",
+    edge: "Edge",
+    opera: "Opera",
+    chrome: "Chrome",
+    safari: "Safari",
+};
+const OS_LABEL: Record<string, string> = {
+    iphone: "iPhone",
+    ipad: "iPad",
+    android: "Android",
+    chromeos: "ChromeOS",
+    mac: "Mac",
+    windows: "Windows",
+    linux: "Linux",
+};
+
+// The device name of a browser-extension session (section 55): "Browser extension – Chrome on Mac".
+// The approve page's own User-Agent decides it. The extension does not get to choose the name.
+export function extensionDeviceName(ua: string | null): string {
+    const base = deviceFromUserAgent(ua);
+    if (base === "browser") return "Browser extension";
+    const [browser, os] = base.split(" on ");
+    const b = BROWSER_LABEL[browser] ?? browser;
+    const o = os ? (OS_LABEL[os] ?? os) : null;
+    const name = o ? `Browser extension \u2013 ${b} on ${o}` : `Browser extension \u2013 ${b}`;
+    return cleanDevice(name) ?? "Browser extension";
 }

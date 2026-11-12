@@ -1,0 +1,7 @@
+body { margin: 0; background: #141414; color: #f4f1ea; font: 15px/1.45 -apple-system, system-ui, sans-serif; }
+main { max-width: 32rem; margin: 3rem auto; padding: 0 1.25rem; }
+h1 { font-size: 1.4rem; letter-spacing: -0.02em; }
+p { color: #d9d3c7; }
+ul { list-style: none; padding: 0; }
+li { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-top: 1px solid #2a2622; }
+label { display: flex; align-items: center; gap: 8px; }
