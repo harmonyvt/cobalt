@@ -5607,7 +5607,8 @@ meaning), and a vector per stretch of speech. Section numbers 45 and 46 (and mig
 - `from` / `to` (seconds) keep the lines that overlap them. A bad number or no key: `400 error.library.bad_request`; an
   unknown post: `404 error.library.not_found`.
 - Chat AI and MCP: `cobalt.library.transcript(id, { from, to })` (MCP `library_transcript`, tier free): the same body
-  without `status`, and without `words` for the model. The chat's instructions mention it and `said`.
+  without `status`, and without `words` for the model; each line also carries `timecode`, its `start` as `"m:ss"`
+  (`"h:mm:ss"` past an hour, rounded down) so an answer can cite the moment. The chat's instructions mention it and `said`.
 - `GET /capabilities` `features.transcripts`: exactly `about_sound`.
 
 ### 47.4 Moments

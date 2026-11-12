@@ -57,7 +57,8 @@ export const SearchItem = PostSummary.extend({
     // meaning search only: its score, up to 3 tags closest to the query, and where it is said in the video
     score: z.number().nullable(),
     why: z.array(z.string()).nullable(),
-    said: z.array(z.looseObject({ at: z.number(), end: z.number(), text: z.string(), match: z.string() })).nullable(),
+    // at/end in seconds; timecode is at as "m:ss" (or "h:mm:ss") to cite the moment
+    said: z.array(z.looseObject({ at: z.number(), end: z.number(), timecode: z.string(), text: z.string(), match: z.string() })).nullable(),
 });
 
 export const SearchOut = z.looseObject({
@@ -76,6 +77,8 @@ export const PostOut = z.looseObject({
         source_link: url,
         caption: z.string().nullable(),
         transcript_excerpt: z.string().nullable(),
+        // the same opening lines with their times (start/end in seconds, timecode "m:ss"); empty without a transcript
+        transcript_lines: z.array(z.object({ start: z.number(), end: z.number(), timecode: z.string(), text: z.string() })),
         share_url: url,
         private_url: url,
         // that private link's direct file (the bytes), while it has one

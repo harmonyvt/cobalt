@@ -381,7 +381,11 @@ describe("show_post", () => {
         expect(r.out.post.file_list).toEqual([expect.objectContaining({ id: v.id, kind: "video", content_type: "video/mp4", url: v.url, width: 720, height: 1280, duration_s: 9.6, bytes: 1000 })]);
         expect(r.text).toContain("The big jump · " + v.id);
         expect(r.text).toContain(`Share link: ${SHARE}${v.name}`);
-        expect(r.text).toContain("Says: hello there watch this");
+        expect(r.out.post.transcript_lines).toEqual([
+            { start: 0, end: 2, timecode: "0:00", text: "hello there" },
+            { start: 2, end: 4, timecode: "0:02", text: "watch this" },
+        ]);
+        expect(r.text).toContain("Says (library_transcript has every line with its time):\n[0:00] hello there\n[0:02] watch this");
         expect(calls.find((c) => c.name === "library.transcript")!.input).toMatchObject({ key: v.id });
     });
 
@@ -415,6 +419,8 @@ describe("show_post", () => {
         };
         const r = await run("show_post", { id: v.id });
         expect(r.out.post.transcript_excerpt).toBeNull();
+        expect(r.out.post.transcript_lines).toEqual([]);
+        expect(r.text).not.toContain("Says");
     });
 });
 
@@ -1121,7 +1127,7 @@ describe("search_library: what library.search and library.list could do", () => 
         answers["library.search"] = [row(a.id, { score: 0.83, why: ["cat", "shelf"], said: [{ at: 12, end: 14, text: "watch this cat", match: "words" }] })];
         const r = await run("search_library", { query: "cat", within: { collection: "Favourites" }, limit: 5 });
         expect(calls[0]).toEqual({ name: "library.search", input: { query: "cat", limit: 5, within: { collection: "Favourites" } } });
-        expect(r.out.items[0]).toMatchObject({ score: 0.83, why: ["cat", "shelf"], said: [{ at: 12, end: 14, text: "watch this cat", match: "words" }], caption: "roasted", source_link: `https://tiktok.com/${a.id}` });
+        expect(r.out.items[0]).toMatchObject({ score: 0.83, why: ["cat", "shelf"], said: [{ at: 12, end: 14, timecode: "0:12", text: "watch this cat", match: "words" }], caption: "roasted", source_link: `https://tiktok.com/${a.id}` });
         expect(r.text).toContain("score 0.83");
         expect(r.text).toContain("why: cat, shelf");
         expect(r.text).toContain("says @0:12: “watch this cat”");

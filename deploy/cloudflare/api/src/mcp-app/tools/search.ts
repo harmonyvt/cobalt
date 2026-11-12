@@ -3,6 +3,7 @@
 import * as z from "zod";
 import { OpError } from "../../registry/op";
 import { SearchOut } from "../shapes";
+import { timecode } from "../../transcripts";
 import type { AppTool } from "../types";
 import { arr, clock, cut, listText, num, plural, readPosts, rec, signThumbs, str, strings, summaryOf, type PostsRead } from "./common";
 
@@ -66,7 +67,7 @@ function rowOf(p: Item, share: string | null, mode: Out["mode"]): string {
         p.status === "public" ? share : p.status === "off" ? "not shared" : "private",
         mode === "meaning" && p.score !== null ? `score ${p.score}` : null,
         p.why && p.why.length > 0 ? `why: ${p.why.join(", ")}` : null,
-        p.said && p.said.length > 0 ? `says @${clock(p.said[0]!.at)}: “${cut(p.said[0]!.text, 80)}”` : null,
+        p.said && p.said.length > 0 ? `says @${timecode(p.said[0]!.at)}: “${cut(p.said[0]!.text, 80)}”` : null,
     ];
     return bits.filter(Boolean).join(" · ");
 }
@@ -81,7 +82,7 @@ function itemOf(record: unknown, read: PostsRead): Item | null {
         ? arr(r.said).flatMap((s) => {
               const o = rec(s);
               const text = str(o.text);
-              return text !== null && num(o.at) !== null ? [{ at: num(o.at)!, end: num(o.end) ?? num(o.at)!, text, match: str(o.match) ?? "words" }] : [];
+              return text !== null && num(o.at) !== null ? [{ at: num(o.at)!, end: num(o.end) ?? num(o.at)!, timecode: timecode(num(o.at)!), text, match: str(o.match) ?? "words" }] : [];
           })
         : null;
     return { ...summary, source_link: str(r.link), caption: str(r.caption), score, why, said: said && said.length > 0 ? said : null };
