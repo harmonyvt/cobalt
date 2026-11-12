@@ -162,7 +162,7 @@ export const stageGetOp = defineOp({
 const Settings = z
     .object({
         on_air: z.boolean().optional().describe("the canvas shows files"),
-        density: z.number().optional().describe("tiles on screen, 5..100"),
+        density: z.number().optional().describe("tiles on screen, 0..100 (0 = no scatter: only the spotlight, summons and chaos show)"),
         tile_seconds: z.number().optional().describe("3..120"),
         tile_scale: z.number().optional().describe("0.5..1.6"),
         spotlight_auto: z.boolean().optional(),

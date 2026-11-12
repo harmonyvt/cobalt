@@ -161,7 +161,7 @@ describe("settings (30.2, 30.10)", () => {
         expect(r.status).toBe(200);
         expect(r.body.stage).toMatchObject({ density: 100, tile_seconds: 3, tile_scale: 1.6, spotlight_seconds: 10, video_max: 24, sound: false, store_hint: false });
         const lo = await w.owner("PATCH", "/stage", { density: -4, tile_seconds: 500, tile_scale: 0.01, spotlight_seconds: 9999, video_max: -3 });
-        expect(lo.body.stage).toMatchObject({ density: 5, tile_seconds: 120, tile_scale: 0.5, spotlight_seconds: 120, video_max: 0 });
+        expect(lo.body.stage).toMatchObject({ density: 0, tile_seconds: 120, tile_scale: 0.5, spotlight_seconds: 120, video_max: 0 });
         const mid = await w.owner("PATCH", "/stage", { density: 42.4, tile_scale: 1.2345, on_air: true, spotlight_auto: false });
         expect(mid.body.stage).toMatchObject({ density: 42, tile_scale: 1.23, on_air: true, spotlight_auto: false });
         expect(w.stageRow()).toMatchObject({ density: 42, on_air: 1, spotlight_auto: 0 });

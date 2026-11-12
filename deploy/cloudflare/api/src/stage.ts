@@ -1067,7 +1067,7 @@ async function ownerGet(d: StageDeps): Promise<StudioReply> {
 
 type Num = { key: string; lo: number; hi: number; int: boolean };
 const NUMBERS: Num[] = [
-    { key: "density", lo: 5, hi: 100, int: true },
+    { key: "density", lo: 0, hi: 100, int: true },
     { key: "tile_seconds", lo: 3, hi: 120, int: true },
     { key: "tile_scale", lo: 0.5, hi: 1.6, int: false },
     { key: "spotlight_seconds", lo: 10, hi: 120, int: true },
