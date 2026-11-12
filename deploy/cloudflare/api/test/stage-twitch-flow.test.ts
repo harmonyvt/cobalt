@@ -590,6 +590,34 @@ describe("summon (30.9)", () => {
         expect(lastRow(w)).toMatchObject({ status: "done" });
     });
 
+    it("the same words twice pick two different close videos, never one off-topic", async () => {
+        const { w, files } = await live();
+        const cat2 = w.video({ name: "grey cat.mp4" });
+        w.tick(11 * 60_000);
+        const cats = new Set([files[0]!.id, cat2.id]);
+        const seen: string[] = [];
+        for (let n = 0; n < 4; n++) {
+            await w.redeem("summon", "cat");
+            seen.push(w.room.last("summon")!.spotlight.item.id);
+        }
+        for (const id of seen) expect(cats.has(id)).toBe(true);
+        for (let n = 1; n < seen.length; n++) expect(seen[n]).not.toBe(seen[n - 1]);
+    });
+
+    it("by meaning: a random one of the close hits, skipping the last summoned", async () => {
+        const { w, files } = await live({ search: true });
+        w.space.axes = { pets: 0 };
+        w.embedding(files[0]!.id, 0);
+        w.embedding(files[1]!.id, 0);
+        const seen: string[] = [];
+        for (let n = 0; n < 3; n++) {
+            await w.redeem("summon", "pets");
+            seen.push(w.room.last("summon")!.spotlight.item.id);
+        }
+        for (const id of seen) expect([files[0]!.id, files[1]!.id]).toContain(id);
+        for (let n = 1; n < seen.length; n++) expect(seen[n]).not.toBe(seen[n - 1]);
+    });
+
     it("by a piece of a title when the search is off", async () => {
         const { w, files } = await live();
         await w.redeem("summon", "frog");

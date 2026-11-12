@@ -1633,17 +1633,32 @@ async function eventSub(d: StageDeps, request: Request): Promise<Response> {
 
 const wordsOf = (s: string) => s.replace(/\s+/g, " ").trim();
 
-// A summon's input to one pool video (the spotlight is videos only). Always the closest video there is: a 3-4 char
-// code naming a video, else the meaning search over the pool (the best pool post with a video, then its first video
-// file), else a title substring, else the closest search hit below the score floor, else a random pool video.
-// null only when the pool has no video at all.
+// How many close videos a summon by words picks from, and how far below the best score a hit may be and still count
+// as close: "cat" gets a random one of the few closest cat videos, not the same one every time.
+export const SUMMON_PICK = 5;
+export const SUMMON_NEAR = 0.1;
+
+// A summon's input to one pool video (the spotlight is videos only). Always a video: a 3-4 char code naming a video
+// is that video; words pick at random among the closest few (the meaning search over the pool above the score floor
+// and near the best hit, else the title matches), skipping the last summoned video when there is another; with
+// nothing close, the closest search hit below the floor; else a random pool video. null only when the pool has no
+// video at all.
 export async function findSummon(d: StageDeps, s: SettingsRow, input: string): Promise<Item | null> {
     const words = wordsOf(input).slice(0, INPUT_MAX);
     const pool = (await poolItems(d, s)).filter((i) => i.kind === "video");
     if (pool.length === 0) return null;
     const byId = new Map(pool.map((i) => [i.id, i]));
-    const anyVideo = () => pool[(rbytes(d)(4).reduce((a, b) => a * 256 + b, 0) >>> 0) % pool.length]!;
-    if (!words) return anyVideo();
+    const pick = async (from: Item[]): Promise<Item> => {
+        let list = from;
+        if (list.length > 1) {
+            const last = await d.db
+                .prepare("SELECT item_id FROM stage_redemptions WHERE action = 'summon' AND status != 'refunded' AND item_id IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 1")
+                .first<{ item_id: string }>();
+            if (last) list = list.filter((i) => i.id !== last.item_id);
+        }
+        return list[(rbytes(d)(4).reduce((a, b) => a * 256 + b, 0) >>> 0) % list.length]!;
+    };
+    if (!words) return await pick(pool);
 
     if (/^[A-Za-z0-9]{3,4}$/.test(words)) {
         const k = await d.db.prepare("SELECT item_id FROM stage_codes WHERE code = ?1").bind(words.toUpperCase()).first<{ item_id: string }>();
@@ -1664,21 +1679,32 @@ export async function findSummon(d: StageDeps, s: SettingsRow, input: string): P
                 .all<{ id: string; item_index: number | null; created_at: number; post_key: string }>();
             const byPost = new Map<string, typeof results>();
             for (const r of results) byPost.set(r.post_key, [...(byPost.get(r.post_key) ?? []), r]);
+            const near: Item[] = [];
+            let best: number | null = null;
             for (const h of found.hits) {
                 const files = (byPost.get(h.post_key) ?? []).sort(
                     (a, b) => (a.item_index ?? 0) - (b.item_index ?? 0) || a.created_at - b.created_at || (a.id < b.id ? -1 : 1),
                 );
                 const first = files.find((f) => byId.has(f.id));
                 if (!first) continue;
-                if (h.score >= SEARCH_MIN_SCORE) return byId.get(first.id)!;
-                closest = byId.get(first.id)!;
-                break;
+                const item = byId.get(first.id)!;
+                if (h.score < SEARCH_MIN_SCORE) {
+                    if (near.length === 0) closest = item;
+                    break;
+                }
+                best ??= h.score;
+                if (h.score < best - SUMMON_NEAR) break;
+                near.push(item);
+                if (near.length >= SUMMON_PICK) break;
             }
+            if (near.length > 0) return await pick(near);
         }
     }
 
     const needle = words.toLowerCase();
-    return pool.find((i) => i.title.toLowerCase().includes(needle)) ?? closest ?? anyVideo();
+    const titled = pool.filter((i) => i.title.toLowerCase().includes(needle)).slice(0, SUMMON_PICK);
+    if (titled.length > 0) return await pick(titled);
+    return closest ?? (await pick(pool));
 }
 
 type Verdict = { status: "done" | "refunded"; reason: string | null; itemId: string | null };
