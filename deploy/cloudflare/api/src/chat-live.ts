@@ -3,7 +3,8 @@
 // The app draws a reply's activity itself when it sent the message. A message sent from somewhere else (the Mac app, a Mac
 // Shortcut) reaches the owner's iPhone only through APNs: each iPhone registers a push-to-start token for chat activities,
 // the Worker's chat route folds the reply's events into the activity state (ChatLivePusher) and hands it to the `main`
-// Durable Object (ChatLiveService), which push-starts the activity on every device with a token except the sender's, then
+// Durable Object (ChatLiveService), which push-starts the activity on every device with a token except the sender's (whose app
+// started its own and hands back its update token, so the server keeps it current while the phone is locked), then
 // updates and ends it once the device has handed back the activity's update token.
 //
 // Free of Cloudflare imports so it runs under plain node in the tests; the APNs wire work is apns.ts.
@@ -24,6 +25,10 @@ import type { KV } from "./webp";
 
 export const CHAT_START_PREFIX = "live:chatstart:";
 export const CHAT_LIVE_PREFIX = "live:chat:";
+// live:chatpending:<thread>:<key id>  {token, env, at}: the sender's activity token that arrived before the reply's first
+// hand-over (the app asks for its activity as the message goes out); taken up when the reply begins.
+export const CHAT_PENDING_PREFIX = "live:chatpending:";
+export const CHAT_PENDING_TTL_MS = 2 * 60 * 1000;
 export const CHAT_THREAD_REGEX = /^[A-Za-z0-9]{16}$/;
 export const CHAT_LIVE_MAX_BODY = 4096;
 // More reply text goes to the Durable Object at most this often; the DO pushes text at most every CHAT_LIVE_TEXT_PUSH_MS
@@ -31,6 +36,14 @@ export const CHAT_LIVE_MAX_BODY = 4096;
 export const CHAT_LIVE_TEXT_MS = 3000;
 export const CHAT_LIVE_TEXT_PUSH_MS = 5000;
 export const CHAT_LIVE_STALE_S = 90;
+// While a reply is quiet (a long tool call), the Worker hands the same state over again this often, and the Durable Object
+// pushes it again (fresh stale-date) once nothing went out for CHAT_LIVE_REFRESH_MS: the island never goes stale on a reply
+// that is still running.
+export const CHAT_LIVE_KEEPALIVE_MS = 30_000;
+export const CHAT_LIVE_REFRESH_MS = 45_000;
+// No hand-over for this long: the Worker running the reply is gone (it was cut off after the app went away, or crashed).
+// The Durable Object ends the activity as interrupted instead of leaving it stuck on "thinking".
+export const CHAT_LIVE_SILENT_MS = 100_000;
 export const CHAT_LIVE_DISMISS_DONE_S = 600;
 export const CHAT_LIVE_DISMISS_FAILED_S = 300;
 export const CHAT_LIVE_TTL_MS = 60 * 60 * 1000;
@@ -250,6 +263,13 @@ export class ChatLivePusher {
         this.send();
     }
 
+    // The reply is still running but has said nothing new (the chat route's ping): hand the state over again now and then,
+    // so the Durable Object knows the reply is alive and keeps the activity fresh.
+    tick() {
+        if (this.closed) return;
+        if (this.pending || this.o.now() - this.lastSent >= CHAT_LIVE_KEEPALIVE_MS) this.send();
+    }
+
     async close(): Promise<void> {
         if (!this.closed) {
             this.closed = true;
@@ -289,6 +309,8 @@ export type ChatLiveTarget = {
     sent: ChatLiveState | null;
     sentAt: number;
     ended: boolean;
+    // the device that sent the message: it started its own activity (never push-started) and hands back its token
+    sender?: boolean;
 };
 export type ChatLiveRecord = {
     thread: string;
@@ -298,6 +320,8 @@ export type ChatLiveRecord = {
     latest: ChatLiveState;
     targets: ChatLiveTarget[];
     createdAt: number;
+    // the last hand-over from the Worker (the watchdog ends a reply that went silent)
+    seenAt?: number;
 };
 
 const secs = (ms: number) => Math.floor(ms / 1000);
@@ -338,8 +362,12 @@ export function chatUpdatePayload(s: ChatLiveState, prompt: string, now: number)
 
 // What to push to a target that has its update token, or null when nothing should go now.
 export function decideChatPush(t: Pick<ChatLiveTarget, "sent" | "sentAt">, next: ChatLiveState, prompt: string, now: number): ApnsPush | null {
-    if (sameState(t.sent, next)) return null;
     const terminal = isChatLiveTerminal(next);
+    if (sameState(t.sent, next)) {
+        // the same state only as a keep-alive (a fresh stale-date), at low priority
+        if (terminal || now - t.sentAt < CHAT_LIVE_REFRESH_MS) return null;
+        return { event: "update", priority: 5, expiration: secs(now) + 60, payload: chatUpdatePayload(next, prompt, now) };
+    }
     const sent = t.sent;
     const textOnly =
         sent !== null && sent.status === next.status && sent.tool === next.tool && sent.steps === next.steps && sent.failedSteps === next.failedSteps && sent.shown === next.shown;
@@ -358,6 +386,8 @@ export type ChatLiveDeps = {
     now: () => number;
     // null: APNs is not configured; nothing is stored or pushed
     apns: ApnsClient | null;
+    // arms the Durable Object's sweep, which runs the watchdog (`watch`)
+    scheduleSweep?: () => Promise<void>;
 };
 
 type Reply = { status: number; body: unknown };
@@ -421,8 +451,19 @@ export class ChatLiveService {
             const b = parse(raw);
             if (typeof b?.token !== "string" || !TOKEN_REGEX.test(b.token) || !isEnv(b.environment)) return bad();
             const rec = await this.d.storage.get<ChatLiveRecord>(`${CHAT_LIVE_PREFIX}${thread}`);
-            const target = rec?.targets.find((t) => t.keyId === keyId);
-            if (!rec || !target) return ok({ pushing: false });
+            let target = rec?.targets.find((t) => t.keyId === keyId);
+            if (!this.d.apns) return ok({ pushing: false });
+            if (!rec || (isChatLiveTerminal(rec.latest) && !target)) {
+                // the sender's own activity, ahead of the reply's first hand-over: kept for when it begins
+                await this.d.storage.put(`${CHAT_PENDING_PREFIX}${thread}:${keyId}`, { token: b.token, env: b.environment, at: this.d.now() });
+                return ok({ pushing: true });
+            }
+            if (!target && rec.senderKeyId === keyId) {
+                // the sender's own activity, for a reply already under way (a device without a chat start token)
+                target = { keyId, env: b.environment, started: true, token: null, sent: null, sentAt: 0, ended: false, sender: true };
+                rec.targets.push(target);
+            }
+            if (!target) return ok({ pushing: false });
             if (target.token !== b.token) {
                 target.token = b.token;
                 target.env = b.environment;
@@ -447,30 +488,93 @@ export class ChatLiveService {
             let rec = await this.d.storage.get<ChatLiveRecord>(key);
             const now = this.d.now();
             if (!rec || rec.since !== state.since || rec.senderKeyId !== b.key_id) {
-                // a new reply: every device with a chat start token but the sender's
+                // A new reply: every device with a chat start token. The others are push-started; the sender (an iPhone
+                // that sent it from the chat tab or a Shortcut) already shows its own activity, so it is only waiting
+                // for that activity's update token (PUT /live/chats/<thread>), and from then on the server writes it
+                // too: the activity stays current while the phone is locked.
                 const targets: ChatLiveTarget[] = [];
                 for (const [k, v] of await this.d.storage.list<ChatStartToken>({ prefix: CHAT_START_PREFIX })) {
                     const keyId = k.slice(CHAT_START_PREFIX.length);
-                    if (keyId === b.key_id) continue;
                     if (now - v.updatedAt > CHAT_START_TOKEN_TTL_MS) {
                         await this.d.storage.delete(k);
                         continue;
                     }
-                    targets.push({ keyId, env: v.env, started: false, token: null, sent: null, sentAt: 0, ended: false });
+                    const sender = keyId === b.key_id;
+                    targets.push({ keyId, env: v.env, started: sender, token: null, sent: null, sentAt: 0, ended: false, ...(sender ? { sender: true } : {}) });
+                }
+                // the sender's activity token, if it came first
+                const pendingKey = `${CHAT_PENDING_PREFIX}${thread}:${b.key_id}`;
+                const pending = await this.d.storage.get<{ token: string; env: Environment; at: number }>(pendingKey);
+                if (pending) {
+                    await this.d.storage.delete(pendingKey);
+                    if (now - pending.at <= CHAT_PENDING_TTL_MS) {
+                        let me = targets.find((t) => t.sender);
+                        if (!me) {
+                            me = { keyId: b.key_id, env: pending.env, started: true, token: null, sent: null, sentAt: 0, ended: false, sender: true };
+                            targets.push(me);
+                        }
+                        me.token = pending.token;
+                        me.env = pending.env;
+                    }
                 }
                 if (targets.length === 0) {
                     if (rec) await this.d.storage.delete(key);
                     return ok({ targets: 0 });
                 }
                 // the reply this replaces never ended on those devices: it simply stops being updated (it goes stale)
-                rec = { thread, senderKeyId: b.key_id, prompt, since: state.since, latest: state, targets, createdAt: now };
-                for (const t of targets) await this.start(rec, t, now);
+                rec = { thread, senderKeyId: b.key_id, prompt, since: state.since, latest: state, targets, createdAt: now, seenAt: now };
+                for (const t of targets) {
+                    if (t.sender) await this.pushTarget(rec, t);
+                    else await this.start(rec, t, now);
+                }
             } else {
-                rec.latest = state;
+                // a finished reply is never revived by a late hand-over
+                if (!isChatLiveTerminal(rec.latest)) rec.latest = state;
+                rec.seenAt = now;
                 for (const t of rec.targets) await this.pushTarget(rec, t);
             }
             await this.save(rec);
+            if (!isChatLiveTerminal(rec.latest)) await this.armWatch();
             return ok({ targets: rec.targets.filter((t) => !t.ended).length });
+        });
+    }
+
+    private async armWatch() {
+        try {
+            await this.d.scheduleSweep?.();
+        } catch (e) {
+            console.error("[chat-live] arming the watchdog failed", e instanceof Error ? e.message : String(e));
+        }
+    }
+
+    // The sweep's watchdog: a reply whose Worker stopped handing over (cut off, crashed) is ended as interrupted on every
+    // device, and an end push that failed is tried again. Answers when it next needs to look (null: nothing open).
+    watch(now: number = this.d.now()): Promise<{ nextInMs: number | null }> {
+        return this.serial(async () => {
+            if (!this.d.apns) return { nextInMs: null };
+            let next: number | null = null;
+            for (const [k, p] of await this.d.storage.list<{ at: number }>({ prefix: CHAT_PENDING_PREFIX })) {
+                if (now - p.at > CHAT_PENDING_TTL_MS) await this.d.storage.delete(k);
+            }
+            for (const [, rec] of await this.d.storage.list<ChatLiveRecord>({ prefix: CHAT_LIVE_PREFIX })) {
+                const open = rec.targets.some((t) => !t.ended);
+                if (!open) continue;
+                if (!isChatLiveTerminal(rec.latest)) {
+                    const seen = rec.seenAt ?? rec.createdAt;
+                    if (now - seen < CHAT_LIVE_SILENT_MS) {
+                        const inMs = seen + CHAT_LIVE_SILENT_MS - now;
+                        next = next === null ? inMs : Math.min(next, inMs);
+                        continue;
+                    }
+                    console.log(`[chat-live] reply went silent, ending it thread=${rec.thread.slice(0, 6)}`);
+                    rec.latest = canonicalChat({ ...rec.latest, status: "failed", code: "error.chat.interrupted" });
+                }
+                for (const t of rec.targets) await this.pushTarget(rec, t);
+                await this.save(rec);
+                // an end that did not go out (APNs down): try again on a later pass, for as long as the record lives
+                if (rec.targets.some((t) => !t.ended && t.token)) next = next === null ? 15_000 : Math.min(next, 15_000);
+            }
+            return { nextInMs: next };
         });
     }
 

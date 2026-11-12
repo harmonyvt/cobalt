@@ -4,6 +4,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { ApnsClient } from "../src/apns";
 import {
+    CHAT_LIVE_KEEPALIVE_MS,
+    CHAT_LIVE_REFRESH_MS,
+    CHAT_LIVE_SILENT_MS,
     CHAT_LIVE_TEXT_MS,
     CHAT_LIVE_TEXT_PUSH_MS,
     ChatLivePusher,
@@ -122,7 +125,30 @@ describe("pacing in the Durable Object", () => {
         const end = decideChatPush({ sent, sentAt: T0 }, s({ status: "done", reply: "ab" }), "q", T0 + 1)!;
         expect(end.event).toBe("end");
         expect(end.payload).toMatchObject({ aps: { event: "end", alert: { title: "chat replied", body: "ab" } } });
-        expect(decideChatPush({ sent, sentAt: T0 }, sent, "q", T0 + 99_999)).toBeNull();
+        // the same state again only as a keep-alive, at low priority, once CHAT_LIVE_REFRESH_MS passed with nothing sent
+        expect(decideChatPush({ sent, sentAt: T0 }, sent, "q", T0 + CHAT_LIVE_REFRESH_MS - 1)).toBeNull();
+        const keep = decideChatPush({ sent, sentAt: T0 }, sent, "q", T0 + CHAT_LIVE_REFRESH_MS)!;
+        expect(keep).toMatchObject({ event: "update", priority: 5 });
+        expect((keep.payload as { aps: Record<string, unknown> }).aps["stale-date"]).toBeGreaterThan((T0 + CHAT_LIVE_REFRESH_MS) / 1000);
+        // a finished state is never sent twice
+        const done = s({ status: "done", reply: "a" });
+        expect(decideChatPush({ sent: done, sentAt: T0 }, done, "q", T0 + 99_999_999)).toBeNull();
+    });
+
+    it("the pusher hands the same state over again on a quiet reply (the ping), at most every CHAT_LIVE_KEEPALIVE_MS", async () => {
+        let t = T0;
+        const posts: unknown[] = [];
+        const p = new ChatLivePusher({ thread: THREAD, keyId: PHONE, prompt: "q", now: () => t, post: async (b) => (posts.push(b), { targets: 1 }) });
+        p.tick();
+        t += CHAT_LIVE_KEEPALIVE_MS - 1;
+        p.tick();
+        await Promise.resolve();
+        const before = posts.length;
+        t += 1;
+        p.tick();
+        await p.close();
+        expect(before).toBe(1);
+        expect(posts.length).toBe(3); // start, keep-alive, close
     });
 });
 
@@ -143,7 +169,8 @@ function doWorld(opts: { configured?: boolean } = {}) {
                   now: () => t,
                   log: () => {},
               });
-    const service = new ChatLiveService({ storage, now: () => t, apns });
+    let sweeps = 0;
+    const service = new ChatLiveService({ storage, now: () => t, apns, scheduleSweep: async () => void sweeps++ });
     const route = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
         handleChatLiveRoute(
             service,
@@ -153,7 +180,7 @@ function doWorld(opts: { configured?: boolean } = {}) {
     const keyed = (key: string) => ({ [KEY_ID_HEADER]: key });
     const internal = { "x-internal-key": INTERNAL };
     const state = (key: string, st: ChatLiveState) => route("POST", `/live/chats/${THREAD}/state`, { key_id: key, prompt: "find my cats", state: st }, internal);
-    return { apple, storage, route, keyed, internal, state, tick: (ms: number) => (t += ms) };
+    return { apple, storage, service, route, keyed, internal, state, tick: (ms: number) => (t += ms), sweeps: () => sweeps };
 }
 
 describe("a reply sent from the Mac, shown on the iPhone", () => {
@@ -190,11 +217,71 @@ describe("a reply sent from the Mac, shown on the iPhone", () => {
         expect(await w.storage.get(`live:chat:${THREAD}`)).toBeUndefined();
     });
 
-    it("the sender's own device is never pushed (it draws the activity itself)", async () => {
+    it("the sender's own device is never push-started; once it hands back its activity's token the server keeps it current", async () => {
         const w = doWorld();
         await w.route("PUT", "/live/chat-start-token", { token: START, environment: "production" }, w.keyed(PHONE));
-        expect(await (await w.state(PHONE, st({}))).json()).toEqual({ status: "success", targets: 0 });
+        expect(await (await w.state(PHONE, st({}))).json()).toEqual({ status: "success", targets: 1 });
         expect(w.apple.calls.length).toBe(0);
+        await w.state(PHONE, st({ status: "working", steps: 1, tool: "searching your library" }));
+        expect(w.apple.calls.length).toBe(0);
+
+        // the phone's own activity hands back its token: caught up at once, then updated and ended by the server
+        const put = await (await w.route("PUT", `/live/chats/${THREAD}`, { token: UPDATE, environment: "production" }, w.keyed(PHONE))).json();
+        expect(put).toEqual({ status: "success", pushing: true });
+        expect(w.apple.pushes.at(-1)).toMatchObject({ token: UPDATE, payload: { aps: { event: "update", "content-state": { status: "working" } } } });
+        w.tick(1000);
+        await w.state(PHONE, st({ status: "done", steps: 1, reply: "three cats" }));
+        expect(w.apple.pushes.at(-1)!.payload.aps).toMatchObject({ event: "end" });
+        expect(w.apple.pushes.every((p) => p.token !== START)).toBe(true);
+        expect(await w.storage.get(`live:chat:${THREAD}`)).toBeUndefined();
+    });
+
+    it("the sender's token may come before the reply's first hand-over (kept, taken up when it begins), or mid-reply without a start token", async () => {
+        const w = doWorld();
+        // no chat start token on this phone: only its own activity's token
+        const early = await (await w.route("PUT", `/live/chats/${THREAD}`, { token: UPDATE, environment: "production" }, w.keyed(PHONE))).json();
+        expect(early).toEqual({ status: "success", pushing: true });
+        expect(await (await w.state(PHONE, st({}))).json()).toEqual({ status: "success", targets: 1 });
+        expect(w.apple.pushes.at(-1)).toMatchObject({ token: UPDATE, payload: { aps: { event: "update", "content-state": { status: "thinking" } } } });
+        expect(await w.storage.get(`live:chatpending:${THREAD}:${PHONE}`)).toBeUndefined();
+
+        const w2 = doWorld();
+        expect(await (await w2.state(MAC, st({}))).json()).toEqual({ status: "success", targets: 0 });
+        // the Mac's reply has no record (nobody to show it to); a phone that is not the sender gets nothing for it
+        await w2.route("PUT", "/live/chat-start-token", { token: START, environment: "production" }, w2.keyed(PHONE));
+        await w2.state(PHONE, st({ since: T0 / 1000 + 5 }));
+        const late = await (await w2.route("PUT", `/live/chats/${THREAD}`, { token: UPDATE, environment: "production" }, w2.keyed(MAC))).json();
+        expect(late).toEqual({ status: "success", pushing: false });
+    });
+
+    it("a device without a chat start token (the Mac) is not a target: nothing is handed over for nobody", async () => {
+        const w = doWorld();
+        expect(await (await w.state(MAC, st({}))).json()).toEqual({ status: "success", targets: 0 });
+        expect(w.apple.calls.length).toBe(0);
+    });
+
+    it("the watchdog: a reply whose Worker went silent is ended as interrupted on every device", async () => {
+        const w = doWorld();
+        await w.route("PUT", "/live/chat-start-token", { token: START, environment: "production" }, w.keyed(PHONE));
+        await w.state(PHONE, st({ status: "working", steps: 1, tool: "searching your library" }));
+        await w.route("PUT", `/live/chats/${THREAD}`, { token: UPDATE, environment: "production" }, w.keyed(PHONE));
+        expect(w.sweeps()).toBeGreaterThan(0);
+        const pushes = w.apple.pushes.length;
+
+        w.tick(CHAT_LIVE_SILENT_MS - 1000);
+        expect((await w.service.watch()).nextInMs).toBe(1000);
+        expect(w.apple.pushes.length).toBe(pushes);
+
+        w.tick(1000);
+        expect((await w.service.watch()).nextInMs).toBeNull();
+        expect(w.apple.pushes.at(-1)!.payload.aps).toMatchObject({
+            event: "end",
+            "content-state": { status: "failed", code: "error.chat.interrupted" },
+        });
+        expect(await w.storage.get(`live:chat:${THREAD}`)).toBeUndefined();
+        // a late hand-over from a Worker that came back starts nothing and revives nothing
+        await w.state(PHONE, st({ status: "working", steps: 2 }));
+        expect(w.apple.pushes.at(-1)!.payload.aps).toMatchObject({ event: "end" });
     });
 
     it("a dead start token is forgotten", async () => {
