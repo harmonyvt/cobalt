@@ -100,7 +100,7 @@ describe("finding posts in a page", () => {
         expect(twitch[0]!.mount.tagName).toBe("A");
     });
 
-    it("mounts on a search lockup's title row, including a sponsored watch link, and skips an ad with no video", () => {
+    it("mounts on a search lockup's title row and skips a sponsored lockup", () => {
         const doc = page(
             "https://www.youtube.com/results?search_query=capy",
              `<yt-lockup-view-model id="sponsored">
@@ -120,12 +120,8 @@ describe("finding posts in a page", () => {
              </yt-lockup-view-model>`,
         );
         const found = scanYouTube(doc, "https://www.youtube.com/results?search_query=capy");
-        expect(found.map((f) => [f.url, f.variant, f.mount.id])).toEqual([
-            ["https://www.youtube.com/watch?v=sponsored01", "icon", "ad-title"],
-            ["https://www.youtube.com/watch?v=abcdefghijk", "icon", "title-row"],
-        ]);
-        expect(found[0]!.mount.closest("ad-button-view-model")).toBeNull();
-        expect(found.every((f) => f.mount !== doc.querySelector("#shop") && f.mount !== doc.querySelector("#plain") && f.mount !== doc.querySelector("#cta"))).toBe(true);
+        expect(found.map((f) => [f.url, f.variant, f.mount.id])).toEqual([["https://www.youtube.com/watch?v=abcdefghijk", "icon", "title-row"]]);
+        expect(found.some((f) => f.url.includes("sponsored01"))).toBe(false);
     });
 
     it("skips a YouTube lockup that has no title row, and mounts on the metadata when it has one", () => {
@@ -195,22 +191,30 @@ describe("finding posts in a page", () => {
         const doc = page(
             "https://www.twitch.tv/somechannel/clip/FunnySlug",
             `<main id="shell">
-               <div id="clip-row">
+               <div id="clip-row" class="Layout-sc-1xcs6mc-0">
                  <div id="edit-chip"><button aria-label="Edit">Edit</button></div>
-                 <div id="share-chip"><button aria-label="Share Clip: Kevin Hart gets drenched">Share</button></div>
+                 <div class="Layout-sc-1xcs6mc-0">
+                   <div class="Layout-sc-1xcs6mc-0" id="share-chip">
+                     <button aria-label="Share Clip: Kevin Hart gets drenched">Share</button>
+                   </div>
+                 </div>
                  <div id="like-chip"><button aria-label="Like">Like</button></div>
+                 <div id="overflow"><button aria-label="More">More</button></div>
                </div>
              </main>`,
         );
         const found = scanTwitch(doc, "https://www.twitch.tv/somechannel/clip/FunnySlug");
+        const shareChip = doc.querySelector("#share-chip")!;
         expect(found).toHaveLength(1);
         expect(found[0]!.mount.id).toBe("clip-row");
-        expect(found[0]!.after?.id).toBe("share-chip");
-        expect(found[0]!.mount.contains(doc.querySelector("#share-chip"))).toBe(true);
+        expect(found[0]!.after?.parentElement?.id).toBe("clip-row");
+        expect(found[0]!.after?.contains(shareChip)).toBe(true);
+        expect(found[0]!.after).not.toBe(shareChip);
         const host = doc.createElement("span");
         expect(relocateHost(host, found[0]!.mount, found[0]!.after)).toBe(true);
-        expect(host.previousElementSibling?.id).toBe("share-chip");
+        expect(host.previousElementSibling).toBe(found[0]!.after);
         expect(host.parentElement?.id).toBe("clip-row");
+        expect(shareChip.contains(host)).toBe(false);
     });
 
     it("waits for Share on a Twitch clip page, then mounts beside it", () => {

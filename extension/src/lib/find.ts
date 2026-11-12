@@ -134,6 +134,8 @@ export function scanYouTube(doc: ParentNode, pageUrl: string): FoundPost[] {
         // An ad or sponsored card with no /watch or /shorts link is not a post.
         if (!url) continue;
         const lockup = card.tagName.toLowerCase() === "yt-lockup-view-model";
+        // A sponsored result carries Watch/Download in ad-button-view-model. It is an ad, not a post.
+        if (lockup && containsAdCta(card)) continue;
         const mount = lockup ? lockupRow(card) : (deepQuery(card, YT_META) ?? deepQuery(card, YT_LINK));
         if (!mount || mount === card) continue;
         out.push({ url, mount, variant: "icon" });
@@ -165,16 +167,19 @@ function isTwitchShare(el: Element): boolean {
     return /^share\b/i.test((el.getAttribute("aria-label") ?? "").trim());
 }
 
-// A one-button wrapper is the Share chip. Its parent, when that parent holds the other actions, is the row.
+// The live clip page wraps Share in extra Layout divs. The row is the nearest ancestor that also
+// holds the other actions (Edit, Like, …): three or more buttons. The pill goes after that row's
+// child which contains Share, so it sits beside the chip instead of inside it.
 function shareRow(share: Element): { mount: Element; after?: Element } | null {
-    const chip = share.parentElement;
-    if (!chip) return null;
-    const row = chip.parentElement;
-    const pageLevel = !row || row.tagName === "MAIN" || row.tagName === "BODY" || row.tagName === "HTML";
-    const chipButtons = chip.querySelectorAll("button").length;
-    const rowButtons = row?.querySelectorAll("button").length ?? 0;
-    if (!pageLevel && chipButtons <= 1 && rowButtons > chipButtons) return { mount: row, after: chip };
-    return { mount: chip };
+    let node: Element | null = share.parentElement;
+    while (node && node.tagName !== "MAIN" && node.tagName !== "BODY" && node.tagName !== "HTML") {
+        if (node.querySelectorAll("button").length >= 3) {
+            const child = [...node.children].find((c) => c === share || c.contains(share));
+            return { mount: node, ...(child ? { after: child } : {}) };
+        }
+        node = node.parentElement;
+    }
+    return share.parentElement ? { mount: share.parentElement } : null;
 }
 
 function clipShareButton(doc: ParentNode): Element | null {
