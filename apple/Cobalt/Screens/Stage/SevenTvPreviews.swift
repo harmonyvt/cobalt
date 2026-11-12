@@ -34,7 +34,7 @@ private func card(_ model: AppModel) -> some View {
         .dynamicTypeSize(.accessibility3)
 }
 #Preview("studio with 7tv · mac width", traits: .fixedLayout(width: 1180, height: 900)) {
-    PreviewHost(.happy, tab: .stage) { NavigationStack { StageScreen(model: $0, tier: .regular) } }
+    PreviewHost(.happy, tab: .stage) { model in NavigationStack { StageScreen(model: model, tier: .regular) } }
 }
 
 // MARK: the set screen and the sheets
