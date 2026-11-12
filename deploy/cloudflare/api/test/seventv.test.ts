@@ -1,0 +1,300 @@
+// 7TV accounts (APP-API-CONTRACT.md section 57): link a 7TV session token, read the channels it edits and their sets,
+// and edit sets. The Worker, the registry, the real handlers and the real SQL on node:sqlite run together; 7TV's GraphQL
+// is a fake that records every call.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
+import { hashKey } from "../src/keys";
+import { openToken, sealToken, tokenExpiry, cleanToken, channelsOf, setEmoteShape } from "../src/seventv";
+import { handleRequest, type WorkerEnv } from "../src/worker";
+import { withBatch } from "./d1-batch";
+import { fixedLengthPair, MemoryMedia, MemoryOriginals } from "./studio-fakes";
+
+const API = "https://api.capybaraharmony.com";
+const WEB = "https://cobalt.capybaraharmony.com";
+const INTERNAL = "9d3a1c6e-2f4b-4c8d-8e7a-5b1f0a2c3d4e";
+const CLIENT = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
+
+const ME_ID = "01GZ0000000000000000000001";
+const LIA = "01GZ0000000000000000000002";
+const MOCHI = "01GZ0000000000000000000003";
+const PENDING = "01GZ0000000000000000000004";
+const SET_MAIN = "01HA0000000000000000000001";
+const SET_XMAS = "01HA0000000000000000000002";
+const SET_PERSONAL = "01HA0000000000000000000003";
+const EMOTE = "01F6MZGCNG000255K4X1K7NTHR";
+
+// header.payload.signature with exp = 1_802_592_000 (seconds)
+const payload = Buffer.from(JSON.stringify({ u: ME_ID, exp: 1_802_592_000 })).toString("base64url");
+const TOKEN = `eyJhbGciOiJIUzI1NiJ9.${payload}.c2lnbmF0dXJl`;
+
+let db: FakeD1;
+let env: WorkerEnv;
+let clock: number;
+let calls: { query: string; variables: any; auth: string | null }[];
+let answer: (query: string, variables: any) => { status?: number; body: unknown };
+
+const container = { fetch: async () => Response.json({}, { status: 503 }) };
+
+const conn = (name: string) => ({ platformDisplayName: name, platformAvatarUrl: `https://cdn.7tv.app/pp/${name}.webp` });
+const ME = {
+    users: {
+        me: {
+            id: ME_ID,
+            mainConnection: conn("capybaraharmony"),
+            style: { activeEmoteSetId: SET_MAIN },
+            editorFor: [
+                { state: "ACCEPTED", userId: MOCHI, permissions: { superAdmin: false, emoteSet: { manage: true, create: false }, user: { manageProfile: false } }, user: { id: MOCHI, mainConnection: conn("mochi_vt"), style: { activeEmoteSetId: null } } },
+                { state: "ACCEPTED", userId: LIA, permissions: { superAdmin: true, emoteSet: { manage: false, create: false }, user: { manageProfile: false } }, user: { id: LIA, mainConnection: conn("liacat"), style: { activeEmoteSetId: SET_XMAS } } },
+                { state: "PENDING", userId: PENDING, permissions: { superAdmin: true, emoteSet: { manage: true, create: true }, user: { manageProfile: true } }, user: { id: PENDING, mainConnection: conn("someone"), style: {} } },
+            ],
+        },
+    },
+};
+
+const img = (scale: number, frames = 12) => ({ url: `https://cdn.7tv.app/emote/${EMOTE}/${scale}x.webp`, mime: "image/webp", size: 1000 * scale, scale, width: 32 * scale, height: 32 * scale, frameCount: frames });
+
+beforeEach(async () => {
+    clock = 1_800_000_000_000;
+    db = withBatch(createFakeD1());
+    db.raw.prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)").run("key-1", "app", await hashKey(CLIENT), "0b5f2c3e", 1);
+    env = {
+        API_URL: `${API}/`,
+        CORS_URL: WEB,
+        COBALT_API_KEY: INTERNAL,
+        DB: db as unknown as D1Database,
+        ORIGINALS: new MemoryOriginals(),
+        MEDIA: new MemoryMedia(),
+        MEDIA_BASE_URL: "https://media.capybaraharmony.com/",
+    };
+    calls = [];
+    answer = (q) => (q.includes("me {") ? { body: { data: ME } } : { body: { data: null } });
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+        expect(url).toBe("https://7tv.io/v4/gql");
+        const body = JSON.parse(String(init.body));
+        calls.push({ query: body.query, variables: body.variables, auth: new Headers(init.headers).get("authorization") });
+        const a = answer(body.query, body.variables);
+        return Response.json(a.body, { status: a.status ?? 200 });
+    });
+});
+
+afterEach(() => vi.unstubAllGlobals());
+
+const send = (path: string, init: RequestInit = {}, key = CLIENT) =>
+    handleRequest(
+        new Request(`${API}${path}`, { ...init, headers: { authorization: `Api-Key ${key}`, "content-type": "application/json", ...(init.headers ?? {}) } }),
+        env,
+        container as any,
+        { now: () => clock, sleep: async () => {}, fixedLength: fixedLengthPair },
+    );
+const json = async (res: Response) => ({ status: res.status, body: (await res.json()) as any });
+const link = () => send("/7tv/link", { method: "POST", body: JSON.stringify({ token: `"${TOKEN}"` }) });
+
+describe("helpers", () => {
+    it("seals and opens the token, reads exp, cleans pasted forms", async () => {
+        const sealed = await sealToken(INTERNAL, TOKEN);
+        expect(sealed).not.toContain(TOKEN);
+        expect(await openToken(INTERNAL, sealed)).toBe(TOKEN);
+        await expect(openToken("another-secret", sealed)).rejects.toThrow();
+        expect(tokenExpiry(TOKEN)).toBe(1_802_592_000_000);
+        expect(tokenExpiry("a.b.c")).toBeNull();
+        expect(cleanToken(`  "${TOKEN}" `)).toBe(TOKEN);
+        expect(cleanToken(`Bearer ${TOKEN}`)).toBe(TOKEN);
+        expect(cleanToken("not a token")).toBeNull();
+        expect(cleanToken("a".repeat(5000) + ".b.c")).toBeNull();
+    });
+
+    it("lists own channel first, accepted editor channels by name, with their rights", () => {
+        const ch = channelsOf(ME.users.me as any);
+        expect(ch.map((c) => c.name)).toEqual(["capybaraharmony", "liacat", "mochi_vt"]);
+        expect(ch[0]).toMatchObject({ you: true, active_set_id: SET_MAIN, can: { manage_sets: true, create_sets: true, make_live: true } });
+        expect(ch[1]!.can).toEqual({ manage_sets: true, create_sets: true, make_live: true }); // superAdmin
+        expect(ch[2]!.can).toEqual({ manage_sets: true, create_sets: false, make_live: false });
+    });
+
+    it("shapes a set emote with section 20's picks", () => {
+        const e = setEmoteShape({ id: EMOTE, alias: "liaWave", addedAt: "2026-11-01T00:00:00Z", emote: { id: EMOTE, defaultName: "peepoHey", flags: { animated: true }, images: [img(1), img(2), img(4), { ...img(4, 1), url: "https://cdn.7tv.app/x_static.webp" }] } });
+        expect(e).toEqual({
+            emote_id: EMOTE,
+            alias: "liaWave",
+            name: "peepoHey",
+            renamed: true,
+            animated: true,
+            preview_url: `https://cdn.7tv.app/emote/${EMOTE}/2x.webp`,
+            file_url: `https://cdn.7tv.app/emote/${EMOTE}/4x.webp`,
+            added_at: Date.parse("2026-11-01T00:00:00Z"),
+        });
+    });
+});
+
+describe("link, status, unlink (57.4)", () => {
+    it("is not linked at first; linking checks the token with 7TV and stores it sealed", async () => {
+        expect(await json(await send("/7tv"))).toEqual({ status: 200, body: { status: "success", linked: false } });
+        const r = await json(await link());
+        expect(r.status).toBe(200);
+        expect(r.body.account).toEqual({ id: ME_ID, name: "capybaraharmony", avatar_url: "https://cdn.7tv.app/pp/capybaraharmony.webp", linked_at: clock, expires_at: 1_802_592_000_000, status: "ok" });
+        expect(r.body.channels).toHaveLength(3);
+        expect(calls[0]!.auth).toBe(`Bearer ${TOKEN}`);
+        const row = db.raw.prepare("SELECT token, status FROM seventv_account").get() as any;
+        expect(row.status).toBe("ok");
+        expect(row.token).not.toContain(TOKEN);
+        expect(await openToken(INTERNAL, row.token)).toBe(TOKEN);
+        const s = await json(await send("/7tv"));
+        expect(s.body.linked).toBe(true);
+        expect(s.body.channels.map((c: any) => c.name)).toEqual(["capybaraharmony", "liacat", "mochi_vt"]);
+    });
+
+    it("refuses a malformed token without calling 7TV, and one 7TV rejects", async () => {
+        expect((await json(await send("/7tv/link", { method: "POST", body: JSON.stringify({ token: "hello" }) }))).body.error.code).toBe("error.seventv.token_invalid");
+        expect(calls).toHaveLength(0);
+        answer = () => ({ status: 401, body: { error: "invalid session" } });
+        const r = await json(await link());
+        expect(r).toMatchObject({ status: 400, body: { error: { code: "error.seventv.token_invalid" } } });
+        expect(db.raw.prepare("SELECT COUNT(*) AS n FROM seventv_account").get()).toEqual({ n: 0 });
+    });
+
+    it("a dead session turns the account to relink, and edits then answer 409 without calling 7TV", async () => {
+        await link();
+        answer = () => ({ status: 401, body: {} });
+        const s = await json(await send("/7tv"));
+        expect(s.body).toMatchObject({ linked: true, account: { status: "relink" }, channels: [] });
+        calls = [];
+        const r = await json(await send(`/7tv/channels/${ME_ID}/sets`));
+        expect(r).toMatchObject({ status: 409, body: { error: { code: "error.seventv.relink" } } });
+        expect(calls).toHaveLength(0);
+        // linking again clears it
+        answer = (q) => (q.includes("me {") ? { body: { data: ME } } : { body: { data: null } });
+        await link();
+        expect((db.raw.prepare("SELECT status FROM seventv_account").get() as any).status).toBe("ok");
+    });
+
+    it("a rotated COBALT_API_KEY makes the token unreadable: relink", async () => {
+        await link();
+        env.COBALT_API_KEY = "11111111-2222-4333-8444-555555555555";
+        // the new internal key is not the old one, so the client key still works but the token does not open
+        const s = await json(await send("/7tv"));
+        expect(s.body.account.status).toBe("relink");
+    });
+
+    it("unlink forgets the token", async () => {
+        await link();
+        expect(await json(await send("/7tv", { method: "DELETE" }))).toEqual({ status: 200, body: { status: "success", linked: false } });
+        expect((await json(await send(`/7tv/sets/${SET_MAIN}`))).body.error.code).toBe("error.seventv.not_linked");
+    });
+
+    it("needs a client key", async () => {
+        expect((await send("/7tv", {}, "11111111-2222-4333-8444-555555555555")).status).toBe(401);
+    });
+});
+
+describe("sets and edits (57.3, 57.4)", () => {
+    beforeEach(async () => {
+        await link();
+        calls = [];
+    });
+
+    it("lists a channel's normal sets, live first", async () => {
+        answer = () => ({
+            body: {
+                data: {
+                    users: {
+                        user: {
+                            id: ME_ID,
+                            style: { activeEmoteSetId: SET_MAIN },
+                            ownedEmoteSets: [
+                                { id: SET_XMAS, name: "christmas", kind: "NORMAL", capacity: 500, emotes: { totalCount: 92 } },
+                                { id: SET_PERSONAL, name: "personal", kind: "PERSONAL", capacity: 5, emotes: { totalCount: 1 } },
+                                { id: SET_MAIN, name: "main", kind: "NORMAL", capacity: 500, emotes: { totalCount: 310 } },
+                            ],
+                        },
+                    },
+                },
+            },
+        });
+        const r = await json(await send(`/7tv/channels/${ME_ID}/sets`));
+        expect(r.body).toEqual({
+            status: "success",
+            channel_id: ME_ID,
+            active_set_id: SET_MAIN,
+            sets: [
+                { id: SET_MAIN, name: "main", capacity: 500, count: 310, live: true },
+                { id: SET_XMAS, name: "christmas", capacity: 500, count: 92, live: false },
+            ],
+        });
+        expect(calls[0]!.variables).toEqual({ id: ME_ID });
+    });
+
+    it("reads a set page", async () => {
+        answer = () => ({
+            body: {
+                data: {
+                    emoteSets: {
+                        emoteSet: {
+                            id: SET_MAIN,
+                            name: "main",
+                            kind: "NORMAL",
+                            capacity: 500,
+                            ownerId: ME_ID,
+                            owner: { id: ME_ID, style: { activeEmoteSetId: SET_MAIN } },
+                            emotes: { totalCount: 310, pageCount: 6, items: [{ id: EMOTE, alias: "catJAM", addedAt: "2026-11-01T00:00:00Z", emote: { id: EMOTE, defaultName: "catJAM", flags: { animated: true }, images: [img(2), img(4)] } }] },
+                        },
+                    },
+                },
+            },
+        });
+        const r = await json(await send(`/7tv/sets/${SET_MAIN}?page=2`));
+        expect(r.body.set).toEqual({ id: SET_MAIN, name: "main", capacity: 500, count: 310, owner_id: ME_ID, live: true });
+        expect(r.body).toMatchObject({ page: 2, has_more: true });
+        expect(r.body.emotes[0]).toMatchObject({ emote_id: EMOTE, alias: "catJAM", renamed: false });
+        expect(calls[0]!.variables).toEqual({ id: SET_MAIN, q: null, page: 2, perPage: 60 });
+    });
+
+    it("adds, renames and removes with 7TV's input shapes", async () => {
+        answer = () => ({ body: { data: { emoteSets: { emoteSet: { addEmote: { id: SET_MAIN }, removeEmote: { id: SET_MAIN }, updateEmoteAlias: { alias: "liaWave" } } } } } });
+        const add = await json(await send(`/7tv/sets/${SET_MAIN}/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE, alias: "catDance" }) }));
+        expect(add).toEqual({ status: 201, body: { status: "success", set_id: SET_MAIN, emote_id: EMOTE, alias: "catDance" } });
+        expect(calls[0]!.query).toContain("addEmote(id: $e, overrideConflicts: $over)");
+        expect(calls[0]!.variables).toEqual({ set: SET_MAIN, e: { emoteId: EMOTE, alias: "catDance" }, over: null });
+
+        const ren = await json(await send(`/7tv/sets/${SET_MAIN}/emotes/${EMOTE}`, { method: "PATCH", body: JSON.stringify({ alias: "liaWave", from: "catDance" }) }));
+        expect(ren.body).toEqual({ status: "success", set_id: SET_MAIN, emote_id: EMOTE, alias: "liaWave" });
+        expect(calls[1]!.variables).toEqual({ set: SET_MAIN, e: { emoteId: EMOTE, alias: "catDance" }, alias: "liaWave" });
+
+        const rm = await json(await send(`/7tv/sets/${SET_MAIN}/emotes/${EMOTE}?alias=liaWave`, { method: "DELETE" }));
+        expect(rm.body).toEqual({ status: "success", set_id: SET_MAIN, emote_id: EMOTE, removed: true });
+        expect(calls[2]!.variables).toEqual({ set: SET_MAIN, e: { emoteId: EMOTE, alias: "liaWave" } });
+    });
+
+    it("rejects an alias with spaces and bad ids before calling 7TV", async () => {
+        expect((await json(await send(`/7tv/sets/${SET_MAIN}/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE, alias: "two words" }) }))).body.error.code).toBe("error.seventv.bad");
+        expect((await send(`/7tv/sets/nope/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE }) })).status).toBe(404);
+        expect(calls).toHaveLength(0);
+    });
+
+    it("passes 7TV's refusals on with their message", async () => {
+        answer = () => ({ body: { data: null, errors: [{ message: "you do not have permission to manage this user's emote sets", extensions: { status: 403, code: "LACKING_PRIVILEGES" } }] } });
+        const r = await json(await send(`/7tv/sets/${SET_MAIN}/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE }) }));
+        expect(r).toEqual({ status: 403, body: { status: "error", error: { code: "error.seventv.forbidden" }, message: "you do not have permission to manage this user's emote sets" } });
+        answer = () => ({ body: { data: null, errors: [{ message: "emote name conflict", extensions: { status: 409 } }] } });
+        expect((await json(await send(`/7tv/sets/${SET_MAIN}/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE }) }))).body.error.code).toBe("error.seventv.rejected");
+        answer = () => ({ status: 429, body: {} });
+        expect((await send(`/7tv/sets/${SET_MAIN}/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE }) })).status).toBe(429);
+    });
+
+    it("makes a set live, new set, rename set", async () => {
+        answer = (q) => ({
+            body: {
+                data: q.includes("activeEmoteSet")
+                    ? { users: { user: { activeEmoteSet: { id: LIA, style: { activeEmoteSetId: SET_XMAS } } } } }
+                    : q.includes("create(")
+                      ? { emoteSets: { create: { id: SET_XMAS, name: "subathon", capacity: 500 } } }
+                      : { emoteSets: { emoteSet: { name: { id: SET_MAIN, name: "main 2", capacity: 500 } } } },
+            },
+        });
+        expect((await json(await send(`/7tv/channels/${LIA}/live`, { method: "POST", body: JSON.stringify({ set_id: SET_XMAS }) }))).body).toEqual({ status: "success", channel_id: LIA, active_set_id: SET_XMAS });
+        expect(calls[0]!.variables).toEqual({ user: LIA, set: SET_XMAS });
+        const created = await json(await send("/7tv/sets", { method: "POST", body: JSON.stringify({ owner_id: LIA, name: "subathon" }) }));
+        expect(created).toMatchObject({ status: 201, body: { set: { id: SET_XMAS, name: "subathon", owner_id: LIA, count: 0, live: false } } });
+        expect(calls[1]!.variables).toEqual({ name: "subathon", owner: LIA });
+        expect((await json(await send(`/7tv/sets/${SET_MAIN}`, { method: "PATCH", body: JSON.stringify({ name: "main 2" }) }))).body.set.name).toBe("main 2");
+    });
+});

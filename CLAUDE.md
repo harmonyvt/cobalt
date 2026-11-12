@@ -125,6 +125,11 @@ the files and a real run before anything is called done.
   from the 15-minute cron (`api/src/ai-titles.ts`) and writes its title into `media_titles` with `key_id = 'ai:titles'`
   (never over an owner's title); cost and state in D1 `media_ai_titles` (migration 0037). Off unless `OPENROUTER_API_KEY`
   is in the secrets file.
+- 7TV accounts (`APP-API-CONTRACT.md` section 57): one linked 7TV login (D1 `seventv_account`, migration 0040, token sealed
+  with an HKDF of `COBALT_API_KEY`) edits the emote sets of its own channel and every channel it is an editor of, through
+  7TV's v4 GraphQL (`api/src/seventv.ts`, routes `/7tv*`, chat/MCP `seventv.*`, writes tier `ask`). 7TV has no OAuth: the
+  token is 7tv.app's `localStorage["7tv-token"]` session (30 days), brought in by a bookmarklet that opens
+  `cobalt-apple://7tv-link?token=` or pasted in the studio tab's link sheet; never through chat.
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.

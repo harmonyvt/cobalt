@@ -370,6 +370,9 @@ export async function capabilities(
                 // GET/PATCH /library/items/<id>/post-details, POST /library/items/<id>/post-frame: a saved video inside a
                 // drawn card of its post (APP-API-CONTRACT.md section 52): the editor on and migration 0036 applied
                 post_frame: editor === true && postFrame,
+                // /7tv*: a linked 7TV account's emote sets (APP-API-CONTRACT.md section 57); the card says when it is not
+                // linked, and the routes answer 503 until migration 0040 is applied
+                seventv: true,
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
                 edit_live_push: editor === true && livePush === true,
                 // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)
