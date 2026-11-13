@@ -135,6 +135,7 @@ describe("settings (30.2, 30.10)", () => {
             { action: "shuffle", title: "shuffle", cost: 1000, cooldown_seconds: 120, enabled: true, synced: false },
             { action: "pin", title: "pin", cost: 300, cooldown_seconds: 60, enabled: false, synced: false },
             { action: "skip", title: "skip", cost: 200, cooldown_seconds: 15, enabled: true, synced: false },
+            { action: "song", title: "song request", cost: 300, cooldown_seconds: 30, enabled: false, synced: false },
         ]);
         expect(w.one("SELECT prompt FROM stage_rewards WHERE action = 'summon'").prompt).toBe("a code from the store, or a few words");
         expect(w.one("SELECT prompt FROM stage_rewards WHERE action = 'skip'").prompt).toBe("clear the spotlight");
@@ -142,17 +143,17 @@ describe("settings (30.2, 30.10)", () => {
         const token = w.stageRow().live_token;
         await w.owner("GET", "/stage");
         expect(w.stageRow().live_token).toBe(token);
-        expect(w.q("SELECT * FROM stage_rewards")).toHaveLength(5);
+        expect(w.q("SELECT * FROM stage_rewards")).toHaveLength(6);
     });
 
     it("a stage that already exists picks up the skip reward on the next read", async () => {
         const w = await world();
         await w.owner("GET", "/stage");
         w.db.raw.prepare("DELETE FROM stage_rewards WHERE action = 'skip'").run();
-        expect(w.q("SELECT action FROM stage_rewards")).toHaveLength(4);
+        expect(w.q("SELECT action FROM stage_rewards")).toHaveLength(5);
         const r = await w.owner("GET", "/stage");
-        expect(r.body.rewards.map((x: { action: string }) => x.action)).toEqual(["summon", "chaos", "shuffle", "pin", "skip"]);
-        expect(r.body.rewards.at(-1)).toMatchObject({ action: "skip", cost: 200, cooldown_seconds: 15, enabled: true });
+        expect(r.body.rewards.map((x: { action: string }) => x.action)).toEqual(["summon", "chaos", "shuffle", "pin", "skip", "song"]);
+        expect(r.body.rewards.at(-2)).toMatchObject({ action: "skip", cost: 200, cooldown_seconds: 15, enabled: true });
     });
 
     it("PATCH saves, clamps out-of-range numbers and answers the whole stage", async () => {
@@ -943,7 +944,7 @@ describe("retention (30.2)", () => {
         ins.run("new", T0);
         w.db.raw.prepare("INSERT INTO stage_seen (id, seen_at) VALUES ('m1', ?), ('m2', ?)").run(T0 - 11 * 60_000, T0);
         const r = await stageRetention(w.env.DB, T0);
-        expect(r).toEqual({ redemptions: 1, seen: 1 });
+        expect(r).toEqual({ redemptions: 1, seen: 1, songs: 0 });
         expect(w.q("SELECT id FROM stage_redemptions ORDER BY id").map((x) => x.id)).toEqual(["edge", "new"]);
         expect(w.q("SELECT id FROM stage_seen").map((x) => x.id)).toEqual(["m2"]);
     });

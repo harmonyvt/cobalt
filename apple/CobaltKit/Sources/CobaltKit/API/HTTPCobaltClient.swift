@@ -212,6 +212,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var chat: Bool?
                 var stage: Bool?
                 var stageTwitch: Bool?
+                var stageSpotify: Bool?
                 var editor: Bool?
                 var editLivePush: Bool?
                 var chatLivePush: Bool?
@@ -310,6 +311,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.chat = f?.chat ?? false
         caps.stage = f?.stage ?? false
         caps.stageTwitch = (f?.stageTwitch ?? false) && caps.stage
+        caps.stageSpotify = (f?.stageSpotify ?? false) && caps.stage
         caps.editor = f?.editor ?? false
         caps.editLivePush = f?.editLivePush ?? false
         caps.chatLivePush = (f?.chatLivePush ?? false) && caps.chat

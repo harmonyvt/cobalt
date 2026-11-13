@@ -13,7 +13,7 @@ import { createCollection, updateCollection } from "../../share-collections";
 import { SHARE_SET_MAX } from "../../share-sets";
 
 // /stage/rewards/<action>
-export const STAGE_ACTION_REGEX = /^(summon|chaos|shuffle|pin|skip)$/;
+export const STAGE_ACTION_REGEX = /^(summon|chaos|shuffle|pin|skip|song)$/;
 
 const stageDeps = (ctx: OpContext): StageDeps | null => stageDepsFrom(ctx.env, ctx.edge, ctx.stageEdge);
 const offBody = { status: "error", error: { code: "error.stage.off" } };
@@ -50,6 +50,8 @@ const STAGE_ROUTES = [
     stageRoute("redemptions", "GET", "/stage/redemptions"),
     stageRoute("twitch_delete", "DELETE", "/stage/twitch"),
     stageRoute("twitch_connect", "POST", "/stage/twitch/connect"),
+    stageRoute("spotify_delete", "DELETE", "/stage/spotify"),
+    stageRoute("spotify_connect", "POST", "/stage/spotify/connect"),
     stageRoute("reward", "PATCH", "/stage/rewards/:action", { action: STAGE_ACTION_REGEX }),
 ];
 

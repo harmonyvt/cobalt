@@ -162,7 +162,7 @@ extension Copy {
         static let rewards = "rewards"
         static let rewardsNote = "these are real twitch rewards; changing a cost here changes it on twitch."
         static let rewardsEmpty = "connect twitch to make the five rewards"
-        static func rewardName(_ kind: StageRewardKind) -> String { kind.rawValue }
+        static func rewardName(_ kind: StageRewardKind) -> String { kind == .song ? "song request" : kind.rawValue }
         static func rewardInfo(_ kind: StageRewardKind) -> String {
             switch kind {
             case .summon: return "search the pool, best match takes the spotlight"
@@ -170,6 +170,7 @@ extension Copy {
             case .shuffle: return "wipe the canvas and refill it"
             case .pin: return "keep the spotlight up 2 more minutes"
             case .skip: return "clear the spotlight"
+            case .song: return "a spotify or youtube link, or the song and artist"
             }
         }
         static func rewardLine(cost: Int, cooldownSeconds: Int) -> String {
@@ -177,7 +178,7 @@ extension Copy {
         }
         static let unsynced = "twitch hasn't got the latest yet · it tries again"
         static func rewardToggleA11y(_ kind: StageRewardKind, on: Bool) -> String {
-            "\(on ? "turn off" : "turn on") \(kind.rawValue)"
+            "\(on ? "turn off" : "turn on") \(rewardName(kind))"
         }
         static let editHint = "edit cost and cooldown"
         static let editCost = "cost"
@@ -186,7 +187,7 @@ extension Copy {
         static let editSeconds = "seconds"
         static let editSave = "save"
         static let editCancel = "cancel"
-        static func editTitle(_ kind: StageRewardKind) -> String { "edit \(kind.rawValue)" }
+        static func editTitle(_ kind: StageRewardKind) -> String { "edit \(rewardName(kind))" }
         static func costRange() -> String {
             "\(points(StageRule.costRange.lowerBound)) to \(points(StageRule.costRange.upperBound))"
         }
@@ -300,6 +301,70 @@ extension Copy {
         static let wallpaperNote = "the canvas behind your desktop icons on every display, silent. it keeps going while the stream is off."
         static let wallpaperMenu = "studio wallpaper"
 
+        // MARK: music (APP-API-CONTRACT 56.7)
+
+        static let music = "music"
+        static let musicNote = "your spotify is the player. the canvas shows what plays, viewers can ask for songs, and it turns down for summons."
+        static let spotifyNotConnectedBody = "connect spotify to show what's playing and take song requests."
+        static let connectSpotify = "connect spotify"
+        static let connectAgain = "connect again"
+        static let disconnectSpotifyTitle = "disconnect spotify?"
+        static let disconnectSpotifyMessage = "the canvas stops showing the music and song requests stop. songs already in spotify's queue stay."
+        static let spotifyConnectedToast = "spotify connected"
+        static let spotifyDisconnectedToast = "spotify disconnected"
+        static let premiumNote = "spotify needs premium for requests"
+        static let spotifyNeedsReconnect = "spotify needs you to sign in again"
+        static func connectedAsSpotify(_ name: String) -> String { name.isEmpty ? "spotify connected" : "connected as \(name)" }
+        static func spotifyConnectFailed(reason: String?) -> String {
+            switch reason {
+            case "denied": return "spotify wasn't allowed · try again"
+            case "scope": return "spotify needs every permission it asks for · try again"
+            case "off": return "spotify isn't set up on this server"
+            default: return "couldn't connect spotify · try again"
+            }
+        }
+
+        static let nowPlaying = "now playing"
+        static let paused = "paused"
+        static let nothingPlaying = "nothing is playing"
+        static func nowPlayingLine(artist: String, by: String?) -> String {
+            var parts: [String] = []
+            if !artist.isEmpty { parts.append(artist) }
+            if let by { parts.append("requested by @\(by)") }
+            return parts.joined(separator: " · ")
+        }
+        static func nowPlayingA11y(title: String, line: String, playing: Bool) -> String {
+            "\(playing ? nowPlaying : paused), \(title), \(line)"
+        }
+
+        static let musicCard = "card on the canvas"
+        static func cardName(_ card: StageMusic.Card) -> String { card.rawValue }
+        static let upNextToggle = "show up next"
+        static let upNextToggleNote = "the card lists the songs waiting"
+        static let songRequests = "song requests"
+        static let songRequestsNote = "a channel point reward: a link, or the song and artist"
+        static let songNeedsTwitch = "connect twitch so viewers can redeem it"
+        static let youtubeLinks = "youtube links"
+        static let youtubeLinksNote = "a youtube link is matched to the song on spotify"
+        static let longestSong = "longest song"
+        static func songLength(_ seconds: Int) -> String { seconds % 60 == 0 ? "\(seconds / 60) min" : "\(seconds) s" }
+        static func waitingAtMost(_ count: Int) -> String { "waiting at most \(count)" }
+        static let waitingAtMostA11y = "requests that may wait"
+        static let explicitSongs = "explicit songs"
+        static let explicitSongsNote = "off: an explicit request is refunded"
+        static let duckToggle = "turn music down on summons"
+        static let duckToggleNote = "while a summoned video plays with sound. needs premium; phones can't be turned down."
+        static let duckTo = "down to"
+        static func percent(_ value: Int) -> String { "\(value)%" }
+
+        static let upNext = "up next"
+        static let upNextEmpty = "nothing waiting"
+        static func upNextCount(_ count: Int, max: Int) -> String { "\(count) of \(max)" }
+        static let fromYouTube = "from youtube"
+        static func requestedBy(_ name: String) -> String { name.isEmpty ? "" : "@\(name)" }
+        static let skipCurrent = "skip current"
+        static let skipHint = "plays the next song on spotify"
+
         // MARK: refusals
 
         /// The status line for a refused or failed studio call.
@@ -312,6 +377,12 @@ extension Copy {
             case .offAir: return "go live first"
             case .videosOnly: return "the spotlight is videos only"
             case .searchUnavailable: return searchUnavailable
+            case .spotifyOff: return "spotify isn't set up on this server"
+            case .spotifyNotConnected: return "connect spotify first"
+            case .spotifyNoDevice: return "spotify isn't on · start playing something"
+            case .spotifyPremium: return premiumNote
+            case .spotifyReconnect: return "spotify needs you to sign in again"
+            case .spotify: return "spotify said no · try again"
             case .unavailable: return "the server can't do that right now"
             case .offline: return "can't reach the server"
             case .other: return Copy.actionFailed

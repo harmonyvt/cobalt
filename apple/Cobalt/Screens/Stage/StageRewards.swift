@@ -11,14 +11,16 @@ struct StageRewardsCard: View {
 
     var body: some View {
         StageCard(title: Copy.Stage.rewards) {
-            if store.rewards.isEmpty {
+            // the song request has its own row in the music group
+            let listed = store.rewards.filter { $0.action != .song }
+            if listed.isEmpty {
                 Text(Copy.Stage.rewardsEmpty)
                     .font(CobaltType.caption)
                     .foregroundStyle(CobaltColor.caption)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(store.rewards) { reward in
-                        if reward.action != store.rewards.first?.action { Divider().overlay(CobaltColor.hairline) }
+                    ForEach(listed) { reward in
+                        if reward.action != listed.first?.action { Divider().overlay(CobaltColor.hairline) }
                         StageRewardRow(reward: reward, controller: controller)
                     }
                 }

@@ -244,6 +244,8 @@ export async function capabilities(
     cutoutAuto = false,
     // the YTDLP binding is there: `engine` on POST /studio, the app's yt-dlp toggle (section 49)
     ytdlp = false,
+    // both SPOTIFY_* secrets: the stage's music (section 56)
+    stageSpotify = false,
 ): Promise<StudioReply> {
     // The key's state and the four "is its migration applied" answers do not depend on each other: asked at the same
     // time, not one after another (each is its own round trip to D1 until an isolate has learnt its answer).
@@ -352,6 +354,8 @@ export async function capabilities(
                 stage: stage === true,
                 // Twitch channel point rewards on the stage: with `stage` and all three TWITCH_* secrets
                 stage_twitch: stage === true && stageTwitch === true,
+                // the stage's music: Spotify connect, now playing, the song reward, turning the music down (section 56)
+                stage_spotify: stage === true && stageSpotify === true,
                 // /edits*: timeline projects rendered on Cloudflare (APP-API-CONTRACT.md section 31): exactly while the
                 // EditRenderer binding is there and migration 0021 is applied
                 editor: editor === true,

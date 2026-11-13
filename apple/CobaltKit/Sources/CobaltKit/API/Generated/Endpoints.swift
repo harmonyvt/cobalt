@@ -571,6 +571,16 @@ enum Endpoints {
         APIEndpoint(op: "stage_owner.twitch_connect", method: "POST", path: "/stage/twitch/connect", auth: .key)
     }
 
+    /// `DELETE /stage/spotify` (op `stage_owner.spotify_delete`, auth key): DELETE /stage/spotify
+    static func stageOwnerSpotifyDelete() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "stage_owner.spotify_delete", method: "DELETE", path: "/stage/spotify", auth: .key)
+    }
+
+    /// `POST /stage/spotify/connect` (op `stage_owner.spotify_connect`, auth key): POST /stage/spotify/connect
+    static func stageOwnerSpotifyConnect() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "stage_owner.spotify_connect", method: "POST", path: "/stage/spotify/connect", auth: .key)
+    }
+
     /// `PATCH /stage/rewards/:action` (op `stage_owner.reward`, auth key): PATCH /stage/rewards/:action
     static func stageOwnerReward(action: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "stage_owner.reward", method: "PATCH", path: "/stage/rewards/\(HTTPCobaltClient.encode(action))", auth: .key)

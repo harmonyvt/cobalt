@@ -149,6 +149,10 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// with `stage` and its three Twitch secrets, and so does the app: false whenever `stage` is false. False when
     /// absent: the studio tab then has no Twitch card.
     public var stageTwitch: Bool = false
+    /// `features.stage_spotify` (56.1): Spotify now playing, song requests and turning the music down. The server sets it
+    /// exactly with `stage` and its two Spotify secrets, and so does the app: false whenever `stage` is false. False when
+    /// absent: the studio tab then has no music group.
+    public var stageSpotify: Bool = false
     /// `features.editor` (APP-API-CONTRACT 31): the timeline editor, `/edits` (projects and renders). True exactly while the
     /// server has its render container and migration 0021. False when absent: no `edit` button and no edits shelf.
     public var editor: Bool = false

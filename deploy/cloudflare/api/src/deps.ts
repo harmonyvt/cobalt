@@ -8,6 +8,7 @@ import type { KeyCache } from "./keys";
 import { safetyConfigFrom } from "./safety";
 import { noRoom, stageBaseFrom, twitchConfigFrom, type RoomPort, type StageDeps } from "./stage";
 import type { TwitchFetch } from "./stage-twitch";
+import { spotifyConfigFrom, type SpotifyFetch } from "./stage-spotify";
 import type { EdgeDeps } from "./studio-edge";
 import { purgeFrom } from "./visibility";
 import type { WorkerEnv } from "./worker";
@@ -91,7 +92,13 @@ export function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps
 
 // What the stage needs that is not in the env: the StageRoom Durable Object (index.ts passes the real one) and
 // the fetch the Twitch client uses (tests pass a fake).
-export type StageEdge = { stageRoom?: RoomPort; twitchFetch?: TwitchFetch; stageEmbed?: EmbedClient | null; stageLimits?: StageDeps["limits"] };
+export type StageEdge = {
+    stageRoom?: RoomPort;
+    twitchFetch?: TwitchFetch;
+    spotifyFetch?: SpotifyFetch;
+    stageEmbed?: EmbedClient | null;
+    stageLimits?: StageDeps["limits"];
+};
 
 // The stage's deps, or null while STAGE_BASE_URL is not an https URL (every /stage* route is then 404).
 export function stageDepsFrom(env: WorkerEnv, edge: Pick<EdgeDeps, "now" | "waitUntil">, se: StageEdge): StageDeps | null {
@@ -103,6 +110,8 @@ export function stageDepsFrom(env: WorkerEnv, edge: Pick<EdgeDeps, "now" | "wait
         stageBaseUrl,
         twitch: twitchConfigFrom(env),
         twitchFetch: se.twitchFetch,
+        spotify: spotifyConfigFrom(env),
+        spotifyFetch: se.spotifyFetch,
         embed: se.stageEmbed === undefined ? embedFrom(env) : se.stageEmbed,
         room: se.stageRoom ?? noRoom,
         now: edge.now,

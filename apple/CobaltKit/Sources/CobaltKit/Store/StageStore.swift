@@ -40,7 +40,7 @@ public final class StageStore {
     }
 
     public private(set) var stage: StageSettings?
-    /// The five rewards in the order summon, chaos, shuffle, pin, skip (empty until the first load).
+    /// The rewards in the order summon, chaos, shuffle, pin, skip, song (empty until the first load).
     public private(set) var rewards: [StageReward] = []
     /// The feed, newest first (empty until the first poll).
     public private(set) var redemptions: [StageRedemption] = []
@@ -300,6 +300,33 @@ public final class StageStore {
         guard started == generation else { return }
         stage = pending.isEmpty ? answer : answer.applying(pending)
         await refreshQuietly()                    // the rewards, no longer synced
+    }
+
+    // MARK: music (56)
+
+    /// "how far" the music goes down on a summon, 0...100 percent (debounced like the other sliders).
+    public func setDuckVolume(_ value: Int) { edit(StagePatch(duckVolume: value)) }
+
+    /// Starts the Spotify sign-in: the authorize URL for an `ASWebAuthenticationSession` with callback scheme `cobalt-apple`.
+    /// `StageError.spotifyOff` while the server has no Spotify secrets. Call `load()` when the session ends.
+    public func connectSpotify() async throws -> URL {
+        try await ctx.client.connectStageSpotify()
+    }
+
+    /// Forgets the Spotify account (a duck in progress is lifted first).
+    public func disconnectSpotify() async throws {
+        let started = generation
+        let answer = try await ctx.client.disconnectStageSpotify()
+        guard started == generation else { return }
+        stage = pending.isEmpty ? answer : answer.applying(pending)
+    }
+
+    /// "skip current": the next song plays. Works on air or not; the answer carries the list as it is now.
+    public func skipSong() async throws {
+        let started = generation
+        let answer = try await ctx.client.stageAction(.songSkip)
+        guard started == generation else { return }
+        stage = pending.isEmpty ? answer : answer.applying(pending)
     }
 
     // MARK: the feed
