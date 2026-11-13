@@ -51,7 +51,10 @@ export const LIVE_START_MIN_GAP_MS = 10_000;
 export const LIVE_END_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 40_000];
 const START_WINDOW_PREFIX = "live:startat:";
 // Agent and MCP jobs (`startAgent`): the devices whose start tokens were refreshed most recently, at most this many.
-export const LIVE_AGENT_MAX_DEVICES = 2;
+// One: a phone can hold start tokens under several keys (an old key and its current session), and each of them
+// starts its own activity on the same screen (seen live 2026-11-13: two islands for one save). The newest token is
+// the one the app refreshed last, so it is the phone in use.
+export const LIVE_AGENT_MAX_DEVICES = 1;
 
 export const STALE_S = 120;
 export const STALE_READY_S = 30 * 60;
@@ -930,7 +933,7 @@ export class LiveService implements LiveHooks {
     // Agent and MCP jobs (APP-API-CONTRACT.md section 8.11). A save (POST /studio by a `chat:` key) or a make on a saved
     // post (render, slideshow, gallery image) that the chat agent or an MCP client started has no device following it,
     // so nothing would ever ask for an activity. The server push-starts the same save island on the owner's devices:
-    // every key with a start token refreshed in the last 60 days (never a `chat:` key), newest first, at most
+    // the key whose start token was refreshed most recently in the last 60 days (never a `chat:` key):
     // LIVE_AGENT_MAX_DEVICES. Each device gets its own run held by its own key, so the update token the app reports
     // for a push-started activity registers exactly as an instant share's does. The run is server-only: the save's
     // "saved" ends a save; a make is pinned to its job, whose result ends it. Never refuses or slows the job:
@@ -943,6 +946,8 @@ export class LiveService implements LiveHooks {
             .map(([k, t]) => ({ keyId: k.slice("live:start:".length), t }))
             .filter(({ keyId, t }) => !keyId.startsWith("chat:") && now - t.updatedAt < LIVE_START_TOKEN_TTL_MS)
             .sort((a, b) => b.t.updatedAt - a.t.updatedAt)
+            // the same token under two keys is one device
+            .filter((d, i, all) => all.findIndex((x) => x.t.token === d.t.token) === i)
             .slice(0, LIVE_AGENT_MAX_DEVICES);
         const making = o.kind === "make";
         const state: LiveState = making
@@ -1001,7 +1006,16 @@ export class LiveService implements LiveHooks {
         return this.withRun(run, async () => {
             const now = this.d.now();
             const found = await this.getRun(run);
-            if (found && found.keyId !== keyId) return notFound();
+            if (found && found.keyId !== keyId) {
+                // An agent run (8.11) was push-started to a start token the server held under one key, but the app
+                // reports the activity's update token with the key it uses now (one phone can hold start tokens under
+                // an old key and its current session). Refusing it left the island stuck on its first state forever.
+                // The run moves to the reporting key; any other run stays its own key's.
+                if (!found.agent || keyId.startsWith("chat:")) return notFound();
+                await this.d.storage.delete(idxKey(found.keyId, run));
+                this.idxSeen.delete(run);
+                found.keyId = keyId;
+            }
 
             const previousSid = found?.sid ?? null;
             const previousToken = found?.updateToken ?? null;

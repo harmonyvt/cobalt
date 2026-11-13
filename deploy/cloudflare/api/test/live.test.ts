@@ -1899,27 +1899,60 @@ describe("agent and MCP jobs (startAgent, APP-API-CONTRACT 8.11)", () => {
     const CHAT_SID = "cHaTsEsSiOn00000000001";
     const runsOf = (w: World, sid = CHAT_SID) => ((w.kv.m.get(`live:sid:${sid}`) as string[] | undefined) ?? []).map((id) => w.run(id)!);
 
-    it("push-starts a save island on each device with a start token, held by the device's key", async () => {
+    it("push-starts one save island, on the newest start token's key, never a chat key's", async () => {
         const w = await agentWorld();
         await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
         w.tick(1000);
         await w.live.putStartToken(OTHER, JSON.stringify({ token: START2, environment: "production" }));
+        w.tick(1000);
         await w.live.putStartToken("chat:t1", JSON.stringify({ token: "ee".repeat(32), environment: "sandbox" }));
         await w.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1", title: null });
-        expect(w.apple.pushes.map((p) => p.token).sort()).toEqual([START, START2].sort());
-        for (const p of w.apple.pushes) {
-            expect(p.payload.aps.event).toBe("start");
-            expect(p.payload.aps.alert).toEqual({ title: "capystore", body: "your agent is saving from twitter" });
-            expect(p.payload.aps["content-state"]).toMatchObject({ stage: "fetching", rail: 0 });
-            expect(p.payload.aps.attributes).toMatchObject({ input: "link", service: "twitter", ref: "1", origin: "share" });
-        }
+        expect(w.apple.pushes).toHaveLength(1);
+        const p = w.apple.pushes[0]!;
+        expect(p.token).toBe(START2);
+        expect(p.payload.aps.event).toBe("start");
+        expect(p.payload.aps.alert).toEqual({ title: "capystore", body: "your agent is saving from twitter" });
+        expect(p.payload.aps["content-state"]).toMatchObject({ stage: "fetching", rail: 0 });
+        expect(p.payload.aps.attributes).toMatchObject({ input: "link", service: "twitter", ref: "1", origin: "share" });
         const runs = runsOf(w);
-        expect(runs.map((r) => r.keyId).sort()).toEqual([KEY, OTHER].sort());
-        for (const r of runs) {
-            expect(r.serverOnly).toBe(true);
-            expect(r.agent).toBe("save");
-            expect(r.sid).toBe(CHAT_SID);
-        }
+        expect(runs.map((r) => r.keyId)).toEqual([OTHER]);
+        expect(runs[0]!.serverOnly).toBe(true);
+        expect(runs[0]!.agent).toBe("save");
+        expect(runs[0]!.sid).toBe(CHAT_SID);
+    });
+
+    it("the same phone under two keys gets one island, and its token report from the other key ends it", async () => {
+        // seen live: one save, two islands; the one whose run sat under the old key never moved again
+        const w = await agentWorld();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        w.tick(1000);
+        await w.live.putStartToken(OTHER, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.startAgent(CHAT_SID, { kind: "save", service: "twitch", ref: "clip" });
+        expect(w.apple.pushes).toHaveLength(1);
+        const [r] = runsOf(w);
+        expect(r!.keyId).toBe(OTHER);
+        // the app reports the activity's token with the key it uses (here: the older one)
+        const reply = await w.live.putRun(KEY, r!.run, JSON.stringify(reg({ update_token: UPDATE, attributes: { ...ATTRS, run: r!.run, origin: "share" } })));
+        expect(reply.status).toBe(200);
+        expect(w.run(r!.run)!.keyId).toBe(KEY);
+        expect(w.idx(r!.run, KEY)).toBeDefined();
+        expect(w.idx(r!.run, OTHER)).toBeUndefined();
+        w.tick(4000);
+        await w.live.onSave(CHAT_SID, { kind: "saved", bytes: 9_000, width: 10, height: 10, seconds: 1 });
+        expect(w.apple.pushes.at(-1)!.payload.aps.event).toBe("end");
+        expect(w.run(r!.run)!.endedAt).not.toBeNull();
+    });
+
+    it("a run that is not an agent's is never claimed by another key, nor an agent's by a chat key", async () => {
+        const w = await world();
+        await w.put({ session: SID });
+        expect((await w.put({ update_token: UPDATE }, RUN, OTHER)).status).toBe(404);
+        const a = await agentWorld();
+        await a.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await a.live.startAgent(CHAT_SID, { kind: "save", service: "twitch", ref: "clip" });
+        const [r] = runsOf(a);
+        const reply = await a.live.putRun("chat:t1", r!.run, JSON.stringify(reg({ update_token: UPDATE, attributes: { ...ATTRS, run: r!.run, origin: "share" } })));
+        expect(reply.status).toBe(404);
     });
 
     it("the save's progress and `saved` reach the island once the app reports the token", async () => {
@@ -1960,7 +1993,7 @@ describe("agent and MCP jobs (startAgent, APP-API-CONTRACT 8.11)", () => {
         expect(w.run(r!.run)!.endedAt).not.toBeNull();
     });
 
-    it("at most two devices, newest token first; stale tokens, no tokens and no APNs start nothing", async () => {
+    it("one device, newest token first; stale tokens, no tokens and no APNs start nothing", async () => {
         const w = await agentWorld();
         await w.live.putStartToken("key-row-3", JSON.stringify({ token: "11".repeat(32), environment: "sandbox" }));
         w.tick(1000);
@@ -1968,7 +2001,7 @@ describe("agent and MCP jobs (startAgent, APP-API-CONTRACT 8.11)", () => {
         w.tick(1000);
         await w.live.putStartToken(OTHER, JSON.stringify({ token: START2, environment: "sandbox" }));
         await w.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
-        expect(w.apple.pushes.map((p) => p.token).sort()).toEqual([START, START2].sort());
+        expect(w.apple.pushes.map((p) => p.token)).toEqual([START2]);
 
         const stale = await agentWorld();
         await stale.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));

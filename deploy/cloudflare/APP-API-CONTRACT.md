@@ -1139,10 +1139,13 @@ asked for an activity and none appeared, app open or closed. The server now push
   (`registry/ops/make.ts` `startStudio`), marked by the internal header `x-cobalt-agent-live: 1`, which the Worker strips from
   every client request (`headers.ts`). Only once the make is accepted (202 with a job). Editor renders (`edits.render`) and
   uploads are not covered: their island type cannot be push-started by the app yet.
-- **Which devices.** `LiveService.startAgent`: every key whose start token was refreshed within 60 days, never a `chat:` key,
-  newest first, at most `LIVE_AGENT_MAX_DEVICES` (2). Each device gets its own run held by its own key; the session's owner
-  check of 8.2 is skipped for this server-made registration only. The app reports the update token as for any push-started
-  activity (no session in that call), so nothing changes on the device.
+- **Which device.** `LiveService.startAgent`: the one key whose start token was refreshed most recently within 60 days,
+  never a `chat:` key (`LIVE_AGENT_MAX_DEVICES` = 1; the same token under two keys counts once). One phone can hold start
+  tokens under several keys (an old key and its current session), and starting one per key put two islands on one screen
+  (2026-11-13). The run is held by that key; the session's owner check of 8.2 is skipped for this server-made
+  registration only. The app reports the update token as for any push-started activity, with whatever key it uses now:
+  an agent run moves to the reporting key (any key but a `chat:` one) instead of answering 404, which had left the
+  island stuck on its first state.
 - **State.** A save starts in `fetching` and ends on the save's `saved` (server-only run) or `failed`. A make starts in
   `rendering` (rail 3, the post's title), pinned to its job: another job on the same post never moves it; its result ends it
   ("webp ready" or the failure alert).
