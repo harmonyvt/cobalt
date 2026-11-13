@@ -1153,6 +1153,39 @@ asked for an activity and none appeared, app open or closed. The server now push
 - **Never refuses the job.** No start token, the 10 s start window per key (a second agent job within 10 s gets no island on
   that device), the run caps or an APNs error only mean no island; logged as `[live] agent save|make run=... started=...`.
 
+### 8.12 Islands end on time (addendum, 2026-11-13)
+
+A finished island that sat on the Lock Screen for 15 minutes read as "it never ends", and a run nobody reported on
+kept its last state for good. Server-only change; the app is unchanged.
+
+- **Dismissal.** Done: 60 s (`DISMISS_DONE_S`), 120 s when the result has a link to copy (`DISMISS_DONE_LINK_S`); editor
+  renders 120 s (`EDIT_LIVE_DISMISS_DONE_S`); chat replies 60 s (`CHAT_LIVE_DISMISS_DONE_S`). Failed stays 300 s. The Dynamic
+  Island lets go at the end push either way.
+- **Quiet watchdog.** `LiveService.watchQuiet`, from the sweep: a save/webp run that has not ended and whose state has not
+  changed for `LIVE_QUIET_END_MS` (10 min; `changedAt` on the run, `createdAt` before the first change) is ended. A run on
+  `ready` (waiting on the owner's trim) ends with an immediate dismissal and no alert; any other ends as `failed` with
+  `code: "error.live.lost"`. A run with no update token yet keeps the failed state and its token's arrival pushes the end.
+  A new run arms the sweep; with nothing else pending the sweep comes back when the next open run would go quiet, at most
+  `SWEEP_QUIET_MAX_S` (60 s) later. Edit and chat islands keep their own staleness rules (27.9, 32).
+
+### 8.13 The job island (addendum, 2026-11-13; apple/CONTRACT-JOBLIVE.md)
+
+One ActivityKit type, `CobaltJobActivityAttributes` with `JobLiveState`, for saves, uploads, makes, editor renders and
+chat replies. The server writes every word (`src/job-live.ts`: `jobOfSave`, `jobOfEdit`, `jobOfChat`); the three modules
+keep their run stores and push rules and re-dress their payloads with `asJobPayload` for a job run. Additive: an app
+that never says `type: "job"` gets exactly today's payloads.
+
+- **Start tokens.** `PUT /live/start-token` with `"type": "job"` stores `live:jobstart:<key id>` beside the old token
+  (`DELETE` removes both; the 60-day cleanup covers both). Push-to-start (instant share, agent jobs 8.11, chat replies)
+  uses a key's job token when it has one, and the run (chat target) is a job run from then on.
+- **Registrations.** `type: "job"` on `PUT /live/runs/<run>`, `PUT /live/edits/<rid>` and `PUT /live/chats/<thread>` (and a
+  chat token parked before its reply began) marks the run, render or chat target as a job run.
+- **Payload.** A job run's pushes carry `content-state` = `JobLiveState` (canonical key order, caps: headline 60, detail 90,
+  compact 7); a start names `attributes-type` "CobaltJobActivityAttributes" and `attributes` {id, kind, title, agent};
+  every non-end push sets `stale-date` = now + 180 s (`JOB_STALE_S`: the widget's "no news"). Event, priority, alerts and
+  dismissal stay each module's (8.12 timings).
+- **Parity.** `test/fixtures/job-live-states.json` (built by `test/job-live-cases.ts`) is what the app decodes.
+
 ## 9. Hark notification bridge (addendum, pinned 2026-10-04)
 
 **Off since 2026-10-23** (the owner doesn't want Hark pushes): the var `HARK_NOTIFY` is `"0"`, so

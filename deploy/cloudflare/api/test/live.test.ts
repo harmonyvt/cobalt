@@ -8,7 +8,10 @@ import { ApnsClient } from "../src/apns";
 import { KEY_ID_HEADER } from "../src/headers";
 import {
     DEVICE_STAGES,
+    DISMISS_DONE_S,
     LIVE_END_RETRY_DELAYS_MS,
+    LIVE_LOST_CODE,
+    LIVE_QUIET_END_MS,
     LIVE_ENDED_TTL_MS,
     LIVE_MAX_OPEN_RUNS_PER_KEY,
     LIVE_MAX_RUNS_PER_KEY,
@@ -762,7 +765,7 @@ describe("rate limiting and coalescing", () => {
 describe("`end` pushes", () => {
     const done = { kind: "success" as const, url: "https://media.capybaraharmony.com/PrEvIeW001.webp", bytes: 4500000, width: 480, height: 854, seconds: 10.1 };
 
-    it("done: dismissal in 15 minutes, a `webp ready` alert with service · size, no sound; the run ends", async () => {
+    it("done: dismissal in 2 minutes (a link to copy), a `webp ready` alert with service · size, no sound; the run ends", async () => {
         const w = await world();
         await w.armed({ state: FIX.ready });
         await w.live.onRender(SID, "J", { kind: "accepted", title: "t", duration: 2 });
@@ -775,7 +778,7 @@ describe("`end` pushes", () => {
             timestamp: now,
             event: "end",
             "content-state": expect.objectContaining({ stage: "done", resultBytes: 4500000 }),
-            "dismissal-date": now + 900,
+            "dismissal-date": now + 120,
             alert: { title: "webp ready", body: "instagram · 4.5 MB" },
         });
         expect(Object.keys(p!.payload.aps)).toEqual(["timestamp", "event", "content-state", "dismissal-date", "alert"]);
@@ -1730,7 +1733,8 @@ describe("finding 8: a failed end is retried by the sweep, bounded, with backoff
         expect(w.apple.calls).toHaveLength(1);
         expect(w.run()).toMatchObject({ endedAt: null, endTries: 1, endRetryAt: w.clock.t + LIVE_END_RETRY_DELAYS_MS[0]! });
         expect(w.idx()!.retryAt).toBe(w.clock.t + LIVE_END_RETRY_DELAYS_MS[0]!);
-        expect(w.sweeps).toHaveLength(1);
+        // armed twice: once when the run was registered (the quiet watchdog), once for the retry
+        expect(w.sweeps).toEqual([T0, w.clock.t]);
     });
 
     it("retryEnds sends nothing before the retry is due, then sends the end and finishes the run", async () => {
@@ -2017,5 +2021,110 @@ describe("agent and MCP jobs (startAgent, APP-API-CONTRACT 8.11)", () => {
         const off = await world({ configured: false });
         await off.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
         expect(off.kv.m.size).toBe(0);
+    });
+});
+
+describe("quiet watchdog (watchQuiet): no island sits on an old state", () => {
+    it("a run whose state has not moved for 10 minutes ends as failed (error.live.lost)", async () => {
+        const w = await world();
+        await w.armed({ session: SID, state: FIX.uploading ?? { ...FETCHING, stage: "uploading" } });
+        expect((await w.live.watchQuiet()).nextInMs).toBe(LIVE_QUIET_END_MS);
+        w.tick(LIVE_QUIET_END_MS - 1000);
+        expect((await w.live.watchQuiet()).nextInMs).toBe(1000);
+        expect(w.apple.pushes).toHaveLength(0);
+        w.tick(1000);
+        expect(await w.live.watchQuiet()).toEqual({ nextInMs: null });
+        const p = w.apple.pushes.at(-1)!;
+        expect(p.payload.aps.event).toBe("end");
+        expect(p.payload.aps["content-state"]).toMatchObject({ stage: "failed", code: LIVE_LOST_CODE });
+        expect(w.run()!.endedAt).not.toBeNull();
+    });
+
+    it("a change resets the clock", async () => {
+        const w = await world();
+        await w.armed({ session: SID });
+        w.tick(LIVE_QUIET_END_MS - 1000);
+        await w.live.onSave(SID, saving(500));
+        w.tick(5000);
+        await w.live.watchQuiet();
+        expect(w.run()!.state.stage).toBe("saving");
+        expect(w.run()!.endedAt).toBeNull();
+    });
+
+    it("`ready` (waiting on the owner) is dismissed quietly, not failed", async () => {
+        const w = await world();
+        await w.armed({ session: SID, state: FIX.ready });
+        w.tick(LIVE_QUIET_END_MS);
+        await w.live.watchQuiet();
+        const p = w.apple.pushes.at(-1)!;
+        expect(p.payload.aps.event).toBe("end");
+        expect(p.payload.aps["dismissal-date"]).toBe(Math.floor(w.clock.t / 1000));
+        expect(p.payload.aps.alert).toBeUndefined();
+        expect(w.run()!.endedAt).not.toBeNull();
+    });
+
+    it("a run with no update token keeps the failed state; the token's arrival sends the end", async () => {
+        const w = await world();
+        await w.put({ session: SID });
+        w.tick(LIVE_QUIET_END_MS);
+        await w.live.watchQuiet();
+        expect(w.run()!.state.stage).toBe("failed");
+        expect(w.apple.pushes).toHaveLength(0);
+        await w.put({ update_token: UPDATE });
+        expect(w.apple.pushes.at(-1)!.payload.aps.event).toBe("end");
+        expect(await w.live.watchQuiet()).toEqual({ nextInMs: null });
+    });
+
+    it("a finished save without a link leaves the Lock Screen after a minute", async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.startShare(KEY, SID, { run: RUN, environment: "sandbox", service: "x", ref: "1" }, false);
+        await w.put({ update_token: UPDATE, attributes: { ...ATTRS, origin: "share" } });
+        w.tick(4000);
+        await w.live.onSave(SID, { kind: "saved", bytes: 1, width: 1, height: 1, seconds: 1 });
+        const p = w.apple.pushes.at(-1)!;
+        expect(p.payload.aps["dismissal-date"]).toBe(Math.floor(w.clock.t / 1000) + DISMISS_DONE_S);
+        expect(DISMISS_DONE_S).toBe(60);
+    });
+});
+
+describe("job island (8.13): runs registered with type job get JobLiveState", () => {
+    it("a run registered with `type: job` is pushed the job state; others keep today's", async () => {
+        const w = await world();
+        await w.put({ session: SID, update_token: UPDATE, type: "job" });
+        w.tick(4000);
+        await w.live.onSave(SID, saving(500));
+        const p = w.apple.pushes.at(-1)!;
+        expect(p.payload.aps["content-state"]).toMatchObject({ phase: "working", steps: ["download", "store"], step: 1, headline: "storing in your library" });
+        expect(typeof p.payload.aps["stale-date"]).toBe("number");
+        const old = await world();
+        await old.put({ session: SID, update_token: UPDATE });
+        old.tick(4000);
+        await old.live.onSave(SID, saving(500));
+        expect(old.apple.pushes.at(-1)!.payload.aps["content-state"]).toMatchObject({ stage: "saving" });
+    });
+
+    it("push-to-start prefers the key's job token and makes the run a job run", async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.putStartToken(KEY, JSON.stringify({ token: "ab".repeat(32), environment: "sandbox", type: "job" }));
+        await w.live.startShare(KEY, SID, { run: RUN, environment: "sandbox", service: "twitch", ref: "clip" }, false);
+        const p = w.apple.pushes[0]!;
+        expect(p.token).toBe("ab".repeat(32));
+        expect(p.payload.aps["attributes-type"]).toBe("CobaltJobActivityAttributes");
+        expect(p.payload.aps.attributes).toEqual({ id: RUN, kind: "save", title: "twitch · clip", agent: false });
+        expect(w.run()!.type).toBe("job");
+        // a device with only the old token keeps the old type
+        const o = await world();
+        await o.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await o.live.startShare(KEY, SID, { run: RUN, environment: "sandbox", service: "twitch", ref: "clip" }, false);
+        expect(o.apple.pushes[0]!.payload.aps["attributes-type"]).toBe("CobaltActivityAttributes");
+    });
+
+    it("deleting the start token deletes both kinds", async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox", type: "job" }));
+        await w.live.deleteStartToken(KEY);
+        expect(w.kv.m.get(`live:jobstart:${KEY}`)).toBeUndefined();
     });
 });

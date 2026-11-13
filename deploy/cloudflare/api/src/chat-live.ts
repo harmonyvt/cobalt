@@ -18,6 +18,8 @@
 //   PUT        /live/chats/<thread>                {"token": "<hex>", "environment": ...}  a push-started activity's token
 //   POST       /live/chats/<thread>/state          from the Worker (x-internal-key): {key_id, prompt, state}
 
+import { asJobPayload, jobOfChat } from "./job-live";
+import { JOB_START_PREFIX } from "./live";
 import type { ApnsClient, ApnsPush, Environment } from "./apns";
 import { KEY_ID_HEADER } from "./headers";
 import { TOKEN_REGEX } from "./live";
@@ -44,7 +46,8 @@ export const CHAT_LIVE_REFRESH_MS = 45_000;
 // No hand-over for this long: the Worker running the reply is gone (it was cut off after the app went away, or crashed).
 // The Durable Object ends the activity as interrupted instead of leaving it stuck on "thinking".
 export const CHAT_LIVE_SILENT_MS = 100_000;
-export const CHAT_LIVE_DISMISS_DONE_S = 600;
+// Short on purpose (2026-11-13): a finished card that lingered read as "it never ends".
+export const CHAT_LIVE_DISMISS_DONE_S = 60;
 export const CHAT_LIVE_DISMISS_FAILED_S = 300;
 export const CHAT_LIVE_TTL_MS = 60 * 60 * 1000;
 export const CHAT_START_TOKEN_TTL_MS = 60 * 24 * 60 * 60 * 1000;
@@ -311,6 +314,8 @@ export type ChatLiveTarget = {
     ended: boolean;
     // the device that sent the message: it started its own activity (never push-started) and hands back its token
     sender?: boolean;
+    // the device shows the job island (8.13, CONTRACT-JOBLIVE): pushed JobLiveState, push-started with its job token
+    job?: boolean;
 };
 // A fresh target. `sender`: the device that sent the message. Its app already shows the card, so the server never
 // push-starts it (`started` is already true) and only waits for that card's token.
@@ -468,7 +473,7 @@ export class ChatLiveService {
             // arrive before the server has heard about the reply). Park the token; the reply picks it up when it begins.
             const noReplyYet = !rec || (isChatLiveTerminal(rec.latest) && !target);
             if (noReplyYet) {
-                await this.d.storage.put(`${CHAT_PENDING_PREFIX}${thread}:${keyId}`, { token: b.token, env: b.environment, at: this.d.now() });
+                await this.d.storage.put(`${CHAT_PENDING_PREFIX}${thread}:${keyId}`, { token: b.token, env: b.environment, at: this.d.now(), ...(b.type === "job" ? { job: true } : {}) });
                 return ok({ pushing: true });
             }
 
@@ -481,6 +486,7 @@ export class ChatLiveService {
 
             // Case 3: some other device's reply. Nothing to do here.
             if (!target) return ok({ pushing: false });
+            if (b.type === "job") target.job = true;
             if (target.token !== b.token) {
                 target.token = b.token;
                 target.env = b.environment;
@@ -511,7 +517,18 @@ export class ChatLiveService {
                 // too: the activity stays current while the phone is locked.
                 const targets: ChatLiveTarget[] = [];
 
-                // Step 1: one target per device that registered for chat cards (old registrations are dropped).
+                // Step 1: one target per device that registered for chat cards (old registrations are dropped), and
+                // one per device with a job-island start token (8.13), which wins for a key that has both.
+                // the same start token under two keys is one phone: it gets one card, not a second that never moves
+                const seenTokens = new Set<string>();
+                for (const [k, v] of await this.d.storage.list<ChatStartToken>({ prefix: JOB_START_PREFIX })) {
+                    if (now - v.updatedAt > CHAT_START_TOKEN_TTL_MS) continue; // live.ts cleans these
+                    if (seenTokens.has(v.token)) continue;
+                    seenTokens.add(v.token);
+                    const t = newTarget(k.slice(JOB_START_PREFIX.length), v.env, k.slice(JOB_START_PREFIX.length) === b.key_id);
+                    t.job = true;
+                    targets.push(t);
+                }
                 for (const [k, v] of await this.d.storage.list<ChatStartToken>({ prefix: CHAT_START_PREFIX })) {
                     const keyId = k.slice(CHAT_START_PREFIX.length);
                     const tooOld = now - v.updatedAt > CHAT_START_TOKEN_TTL_MS;
@@ -519,12 +536,14 @@ export class ChatLiveService {
                         await this.d.storage.delete(k);
                         continue;
                     }
+                    if (targets.some((t) => t.keyId === keyId) || seenTokens.has(v.token)) continue;
+                    seenTokens.add(v.token);
                     targets.push(newTarget(keyId, v.env, keyId === b.key_id));
                 }
 
                 // Step 2: did the sending phone's card token arrive before this reply began? Then use it now.
                 const pendingKey = `${CHAT_PENDING_PREFIX}${thread}:${b.key_id}`;
-                const pending = await this.d.storage.get<{ token: string; env: Environment; at: number }>(pendingKey);
+                const pending = await this.d.storage.get<{ token: string; env: Environment; at: number; job?: boolean }>(pendingKey);
                 if (pending) {
                     await this.d.storage.delete(pendingKey);
                     const fresh = now - pending.at <= CHAT_PENDING_TTL_MS;
@@ -536,6 +555,7 @@ export class ChatLiveService {
                         }
                         me.token = pending.token;
                         me.env = pending.env;
+                        if (pending.job) me.job = true;
                     }
                 }
                 if (targets.length === 0) {
@@ -624,16 +644,19 @@ export class ChatLiveService {
 
     private async start(rec: ChatLiveRecord, t: ChatLiveTarget, now: number) {
         const apns = this.d.apns!;
-        const startToken = await this.d.storage.get<ChatStartToken>(`${CHAT_START_PREFIX}${t.keyId}`);
+        const tokenKey = `${t.job ? JOB_START_PREFIX : CHAT_START_PREFIX}${t.keyId}`;
+        const startToken = await this.d.storage.get<ChatStartToken>(tokenKey);
         if (!startToken) {
             t.ended = true;
             return;
         }
         t.started = true;
-        const push: ApnsPush = { event: "start", priority: 10, expiration: secs(now) + 300, payload: chatStartPayload(rec.thread, rec.prompt, rec.latest, now) };
+        const base = chatStartPayload(rec.thread, rec.prompt, rec.latest, now);
+        const payload = t.job ? asJobPayload(base, jobOfChat(rec.thread, rec.prompt, rec.latest), now) : base;
+        const push: ApnsPush = { event: "start", priority: 10, expiration: secs(now) + 300, payload };
         const dlv = await apns.deliver(startToken.token, startToken.env, push, `chat:${rec.thread}`);
         if (dlv.kind === "drop") {
-            await this.d.storage.delete(`${CHAT_START_PREFIX}${t.keyId}`);
+            await this.d.storage.delete(tokenKey);
             t.ended = true;
         } else if (dlv.kind === "sent") {
             t.env = dlv.env;
@@ -648,8 +671,9 @@ export class ChatLiveService {
         const apns = this.d.apns;
         if (!apns || t.ended || !t.started || !t.token) return;
         const now = this.d.now();
-        const push = decideChatPush(t, rec.latest, rec.prompt, now);
-        if (!push) return;
+        const decided = decideChatPush(t, rec.latest, rec.prompt, now);
+        if (!decided) return;
+        const push = t.job ? { ...decided, payload: asJobPayload(decided.payload as { aps: Record<string, unknown> }, jobOfChat(rec.thread, rec.prompt, rec.latest), now) } : decided;
         const dlv = await apns.deliver(t.token, t.env, push, `chat:${rec.thread}`);
         if (dlv.kind === "sent") {
             t.env = dlv.env;
