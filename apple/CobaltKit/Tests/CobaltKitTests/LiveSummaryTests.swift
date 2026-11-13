@@ -4,8 +4,8 @@ import Testing
 
 // The busy period's one Live Activity (CONTRACT-PARALLEL.md section 6) on a fake ActivityKit and the virtual clock:
 // one job is today's per-run activity; the second live job keeps the first activity and asks ActivityKit for no other;
-// the activity is written at most once a second; the lead is the job running on the server; it ends with what came out
-// of the period.
+// the activity is written at most once a second; it shows the period's jobs as rows (`JobLive.many`, CONTRACT-JOBLIVE.md
+// 2.1: "1 done, 2 going", at most 3 rows); it ends with what came out of the period ("3 done").
 
 // MARK: - the pure parts
 
@@ -99,18 +99,32 @@ struct SummaryRig {
     func isFailed(_ job: Job) -> Bool { job.isFailed }
 
     /// What the activity was told, in order: the request's content, every update, the end.
-    func contents(of handle: FakeLiveHandle) -> [LiveContentState] {
-        var out: [LiveContentState] = []
-        if let request = adapter.requests.first(where: { $0.attributes.run == handle.attributes.run }) { out.append(request.state) }
+    func contents(of handle: FakeLiveHandle) -> [JobLiveState] {
+        var out: [JobLiveState] = []
+        if let request = adapter.requests.first(where: { $0.attributes.id == handle.attributes.id }) { out.append(request.state) }
         out += handle.updates.map(\.state)
         if let end = handle.end { out.append(end.state) }
         return out
     }
 
-    /// The moment each update was sent: its stale date is that moment plus 120 s.
+    /// The moment each update was sent: its stale date is that moment plus 180 s.
     func sendTimes(of handle: FakeLiveHandle) -> [Date] {
         handle.updates.compactMap { $0.staleDate?.addingTimeInterval(-LiveActivityManager.staleSeconds) }
     }
+}
+
+extension JobLiveState {
+    /// How many jobs the busy period's headline says are in `word` ("done", "going", "failed"): "2 done, 1 failed".
+    func count(_ word: String) -> Int {
+        for part in headline.components(separatedBy: ", ") {
+            let bits = part.split(separator: " ")
+            if bits.count == 2, bits[1] == word, let n = Int(bits[0]) { return n }
+        }
+        return 0
+    }
+
+    /// The busy period's state (it has rows) and it has ended.
+    var isFinishedPeriod: Bool { rows != nil && isTerminal }
 }
 
 @MainActor
@@ -124,10 +138,10 @@ struct LiveSummaryTests {
         await rig.drive { rig.isSaved(job) }
         await rig.settle()
         #expect(rig.adapter.requests.count == 1)
-        #expect(rig.adapter.requests[0].attributes.run == job.pipeline.liveRunID.uuidString.lowercased(), "the run's own activity")
+        #expect(rig.adapter.requests[0].attributes.id == job.pipeline.liveRunID.uuidString.lowercased(), "the run's own activity")
         let handle = try #require(rig.handle)
         let contents = rig.contents(of: handle)
-        #expect(contents.allSatisfy { $0.jobs == nil && $0.waiting == nil }, "a per-run activity carries no summary")
+        #expect(contents.allSatisfy { $0.rows == nil }, "a per-run activity carries no rows")
         #expect(!rig.manager.inBusyPeriod)
     }
 
@@ -152,15 +166,16 @@ struct LiveSummaryTests {
         #expect(rig.adapter.requests.count == 1, "never two requests in the whole period")
         #expect(!rig.manager.inBusyPeriod)
         let writes = handle.updates.map(\.state)
-        let began = try #require(writes.firstIndex { $0.jobs != nil }, "the period wrote its first summary")
-        #expect(writes[..<began].allSatisfy { $0.jobs == nil }, "before the second job it was the run's own activity")
-        #expect(writes[began...].allSatisfy { $0.jobs != nil }, "every write after that speaks for the period")
-        #expect((writes.compactMap(\.jobs).max() ?? 0) == 3)
+        let began = try #require(writes.firstIndex { $0.rows != nil }, "the period wrote its first rows")
+        #expect(writes[..<began].allSatisfy { $0.rows == nil }, "before the second job it was the run's own activity")
+        #expect(writes[began...].allSatisfy { $0.rows != nil }, "every write after that speaks for the period")
+        #expect((writes.compactMap { $0.rows?.count }.max() ?? 0) == 3)
         let end = try #require(handle.end)
-        #expect(end.state.stage == .done && end.state.isFinishedSummary)
-        #expect(end.state.savedCount == 3 && end.state.webpCount == 0 && end.state.failedCount == 0)
+        #expect(end.state.phase == .done && end.state.isFinishedPeriod && end.state.headline == "3 done")
+        #expect(end.state.rows?.allSatisfy { $0.phase == .done && $0.status == "saved" } == true)
+        #expect(end.state.fraction == 1 && end.state.compact == "3/3")
         let dismiss = try #require(end.dismissAt)
-        #expect(abs(dismiss.timeIntervalSince(rig.line.clock.now()) - 900) < 30, "a done summary stays 15 minutes")
+        #expect(abs(dismiss.timeIntervalSince(rig.line.clock.now()) - 60) < 1, "a done period stays a minute")
         #expect(handle.endCalls.count == 1)
     }
 
@@ -180,19 +195,48 @@ struct LiveSummaryTests {
         }
     }
 
-    @Test func waitingCountsTheJobsInALineAndTheCountsOnlyGoDownAsJobsFinish() async throws {
+    @Test func theRowsSpeakForEveryJobAndTheDoneCountOnlyGrows() async throws {
         // a server that is busy with a share from the iphone: every job of this app waits behind it
         let rig = SummaryRig(.serverBusyWithShare)
         let jobs = rig.queue.add([.link(linkA), .link(linkB), .link(linkC)], via: .review)
         await rig.drive { jobs.allSatisfy { rig.isSaved($0) } }
         await rig.settle()
         let handle = try #require(rig.handle)
-        let writes = handle.updates.map(\.state).filter { !$0.isTerminal }
-        let waits = writes.compactMap(\.waiting)
-        #expect(waits.contains { $0 >= 2 }, "queued jobs are counted as waiting: \(waits)")
-        let counts = writes.compactMap(\.jobs)
-        #expect(zip(counts, counts.dropFirst()).allSatisfy { $0 >= $1 }, "jobs never grows once the period began: \(counts)")
-        #expect(writes.allSatisfy { ($0.waiting ?? 0) <= ($0.jobs ?? 0) })
+        let writes = handle.updates.map(\.state).filter { $0.rows != nil && !$0.isTerminal }
+        #expect(!writes.isEmpty)
+        #expect(writes.allSatisfy { $0.count("done") + $0.count("going") + $0.count("failed") == 3 }, "every job is counted")
+        #expect(writes.contains { $0.count("going") == 3 }, "while they wait, all three are going")
+        let done = writes.map { $0.count("done") }
+        #expect(zip(done, done.dropFirst()).allSatisfy { $0 <= $1 }, "done never goes down: \(done)")
+        let fractions = writes.compactMap(\.fraction)
+        #expect(zip(fractions, fractions.dropFirst()).allSatisfy { $0 <= $1 }, "the bar is done / total: \(fractions)")
+    }
+
+    @Test func aPeriodOfFourJobsShowsAtMostThreeRowsNewestFirst() async throws {
+        let rig = SummaryRig()
+        let fourth = URL(string: "https://x.com/i/status/2105435404002562057")!
+        let jobs = rig.queue.add([.link(linkA), .link(linkB), .link(linkC), .link(fourth)], via: .review)
+        await rig.drive { jobs.allSatisfy { rig.isSaved($0) } }
+        await rig.settle()
+        let handle = try #require(rig.handle)
+        let states = rig.contents(of: handle).filter { $0.rows != nil }
+        #expect(!states.isEmpty)
+        #expect(states.allSatisfy { ($0.rows?.count ?? 0) <= 3 }, "at most 3 rows (CONTRACT-JOBLIVE.md 2.1)")
+        #expect(states.contains { $0.rows?.count == 3 })
+        #expect(states.allSatisfy { $0.steps == ["jobs"] && $0.compact?.hasSuffix("/4") == true }, "the count covers all four")
+        // newest first by when each job joined, the same rows in the same order on every write (a stage change used to
+        // reshuffle them and hide the newest job)
+        let newestFirst = ["x · 2105435404002562057", "tiktok · @cobalt", "x · 2105435404002562056"]
+        for state in states where state.rows?.count == 3 {
+            #expect(state.rows?.map(\.title) == newestFirst, "\(state.rows?.map(\.title) ?? [])")
+        }
+        // the clock counts from the period's start: it never moves
+        let sinces = Set(states.map(\.since))
+        #expect(sinces.count == 1, "since moved: \(states.map(\.since))")
+        let end = try #require(handle.end)
+        #expect(end.state.headline == "4 done" && end.state.rows?.map(\.title) == newestFirst)
+        #expect(end.state.since == states.first?.since)
+        #expect(rig.adapter.requests.count == 1)
     }
 
     @Test func theLeadIsTheJobRunningOnTheServerThenThisDevicesWorkThenAJobInLine() async throws {
@@ -216,16 +260,16 @@ struct LiveSummaryTests {
 
     // MARK: ending
 
-    @Test func aFailureIsCountedAndAPeriodWithSomethingSavedStaysFifteenMinutes() async throws {
+    @Test func aFailureIsCountedAndKeepsAPeriodWithSomethingSavedFiveMinutes() async throws {
         let rig = SummaryRig()
         let jobs = rig.queue.add([.link(linkA), .link(linkPrivate), .link(linkC)], via: .review)
         await rig.drive { jobs.allSatisfy { rig.isSaved($0) || rig.isFailed($0) } }
         await rig.settle()
         let handle = try #require(rig.handle)
         let end = try #require(handle.end)
-        #expect(end.state.savedCount == 2 && end.state.failedCount == 1 && end.state.webpCount == 0, "\(end.state)")
-        #expect(end.state.stage == .done)
-        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 900) < 30)
+        #expect(end.state.headline == "2 done, 1 failed", "\(end.state)")
+        #expect(end.state.phase == .done && end.state.rows?.filter { $0.phase == .failed }.count == 1)
+        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 300) < 1, "a failure is seen: 300 s")
         #expect(rig.adapter.requests.count == 1)
     }
 
@@ -237,8 +281,8 @@ struct LiveSummaryTests {
         await rig.settle()
         let handle = try #require(rig.handle)
         let end = try #require(handle.end)
-        #expect(end.state.stage == .failed && end.state.failedCount == 2 && end.state.savedCount == 0, "\(end.state)")
-        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 300) < 30)
+        #expect(end.state.phase == .failed && end.state.headline == "2 failed", "\(end.state)")
+        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 300) < 1)
     }
 
     @Test func aWebpIsCountedAndASaveBeforeThePeriodIsNot() async throws {
@@ -254,9 +298,31 @@ struct LiveSummaryTests {
         await rig.settle()
         let last = try #require(rig.adapter.handles.last)
         let end = try #require(last.end)
-        #expect(end.state.isFinishedSummary, "\(end.state)")
-        #expect(end.state.webpCount == 1, "the webp is counted")
-        #expect(end.state.savedCount == 1, "only the new save: the first was saved before the period")
+        #expect(end.state.isFinishedPeriod, "\(end.state)")
+        let statuses = end.state.rows?.map(\.status) ?? []
+        #expect(statuses.filter { $0 == "webp ready" }.count == 1, "the webp is its row: \(statuses)")
+        #expect(statuses.filter { $0 == "saved" }.count == 1, "the new save: \(statuses)")
+        #expect(end.state.headline == "2 done")
+        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 120) < 1, "all done, one with a link: 120 s")
+    }
+
+    @Test func aJobDismissedWhileItsWebpRendersEndsThePeriodAsSaved() async throws {
+        let rig = SummaryRig()
+        let jobs = rig.queue.add([.link(linkA), .link(linkB), .link(linkC)], via: .review)
+        let first = jobs[0]
+        await rig.drive { rig.isSaved(first) }
+        #expect(rig.manager.inBusyPeriod)
+        first.pipeline.makeWebp()
+        await rig.drive { if case .rendering = first.pipeline.state { true } else { false } }
+        // off the tray mid-render: its save stands, the render goes on unseen
+        rig.queue.dismiss(first.id)
+        await rig.drive { jobs.dropFirst().allSatisfy { rig.isSaved($0) } }
+        await rig.settle()
+        let end = try #require(rig.handle?.end)
+        #expect(end.state.isFinishedPeriod, "\(end.state)")
+        #expect(end.state.count("going") == 0 && end.state.headline == "3 done", "\(end.state.headline)")
+        #expect(end.state.rows?.allSatisfy { $0.phase == .done } == true, "\(end.state.rows ?? [])")
+        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 60) < 1)
     }
 
     @Test func cancellingEveryJobEndsTheActivityQuietly() async throws {
@@ -270,7 +336,7 @@ struct LiveSummaryTests {
         await rig.settle()
         let handle = try #require(rig.handle)
         #expect(handle.ended && handle.end?.dismissAt == nil, "nothing to say: it goes at once")
-        #expect(handle.end?.state.isFinishedSummary != true)
+        #expect(handle.end?.state.isTerminal == false, "it ends on what it showed, not on a result")
         #expect(!rig.manager.inBusyPeriod)
         #expect(rig.adapter.requests.count == 1)
     }
@@ -287,7 +353,7 @@ struct LiveSummaryTests {
         await rig.settle()
         #expect(rig.adapter.requests.count == 2, "one activity per period")
         let second = try #require(rig.adapter.handles.last)
-        #expect(second !== firstHandle && second.end?.state.savedCount == 2)
+        #expect(second !== firstHandle && second.end?.state.headline == "2 done")
         #expect(firstHandle.endCalls.count == 1, "the first period's finished activity is left alone")
     }
 
@@ -368,7 +434,7 @@ struct LiveSummaryBackgroundTests {
         #expect(rig.log.ends == [first.pipeline.liveRunID], "now the server stops writing the first run")
         #expect(firstHandle.ended)
         let summary = try #require(rig.manager.summaryHandle as? FakeLiveHandle)
-        #expect(summary !== firstHandle && summary.state.jobs == 2)
+        #expect(summary !== firstHandle && summary.state.rows?.count == 2)
     }
 
     @Test func aRefusedSummaryRequestIsNotMarkedTriedAndTheForegroundAsksAgain() async throws {
@@ -384,7 +450,7 @@ struct LiveSummaryBackgroundTests {
         rig.manager.foreground()
         await rig.settle()
         let summary = try #require(rig.manager.summaryHandle as? FakeLiveHandle, "foreground() asked again")
-        #expect(summary.state.jobs == 2 && summary.state.isSummary)
+        #expect(summary.state.rows?.count == 2 && summary.attributes.kind == "many")
         #expect(rig.adapter.requests.count == 1)
     }
 
@@ -433,11 +499,13 @@ struct LiveSummaryPushTests {
         #expect(rig.adapter.requests.count == 2)
         let second = try #require(rig.adapter.requests.dropFirst().first)
         #expect(second.push == false, "the summary is local: it asks for no push token")
-        #expect(second.attributes.run != firstRun.uuidString.lowercased(), "its own run id: the server never hears of it")
+        #expect(second.attributes.id != firstRun.uuidString.lowercased(), "its own id: the server never hears of it")
+        #expect(second.attributes.kind == "many" && second.attributes.title == "2 jobs" && second.attributes.open == "cobalt-apple://jobs")
+        #expect(second.state.rows?.count == 2 && second.state.headline == "2 going")
         await rig.drive { first.pipeline.state == .ready && batch.allSatisfy { $0.pipeline.state == .ready } }
         await rig.settle()
         let summary = try #require(rig.adapter.handles.last)
-        #expect(summary !== firstHandle && summary.end?.state.isFinishedSummary == true)
+        #expect(summary !== firstHandle && summary.end?.state.isFinishedPeriod == true)
         #expect(rig.log.runs.count == 1, "no registration after the period began")
         #expect(rig.adapter.requests.count == 2)
     }
@@ -452,6 +520,6 @@ struct LiveSummaryPushTests {
         await rig.settle()
         #expect(rig.log.ends.isEmpty && rig.log.runs.isEmpty)
         #expect(rig.adapter.requests.count == 1)
-        #expect(rig.handle?.end?.state.isFinishedSummary == true)
+        #expect(rig.handle?.end?.state.isFinishedPeriod == true)
     }
 }

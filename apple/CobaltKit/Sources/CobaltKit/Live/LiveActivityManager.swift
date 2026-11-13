@@ -16,8 +16,13 @@ import Synchronization
 /// **Two or more live jobs: one activity for the whole busy period** (section 6). The first job's activity is kept
 /// (no second `Activity.request`, so neither ActivityKit's per-app limit nor the server's 16 open runs per key are
 /// touched), the app writes it locally (at most once a second), and the server's registration of that run is deleted so
-/// the server never pushes one run's content into it. It stays local until nothing is live any more, then ends with
-/// "3 saved · 1 webp".
+/// the server never pushes one run's content into it. It stays local until nothing is live any more, then ends with what
+/// came out of the period ("3 done").
+///
+/// **What ActivityKit gets** (CONTRACT-JOBLIVE.md 5): every activity is a job activity (`CobaltJobActivityAttributes`). The
+/// manager keeps building `LiveContentState` as before (it decides when to write); each write turns it into `JobLiveState`
+/// with the local builder `JobLive.job(save:...)`, which says what the server would say. The busy period writes
+/// `JobLive.many(...)`: one row per job, at most 3. Registrations say `"type": "job"`.
 @MainActor
 final class LiveActivityManager: JobLiveSink {
     // MARK: tunables (the contract's numbers)
@@ -25,16 +30,16 @@ final class LiveActivityManager: JobLiveSink {
     static let counterInterval: Double = 1
     /// The busy period's activity is written at most this often, in total (section 6).
     static let summaryInterval: Double = 1
-    static let staleSeconds: Double = 120
+    /// An app-written state goes stale ("no news for 3 min") this long after it was written (JOB_STALE_S).
+    static let staleSeconds: Double = JobLiveTimes.staleSeconds
     /// A busy period with nothing new to say (every job waits in a line) is written again this often, so the card is not
-    /// marked stale ("waiting for cobalt…") while the app is alive and well.
+    /// marked stale while the app is alive and well.
     static let summaryKeepalive: Double = 60
     /// A refused summary request (the system said no) is asked again after this long at the earliest, so a refusal does
     /// not log and retry on every pipeline event.
     static let requestRetrySeconds: Double = 10
+    /// "ready to trim" waits on the owner, not on any news: it does not go quiet after 3 minutes.
     static let readyStaleSeconds: Double = 30 * 60
-    static let doneDismissSeconds: Double = 15 * 60
-    static let failedDismissSeconds: Double = 5 * 60
 
     // MARK: state
 
@@ -51,10 +56,13 @@ final class LiveActivityManager: JobLiveSink {
         /// Its activity ended on purpose while the job lives on (a busy period ended, an unfocused job was saved): only
         /// work beginning again makes a new run of it, a title change or a second "saved" does not.
         var retired = false
-        var handle: (any LiveActivityHandle)?
+        var handle: (any JobActivityHandle)?
         var activityTried = false
+        /// Set when the run took over an activity the server started for an agent: its local writes keep the agent's words.
+        var agent: JobLiveAgent?
         var built: LiveContentState?          // the latest content the pipeline produced (the merge base)
         var sent: LiveContentState?           // the last content written to the activity
+        var sentJob: JobLiveState?            // ... as the activity shows it (the job state built from `sent`)
         var sentAt: Double = 0
         var pending: LiveContentState?        // held back by the 1 per second rule
         var flushTask: Task<Void, Never>?
@@ -81,25 +89,31 @@ final class LiveActivityManager: JobLiveSink {
     /// One busy period's activity: what several jobs share (section 6). Independent of any run, so the run that
     /// lent its activity can settle or be stopped without ending it.
     final class Summary {
-        var handle: (any LiveActivityHandle)?
-        var attributes: LiveRunAttributes?
+        var handle: (any JobActivityHandle)?
+        /// The id of the activity that carries the period (the first run's, kept, or the period's own).
+        var id: String?
         /// Set only once an activity exists (a failed request is tried again: on the next foreground, and after
         /// `requestRetrySeconds` while the app is in the foreground).
         var activityTried = false
         var lastRequestAttempt: Double?
-        var sent: LiveContentState?
+        var sent: JobLiveState?
         var sentAt: Double = 0
-        var pending: LiveContentState?
+        var pending: JobLiveState?
         var flushTask: Task<Void, Never>?
         var keepaliveTask: Task<Void, Never>?
         var members: [UUID: Member] = [:]
+        /// Counts members as they join: the rows are newest first by this order.
+        var joined = 0
+        /// When the period began: its clock counts from here (a job's own `since` is its current stage's).
+        var since: Double = 0
         var loggedJobs = -1
         var loggedWaiting = -1
         var ended = false
     }
 
-    /// What one job did in the period (counted at its end: "3 saved · 1 webp").
+    /// What one job did in the period, and its row.
     struct Member {
+        var order = 0
         var live = true
         /// The save landed in this period / the webp was made / it did not finish.
         var saved = false
@@ -107,11 +121,26 @@ final class LiveActivityManager: JobLiveSink {
         var failed = false
         /// It was saved before the period began (a webp from a saved job): its save is not counted again.
         var priorSave = false
+        /// The job's row as last seen (kept when the job leaves the queue with something finished).
+        var job: JobLiveJob?
+        /// The job's run attributes, to rebuild its row as "saved" when it leaves the queue mid-webp.
+        var attributes: LiveRunAttributes?
+
+        /// It has an outcome the period's end can report.
+        var finished: Bool { saved || webp || failed }
     }
 
     /// An activity the server push-started (a share-sheet run) that this process watches.
     private struct Adopted {
         var task: Task<Void, Never>
+        var token: String?
+        var registeredToken: String?
+    }
+
+    /// An old-type activity the server push-started (changeover release, `OldLiveActivity`) that this process watches.
+    private struct AdoptedOld {
+        let activity: any OldLiveActivity
+        var task: Task<Void, Never>?
         var token: String?
         var registeredToken: String?
     }
@@ -128,6 +157,7 @@ final class LiveActivityManager: JobLiveSink {
     private var runCounter = 0
     private var summary: Summary?
     private var adopted: [String: Adopted] = [:]
+    private var adoptedOld: [String: AdoptedOld] = [:]
     private var tasks: [Task<Void, Never>] = []
     private var observers: [any NSObjectProtocol] = []
     private var latestStartToken: String?
@@ -165,6 +195,13 @@ final class LiveActivityManager: JobLiveSink {
             for await handle in stream {
                 guard let self else { return }
                 self.adoptIfWanted(handle)
+            }
+        })
+        tasks.append(Task { [weak self] in
+            guard let stream = self?.adapter.newOldActivities() else { return }
+            for await old in stream {
+                guard let self else { return }
+                self.adoptOld(old)
             }
         })
         if observeLifecycle {
@@ -209,6 +246,7 @@ final class LiveActivityManager: JobLiveSink {
             scheduleRegister(r)
         }
         for id in adopted.keys { registerAdopted(id) }
+        for id in adoptedOld.keys { registerOld(id) }
     }
 
     // MARK: - Environment
@@ -229,6 +267,12 @@ final class LiveActivityManager: JobLiveSink {
 
     /// The queue to read the busy period from: the one that told us, else the context's.
     private var jobQueue: JobQueue? { queue ?? ctx?.jobQueue }
+
+    /// What the activity shows for a run's content: the job island's words, from the local builder (the same words the
+    /// server pushes for the same run).
+    private func island(_ r: Run, _ content: LiveContentState) -> JobLiveJob {
+        JobLive.job(save: content, attributes: r.attributes, agent: r.agent, open: JobLiveLinks.run(r.attributes))
+    }
 
     // MARK: - Tokens
 
@@ -440,26 +484,25 @@ final class LiveActivityManager: JobLiveSink {
     /// A run (visible or detached) or the busy period's activity carries activity `id`.
     private func isCarried(_ id: String) -> Bool {
         if runs.values.contains(where: { $0.idString == id }) { return true }
-        return summary?.attributes?.run == id
+        return summary?.id == id
     }
 
     /// The handle that carries activity `id` for us: a run's own, or the busy period's.
-    private func ownHandle(forRun id: String) -> (any LiveActivityHandle)? {
+    private func ownHandle(forRun id: String) -> (any JobActivityHandle)? {
         if let r = runs.values.first(where: { $0.idString == id }), let h = r.handle { return h }
-        if let s = summary, s.attributes?.run == id { return s.handle }
+        if let s = summary, s.id == id { return s.handle }
         return nil
     }
 
     /// An activity for a run that already has one (the server's push-start landed after the app
     /// requested its own): exactly one stays. The newcomer goes at once; ours keeps the run.
     /// True when `handle` was such a duplicate.
-    private func endIfDuplicate(_ handle: any LiveActivityHandle) -> Bool {
-        guard let mine = ownHandle(forRun: handle.attributes.run),
-              mine.activityID != handle.activityID, !handle.isEnded
-        else { return false }
-        adopted[handle.attributes.run]?.task.cancel()
-        adopted[handle.attributes.run] = nil
-        writes.enqueue { await handle.end(handle.state, dismissAt: nil) }
+    private func endIfDuplicate(_ handle: any JobActivityHandle) -> Bool {
+        let id = handle.attributes.id
+        guard let mine = ownHandle(forRun: id), mine.activityID != handle.activityID, !handle.isEnded else { return false }
+        adopted[id]?.task.cancel()
+        adopted[id] = nil
+        writes.enqueue { await handle.end(nil, dismissAt: nil) }
         return true
     }
 
@@ -474,22 +517,32 @@ final class LiveActivityManager: JobLiveSink {
         // pasting at once): a moment later `capabilitiesChanged()` creates it, with the right push type.
         if ctx.capabilities.kind == .unreachable, case .fetching = p.state { return }
         // A share-sheet save the queue follows takes over the activity the server started for it (below), never asks for one.
-        if !p.requestsLiveActivity, !adapter.activities.contains(where: { $0.attributes.run == r.idString && !$0.isEnded }) { return }
+        if !p.requestsLiveActivity, !adapter.activities.contains(where: { $0.attributes.id == r.idString && !$0.isEnded }) { return }
         r.activityTried = true
         guard adapter.isAvailable else { return }
         let id = r.idString
-        if let existing = adapter.activities.first(where: { $0.attributes.run == id && !$0.isEnded }) {
+        // An old-type activity of this run (from an older build) gives way: one island per job.
+        let old = adapter.oldActivities
+        let t = now
+        adoptedOld.removeValue(forKey: id)?.task?.cancel()
+        writes.enqueue { await OldLiveActivities.end(old, now: t, showing: id) }
+        if let existing = adapter.activities.first(where: { $0.attributes.id == id && !$0.isEnded }) {
             r.handle = existing
-            r.attributes = existing.attributes
-            r.sent = existing.state
+            // What it shows came from the server: the next write replaces it.
+            r.sent = nil
+            r.sentJob = existing.state
             r.sentAt = now.timeIntervalSince1970
+            // A run the server started for an agent keeps its kind and chip in the app's own writes.
+            if existing.attributes.agent { r.agent = existing.attributes.kind == "make" ? .make : .save }
             adopted[id]?.task.cancel()
             adopted[id] = nil
         } else {
             do {
                 let stale = now.addingTimeInterval(Self.staleWindow(for: content))
-                r.handle = try adapter.request(r.attributes, state: content, staleDate: stale, push: pushAvailable)
+                let first = island(r, content)
+                r.handle = try adapter.request(first, staleDate: stale, push: pushAvailable)
                 r.sent = content
+                r.sentJob = first.state
                 r.sentAt = now.timeIntervalSince1970
                 Telemetry.log(.info, .live, "live activity started", data: ["run": .string(String(id.prefix(8))), "push": .bool(pushAvailable)])
             } catch {
@@ -509,7 +562,7 @@ final class LiveActivityManager: JobLiveSink {
     }
 
     /// A share-sheet run the app took over keeps the share origin, so a tap on its activity opens that
-    /// run (`cobalt-apple://job/<run>`, CONTRACT-SHARE-QUICK.md section 4); the app's own runs open cobalt.
+    /// run (`JobLiveLinks.run`); the app's own runs open cobalt.
     static func origin(of p: Pipeline) -> String {
         p.origin == .shareExtension ? "share" : "app"
     }
@@ -552,8 +605,13 @@ final class LiveActivityManager: JobLiveSink {
         r.pending = nil
         r.flushTask?.cancel()                    // it counted from an older write: a new window starts here
         r.flushTask = nil
+        // Content the island would draw the same (a new clip length, a title it does not show) is not written: the stale
+        // date counts from the last change the owner can see.
+        let state = island(r, content).state
+        guard state != r.sentJob else { return }
+        r.sentJob = state
         let stale = now.addingTimeInterval(Self.staleWindow(for: content))
-        writes.enqueue { await handle.update(content, staleDate: stale) }
+        writes.enqueue { await handle.update(state, staleDate: stale) }
     }
 
     /// `new` is `old` with other counters (the case the 1 per second rule is about).
@@ -586,8 +644,11 @@ final class LiveActivityManager: JobLiveSink {
         guard let handle = r.handle else { return }       // never shown: nothing to end
         Telemetry.log(.info, .live, "live activity ended", data: ["run": .string(String(r.idString.prefix(8))), "stage": .string(String(describing: content.stage))])
         r.sent = content
-        let dismiss = now.addingTimeInterval(content.stage == .failed ? Self.failedDismissSeconds : Self.doneDismissSeconds)
-        writes.enqueue { await handle.end(content, dismissAt: dismiss) }
+        let state = island(r, content).state
+        r.sentJob = state
+        // done 60 s (120 s with a link to copy), failed and lost 300 s (APP-API-CONTRACT 8.12)
+        let dismiss = now.addingTimeInterval(JobLiveTimes.dismissal(of: state))
+        writes.enqueue { await handle.end(state, dismissAt: dismiss) }
     }
 
     /// A new run began, or the pipeline went `.idle`: an unfinished activity goes at once, a
@@ -595,7 +656,9 @@ final class LiveActivityManager: JobLiveSink {
     private func finish(_ r: Run) {
         r.flushTask?.cancel()
         r.tokenTask?.cancel()
-        if let handle = r.handle, !r.ended, let last = r.sent ?? r.built {
+        if let handle = r.handle, !r.ended {
+            // what it last showed (nil: an activity taken over with nothing written yet keeps its own)
+            let last = (r.sent ?? r.built).map { island(r, $0).state }
             writes.enqueue { await handle.end(last, dismissAt: nil) }
         }
         r.ended = true
@@ -611,6 +674,7 @@ final class LiveActivityManager: JobLiveSink {
     /// Two jobs are live: from here one activity speaks for all of them, until nothing is live.
     private func beginPeriod(_ queue: JobQueue) {
         let s = Summary()
+        s.since = now.timeIntervalSince1970.rounded(.down)
         summary = s
         // The oldest unfinished activity of a run is kept; any other one goes at once (and its server run with it).
         let holders = runs.values.filter { $0.handle != nil && !$0.ended && !$0.detached }.sorted { $0.order < $1.order }
@@ -622,12 +686,14 @@ final class LiveActivityManager: JobLiveSink {
                 // The server knows this run, and deleting a run it has a token for ends its activity (APP-API-CONTRACT 8.2):
                 // that activity cannot carry the summary. It goes now, and the summary asks for its own (the one
                 // `Activity.request` this period makes in push mode; local mode never gets here).
-                let last = first.sent ?? first.built ?? handle.state
+                let last = (first.sent ?? first.built).map { island(first, $0).state }
                 writes.enqueue { await handle.end(last, dismissAt: nil) }
             } else {
+                // Its attributes stay the first job's (an activity's attributes never change); its state becomes the
+                // period's rows.
                 s.handle = handle
-                s.attributes = first.attributes
-                s.sent = first.sent
+                s.id = first.idString
+                s.sent = first.sentJob
                 s.sentAt = first.sentAt
                 s.activityTried = true
             }
@@ -639,7 +705,7 @@ final class LiveActivityManager: JobLiveSink {
             other.flushTask?.cancel()
             other.pending = nil
             if let handle = other.handle {
-                let last = other.sent ?? other.built ?? handle.state
+                let last = (other.sent ?? other.built).map { island(other, $0).state }
                 writes.enqueue { await handle.end(last, dismissAt: nil) }
             }
             other.handle = nil
@@ -652,6 +718,8 @@ final class LiveActivityManager: JobLiveSink {
         }
         for job in queue.jobs where job.isLive {
             var m = Member()
+            s.joined += 1
+            m.order = s.joined
             if case .rendering = job.pipeline.state { m.priorSave = true }
             s.members[job.id] = m
         }
@@ -675,23 +743,41 @@ final class LiveActivityManager: JobLiveSink {
             endPeriod(s)
             return
         }
-        // lead: the job running on the server, else this device's work, else (all in line) the newest; newest first
-        guard let lead = live.enumerated().min(by: { ($0.element.pipeline.liveLeadRank, -$0.offset) < ($1.element.pipeline.liveLeadRank, -$1.offset) })?.element
-        else { return }
-        let p = lead.pipeline
-        let leadRun = runs[ObjectIdentifier(p)]
-        guard let built = LiveContentState.make(from: p.state, p.liveSnapshot(previous: leadRun?.built, now: now)) else { return }
-        leadRun?.built = built
+        // One row per job of the period (at most 3 are shown, newest first), "1 done, 2 going" (CONTRACT-JOBLIVE.md 2.1).
+        let jobs = periodJobs(s, finishedOnly: false)
+        guard !jobs.isEmpty else { return }
+        let many = JobLive.many(id: s.id ?? UUID().uuidString.lowercased(), jobs: jobs, since: s.since, open: JobLiveLinks.jobs)
+        ensureSummaryActivity(s, many)
+        writeSummary(s, many.state)
         let waiting = live.filter { $0.pipeline.line != nil }.count
-        let content = LiveContentState.summary(lead: built, jobs: live.count, waiting: waiting)
-        ensureSummaryActivity(s, content, lead: p)
-        writeSummary(s, content)
-        if s.loggedJobs != content.jobs || s.loggedWaiting != content.waiting {
-            s.loggedJobs = content.jobs ?? 0
-            s.loggedWaiting = content.waiting ?? 0
+        if s.loggedJobs != live.count || s.loggedWaiting != waiting {
+            s.loggedJobs = live.count
+            s.loggedWaiting = waiting
             Telemetry.logLiveSummary(jobs: s.loggedJobs, waiting: s.loggedWaiting, line: queue.lineMode)
         }
         updateGrace()
+    }
+
+    /// The period's jobs, newest first by when they joined (the rows' order). `finishedOnly`: only those with an outcome
+    /// (the period's end).
+    private func periodJobs(_ s: Summary, finishedOnly: Bool) -> [JobLiveJob] {
+        s.members.values
+            .filter { !finishedOnly || $0.finished }
+            .sorted { $0.order > $1.order }
+            .compactMap(\.job)
+    }
+
+    /// One job's row: its own words (the local builder), except that a job whose save landed and that now waits on the
+    /// owner (the trim, a picture) reads "saved": as far as the period goes it is done.
+    private func periodJob(_ job: Job, _ m: Member) -> JobLiveJob? {
+        let p = job.pipeline
+        guard var content = LiveContentState.make(from: p.state, p.liveSnapshot(previous: runs[ObjectIdentifier(p)]?.built, now: now))
+        else { return nil }
+        if !job.isLive, m.saved || m.webp, !content.isTerminal {
+            content = LiveContentState(stage: .done, rail: 2, since: content.since)
+        }
+        let attributes = p.liveAttributes(origin: Self.origin(of: p))
+        return JobLive.job(save: content, attributes: attributes, open: JobLiveLinks.run(attributes))
     }
 
     /// Keeps the members' outcomes: a save that landed, a webp made, a failure. A job that left the queue keeps what it
@@ -703,6 +789,11 @@ final class LiveActivityManager: JobLiveSink {
             if m.saved || m.webp {
                 m.live = false
                 m.failed = false
+                // It left mid-step (dismissed while its webp rendered): its save stands, so its row says "saved".
+                if let row = m.job, !row.state.isTerminal, let a = m.attributes {
+                    let done = LiveContentState(stage: .done, rail: 2, since: row.state.since)
+                    m.job = JobLive.job(save: done, attributes: a, open: JobLiveLinks.run(a))
+                }
                 s.members[id] = m
             } else {
                 s.members[id] = nil
@@ -713,6 +804,8 @@ final class LiveActivityManager: JobLiveSink {
             var m = s.members[job.id]
             if m == nil, job.isLive {
                 var joined = Member()
+                s.joined += 1
+                joined.order = s.joined
                 if case .rendering = state { joined.priorSave = true }
                 m = joined
             }
@@ -731,6 +824,8 @@ final class LiveActivityManager: JobLiveSink {
             default:
                 if job.isLive { member.failed = false }
             }
+            member.attributes = job.pipeline.liveAttributes(origin: Self.origin(of: job.pipeline))
+            member.job = periodJob(job, member) ?? member.job
             s.members[job.id] = member
         }
     }
@@ -747,8 +842,10 @@ final class LiveActivityManager: JobLiveSink {
         let saved = s.members.values.filter(\.saved).count
         let webps = s.members.values.filter(\.webp).count
         let failed = s.members.values.filter(\.failed).count
-        let final = LiveContentState.finishedSummary(
-            saved: saved, webps: webps, failed: failed, jobs: s.members.count, now: now.timeIntervalSince1970)
+        // The rows of the jobs that came to something: "3 done", or "2 failed" when nothing did (nil: every job was
+        // cancelled, nothing to say).
+        let finals = periodJobs(s, finishedOnly: true)
+        let final = finals.isEmpty ? nil : JobLive.many(id: s.id ?? "", jobs: finals, since: s.since, open: JobLiveLinks.jobs).state
         for r in runs.values where r.folded && !r.detached {
             r.folded = false
             r.ended = true
@@ -759,38 +856,39 @@ final class LiveActivityManager: JobLiveSink {
         guard let handle = s.handle else { return }
         if let final {
             s.sent = final
-            let dismiss = now.addingTimeInterval(final.stage == .failed ? Self.failedDismissSeconds : Self.doneDismissSeconds)
+            let dismiss = now.addingTimeInterval(JobLiveTimes.dismissal(ofPeriod: finals))
             Telemetry.log(.info, .live, "live summary ended", data: [
                 "saved": .int(saved), "webps": .int(webps), "failed": .int(failed),
             ])
             writes.enqueue { await handle.end(final, dismissAt: dismiss) }
         } else {
             // every job was cancelled: nothing to say
-            writes.enqueue { await handle.end(handle.state, dismissAt: nil) }
+            writes.enqueue { await handle.end(nil, dismissAt: nil) }
         }
     }
 
     /// The period's activity: the first run's, kept, or (no run had one, or the server was about to end it) the one
     /// request this period makes.
-    private func ensureSummaryActivity(_ s: Summary, _ content: LiveContentState, lead: Pipeline) {
+    private func ensureSummaryActivity(_ s: Summary, _ many: JobLiveJob) {
         guard s.handle == nil, !s.activityTried else { return }
         // ActivityKit refuses a request from the background: wait for `foreground()` (nothing is marked as tried).
         guard !inBackground, adapter.isAvailable else { return }
         let t = now.timeIntervalSince1970
         if let last = s.lastRequestAttempt, t - last < Self.requestRetrySeconds { return }
         s.lastRequestAttempt = t
-        // Its own run id: the server never hears of it (a push to it would overwrite the summary).
-        let origin = lead.liveAttributes(origin: "app")
-        let attributes = LiveRunAttributes(run: UUID(), input: origin.input, service: origin.service, ref: origin.ref, origin: "app")
+        // Its own id, kind "many": the server never hears of it (a push to it would overwrite the period).
+        let id = UUID().uuidString.lowercased()
+        let first = JobLiveJob(attributes: JobLiveAttributes(
+            id: id, kind: many.attributes.kind, title: many.attributes.title, agent: false, open: many.attributes.open), state: many.state)
         do {
             let stale = now.addingTimeInterval(Self.staleSeconds)
-            s.handle = try adapter.request(attributes, state: content, staleDate: stale, push: false)
+            s.handle = try adapter.request(first, staleDate: stale, push: false)
             s.activityTried = true
-            s.attributes = attributes
-            s.sent = content
+            s.id = id
+            s.sent = first.state
             s.sentAt = t
             scheduleKeepalive(s)
-            Telemetry.log(.info, .live, "live activity started", data: ["run": .string(String(attributes.run.prefix(8))), "push": false, "summary": true])
+            Telemetry.log(.info, .live, "live activity started", data: ["run": .string(String(id.prefix(8))), "push": false, "summary": true])
         } catch {
             Telemetry.log(.error, .live, "live activity request failed", data: Telemetry.errorData(error))
             Self.log.notice("summary activity request failed: \(String(describing: error), privacy: .public)")
@@ -798,7 +896,7 @@ final class LiveActivityManager: JobLiveSink {
     }
 
     /// At most one write per second in total, the latest content held back until the window passes.
-    private func writeSummary(_ s: Summary, _ content: LiveContentState, force: Bool = false) {
+    private func writeSummary(_ s: Summary, _ content: JobLiveState, force: Bool = false) {
         guard s.handle != nil, !s.ended else { return }
         if content == s.sent {
             s.pending = nil
@@ -813,7 +911,7 @@ final class LiveActivityManager: JobLiveSink {
         sendSummary(s, content)
     }
 
-    private func sendSummary(_ s: Summary, _ content: LiveContentState) {
+    private func sendSummary(_ s: Summary, _ content: JobLiveState) {
         guard let handle = s.handle else { return }
         s.sent = content
         s.sentAt = now.timeIntervalSince1970
@@ -825,8 +923,8 @@ final class LiveActivityManager: JobLiveSink {
         scheduleKeepalive(s)
     }
 
-    /// The card says "waiting for cobalt…" once its stale date passes: while the app is alive and the period goes on, the
-    /// last content is written again before that.
+    /// The card goes quiet ("no news for 3 min") once its stale date passes: while the app is alive and the period goes on,
+    /// the last content is written again before that.
     private func scheduleKeepalive(_ s: Summary) {
         s.keepaliveTask?.cancel()
         guard let clock = ctx?.clock else { return }
@@ -871,7 +969,7 @@ final class LiveActivityManager: JobLiveSink {
         let session = r.session
         let registration = LiveRunRegistration(
             run: r.id, environment: env, updateToken: token, session: session, start: false,
-            attributes: r.attributes, state: state)
+            attributes: r.attributes, state: state, job: true)
         do {
             let reply = try await client.registerLiveRun(registration)
             r.registeredToken = token
@@ -889,8 +987,8 @@ final class LiveActivityManager: JobLiveSink {
 
     // MARK: - Activities the server started, orphans
 
-    private func adoptIfWanted(_ handle: any LiveActivityHandle) {
-        let id = handle.attributes.run
+    private func adoptIfWanted(_ handle: any JobActivityHandle) {
+        let id = handle.attributes.id
         if endIfDuplicate(handle) { return }
         guard !handle.isEnded, !isCarried(id), adopted[id] == nil else { return }
         adopted[id] = Adopted(task: Task { [weak self] in
@@ -910,20 +1008,68 @@ final class LiveActivityManager: JobLiveSink {
     private func registerAdopted(_ id: String) {
         guard var entry = adopted[id], let token = entry.token, entry.registeredToken != token,
               pushAvailable, let ctx, let env = environment,
-              let handle = adapter.activities.first(where: { $0.attributes.run == id && !$0.isEnded })
+              let handle = adapter.activities.first(where: { $0.attributes.id == id && !$0.isEnded }),
+              let runID = UUID(uuidString: id)
         else { return }
-        let attributes = handle.attributes
-        guard let runID = UUID(uuidString: attributes.run) else { return }
         entry.registeredToken = token
         adopted[id] = entry
-        let session = ctx.jobs.all().first { $0.id == runID }?.sessionID
+        let job = ctx.jobs.all().first { $0.id == runID }
+        // The server started this run and holds its attributes; the body only has to pass its checks. The state is the
+        // job's real stage when this device knows it, so a server that lost the run (and makes it again from this body)
+        // shows the right step. Otherwise "fetching": a server step, it never replaces the state the server has.
         let registration = LiveRunRegistration(
-            run: runID, environment: env, updateToken: token, session: session, start: false,
-            attributes: attributes, state: handle.state)
+            run: runID, environment: env, updateToken: token, session: job?.sessionID, start: false,
+            attributes: LiveRunAttributes(pushStarted: handle.attributes, run: runID),
+            state: Self.registrationState(job?.stage, since: handle.state.since), job: true)
         let client = ctx.client
         network.enqueue { [weak self] in
             do { _ = try await client.registerLiveRun(registration) }
             catch { self?.adopted[id]?.registeredToken = nil }
+        }
+    }
+
+    /// What a re-registered push-started run says it is doing: its `SharedJob` stage, else "fetching".
+    static func registrationState(_ stage: SharedJob.Stage?, since: Double) -> LiveContentState {
+        switch stage {
+        case .saving?: return LiveContentState(stage: .saving, rail: 1, since: since)
+        case .ready?: return LiveContentState(stage: .ready, rail: 2, since: since)
+        case .rendering?: return LiveContentState(stage: .rendering, rail: 3, since: since)
+        default: return LiveContentState(stage: .fetching, rail: 0, since: since)
+        }
+    }
+
+    // MARK: - Old-type activities the server started (changeover release)
+
+    /// Follows an old-type save activity the server push-started, so its token reaches the server on the old route.
+    private func adoptOld(_ a: any OldLiveActivity) {
+        guard !a.isEnded, a.saveRun != nil, adoptedOld[a.id] == nil else { return }
+        let id = a.id
+        let tokens = a.pushTokens()
+        adoptedOld[id] = AdoptedOld(activity: a)
+        adoptedOld[id]?.task = Task { [weak self] in
+            for await token in tokens {
+                guard let self else { return }
+                self.adoptedOld[id]?.token = token
+                self.registerOld(id)
+            }
+        }
+    }
+
+    /// `PUT /live/runs/<run>` without `"type": "job"`: the server pushes the old shape, which the old widget draws.
+    private func registerOld(_ id: String) {
+        guard var entry = adoptedOld[id], let token = entry.token, entry.registeredToken != token, !entry.activity.isEnded,
+              pushAvailable, let ctx, let env = environment, let run = entry.activity.saveRun,
+              let runID = UUID(uuidString: id)
+        else { return }
+        entry.registeredToken = token
+        adoptedOld[id] = entry
+        let registration = LiveRunRegistration(
+            run: runID, environment: env, updateToken: token, session: ctx.jobs.all().first { $0.id == runID }?.sessionID,
+            start: false, attributes: run.attributes, state: run.state, job: false)
+        let client = ctx.client
+        network.enqueue { [weak self] in
+            do { _ = try await client.registerLiveRun(registration) }
+            catch { self?.adoptedOld[id]?.registeredToken = nil }
         }
     }
 
@@ -940,7 +1086,7 @@ final class LiveActivityManager: JobLiveSink {
         })
         let live = adapter.activities
         for handle in live where !handle.isEnded {
-            let id = handle.attributes.run
+            let id = handle.attributes.id
             if isCarried(id) {
                 _ = endIfDuplicate(handle)
                 continue
@@ -950,10 +1096,20 @@ final class LiveActivityManager: JobLiveSink {
             } else {
                 adopted[id]?.task.cancel()
                 adopted[id] = nil
-                writes.enqueue { await handle.end(handle.state, dismissAt: nil) }
+                writes.enqueue { await handle.end(nil, dismissAt: nil) }
             }
         }
-        let alive = Set(live.filter { !$0.isEnded }.map { $0.attributes.run })
+        // Old-type activities from an older build that nobody writes any more go too (the server still writes the
+        // ones it was told about before the update, and ends them itself). A fresh one hands over its token: the server
+        // may have push-started it after the update, before this build ran (changeover release).
+        let old = adapter.oldActivities
+        for a in old where !a.isEnded && a.isFresh(at: t) { adoptOld(a) }
+        for (id, entry) in adoptedOld where entry.activity.isEnded {
+            entry.task?.cancel()
+            adoptedOld[id] = nil
+        }
+        writes.enqueue { await OldLiveActivities.end(old, now: t) }
+        let alive = Set(live.filter { !$0.isEnded }.map { $0.attributes.id })
         for id in adopted.keys where !alive.contains(id) {
             adopted[id]?.task.cancel()
             adopted[id] = nil
@@ -991,7 +1147,7 @@ final class LiveActivityManager: JobLiveSink {
     }
 
     /// The busy period's activity right now (nil outside a busy period, or when there is none to show).
-    var summaryHandle: (any LiveActivityHandle)? { summary?.handle }
+    var summaryHandle: (any JobActivityHandle)? { summary?.handle }
     var inBusyPeriod: Bool { summary != nil }
 }
 

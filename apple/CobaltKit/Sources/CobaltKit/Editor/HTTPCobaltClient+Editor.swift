@@ -86,7 +86,7 @@ extension HTTPCobaltClient: EditorClient {
 
     public func putEditLiveToken(renderID: String, token: String, environment: LiveEnvironment) async throws -> Bool {
         let req = try editRequest("PUT", "/live/edits/\(Self.encode(renderID))", timeout: 15)
-        let (data, http) = try await editSend(req, body: try Self.editBody(LiveTokenBody(token: token, env: environment.rawValue)))
+        let (data, http) = try await editSend(req, body: try Self.editBody(LiveTokenBody(token: token, env: environment.rawValue, type: "job")))
         struct Wire: Decodable { var pushing: Bool? }
         return try editAnswer(Wire.self, data, http).pushing ?? false
     }
@@ -99,9 +99,11 @@ extension HTTPCobaltClient: EditorClient {
 
     // MARK: bodies
 
+    /// `type: "job"`: the render's activity is the job island (APP-API-CONTRACT 8.13), so the server pushes `JobLiveState`.
     private struct LiveTokenBody: Encodable {
         var token: String
         var env: String
+        var type: String
     }
 
     private struct CreateBody: Encodable {
