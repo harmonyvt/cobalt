@@ -173,7 +173,7 @@ struct LiveCapabilityTests {
 
 @Suite(.serialized)
 struct LiveClientTests {
-    @Test func startTokenIsPutKeyedWithTheTokenAndEnvironment() async throws {
+    @Test func startTokenIsPutKeyedWithTheTokenEnvironmentAndTheJobType() async throws {
         let host = liveHost()
         let seen = Seen()
         StubProtocol.install(host: host) { req in seen.add(req); return (204, [:], Data()) }
@@ -184,7 +184,42 @@ struct LiveClientTests {
         #expect(req.value(forHTTPHeaderField: "Authorization") == "Api-Key \(liveKey)")
         let body = try jsonObject(StubProtocol.bodyData(of: req))
         #expect(body["token"] as? String == token && body["environment"] as? String == "production")
-        #expect(body.count == 2)
+        #expect(body["type"] as? String == "job", "the job island's push-to-start token (8.13)")
+        #expect(body.count == 3)
+    }
+
+    @Test func aJobRegistrationSaysTypeJobAndAShareStartDoesNot() async throws {
+        let host = liveHost()
+        let seen = Seen()
+        StubProtocol.install(host: host) { req in seen.add(req); return ok(#"{"status":"success","pushing":true,"started":false}"#) }
+        var job = registration(start: false, token: String(repeating: "0f", count: 32))
+        job.job = true
+        _ = try await liveClient(host: host).registerLiveRun(job)
+        _ = try await liveClient(host: host).registerLiveRun(registration(start: true))
+        let bodies = try seen.all.map { try jsonObject(StubProtocol.bodyData(of: $0)) }
+        #expect(bodies.count == 2)
+        #expect(bodies[0]["type"] as? String == "job")
+        #expect(Set(bodies[0].keys) == ["environment", "update_token", "session", "start", "attributes", "state", "type"])
+        // the share sheet's start leaves the type to the server, which picks it by the start token the key has
+        #expect(bodies[1]["type"] == nil)
+    }
+
+    @Test func chatAndEditTokensSayTypeJob() async throws {
+        let host = liveHost()
+        let seen = Seen()
+        StubProtocol.install(host: host) { req in seen.add(req); return ok(#"{"status":"success","pushing":true}"#) }
+        let client = liveClient(host: host)
+        let token = String(repeating: "ab", count: 32)
+        try await client.putChatLiveToken(threadID: "AbCdEfGh12345678", token: token, environment: .sandbox)
+        _ = try await client.putEditLiveToken(renderID: "Rq7sTu0vWx3yZa6bCd9e", token: token, environment: .production)
+        let chat = try #require(seen.all.first { $0.url?.path == "/live/chats/AbCdEfGh12345678" })
+        #expect(chat.httpMethod == "PUT")
+        let chatBody = try jsonObject(StubProtocol.bodyData(of: chat))
+        #expect(chatBody["token"] as? String == token && chatBody["environment"] as? String == "sandbox" && chatBody["type"] as? String == "job")
+        let edit = try #require(seen.all.first { $0.url?.path == "/live/edits/Rq7sTu0vWx3yZa6bCd9e" })
+        #expect(edit.httpMethod == "PUT")
+        let editBody = try jsonObject(StubProtocol.bodyData(of: edit))
+        #expect(editBody["token"] as? String == token && editBody["env"] as? String == "production" && editBody["type"] as? String == "job")
     }
 
     @Test func registeringARunSendsSnakeCaseOutsideAndCamelCaseInside() async throws {

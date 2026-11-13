@@ -42,9 +42,9 @@ struct ShareJobLiveTests {
         await rig.run(for: 1)
         #expect(rig.manager.inBusyPeriod, "two live jobs: one of them is the share")
         let summary = try #require(rig.manager.summaryHandle as? FakeLiveHandle)
-        #expect(summary.state.jobs == 2)
+        #expect(summary.state.rows?.count == 2)
         #expect(rig.adapter.requests.count == 1, "the summary's own request, none for the share")
-        #expect(rig.adapter.requests[0].attributes.run != rig.queue.jobs[0].pipeline.liveRunID.uuidString.lowercased())
+        #expect(rig.adapter.requests[0].attributes.id != rig.queue.jobs[0].pipeline.liveRunID.uuidString.lowercased())
         _ = own
     }
 
@@ -174,7 +174,7 @@ struct FinishedJobsLeaveTests {
         await rig.run(for: JobQueue.finishedLinger + 2)
         #expect(rig.queue.jobs.isEmpty)
         let handle = try #require(rig.handle)
-        #expect(handle.end?.state.savedCount == 3, "\(String(describing: handle.end?.state))")
+        #expect(handle.end?.state.headline == "3 done", "\(String(describing: handle.end?.state))")
     }
 }
 

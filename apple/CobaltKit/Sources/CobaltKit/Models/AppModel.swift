@@ -341,18 +341,19 @@ public final class AppModel {
         // a gallery found by the foreground (a build with no app group) is followed as a job, not downloaded as one file
         fetcher.adoptGallery = { [unowned model] id, link in model.queue.adoptSharedGallery(session: id, link: link) }
         #if os(iOS) && canImport(ActivityKit)
-        // First thing at launch, before any run: the push-to-start token observer (CONTRACT-LIVE.md 2.5).
-        let manager = LiveActivityManager(context: ctx, adapter: ActivityKitAdapter(), environment: LiveEnvironment.current)
+        // First thing at launch, before any run: the push-to-start token observer (CONTRACT-LIVE.md 2.5). Every activity
+        // is the job island (CONTRACT-JOBLIVE.md 5): one ActivityKit type, one adapter per manager picking its kinds.
+        let manager = LiveActivityManager(context: ctx, adapter: ActivityKitJobAdapter.saves(), environment: LiveEnvironment.current)
         ctx.live = manager
         model.liveManager = manager
         manager.start()
         model.editLive = EditLiveManager(
-            adapter: ActivityKitEditAdapter(), environment: LiveEnvironment.current,
+            adapter: ActivityKitJobAdapter.edits(), environment: LiveEnvironment.current,
             capabilities: { [unowned model] in model.capabilities },
             client: { [unowned ctx] in ctx.client as? any EditorClient },
             now: { [unowned ctx] in ctx.clock.now() })
         let chatLive = ChatLiveManager(
-            adapter: ActivityKitChatAdapter(), now: { [unowned ctx] in ctx.clock.now() },
+            adapter: ActivityKitJobAdapter.chats(), now: { [unowned ctx] in ctx.clock.now() },
             isAppActive: { [unowned ctx] in ctx.background.activity.isActive },
             environment: LiveEnvironment.current,
             capabilities: { [unowned model] in model.capabilities },
@@ -364,7 +365,7 @@ public final class AppModel {
         // The owner leaves mid-run: the system keeps the app working on it (`BGContinuedProcessingTask`),
         // and the server speaks for it through the notify bridge if that task is refused or expires.
         let continued = ContinuedProcessing(context: ctx, scheduler: SystemContinuedScheduler(), home: { [unowned model] in model.pipeline })
-        continued.liveActivityCovers = { ActivityKitAdapter.activitiesAllowed }
+        continued.liveActivityCovers = { ActivityKitJobAdapter.activitiesAllowed }
         continued.register()
         ctx.continued = continued
         model.continuedProcessing = continued
@@ -436,7 +437,6 @@ public final class AppModel {
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
         editor.capabilitiesChanged()                  // `features.editor` went: close the editor
         if let editLive { Task { await editLive.capabilitiesChanged() } }
-        if let chatLive = chat.live { Task { await chatLive.capabilitiesChanged() } }
     }
 
     func markKeyInvalid() {

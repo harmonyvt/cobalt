@@ -336,8 +336,9 @@ struct QuickLiveOriginTests {
         await rig.h.app.pickUpSharedJobs()                // the app comes to the foreground
         await rig.settle()
         let request = try #require(rig.adapter.requests.first, "the app starts the activity at once")
-        #expect(request.attributes.run == job.id.uuidString.lowercased())
-        #expect(request.attributes.origin == "share")
+        #expect(request.attributes.id == job.id.uuidString.lowercased())
+        // the share origin shows as its deep link: a tap opens the run
+        #expect(request.attributes.open == "cobalt-apple://job/\(job.id.uuidString.lowercased())")
         #expect(request.state.stage == .saving)
     }
 
@@ -345,6 +346,7 @@ struct QuickLiveOriginTests {
         let rig = LiveRig(.coldStart)
         rig.pipeline.start(link: URL(string: shortLink)!)
         await rig.drive { rig.pipeline.sessionID != nil }
-        #expect(rig.adapter.requests.first?.attributes.origin == "app")
+        let request = try #require(rig.adapter.requests.first)
+        #expect(request.attributes.open == nil, "the app's own run opens capystore")
     }
 }

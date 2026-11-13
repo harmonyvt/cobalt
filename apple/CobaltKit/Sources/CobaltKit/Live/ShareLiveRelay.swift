@@ -114,6 +114,10 @@ final class ShareLiveRelay: LiveSink {
         if !registered, state.isTerminal { return }
         let session = p.sessionID
         let start = needsStart && !state.isTerminal && now >= startNotBefore
+        // No `"type": "job"` here (APP-API-CONTRACT 8.13): the server makes the run a job run when the key has a job
+        // start token, and starts the old type with the old token when it has only that. Saying "job" ourselves would make
+        // the server push the job shape through an old-type start token, which starts nothing. The device steps relayed
+        // below stay `LiveContentState`; the server turns them into the job's words.
         let registration = LiveRunRegistration(
             run: p.liveRunID, environment: env, updateToken: nil, session: session, start: start,
             attributes: attributes, state: state)
