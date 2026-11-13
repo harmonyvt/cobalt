@@ -29,7 +29,7 @@ button,input{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--pink);outline-offset:2px}
 .ic{display:inline-block;flex:none;vertical-align:middle}
-.widget{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--bg);transition:opacity .15s}
+.widget{border:1px solid var(--line);border-radius:0;overflow:hidden;background:var(--bg);transition:opacity .15s}
 .widget.busy{opacity:.65;cursor:progress}
 .wbody{padding:var(--p)}
 .whead{display:flex;align-items:center;gap:8px;min-height:var(--hh);padding:0 4px 0 10px;border-bottom:1px solid var(--line);background:var(--card)}
