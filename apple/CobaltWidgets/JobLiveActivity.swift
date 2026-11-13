@@ -32,11 +32,9 @@ struct JobLiveActivity: Widget {
         } dynamicIsland: { context in
             let facts = JobFacts(context)
             return DynamicIsland {
-                // Top: star, the headline, and the clock or mark.
-                DynamicIslandExpandedRegion(.leading) { LiveStar() }
-                DynamicIslandExpandedRegion(.center) { JobExpandedHeadline(facts: facts) }
-                DynamicIslandExpandedRegion(.trailing) { JobClock(facts: facts, size: 12) }
-                // Below: the detail and a small bar.
+                // Everything sits in one region below the camera, so the star, the headline and the clock share a
+                // line. (Split over leading/center/trailing, the star sat up beside the camera while the headline sat
+                // lower down in the middle, so the two never lined up.)
                 DynamicIslandExpandedRegion(.bottom) { JobExpandedBottom(facts: facts) }
             } compactLeading: {
                 JobCompactLeading(facts: facts)
@@ -521,7 +519,7 @@ struct JobCompactTrailing: View {
     }
 }
 
-/// Expanded, top: the headline (red when it did not finish).
+/// Expanded: the headline (red when it did not finish).
 struct JobExpandedHeadline: View {
     let facts: JobFacts
     @Environment(\.isLuminanceReduced) private var reduced
@@ -535,7 +533,7 @@ struct JobExpandedHeadline: View {
     }
 }
 
-/// Expanded, below: the detail and a small 4 pt bar (a job still going).
+/// Expanded: star, headline and clock on one line, then the detail and a small 4 pt bar (a job still going).
 struct JobExpandedBottom: View {
     let facts: JobFacts
     @Environment(\.isLuminanceReduced) private var reduced
@@ -543,6 +541,12 @@ struct JobExpandedBottom: View {
     var body: some View {
         let ink = JobInk(reduced: reduced)
         VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                LiveStar()
+                JobExpandedHeadline(facts: facts)
+                Spacer(minLength: 8)
+                JobClock(facts: facts, size: 12)
+            }
             if let detail = facts.detail {
                 Text(detail)
                     .font(liveFont(12))
@@ -554,7 +558,7 @@ struct JobExpandedBottom: View {
                 StoryBar(fraction: facts.barFraction, ink: ink.bar, sweeps: false, height: 4)
             }
         }
-        .padding(.top, 4)
+        .padding(.horizontal, 6)
         .dynamicTypeSize(...LiveLock.largestType)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(facts.spoken)
