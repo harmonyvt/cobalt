@@ -330,6 +330,7 @@ public final class AppModel {
                     await model.store.removeMedia(media.id)
                 }
                 Task { await librarySync.start() }
+                model.library.glowActivity = SyncGlowActivityFeed(queue: model.queue, status: librarySync.status)
             } catch {
                 Telemetry.log(.error, .sync, "sync store failed", data: ["error": .string(String(describing: error))])
             }

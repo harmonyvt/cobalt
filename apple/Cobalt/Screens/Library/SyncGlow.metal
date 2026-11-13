@@ -4,11 +4,12 @@ using namespace metal;
 // The sync glow: light concentrated along the bottom edge of the content, under the bars' glass,
 // with a thin horizon line at the very edge. One pass, straight into the drawable.
 //
-// Uniform block. The order is SyncGlowUniforms.Index in SyncGlowKit: sixteen floats, 64 bytes.
+// Uniform block. The order is SyncGlowUniforms.Index in SyncGlowKit: twenty floats, 80 bytes.
 // 0 time, 1 state, 2 previous, 3 transition, 4 pending, 5 intensity, 6 reduced motion,
 // 7 display headroom, 8 low power, 9 event age, 10 width (pixels), 11 height (pixels),
-// 12 point scale (pixels per point), 13 dark, 14 pad, 15 pad.
-// State: 0 up to date, 1 syncing, 2 offline, 3 refused, 4 re-pull, 5 nudge, 6 off.
+// 12 point scale (pixels per point), 13 dark, 14 activity (-1 none, 0...1, 2 no known length),
+// 15 touch x (points, -1 none), 16 touch level, 17 scroll, 18 pad, 19 pad.
+// State: 0 up to date, 1 syncing, 2 offline, 3 refused, 4 re-pull, 5 nudge, 6 off, 7 new posts.
 struct GlowUniforms {
     float time;
     float state;
@@ -24,6 +25,10 @@ struct GlowUniforms {
     float height;
     float pointScale;
     float dark;
+    float activity;
+    float touchX;
+    float touchLevel;
+    float scroll;
     float pad0;
     float pad1;
 };
@@ -92,6 +97,7 @@ float3 redColor(bool dark) { return dark ? hexLinear(0xff5c6c) : hexLinear(0xc41
 
 /// SyncGlowLook.amplitude.
 float amplitude(float s) {
+    if (s > 6.5) return 0.7;
     if (s > 5.5) return 0.0;
     if (s < 0.5) return 0.75;
     if (s < 1.5) return 0.6;
@@ -139,6 +145,26 @@ float nudgeLight(float x, float widthPt, float age, bool reduced) {
     return exp(-g * g) * envelope;
 }
 
+/// New posts: two lights run in from the ends, meet in the middle and flare there once.
+float arrivedLight(float x, float widthPt, float age, bool reduced) {
+    float p = reduced ? 0.6 : saturate(age / 1.4);
+    float run = saturate(p / 0.7);
+    float eased = run * run * (3.0 - 2.0 * run);
+    float margin = kLightWidth;
+    float mid = widthPt * 0.5;
+    float left = mix(-margin, mid, eased);
+    float right = mix(widthPt + margin, mid, eased);
+    float w = kLightWidth * 0.6;
+    float gl = (x - left) / w;
+    float gr = (x - right) / w;
+    float lights = exp(-gl * gl) + exp(-gr * gr);
+    // Where they meet: one wider flare that fades out.
+    float meet = saturate((p - 0.6) / 0.15) * (1.0 - smoothstep(0.75, 1.0, p));
+    float gm = (x - mid) / (kLightWidth * 1.4);
+    float envelope = reduced ? 0.7 : 1.0 - smoothstep(0.85, 1.0, p);
+    return min(lights * envelope + 1.3 * meet * exp(-gm * gm), 1.6);
+}
+
 /// One red flash, then back.
 float refusedFlash(float age, bool reduced) {
     if (reduced) return 1.0;
@@ -175,7 +201,7 @@ float lineAt(float y, float thickness) {
 
 /// One state's glow at `p` (points, y up from the bottom edge). Premultiplied: rgb is light, a is cover.
 float4 stateGlow(float st, float2 p, float widthPt, float band, constant GlowUniforms &u) {
-    if (st > 5.5) return float4(0.0);
+    if (abs(st - 6.0) < 0.5) return float4(0.0);
     bool dark = u.dark > 0.5;
     bool reduced = u.reduced > 0.5;
     float t = reduced ? 1.7 : u.time;
@@ -227,6 +253,44 @@ float4 stateGlow(float st, float2 p, float widthPt, float band, constant GlowUni
         amp += 0.6 * l;
         lift *= 1.0 + 2.2 * l;
         level = 0.5 + 1.8 * l;
+    } else if (abs(st - 7.0) < 0.5) {
+        float l = arrivedLight(p.x, widthPt, u.eventAge, reduced);
+        amp += 0.5 * l;
+        lift *= 1.0 + 2.4 * l;
+        level = 0.55 + 1.9 * l;
+    }
+
+    // On top of any state: the owner's own work, a finger or the pointer, and scrolling.
+    if (u.activity >= 0.0) {
+        float x01 = p.x / widthPt;
+        if (u.activity <= 1.0) {
+            // How far the saves have got: a brighter run from the left, with a hot head at its front.
+            float fill = 1.0 - smoothstep(u.activity - 0.006, u.activity + 0.006, x01);
+            float g = (p.x - u.activity * widthPt) / 14.0;
+            float head = (u.activity > 0.001 && u.activity < 0.999) ? exp(-g * g) : 0.0;
+            level += 0.5 * fill + 1.5 * head;
+            lift *= 1.0 + 0.35 * fill + 1.2 * head;
+        } else {
+            // No known length: a short light loops along the line.
+            float pos = reduced ? 0.5 : fract(t * 0.4);
+            float g = (x01 - pos) * widthPt / 40.0;
+            float head = exp(-g * g);
+            level += 1.3 * head;
+            lift *= 1.0 + 1.1 * head;
+            amp += 0.12 * head;
+        }
+    }
+    if (u.touchX >= 0.0 && u.touchLevel > 0.001) {
+        float g = (p.x - u.touchX) / 70.0;
+        float l = exp(-g * g) * u.touchLevel;
+        amp += 0.45 * l;
+        lift *= 1.0 + 2.0 * l;
+        level += 1.5 * l;
+    }
+    if (u.scroll > 0.001) {
+        amp += 0.18 * u.scroll;
+        lift *= 1.0 + 0.7 * u.scroll;
+        level += 0.55 * u.scroll;
     }
 
     // The band is SyncGlowLook.bandHeight points above the bars plus the bars themselves.

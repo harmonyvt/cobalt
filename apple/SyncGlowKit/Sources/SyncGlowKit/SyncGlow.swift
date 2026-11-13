@@ -10,6 +10,8 @@ public enum SyncGlowState: Int, Sendable, Equatable, CaseIterable {
     case repull = 4
     case nudge = 5
     case off = 6
+    /// New posts came in with a pull: two lights run in from the ends and meet in the middle.
+    case arrived = 7
 
     public var title: String {
         switch self {
@@ -20,6 +22,7 @@ public enum SyncGlowState: Int, Sendable, Equatable, CaseIterable {
         case .repull: return "Full re-pull"
         case .nudge: return "Nudge"
         case .off: return "Off"
+        case .arrived: return "New posts"
         }
     }
 }
@@ -34,6 +37,7 @@ public enum SyncGlowEvent: String, Sendable, Equatable {
     case refused
     case repull
     case nudge
+    case arrived
     case fellBack
 
     public static func debugMirror(of state: SyncGlowState) -> SyncGlowEvent {
@@ -45,6 +49,7 @@ public enum SyncGlowEvent: String, Sendable, Equatable {
         case .repull: return .repull
         case .nudge: return .nudge
         case .off: return .fellBack
+        case .arrived: return .arrived
         }
     }
 }
@@ -58,6 +63,8 @@ public enum SyncGlowTiming {
     public static let nudge: TimeInterval = 1.8
     /// The line is wiped, then drawn back in from the left. Held longer while the restart pull is still running.
     public static let repull: TimeInterval = 2.4
+    /// Two lights run in from the ends, meet in the middle and flare once.
+    public static let arrived: TimeInterval = 1.6
     /// Brighter dashes shown for an offline outbox. The count uniform never goes above this.
     public static let visiblePendingCap = 8
     /// A frozen clock for Reduce Motion: the syncing light's breath sits mid-phase, not at its dimmest.
@@ -68,6 +75,7 @@ public enum SyncGlowTiming {
         case .refused: return refused
         case .nudge: return nudge
         case .repull: return repull
+        case .arrived: return arrived
         default: return nil
         }
     }
@@ -79,6 +87,7 @@ public enum SyncGlowTiming {
         case .nudge: return 0.7
         case .offlinePending: return 0.40
         case .syncing: return 4.0
+        case .arrived: return 0.6
         case .upToDate, .off: return 1.7
         }
     }
@@ -123,6 +132,7 @@ public enum SyncGlowResolve {
         case .refused: return .refused
         case .nudge: return .nudge
         case .repull: return .repull
+        case .arrived: return .arrived
         default: break
         }
         if !facts.reachable { return .offlinePending }
@@ -132,8 +142,8 @@ public enum SyncGlowResolve {
 }
 
 /// The uniform block. Every field is a `Float` so the memory matches `GlowUniforms` in
-/// `SyncGlow.metal` with no padding. `Index` is the order both sides share. Sixteen floats,
-/// 64 bytes: `setFragmentBytes` wants a multiple of 16.
+/// `SyncGlow.metal` with no padding. `Index` is the order both sides share. Twenty floats,
+/// 80 bytes: `setFragmentBytes` wants a multiple of 16.
 public struct SyncGlowUniforms: Sendable, Equatable {
     public var time: Float
     public var state: Float
@@ -151,6 +161,15 @@ public struct SyncGlowUniforms: Sendable, Equatable {
     public var pointScale: Float
     /// 1 in dark mode, where the glow is light added to the page. Light mode tints with ink instead.
     public var dark: Float
+    /// The owner's own saves and uploads: -1 none, 0...1 how far (a lit run along the line with a
+    /// bright head), 2 working with no known length (a short light loops along the line).
+    public var activity: Float
+    /// A finger or the pointer, in points from the band's left edge; -1 when there is none.
+    public var touchX: Float
+    /// How strongly the light pools under that finger or pointer, 0...1 (eases out after a release).
+    public var touchLevel: Float
+    /// How fast the owner is scrolling, 0...1: the whole line brightens with it and settles back.
+    public var scroll: Float
     public var pad0: Float
     public var pad1: Float
 
@@ -169,14 +188,18 @@ public struct SyncGlowUniforms: Sendable, Equatable {
         public static let height = 11
         public static let pointScale = 12
         public static let dark = 13
-        public static let pad0 = 14
-        public static let pad1 = 15
-        public static let count = 16
+        public static let activity = 14
+        public static let touchX = 15
+        public static let touchLevel = 16
+        public static let scroll = 17
+        public static let pad0 = 18
+        public static let pad1 = 19
+        public static let count = 20
     }
 
     public var packed: [Float] {
         [time, state, previous, transition, pending, intensity, reducedMotion, headroom, lowPower, eventAge,
-         width, height, pointScale, dark, pad0, pad1]
+         width, height, pointScale, dark, activity, touchX, touchLevel, scroll, pad0, pad1]
     }
 }
 
@@ -205,7 +228,11 @@ public enum SyncGlowComposer {
         height: Float,
         intensity: Float = defaultIntensity,
         pointScale: Float = 1,
-        dark: Bool = true
+        dark: Bool = true,
+        activity: Double? = nil,
+        touchX: Float = -1,
+        touchLevel: Float = 0,
+        scroll: Float = 0
     ) -> SyncGlowUniforms {
         let fade: Float = reduceMotion ? 1 : min(max(transition, 0), 1)
         let room = headroom.isFinite ? max(headroom, 1) : 1
@@ -226,6 +253,11 @@ public enum SyncGlowComposer {
             height: max(0, height),
             pointScale: pointScale.isFinite ? max(pointScale, 1) : 1,
             dark: dark ? 1 : 0,
+            activity: SyncGlowActivity.uniform(activity),
+            touchX: touchX.isFinite && touchX >= 0 && !reduceMotion ? touchX : -1,
+            // Reduce Motion: nothing follows a finger or a scroll.
+            touchLevel: reduceMotion || !touchLevel.isFinite ? 0 : min(max(touchLevel, 0), 1),
+            scroll: reduceMotion || !scroll.isFinite ? 0 : min(max(scroll, 0), 1),
             pad0: 0,
             pad1: 0)
     }
@@ -248,18 +280,20 @@ public enum SyncGlowPace {
         reduceMotion: Bool,
         lowPower: Bool,
         visible: Bool,
-        sceneActive: Bool
+        sceneActive: Bool,
+        live: Bool = false
     ) -> Int? {
         if !visible || !sceneActive || state == .off { return nil }
         if reduceMotion { return nil }
-        if transitioning || isOneShot(state) { return lowPower ? lowPowerActive : active }
+        // `live`: a save or upload is running, or a finger, the pointer or a scroll is moving the light.
+        if transitioning || isOneShot(state) || live { return lowPower ? lowPowerActive : active }
         if state == .syncing { return lowPower ? lowPowerSlow : slow }
         return nil
     }
 
     /// A moment that plays once and is then cleared by `SyncGlowStatus.tick`.
     public static func isOneShot(_ state: SyncGlowState) -> Bool {
-        state == .refused || state == .repull || state == .nudge
+        state == .refused || state == .repull || state == .nudge || state == .arrived
     }
 
     /// Whether the view has to keep calling `tick`. Only a one-shot moment ends by the clock. The
@@ -322,6 +356,7 @@ public enum SyncGlowLook {
         case .repull: return 0.8
         case .nudge: return 0.65
         case .off: return 0
+        case .arrived: return 0.7
         }
     }
 
@@ -403,6 +438,8 @@ public enum SyncGlowDebugParse {
             return .nudge
         case "off", "hidden", "disabled", "none":
             return .off
+        case "arrived", "new", "newposts", "new-posts":
+            return .arrived
         default:
             return nil
         }
@@ -411,5 +448,31 @@ public enum SyncGlowDebugParse {
     public static func pending(from raw: String?) -> Int? {
         guard let raw, let value = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
         return max(0, value)
+    }
+}
+
+/// The owner's own saves and uploads, as the line shows them. `nil` is none; 0...1 is how far the
+/// work has got; `indeterminate` is work with no known length.
+public enum SyncGlowActivity {
+    public static let indeterminate: Double = 2
+
+    /// What the shader reads: -1 none, 0...1 a fraction, 2 no known length.
+    public static func uniform(_ value: Double?) -> Float {
+        guard let value, value.isFinite, value >= 0 else { return -1 }
+        if value > 1 { return Float(indeterminate) }
+        return Float(value)
+    }
+
+    /// One value for several pieces of work. Each is a fraction 0...1, or nil when its length is not
+    /// known. Any unknown makes the whole unknown; none at all is no activity. Rounded to half a
+    /// percent, so a fast upload does not redraw the band for every few bytes.
+    public static func combine(_ parts: [Double?]) -> Double? {
+        guard !parts.isEmpty else { return nil }
+        var sum = 0.0
+        for part in parts {
+            guard let part, part.isFinite else { return indeterminate }
+            sum += min(max(part, 0), 1)
+        }
+        return (sum / Double(parts.count) * 200).rounded(.down) / 200
     }
 }

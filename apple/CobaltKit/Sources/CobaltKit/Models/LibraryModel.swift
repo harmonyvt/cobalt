@@ -120,6 +120,8 @@ public final class LibraryModel {
     @ObservationIgnored var hiddenSyncing = false
     /// The on-device library, when `sync.engine` is on. Nil leaves every load on `GET /library`.
     @ObservationIgnored var sync: LibrarySync?
+    /// Fills the glow's line as the owner's own saves and uploads run. Kept here so it lives as long as the engine.
+    @ObservationIgnored var glowActivity: SyncGlowActivityFeed?
     #if DEBUG
     /// A glow status with no engine behind it, so a debug build can force a state for a screenshot
     /// while `sync.engine` is off.
@@ -149,6 +151,16 @@ public final class LibraryModel {
         }
         if debugStatus == nil { debugStatus = SyncGlowStatus() }
         debugStatus?.debugForce(state, pending: pending)
+    }
+
+    /// Shows a save's progress on the glow with no save running: 0...1, `SyncGlowActivity.indeterminate`, or nil.
+    public func debugSyncActivity(_ value: Double?) {
+        if let status = sync?.status {
+            status.setActivity(value)
+            return
+        }
+        if debugStatus == nil { debugStatus = SyncGlowStatus() }
+        debugStatus?.setActivity(value)
     }
     #endif
 

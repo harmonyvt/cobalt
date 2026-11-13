@@ -13,7 +13,14 @@ extension LibraryModel {
     /// cursor's, not the library's, so a filter does not ask `GET /library` for the rest.
     func replaceFromSync(_ snapshot: SyncLibrarySnapshot, source: String) {
         let wasEmpty = posts.isEmpty
+        let known = Set(posts.map(\.id))
         posts = snapshot.visible.filter { !$0.hidden }
+        // Posts this device did not have, from a pull (not the first fill from the device's own copy):
+        // the glow's two lights run in and meet.
+        if !wasEmpty {
+            let fresh = posts.reduce(0) { known.contains($1.id) ? $0 : $0 + 1 }
+            if fresh > 0 { sync?.status.arrived(count: fresh) }
+        }
         var seen = Set<String>()
         let album = snapshot.hidden + snapshot.visible.filter(\.hidden)
         hiddenPosts = album.filter { seen.insert($0.id).inserted }
