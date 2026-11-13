@@ -6,6 +6,7 @@
 //
 // Storage keys (all in the one `main` Durable Object, next to job:/save:/sweep:at):
 //   live:start:<key id>   {token, env, updatedAt}   one per API key (one key per device)
+//   live:jobstart:<key id> the same, for the job island (8.13); preferred for push-to-start when present
 //   live:run:<run>        the run record (RunRecord)
 //   live:sid:<sid>        run ids registered for a studio session
 //   live:health:<key id>  {badAt, reason}           the last non-token APNs failure
@@ -24,6 +25,7 @@ import { STUDIO_SID_REGEX } from "./gate";
 import { KEY_ID_HEADER } from "./headers";
 import type { SaveProgress } from "./studio";
 import type { KV } from "./webp";
+import { asJobPayload, jobOfSave } from "./job-live";
 
 // ---- constants --------------------------------------------------------------------
 
@@ -54,6 +56,8 @@ export const LIVE_START_MIN_GAP_MS = 10_000;
 // then after each further one): 3 retries over about a minute, then only a poll retries.
 export const LIVE_END_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 40_000];
 const START_WINDOW_PREFIX = "live:startat:";
+// The job island's push-to-start tokens (8.13): one per key, beside `live:start:<key id>`.
+export const JOB_START_PREFIX = "live:jobstart:";
 // Agent and MCP jobs (`startAgent`): the devices whose start tokens were refreshed most recently, at most this many.
 // One: a phone can hold start tokens under several keys (an old key and its current session), and each of them
 // starts its own activity on the same screen (seen live 2026-11-13: two islands for one save). The newest token is
@@ -418,6 +422,11 @@ export function endPayload(a: RunAttributes, state: LiveState, now: number, imme
     return { aps };
 }
 
+// A run's push payload: today's shape, or the job island's (8.13) for a run registered with `type: "job"`.
+export function runPayload(r: Pick<RunRecord, "type" | "attributes" | "state" | "agent">, base: { aps: Record<string, unknown> }, now: number) {
+    return r.type === "job" ? asJobPayload(base, jobOfSave(r.attributes, r.state, r.agent), now) : base;
+}
+
 // ---- records ----------------------------------------------------------------------
 
 export type StartToken = { token: string; env: Environment; updatedAt: number };
@@ -447,6 +456,8 @@ export type RunRecord = {
     endRetryAt?: number | null;
     // When `state` last changed (the quiet watchdog); absent on runs from before it: createdAt then.
     changedAt?: number;
+    // The device's activity is the one job island (8.13, CONTRACT-JOBLIVE): every push carries JobLiveState.
+    type?: "job";
     // Started by the server for an instant share (`startShare`): no device relays its
     // steps, so the save's "saved" ends it, unless a make follows (`awaitsMake`: the
     // render's result ends it then).
@@ -514,6 +525,7 @@ type Registration = {
     start: boolean;
     attributes: RunAttributes;
     state: LiveState;
+    job: boolean;
 };
 
 function parseRegistration(run: string, b: Record<string, unknown>): Registration | null {
@@ -539,6 +551,7 @@ function parseRegistration(run: string, b: Record<string, unknown>): Registratio
         start: start === true,
         attributes: { run, input: a.input, service: a.service, ref: a.ref, origin: a.origin },
         state,
+        job: b.type === "job",
     };
 }
 
@@ -737,7 +750,7 @@ export class LiveService implements LiveHooks {
             event: terminal ? "end" : "update",
             priority: counter ? 5 : 10,
             expiration: secs(now) + (counter ? EXPIRE_COUNTER_S : EXPIRE_STAGE_S),
-            payload: terminal ? endPayload(r.attributes, s, now) : updatePayload(s, now),
+            payload: runPayload(r, terminal ? endPayload(r.attributes, s, now) : updatePayload(s, now), now),
         };
         const dlv = await apns.deliver(r.updateToken, r.env, push, r.run);
         await this.settleRun(r, s, dlv, terminal);
@@ -817,7 +830,7 @@ export class LiveService implements LiveHooks {
                         const dlv = await this.d.apns.deliver(
                             r.updateToken,
                             r.env,
-                            { event: "end", priority: 10, expiration: secs(now) + EXPIRE_STAGE_S, payload: endPayload(r.attributes, r.state, now, true) },
+                            { event: "end", priority: 10, expiration: secs(now) + EXPIRE_STAGE_S, payload: runPayload(r, endPayload(r.attributes, r.state, now, true), now) },
                             r.run,
                         );
                         if (dlv.kind === "quiet" || dlv.kind === "unhealthy") return; // tried again next pass
@@ -894,7 +907,10 @@ export class LiveService implements LiveHooks {
             if (left.length === 0) await this.d.storage.delete(key);
             else if (left.length !== ids.length) await this.d.storage.put(key, left);
         }
-        const starts = await this.d.storage.list<StartToken>({ prefix: "live:start:" });
+        const starts = [
+            ...(await this.d.storage.list<StartToken>({ prefix: "live:start:" })).entries(),
+            ...(await this.d.storage.list<StartToken>({ prefix: JOB_START_PREFIX })).entries(),
+        ];
         for (const [key, t] of starts) {
             if (now - t.updatedAt > LIVE_START_TOKEN_TTL_MS) await this.d.storage.delete(key);
         }
@@ -916,12 +932,15 @@ export class LiveService implements LiveHooks {
     async putStartToken(keyId: string, raw: string): Promise<LiveReply> {
         const b = parseJson(raw);
         if (!b || typeof b.token !== "string" || !TOKEN_REGEX.test(b.token) || !isEnv(b.environment)) return badRequest();
-        await this.d.storage.put(`live:start:${keyId}`, { token: b.token, env: b.environment, updatedAt: this.d.now() } satisfies StartToken);
+        // `type: "job"` (8.13): the push-to-start token of the job island, kept beside the old type's
+        const key = b.type === "job" ? `${JOB_START_PREFIX}${keyId}` : `live:start:${keyId}`;
+        await this.d.storage.put(key, { token: b.token, env: b.environment, updatedAt: this.d.now() } satisfies StartToken);
         return noContent();
     }
 
     async deleteStartToken(keyId: string): Promise<LiveReply> {
         await this.d.storage.delete(`live:start:${keyId}`);
+        await this.d.storage.delete(`${JOB_START_PREFIX}${keyId}`);
         return noContent();
     }
 
@@ -995,13 +1014,16 @@ export class LiveService implements LiveHooks {
     async startAgent(sid: string, o: { kind: "save" | "make"; job?: string | null; service: string; ref: string; title?: string | null }): Promise<void> {
         if (!this.d.apns || !STUDIO_SID_REGEX.test(sid)) return;
         const now = this.d.now();
-        const starts = await this.d.storage.list<StartToken>({ prefix: "live:start:" });
-        const devices = [...starts]
-            .map(([k, t]) => ({ keyId: k.slice("live:start:".length), t }))
+        const starts = [
+            ...(await this.d.storage.list<StartToken>({ prefix: "live:start:" })).entries(),
+            ...(await this.d.storage.list<StartToken>({ prefix: JOB_START_PREFIX })).entries(),
+        ];
+        const devices = starts
+            .map(([k, t]) => ({ keyId: k.slice(k.startsWith(JOB_START_PREFIX) ? JOB_START_PREFIX.length : "live:start:".length), t }))
             .filter(({ keyId, t }) => !keyId.startsWith("chat:") && now - t.updatedAt < LIVE_START_TOKEN_TTL_MS)
             .sort((a, b) => b.t.updatedAt - a.t.updatedAt)
-            // the same token under two keys is one device
-            .filter((d, i, all) => all.findIndex((x) => x.t.token === d.t.token) === i)
+            // the same token under two keys is one device, and a key with both token kinds is one device too
+            .filter((d, i, all) => all.findIndex((x) => x.t.token === d.t.token || x.keyId === d.keyId) === i)
             .slice(0, LIVE_AGENT_MAX_DEVICES);
         const making = o.kind === "make";
         const state: LiveState = making
@@ -1113,6 +1135,7 @@ export class LiveService implements LiveHooks {
                         endedAt: null,
                         createdAt: now,
                         ...(opts.agent ? { agent: opts.agent } : {}),
+                        ...(reg.job ? { type: "job" as const } : {}),
                     };
                     // visible to the next caller's count at once
                     await this.saveRun(created);
@@ -1133,6 +1156,7 @@ export class LiveService implements LiveHooks {
             let replaced = false;
             if (found) {
                 r.env = reg.env;
+                if (reg.job) r.type = "job";
                 if (reg.updateToken) r.updateToken = reg.updateToken;
                 if (reg.session) r.sid = reg.session;
                 // the stored state is replaced only by a device-owned stage
@@ -1154,7 +1178,11 @@ export class LiveService implements LiveHooks {
                     // reports settles the question).
                     reason = "start_unconfirmed";
                 } else {
-                    const start = await this.d.storage.get<StartToken>(`live:start:${keyId}`);
+                    // the job island's token when the device has one (8.13), the old type's otherwise
+                    const jobStart = await this.d.storage.get<StartToken>(`${JOB_START_PREFIX}${keyId}`);
+                    const startKey = jobStart ? `${JOB_START_PREFIX}${keyId}` : `live:start:${keyId}`;
+                    const start = jobStart ?? (await this.d.storage.get<StartToken>(startKey));
+                    if (jobStart) r.type = "job";
                     if (!start) {
                         reason = "no_start_token";
                     } else if (!(await this.reserveStart(keyId, now))) {
@@ -1167,7 +1195,7 @@ export class LiveService implements LiveHooks {
                             event: "start",
                             priority: 10,
                             expiration: secs(now) + EXPIRE_STAGE_S,
-                            payload: startPayload(r.attributes, r.state, now, agentAlert(r)),
+                            payload: runPayload(r, startPayload(r.attributes, r.state, now, agentAlert(r)), now),
                         };
                         const dlv = await this.d.apns!.deliver(start.token, start.env, push, run);
                         if (dlv.kind === "sent") {
@@ -1177,11 +1205,11 @@ export class LiveService implements LiveHooks {
                             r.lastPushAt = this.d.now();
                             await this.markOk(keyId);
                             if (dlv.env !== start.env) {
-                                await this.d.storage.put(`live:start:${keyId}`, { ...start, env: dlv.env } satisfies StartToken);
+                                await this.d.storage.put(startKey, { ...start, env: dlv.env } satisfies StartToken);
                             }
                         } else if (dlv.kind === "drop") {
                             r.startAttemptedAt = null;
-                            await this.d.storage.delete(`live:start:${keyId}`);
+                            await this.d.storage.delete(startKey);
                             reason = "no_start_token";
                         } else if (dlv.kind === "unhealthy") {
                             await this.markBad(keyId, `${dlv.status} ${dlv.reason}`);
@@ -1238,7 +1266,7 @@ export class LiveService implements LiveHooks {
                         event: "end",
                         priority: 10,
                         expiration: secs(now) + EXPIRE_STAGE_S,
-                        payload: endPayload(r.attributes, r.state, now, true),
+                        payload: runPayload(r, endPayload(r.attributes, r.state, now, true), now),
                     },
                     run,
                 );

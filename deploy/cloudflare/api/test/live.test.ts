@@ -2087,3 +2087,44 @@ describe("quiet watchdog (watchQuiet): no island sits on an old state", () => {
         expect(DISMISS_DONE_S).toBe(60);
     });
 });
+
+describe("job island (8.13): runs registered with type job get JobLiveState", () => {
+    it("a run registered with `type: job` is pushed the job state; others keep today's", async () => {
+        const w = await world();
+        await w.put({ session: SID, update_token: UPDATE, type: "job" });
+        w.tick(4000);
+        await w.live.onSave(SID, saving(500));
+        const p = w.apple.pushes.at(-1)!;
+        expect(p.payload.aps["content-state"]).toMatchObject({ phase: "working", steps: ["download", "store"], step: 1, headline: "storing in your library" });
+        expect(typeof p.payload.aps["stale-date"]).toBe("number");
+        const old = await world();
+        await old.put({ session: SID, update_token: UPDATE });
+        old.tick(4000);
+        await old.live.onSave(SID, saving(500));
+        expect(old.apple.pushes.at(-1)!.payload.aps["content-state"]).toMatchObject({ stage: "saving" });
+    });
+
+    it("push-to-start prefers the key's job token and makes the run a job run", async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.putStartToken(KEY, JSON.stringify({ token: "ab".repeat(32), environment: "sandbox", type: "job" }));
+        await w.live.startShare(KEY, SID, { run: RUN, environment: "sandbox", service: "twitch", ref: "clip" }, false);
+        const p = w.apple.pushes[0]!;
+        expect(p.token).toBe("ab".repeat(32));
+        expect(p.payload.aps["attributes-type"]).toBe("CobaltJobActivityAttributes");
+        expect(p.payload.aps.attributes).toEqual({ id: RUN, kind: "save", title: "twitch · clip", agent: false });
+        expect(w.run()!.type).toBe("job");
+        // a device with only the old token keeps the old type
+        const o = await world();
+        await o.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await o.live.startShare(KEY, SID, { run: RUN, environment: "sandbox", service: "twitch", ref: "clip" }, false);
+        expect(o.apple.pushes[0]!.payload.aps["attributes-type"]).toBe("CobaltActivityAttributes");
+    });
+
+    it("deleting the start token deletes both kinds", async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox", type: "job" }));
+        await w.live.deleteStartToken(KEY);
+        expect(w.kv.m.get(`live:jobstart:${KEY}`)).toBeUndefined();
+    });
+});

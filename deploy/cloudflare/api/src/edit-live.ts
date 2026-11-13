@@ -19,6 +19,7 @@ import { RENDER_SELECT, renderProgress, type RenderRow } from "./edits";
 import { TOKEN_REGEX } from "./live";
 import { plainReason } from "./notify";
 import type { KV } from "./webp";
+import { asJobPayload, jobOfEdit } from "./job-live";
 
 export const EDIT_LIVE_PREFIX = "live:edit:";
 export const RENDER_ID_REGEX = /^[A-Za-z0-9]{20}$/;
@@ -59,6 +60,8 @@ export type EditLiveRecord = {
     sent: EditLiveState | null;
     sentAt: number;
     createdAt: number;
+    // the app's activity is the job island (8.13, CONTRACT-JOBLIVE): pushes carry JobLiveState
+    type?: "job";
 };
 
 const secs = (ms: number) => Math.floor(ms / 1000);
@@ -124,7 +127,7 @@ export function editLivePayload(s: EditLiveState, now: number) {
 }
 
 // What a push of `next` after `rec.sent` would be, or null when nothing should go now.
-export function decideEditPush(rec: Pick<EditLiveRecord, "sent" | "sentAt">, next: EditLiveState, now: number): ApnsPush | null {
+export function decideEditPush(rec: Pick<EditLiveRecord, "sent" | "sentAt"> & Partial<Pick<EditLiveRecord, "type" | "rid">>, next: EditLiveState, now: number): ApnsPush | null {
     if (same(rec.sent, next)) return null;
     const terminal = isEditLiveTerminal(next);
     const statusChanged = rec.sent === null || rec.sent.status !== next.status || rec.sent.queueAhead !== next.queueAhead;
@@ -137,7 +140,7 @@ export function decideEditPush(rec: Pick<EditLiveRecord, "sent" | "sentAt">, nex
         event: terminal ? "end" : "update",
         priority: counter ? 5 : 10,
         expiration: secs(now) + (counter ? 60 : 3600),
-        payload: editLivePayload(next, now),
+        payload: rec.type === "job" ? asJobPayload(editLivePayload(next, now), jobOfEdit(rec.rid ?? "", next), now) : editLivePayload(next, now),
     };
 }
 
@@ -170,7 +173,7 @@ export class EditLiveService {
         } catch {
             return bad();
         }
-        const b = body as { token?: unknown; env?: unknown };
+        const b = body as { token?: unknown; env?: unknown; type?: unknown };
         if (typeof b?.token !== "string" || !TOKEN_REGEX.test(b.token)) return bad();
         if (b.env !== "sandbox" && b.env !== "production") return bad();
         if (!this.d.apns) return { status: 200, body: { status: "success", pushing: false, reason: "not_configured" } };
@@ -186,6 +189,7 @@ export class EditLiveService {
             sent: prev && prev.token === b.token ? prev.sent : null,
             sentAt: prev && prev.token === b.token ? prev.sentAt : 0,
             createdAt: prev?.createdAt ?? this.d.now(),
+            ...(b.type === "job" ? { type: "job" as const } : {}),
         };
         await this.d.storage.put(this.key(rid), rec);
         // the render may have moved (or ended) between the app's last poll and now: catch the activity up

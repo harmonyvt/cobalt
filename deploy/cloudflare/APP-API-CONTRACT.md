@@ -1168,6 +1168,24 @@ kept its last state for good. Server-only change; the app is unchanged.
   A new run arms the sweep; with nothing else pending the sweep comes back when the next open run would go quiet, at most
   `SWEEP_QUIET_MAX_S` (60 s) later. Edit and chat islands keep their own staleness rules (27.9, 32).
 
+### 8.13 The job island (addendum, 2026-11-13; apple/CONTRACT-JOBLIVE.md)
+
+One ActivityKit type, `CobaltJobActivityAttributes` with `JobLiveState`, for saves, uploads, makes, editor renders and
+chat replies. The server writes every word (`src/job-live.ts`: `jobOfSave`, `jobOfEdit`, `jobOfChat`); the three modules
+keep their run stores and push rules and re-dress their payloads with `asJobPayload` for a job run. Additive: an app
+that never says `type: "job"` gets exactly today's payloads.
+
+- **Start tokens.** `PUT /live/start-token` with `"type": "job"` stores `live:jobstart:<key id>` beside the old token
+  (`DELETE` removes both; the 60-day cleanup covers both). Push-to-start (instant share, agent jobs 8.11, chat replies)
+  uses a key's job token when it has one, and the run (chat target) is a job run from then on.
+- **Registrations.** `type: "job"` on `PUT /live/runs/<run>`, `PUT /live/edits/<rid>` and `PUT /live/chats/<thread>` (and a
+  chat token parked before its reply began) marks the run, render or chat target as a job run.
+- **Payload.** A job run's pushes carry `content-state` = `JobLiveState` (canonical key order, caps: headline 60, detail 90,
+  compact 7); a start names `attributes-type` "CobaltJobActivityAttributes" and `attributes` {id, kind, title, agent};
+  every non-end push sets `stale-date` = now + 180 s (`JOB_STALE_S`: the widget's "no news"). Event, priority, alerts and
+  dismissal stay each module's (8.12 timings).
+- **Parity.** `test/fixtures/job-live-states.json` (built by `test/job-live-cases.ts`) is what the app decodes.
+
 ## 9. Hark notification bridge (addendum, pinned 2026-10-04)
 
 **Off since 2026-10-23** (the owner doesn't want Hark pushes): the var `HARK_NOTIFY` is `"0"`, so
