@@ -29,7 +29,8 @@ export const EDIT_LIVE_MIN_GAP_MS = 10_000;
 export const EDIT_LIVE_MIN_STEP = 0.04;
 // No push for this long (a stuck render, a lost container) and iOS greys the activity out.
 export const EDIT_LIVE_STALE_S = 180;
-export const EDIT_LIVE_DISMISS_DONE_S = 900;
+// Short on purpose (2026-11-13): a finished card that stayed 15 minutes read as "it never ends".
+export const EDIT_LIVE_DISMISS_DONE_S = 120;
 export const EDIT_LIVE_DISMISS_FAILED_S = 300;
 // A record whose render never moves again (the token arrived for a render that already ended) is dropped after this.
 export const EDIT_LIVE_TTL_MS = 6 * 60 * 60 * 1000;

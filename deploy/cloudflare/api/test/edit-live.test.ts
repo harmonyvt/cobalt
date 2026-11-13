@@ -109,7 +109,7 @@ describe("coalescing and payloads", () => {
         expect(p.priority).toBe(10);
         expect((p.payload as any).aps).toMatchObject({
             event: "end",
-            "dismissal-date": T0 / 1000 + 900,
+            "dismissal-date": T0 / 1000 + 120,
             alert: { title: "video ready", body: "beach day" },
             "content-state": done,
         });

@@ -44,7 +44,8 @@ export const CHAT_LIVE_REFRESH_MS = 45_000;
 // No hand-over for this long: the Worker running the reply is gone (it was cut off after the app went away, or crashed).
 // The Durable Object ends the activity as interrupted instead of leaving it stuck on "thinking".
 export const CHAT_LIVE_SILENT_MS = 100_000;
-export const CHAT_LIVE_DISMISS_DONE_S = 600;
+// Short on purpose (2026-11-13): a finished card that lingered read as "it never ends".
+export const CHAT_LIVE_DISMISS_DONE_S = 60;
 export const CHAT_LIVE_DISMISS_FAILED_S = 300;
 export const CHAT_LIVE_TTL_MS = 60 * 60 * 1000;
 export const CHAT_START_TOKEN_TTL_MS = 60 * 24 * 60 * 60 * 1000;

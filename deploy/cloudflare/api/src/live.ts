@@ -38,6 +38,10 @@ export const LIVE_COALESCE_MS = 1000;
 // this long with a fresh stale-date, so the island never says "waiting for cobalt…" while the work is fine.
 // Well inside STALE_S (120 s): a lost refresh still leaves room for the next one.
 export const LIVE_REFRESH_MS = 45_000;
+// A run whose state has not changed for this long is over, whatever it last said: an app killed mid-upload, a step
+// that never reported back. The watchdog (`watchQuiet`, from the sweep) ends it, so no island sits on an old state.
+export const LIVE_QUIET_END_MS = 10 * 60 * 1000;
+export const LIVE_LOST_CODE = "error.live.lost";
 export const LIVE_MAX_BODY_BYTES = 4096;
 // Caps (error.live.too_many_runs, 429): runs a key may hold that have not ended, runs a
 // key may hold at all (ended ones stay for LIVE_ENDED_TTL_MS), runs per studio session.
@@ -58,7 +62,10 @@ export const LIVE_AGENT_MAX_DEVICES = 1;
 
 export const STALE_S = 120;
 export const STALE_READY_S = 30 * 60;
-export const DISMISS_DONE_S = 900;
+// How long a finished island stays on the Lock Screen (the Dynamic Island lets go at once). Short on purpose: a card
+// that sat there for 15 minutes read as "it never ends" (2026-11-13). A result with a link to copy gets a little longer.
+export const DISMISS_DONE_S = 60;
+export const DISMISS_DONE_LINK_S = 120;
 export const DISMISS_FAILED_S = 300;
 export const EXPIRE_COUNTER_S = 60;
 export const EXPIRE_STAGE_S = 3600;
@@ -398,7 +405,7 @@ export function endPayload(a: RunAttributes, state: LiveState, now: number, imme
     if (immediate) {
         aps["dismissal-date"] = secs(now);
     } else if (state.stage === "done") {
-        aps["dismissal-date"] = secs(now) + DISMISS_DONE_S;
+        aps["dismissal-date"] = secs(now) + (state.resultURL ? DISMISS_DONE_LINK_S : DISMISS_DONE_S);
         aps.alert = {
             // no resultURL: a save the instant share started, now in the library
             title: state.resultURL === undefined && a.origin === "share" ? "saved to capystore" : "webp ready",
@@ -438,6 +445,8 @@ export type RunRecord = {
     // a client poll retries from then on).
     endTries?: number;
     endRetryAt?: number | null;
+    // When `state` last changed (the quiet watchdog); absent on runs from before it: createdAt then.
+    changedAt?: number;
     // Started by the server for an instant share (`startShare`): no device relays its
     // steps, so the save's "saved" ends it, unless a make follows (`awaitsMake`: the
     // render's result ends it then).
@@ -754,7 +763,9 @@ export class LiveService implements LiveHooks {
             // "saved" only ends a run nobody else will end: one the server started, with nothing made after
             if (ev.t === "saved" && (!r.serverOnly || r.awaitsMake)) return;
             const before = JSON.stringify(r);
+            const was = r.state;
             r.state = nextState(r.state, ev, this.d.now());
+            if (!sameState(was, r.state)) r.changedAt = this.d.now();
             await this.dispatch(r);
             // a poll that changes nothing writes nothing
             if (JSON.stringify(r) !== before) await this.saveRun(r);
@@ -780,6 +791,49 @@ export class LiveService implements LiveHooks {
         const idx = await this.d.storage.list<RunIndexEntry>({ prefix: IDX_PREFIX });
         for (const e of idx.values()) if (e.active) return true;
         return false;
+    }
+
+    // The quiet watchdog (sweep): a run that has not ended and whose state has not moved for LIVE_QUIET_END_MS is
+    // ended. One waiting on the owner ("ready to trim") goes quietly; any other ends as failed with LIVE_LOST_CODE.
+    // A run with no update token yet keeps the failed state, and the token's arrival pushes the end (catch-up).
+    // Returns when the next run would go quiet (null: none open), for the sweep to come back.
+    async watchQuiet(now: number = this.d.now()): Promise<{ nextInMs: number | null }> {
+        if (!this.d.apns) return { nextInMs: null };
+        let next: number | null = null;
+        for (const e of (await this.d.storage.list<RunIndexEntry>({ prefix: IDX_PREFIX })).values()) {
+            if (e.endedAt !== null) continue;
+            await this.withRun(e.run, async () => {
+                const r = await this.getRun(e.run);
+                if (!r || r.endedAt || isTerminal(r.state)) return;
+                const quietFor = now - (r.changedAt ?? r.createdAt);
+                if (quietFor < LIVE_QUIET_END_MS) {
+                    const inMs = LIVE_QUIET_END_MS - quietFor;
+                    next = next === null ? inMs : Math.min(next, inMs);
+                    return;
+                }
+                console.log(`[live] quiet run=${r.run.slice(0, 8)} stage=${r.state.stage} ended`);
+                if (r.state.stage === "ready") {
+                    if (r.updateToken && this.d.apns) {
+                        const dlv = await this.d.apns.deliver(
+                            r.updateToken,
+                            r.env,
+                            { event: "end", priority: 10, expiration: secs(now) + EXPIRE_STAGE_S, payload: endPayload(r.attributes, r.state, now, true) },
+                            r.run,
+                        );
+                        if (dlv.kind === "quiet" || dlv.kind === "unhealthy") return; // tried again next pass
+                    }
+                    r.endedAt = now;
+                    await this.saveRun(r);
+                    return;
+                }
+                r.state = { ...r.state, stage: "failed", code: LIVE_LOST_CODE };
+                delete r.state.failure;
+                r.changedAt = now;
+                await this.dispatch(r);
+                await this.saveRun(r);
+            }).catch((x) => console.error("[live] quiet watch failed:", e.run.slice(0, 8), String(x)));
+        }
+        return { nextInMs: next };
     }
 
     // The sweep's retry of end pushes that failed after the result was collected (the
@@ -1021,6 +1075,8 @@ export class LiveService implements LiveHooks {
             const previousToken = found?.updateToken ?? null;
             const targetSid = reg.session ?? previousSid;
             let created: RunRecord | null = null;
+            // a new run arms the sweep, whose quiet watchdog ends it if it is never heard from again
+            let armSweep = false;
 
             // Caps, checked and committed together (one at a time) before anything else is
             // written: a key may hold at most LIVE_MAX_OPEN_RUNS_PER_KEY runs that have not
@@ -1060,10 +1116,18 @@ export class LiveService implements LiveHooks {
                     };
                     // visible to the next caller's count at once
                     await this.saveRun(created);
+                    armSweep = true;
                 }
                 return null;
             });
             if (rejected) return rejected;
+            if (armSweep) {
+                try {
+                    await this.d.scheduleSweep?.();
+                } catch (e) {
+                    console.error("[live] arming the sweep for a new run failed:", String(e));
+                }
+            }
 
             const r: RunRecord = (found ?? created)!;
             let replaced = false;
@@ -1074,6 +1138,7 @@ export class LiveService implements LiveHooks {
                 // the stored state is replaced only by a device-owned stage
                 if (DEVICE_STAGES.includes(reg.state.stage) && !sameState(r.state, reg.state) && !r.endedAt) {
                     r.state = reg.state;
+                    r.changedAt = this.d.now();
                     replaced = true;
                 }
             }
@@ -1152,6 +1217,7 @@ export class LiveService implements LiveHooks {
         await this.withRun(run, async () => {
             const r = await this.getRun(run);
             if (!r || r.endedAt) return;
+            if (!sameState(r.state, state)) r.changedAt = this.d.now();
             r.state = state;
             await this.dispatch(r);
             await this.saveRun(r);

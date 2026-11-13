@@ -335,6 +335,7 @@ export class CobaltContainer extends Container<Env> {
         return {
             hasActiveRuns: () => live.hasActiveRuns(),
             cleanup: (now) => live.cleanup(now),
+            watchQuiet: (now) => live.watchQuiet(now),
             retryEnds: async (now) => {
                 // Both run in the same sweep pass.
                 const runs = await live.retryEnds(now);
