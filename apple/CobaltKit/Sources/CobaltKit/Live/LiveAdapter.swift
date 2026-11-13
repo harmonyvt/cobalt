@@ -19,6 +19,8 @@ protocol LiveActivityAdapter: AnyObject, Sendable {
     var currentStartToken: String? { get }
     /// The job type's `activityUpdates`: activities the system (a push-to-start) created, of the kinds above.
     func newActivities() -> AsyncStream<any JobActivityHandle>
+    /// The old type's `activityUpdates` (changeover release, `OldLiveActivity`).
+    func newOldActivities() -> AsyncStream<any OldLiveActivity>
 }
 
 extension Data {

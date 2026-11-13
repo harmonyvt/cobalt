@@ -238,6 +238,23 @@ struct EditLiveManagerTests {
         #expect(adapter.made.count == 1)
     }
 
+    @Test func twoFeedsSeeingANewRenderWhileAnOldActivityEndsMakeOneActivity() async throws {
+        // the editor's feed and the queue's each call in from their own task; ending the old activity really suspends
+        let (m, adapter, _) = world()
+        let old = FakeOldActivity(id: "OldOldOldOldOldOldOl", staleDate: t0)
+        old.suspends = true
+        adapter.old = [old]
+        let a = Task { @MainActor in await m.observe([render(.rendering, progress: 0.3)]) }
+        let b = Task { @MainActor in await m.observe([render(.rendering, progress: 0.31)]) }
+        await a.value
+        await b.value
+        #expect(old.isEnded)
+        #expect(adapter.made.count == 1, "one activity per render")
+        // the next copy updates the one activity
+        await m.observe([render(.rendering, progress: 0.5)])
+        #expect(adapter.made.count == 1 && adapter.made[0].updates.last?.compact == "50%")
+    }
+
     @Test func noEditorNoActivities() async {
         let (m, adapter, _) = world(editor: false)
         await m.observe([render(.rendering, progress: 0.2)])

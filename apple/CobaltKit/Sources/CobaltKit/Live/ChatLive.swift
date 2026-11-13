@@ -326,8 +326,16 @@ public struct CobaltChatActivityAttributes: ActivityAttributes, Hashable, Sendab
 /// not one of them any more: the job island's (`registerLiveStartToken`, sent by `LiveActivityManager`) starts chat replies
 /// too (8.13), so `PUT /live/chat-start-token` is no longer called.
 public protocol ChatLiveClient: Sendable {
-    /// `PUT /live/chats/<thread>` with `"type": "job"`
-    func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment) async throws
+    /// `PUT /live/chats/<thread>`, with `"type": "job"` for a job activity (`job: false` only for an old-type activity the
+    /// server push-started, changeover release)
+    func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment, job: Bool) async throws
+}
+
+extension ChatLiveClient {
+    /// `PUT /live/chats/<thread>` with `"type": "job"`.
+    public func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment) async throws {
+        try await putChatLiveToken(threadID: threadID, token: token, environment: environment, job: true)
+    }
 }
 
 /// The part of ActivityKit `ChatLiveManager` uses. The real one is `ActivityKitJobAdapter.chats()` (`JobActivity.swift`):
@@ -343,6 +351,8 @@ protocol ChatLiveAdapter: AnyObject {
     func request(_ job: JobLiveJob, staleDate: Date, push: Bool) throws -> any JobActivityHandle
     /// Chat activities the system created (a push-to-start from the server, for a reply sent from another device).
     func newActivities() -> AsyncStream<any JobActivityHandle>
+    /// The old chat type's `activityUpdates` (changeover release, `OldLiveActivity`).
+    func newOldActivities() -> AsyncStream<any OldLiveActivity>
 }
 
 // MARK: - the manager
@@ -380,6 +390,8 @@ public final class ChatLiveManager {
     private var runs: [String: Run] = [:]
     private var watchers: [Task<Void, Never>] = []
     private var tokenTasks: [String: Task<Void, Never>] = [:]
+    /// Followers of old-type activities the server push-started (changeover release), by thread.
+    private var oldTokenTasks: [String: Task<Void, Never>] = [:]
     /// Uploads sent (tests).
     private(set) var tokensSent: [(thread: String, token: String)] = []
     /// Updates go out in order, one after the other.
@@ -422,9 +434,33 @@ public final class ChatLiveManager {
         })
         // activities the server started while the app was not running
         for h in adapter.activities where !h.isEnded { watchTokens(h) }
+        // Changeover release: an old-type activity the server still starts (a key with no job start token) hands over its
+        // token on the old route, so the server can write and end it. Stale ones nobody writes are ended.
+        let createdOld = adapter.newOldActivities()
+        watchers.append(Task { [weak self] in
+            for await a in createdOld {
+                guard let self else { return }
+                self.watchOldTokens(a)
+            }
+        })
         let old = adapter.oldActivities
         let t = now()
+        for a in old where !a.isEnded && a.isFresh(at: t) { watchOldTokens(a) }
         enqueue { await OldLiveActivities.end(old, now: t) }
+    }
+
+    private func watchOldTokens(_ a: any OldLiveActivity) {
+        let thread = a.id
+        guard oldTokenTasks[thread] == nil else { return }
+        let tokens = a.pushTokens()
+        oldTokenTasks[thread] = Task { [weak self] in
+            for await token in tokens {
+                guard let self, self.pushAvailable, let environment = self.environment, let client = self.client() else { continue }
+                self.tokensSent.append((thread, token))
+                try? await client.putChatLiveToken(threadID: thread, token: token, environment: environment, job: false)
+            }
+            if !Task.isCancelled { self?.oldTokenTasks[thread] = nil }
+        }
     }
 
     private func watchTokens(_ h: any JobActivityHandle) {
@@ -454,6 +490,7 @@ public final class ChatLiveManager {
         let interrupted = Self.island(ChatLiveContentState(status: .failed, since: tracker.state.since, code: "error.chat.interrupted"), attributes).state
         let old = adapter.oldActivities
         let t = now()
+        oldTokenTasks.removeValue(forKey: thread)?.cancel()
         enqueue {
             for h in older { await h.end(interrupted, dismissAt: nil) }
             await OldLiveActivities.end(old, now: t, showing: thread)
@@ -544,6 +581,8 @@ public final class ChatLiveManager {
         let open = adapter.activities.filter { !$0.isEnded }
         let old = adapter.oldActivities.filter { !$0.isEnded }
         runs.removeAll()
+        for t in oldTokenTasks.values { t.cancel() }
+        oldTokenTasks.removeAll()
         let interrupted = ChatLiveContentState(status: .failed, since: Date().timeIntervalSince1970, code: "error.chat.interrupted")
         enqueue {
             for h in open {

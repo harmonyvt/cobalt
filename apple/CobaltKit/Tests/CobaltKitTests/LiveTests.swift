@@ -220,6 +220,11 @@ struct LiveClientTests {
         #expect(edit.httpMethod == "PUT")
         let editBody = try jsonObject(StubProtocol.bodyData(of: edit))
         #expect(editBody["token"] as? String == token && editBody["env"] as? String == "production" && editBody["type"] as? String == "job")
+        // an old-type chat activity (changeover release) leaves the type out
+        try await client.putChatLiveToken(threadID: "OldOldOldOld0001", token: token, environment: .sandbox, job: false)
+        let oldChat = try #require(seen.all.first { $0.url?.path == "/live/chats/OldOldOldOld0001" })
+        let oldBody = try jsonObject(StubProtocol.bodyData(of: oldChat))
+        #expect(oldBody["token"] as? String == token && oldBody["type"] == nil)
     }
 
     @Test func registeringARunSendsSnakeCaseOutsideAndCamelCaseInside() async throws {

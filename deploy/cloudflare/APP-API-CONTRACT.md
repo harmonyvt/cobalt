@@ -2875,7 +2875,11 @@ through APNs, with the same APNs secrets as section 8 (`src/chat-live.ts`).
 - `features.chat_live_push`: `chat` and APNs configured.
 - `PUT /live/chat-start-token` `{"token": "<hex>", "environment": "sandbox"|"production"}` (keyed; `DELETE` forgets it): the
   device's push-to-start token for chat activities. `200 {"pushing": true}`; `{"pushing": false}` without APNs.
+  *2026-11-13 (8.13): the app no longer calls it.* The server starts a chat reply with the key's job push-to-start token
+  (`PUT /live/start-token` with `type: "job"`), which wins when a key has both. The route stays for older builds.
 - `PUT /live/chats/<thread>` (keyed, same body): the update token of an activity the server push-started on this device.
+  The app now sends `"type": "job"` with it (8.13), so the activity is a job island (`CobaltJobActivityAttributes`) and
+  gets `JobLiveState` pushes; without `type` it is the old chat activity.
 - The chat route hands the reply's state to the `main` Durable Object (`POST /live/chats/<thread>/state`, internal key,
   never public): at its start, at once on a status change (a tool call starts or ends, files shown, done, failed), and
   more text at most every 3 s. On a new reply the DO push-starts the activity (`attributes.source: "other"`, alert

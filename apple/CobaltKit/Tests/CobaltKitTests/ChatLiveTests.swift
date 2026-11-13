@@ -98,13 +98,13 @@ private final class FakeChatHandle: JobActivityHandle {
     var isEnded = false
     var updates: [JobLiveState] = []
     var ended: (state: JobLiveState, dismissAt: Date?)?
-    let tokenStream: AsyncStream<String>
-    let tokenSink: AsyncStream<String>.Continuation
+    /// Like ActivityKit's `pushTokenUpdates`: every listener gets the current token, then every change.
+    private var token: String?
+    private var listeners: [AsyncStream<String>.Continuation] = []
 
     init(job: JobLiveJob) {
         attributes = job.attributes
         state = job.state
-        (tokenStream, tokenSink) = AsyncStream.makeStream(of: String.self)
     }
 
     /// A reply's activity the server push-started here (a message sent from another device).
@@ -116,7 +116,16 @@ private final class FakeChatHandle: JobActivityHandle {
 
     var thread: String { attributes.id }
     func isFresh(at now: Date) -> Bool { !isEnded }
-    func pushTokens() -> AsyncStream<String> { tokenStream }
+    func pushTokens() -> AsyncStream<String> {
+        let (stream, continuation) = AsyncStream.makeStream(of: String.self)
+        listeners.append(continuation)
+        if let token { continuation.yield(token) }
+        return stream
+    }
+    func sendToken(_ t: String) {
+        token = t
+        for c in listeners { c.yield(t) }
+    }
     func update(_ state: JobLiveState, staleDate: Date?) async {
         self.state = state
         updates.append(state)
@@ -135,11 +144,14 @@ private final class FakeChatAdapter: ChatLiveAdapter {
     var requested: [JobLiveJob] = []
     var pushed: [FakeChatHandle] = []
     var old: [FakeOldActivity] = []
+    let oldStream: AsyncStream<any OldLiveActivity>
+    let oldSink: AsyncStream<any OldLiveActivity>.Continuation
     let createdStream: AsyncStream<any JobActivityHandle>
     let createdSink: AsyncStream<any JobActivityHandle>.Continuation
 
     init() {
         (createdStream, createdSink) = AsyncStream.makeStream(of: (any JobActivityHandle).self)
+        (oldStream, oldSink) = AsyncStream.makeStream(of: (any OldLiveActivity).self)
     }
 
     var activities: [any JobActivityHandle] { made + pushed }
@@ -152,11 +164,17 @@ private final class FakeChatAdapter: ChatLiveAdapter {
         return h
     }
     func newActivities() -> AsyncStream<any JobActivityHandle> { createdStream }
+    func newOldActivities() -> AsyncStream<any OldLiveActivity> { oldStream }
 }
 
 private final class FakeChatLiveClient: ChatLiveClient, @unchecked Sendable {
     var tokens: [(String, String)] = []
-    func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment) async throws { tokens.append((threadID, token)) }
+    /// `job` of each upload, in order.
+    var jobFlags: [Bool] = []
+    func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment, job: Bool) async throws {
+        tokens.append((threadID, token))
+        jobFlags.append(job)
+    }
 }
 
 @MainActor
@@ -249,17 +267,39 @@ struct ChatLiveManagerTests {
         manager.start()
         let pushed = FakeChatHandle(thread: "AbCdEfGh12345678")
         adapter.createdSink.yield(pushed)
-        pushed.tokenSink.yield("cd34")
+        pushed.sendToken("cd34")
         for _ in 0..<50 where client.tokens.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         #expect(client.tokens.map(\.0) == ["AbCdEfGh12345678"] && client.tokens.map(\.1) == ["cd34"])
         // the app's own reply activity shows up in the system's list too: it is followed from `began`, once
         manager.began(thread: "ZZZZZZZZZZZZZZZZ", prompt: "mine", source: .app)
         let own = try #require(adapter.made.first)
         adapter.createdSink.yield(own)
-        own.tokenSink.yield("ee56")
+        own.sendToken("ee56")
         for _ in 0..<50 where client.tokens.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
         try await Task.sleep(for: .milliseconds(30))
         #expect(client.tokens.filter { $0.0 == "ZZZZZZZZZZZZZZZZ" }.count == 1, "one follower per activity")
+        #expect(client.jobFlags.allSatisfy { $0 }, "job activities say type: job")
+    }
+
+    @Test func anOldTypeChatActivityTheServerStartedHandsItsTokenToTheOldRoute() async throws {
+        // a key with no job start token yet (the first reply after the update): the server starts the old chat type
+        let adapter = FakeChatAdapter()
+        let client = FakeChatLiveClient()
+        var caps = Capabilities.unknown
+        caps.chat = true
+        caps.chatLivePush = true
+        let manager = ChatLiveManager(
+            adapter: adapter, now: { Date() }, isAppActive: { false }, environment: .production,
+            capabilities: { caps }, client: { client })
+        manager.start()
+        let old = FakeOldActivity(id: "AbCdEfGh12345678", staleDate: Date().addingTimeInterval(90))
+        adapter.old.append(old)
+        adapter.oldSink.yield(old)
+        old.sendToken("ab12")
+        for _ in 0..<50 where client.tokens.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(client.tokens.map(\.0) == ["AbCdEfGh12345678"] && client.tokens.map(\.1) == ["ab12"])
+        #expect(client.jobFlags == [false], "the old type: the server must push the old shape")
+        #expect(!old.isEnded, "the server writes and ends it")
     }
 
     @Test func oldChatActivitiesNobodyWritesAreEndedAtLaunchAndANewReplyEndsItsThreadsOldOne() async throws {
@@ -290,7 +330,7 @@ struct ChatLiveManagerTests {
         manager.began(thread: "AbCdEfGh12345678", prompt: "find my cats", source: .shortcut)
         #expect(adapter.madeWithPush == [true], "asked with a push type, so the server can keep it current while locked")
         let own = try #require(adapter.made.first)
-        own.tokenSink.yield("ee56")
+        own.sendToken("ee56")
         for _ in 0..<50 where client.tokens.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         #expect(client.tokens.map(\.0) == ["AbCdEfGh12345678"] && client.tokens.map(\.1) == ["ee56"])
         // the app still writes it while it runs, and still ends it itself
@@ -305,7 +345,7 @@ struct ChatLiveManagerTests {
         let manager = ChatLiveManager(adapter: adapter, now: { Date() }, isAppActive: { false }, environment: nil, client: { client })
         manager.began(thread: "AbCdEfGh12345678", prompt: "find my cats", source: .app)
         #expect(adapter.madeWithPush == [false])
-        adapter.made.first?.tokenSink.yield("ee56")
+        adapter.made.first?.sendToken("ee56")
         try await Task.sleep(for: .milliseconds(30))
         #expect(client.tokens.isEmpty)
     }

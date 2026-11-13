@@ -113,24 +113,43 @@ final class FakeLiveHandle: JobActivityHandle {
     }
 }
 
-/// A fake old-type activity (`OldLiveActivity`): from an older build, only ever ended.
+/// A fake old-type activity (`OldLiveActivity`): from an older build, or push-started by the server with an old start
+/// token (changeover release). `suspends`: its end really waits, as ActivityKit's does.
 @MainActor
 final class FakeOldActivity: OldLiveActivity {
     let id: String
     var staleDate: Date?
+    var saveRun: (attributes: LiveRunAttributes, state: LiveContentState)?
+    var suspends = false
     private(set) var ended = false
     private(set) var endCount = 0
+    private(set) var token: String?
+    private var continuations: [AsyncStream<String>.Continuation] = []
 
-    init(id: String, staleDate: Date?) {
+    init(id: String, staleDate: Date?, saveRun: (attributes: LiveRunAttributes, state: LiveContentState)? = nil) {
         self.id = id
         self.staleDate = staleDate
+        self.saveRun = saveRun
     }
 
     var isEnded: Bool { ended }
     func isFresh(at now: Date) -> Bool { !ended && (staleDate.map { $0 > now } ?? false) }
     func endNow() async {
+        if suspends { for _ in 0..<5 { await Task.yield() } }
         ended = true
         endCount += 1
+    }
+
+    func pushTokens() -> AsyncStream<String> {
+        let (stream, continuation) = AsyncStream.makeStream(of: String.self)
+        continuations.append(continuation)
+        if let token { continuation.yield(token) }
+        return stream
+    }
+
+    func sendToken(_ t: String) {
+        token = t
+        for c in continuations { c.yield(t) }
     }
 }
 
@@ -160,6 +179,7 @@ final class FakeLiveAdapter: LiveActivityAdapter {
     var clock: @MainActor () -> Date = { Date() }
     private var startContinuations: [AsyncStream<String>.Continuation] = []
     private var activityContinuations: [AsyncStream<any JobActivityHandle>.Continuation] = []
+    private var oldContinuations: [AsyncStream<any OldLiveActivity>.Continuation] = []
 
     var activities: [any JobActivityHandle] { handles }
     var oldActivities: [any OldLiveActivity] { old }
@@ -195,6 +215,18 @@ final class FakeLiveAdapter: LiveActivityAdapter {
     func systemStarts(_ handle: FakeLiveHandle) {
         handles.append(handle)
         for c in activityContinuations { c.yield(handle) }
+    }
+
+    func newOldActivities() -> AsyncStream<any OldLiveActivity> {
+        let (stream, continuation) = AsyncStream.makeStream(of: (any OldLiveActivity).self)
+        oldContinuations.append(continuation)
+        return stream
+    }
+
+    /// The system push-started an old-type activity (a key with no job start token yet).
+    func systemStartsOld(_ a: FakeOldActivity) {
+        old.append(a)
+        for c in oldContinuations { c.yield(a) }
     }
 }
 

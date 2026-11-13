@@ -1344,10 +1344,13 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     }
 
     /// `PUT /live/chats/<thread>` with `"type": "job"`: the update token of a chat reply's job activity (this phone's own,
-    /// or one the server push-started here), so the server pushes `JobLiveState` to it.
-    public func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment) async throws {
+    /// or one the server push-started here), so the server pushes `JobLiveState` to it. `job: false` leaves the type out:
+    /// an old-type activity the server push-started (changeover release).
+    public func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment, job: Bool) async throws {
         let req = try makeRequest("PUT", "/live/chats/\(Self.encode(threadID))", keyed: true)
-        try await sendEmpty(req, body: Self.jsonBody(["token": token, "environment": environment.rawValue, "type": "job"]))
+        var body = ["token": token, "environment": environment.rawValue]
+        if job { body["type"] = "job" }
+        try await sendEmpty(req, body: Self.jsonBody(body))
     }
 
     public func registerLiveRun(_ r: LiveRunRegistration) async throws -> LiveRunReply {

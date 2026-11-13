@@ -102,8 +102,10 @@ final class LiveActivityManager: JobLiveSink {
         var flushTask: Task<Void, Never>?
         var keepaliveTask: Task<Void, Never>?
         var members: [UUID: Member] = [:]
-        /// Counts members as they join, so jobs that started in the same second keep their order in the rows.
+        /// Counts members as they join: the rows are newest first by this order.
         var joined = 0
+        /// When the period began: its clock counts from here (a job's own `since` is its current stage's).
+        var since: Double = 0
         var loggedJobs = -1
         var loggedWaiting = -1
         var ended = false
@@ -121,6 +123,8 @@ final class LiveActivityManager: JobLiveSink {
         var priorSave = false
         /// The job's row as last seen (kept when the job leaves the queue with something finished).
         var job: JobLiveJob?
+        /// The job's run attributes, to rebuild its row as "saved" when it leaves the queue mid-webp.
+        var attributes: LiveRunAttributes?
 
         /// It has an outcome the period's end can report.
         var finished: Bool { saved || webp || failed }
@@ -129,6 +133,14 @@ final class LiveActivityManager: JobLiveSink {
     /// An activity the server push-started (a share-sheet run) that this process watches.
     private struct Adopted {
         var task: Task<Void, Never>
+        var token: String?
+        var registeredToken: String?
+    }
+
+    /// An old-type activity the server push-started (changeover release, `OldLiveActivity`) that this process watches.
+    private struct AdoptedOld {
+        let activity: any OldLiveActivity
+        var task: Task<Void, Never>?
         var token: String?
         var registeredToken: String?
     }
@@ -145,6 +157,7 @@ final class LiveActivityManager: JobLiveSink {
     private var runCounter = 0
     private var summary: Summary?
     private var adopted: [String: Adopted] = [:]
+    private var adoptedOld: [String: AdoptedOld] = [:]
     private var tasks: [Task<Void, Never>] = []
     private var observers: [any NSObjectProtocol] = []
     private var latestStartToken: String?
@@ -182,6 +195,13 @@ final class LiveActivityManager: JobLiveSink {
             for await handle in stream {
                 guard let self else { return }
                 self.adoptIfWanted(handle)
+            }
+        })
+        tasks.append(Task { [weak self] in
+            guard let stream = self?.adapter.newOldActivities() else { return }
+            for await old in stream {
+                guard let self else { return }
+                self.adoptOld(old)
             }
         })
         if observeLifecycle {
@@ -226,6 +246,7 @@ final class LiveActivityManager: JobLiveSink {
             scheduleRegister(r)
         }
         for id in adopted.keys { registerAdopted(id) }
+        for id in adoptedOld.keys { registerOld(id) }
     }
 
     // MARK: - Environment
@@ -503,6 +524,7 @@ final class LiveActivityManager: JobLiveSink {
         // An old-type activity of this run (from an older build) gives way: one island per job.
         let old = adapter.oldActivities
         let t = now
+        adoptedOld.removeValue(forKey: id)?.task?.cancel()
         writes.enqueue { await OldLiveActivities.end(old, now: t, showing: id) }
         if let existing = adapter.activities.first(where: { $0.attributes.id == id && !$0.isEnded }) {
             r.handle = existing
@@ -652,6 +674,7 @@ final class LiveActivityManager: JobLiveSink {
     /// Two jobs are live: from here one activity speaks for all of them, until nothing is live.
     private func beginPeriod(_ queue: JobQueue) {
         let s = Summary()
+        s.since = now.timeIntervalSince1970.rounded(.down)
         summary = s
         // The oldest unfinished activity of a run is kept; any other one goes at once (and its server run with it).
         let holders = runs.values.filter { $0.handle != nil && !$0.ended && !$0.detached }.sorted { $0.order < $1.order }
@@ -723,7 +746,7 @@ final class LiveActivityManager: JobLiveSink {
         // One row per job of the period (at most 3 are shown, newest first), "1 done, 2 going" (CONTRACT-JOBLIVE.md 2.1).
         let jobs = periodJobs(s, finishedOnly: false)
         guard !jobs.isEmpty else { return }
-        let many = JobLive.many(id: s.id ?? UUID().uuidString.lowercased(), jobs: jobs, open: JobLiveLinks.jobs)
+        let many = JobLive.many(id: s.id ?? UUID().uuidString.lowercased(), jobs: jobs, since: s.since, open: JobLiveLinks.jobs)
         ensureSummaryActivity(s, many)
         writeSummary(s, many.state)
         let waiting = live.filter { $0.pipeline.line != nil }.count
@@ -735,11 +758,12 @@ final class LiveActivityManager: JobLiveSink {
         updateGrace()
     }
 
-    /// The period's jobs in the order they joined. `finishedOnly`: only those with an outcome (the period's end).
+    /// The period's jobs, newest first by when they joined (the rows' order). `finishedOnly`: only those with an outcome
+    /// (the period's end).
     private func periodJobs(_ s: Summary, finishedOnly: Bool) -> [JobLiveJob] {
         s.members.values
             .filter { !finishedOnly || $0.finished }
-            .sorted { $0.order < $1.order }
+            .sorted { $0.order > $1.order }
             .compactMap(\.job)
     }
 
@@ -765,6 +789,11 @@ final class LiveActivityManager: JobLiveSink {
             if m.saved || m.webp {
                 m.live = false
                 m.failed = false
+                // It left mid-step (dismissed while its webp rendered): its save stands, so its row says "saved".
+                if let row = m.job, !row.state.isTerminal, let a = m.attributes {
+                    let done = LiveContentState(stage: .done, rail: 2, since: row.state.since)
+                    m.job = JobLive.job(save: done, attributes: a, open: JobLiveLinks.run(a))
+                }
                 s.members[id] = m
             } else {
                 s.members[id] = nil
@@ -795,6 +824,7 @@ final class LiveActivityManager: JobLiveSink {
             default:
                 if job.isLive { member.failed = false }
             }
+            member.attributes = job.pipeline.liveAttributes(origin: Self.origin(of: job.pipeline))
             member.job = periodJob(job, member) ?? member.job
             s.members[job.id] = member
         }
@@ -815,7 +845,7 @@ final class LiveActivityManager: JobLiveSink {
         // The rows of the jobs that came to something: "3 done", or "2 failed" when nothing did (nil: every job was
         // cancelled, nothing to say).
         let finals = periodJobs(s, finishedOnly: true)
-        let final = finals.isEmpty ? nil : JobLive.many(id: s.id ?? "", jobs: finals, open: JobLiveLinks.jobs).state
+        let final = finals.isEmpty ? nil : JobLive.many(id: s.id ?? "", jobs: finals, since: s.since, open: JobLiveLinks.jobs).state
         for r in runs.values where r.folded && !r.detached {
             r.folded = false
             r.ended = true
@@ -826,7 +856,7 @@ final class LiveActivityManager: JobLiveSink {
         guard let handle = s.handle else { return }
         if let final {
             s.sent = final
-            let dismiss = now.addingTimeInterval(JobLiveTimes.dismissal(of: final))
+            let dismiss = now.addingTimeInterval(JobLiveTimes.dismissal(ofPeriod: finals))
             Telemetry.log(.info, .live, "live summary ended", data: [
                 "saved": .int(saved), "webps": .int(webps), "failed": .int(failed),
             ])
@@ -983,17 +1013,63 @@ final class LiveActivityManager: JobLiveSink {
         else { return }
         entry.registeredToken = token
         adopted[id] = entry
-        let session = ctx.jobs.all().first { $0.id == runID }?.sessionID
-        // The server started this run and holds its attributes and state; the body only has to pass its checks.
-        // "fetching" is a step the server owns, so it never replaces the state the server has (a device step would).
+        let job = ctx.jobs.all().first { $0.id == runID }
+        // The server started this run and holds its attributes; the body only has to pass its checks. The state is the
+        // job's real stage when this device knows it, so a server that lost the run (and makes it again from this body)
+        // shows the right step. Otherwise "fetching": a server step, it never replaces the state the server has.
         let registration = LiveRunRegistration(
-            run: runID, environment: env, updateToken: token, session: session, start: false,
+            run: runID, environment: env, updateToken: token, session: job?.sessionID, start: false,
             attributes: LiveRunAttributes(pushStarted: handle.attributes, run: runID),
-            state: LiveContentState(stage: .fetching, rail: 0, since: handle.state.since), job: true)
+            state: Self.registrationState(job?.stage, since: handle.state.since), job: true)
         let client = ctx.client
         network.enqueue { [weak self] in
             do { _ = try await client.registerLiveRun(registration) }
             catch { self?.adopted[id]?.registeredToken = nil }
+        }
+    }
+
+    /// What a re-registered push-started run says it is doing: its `SharedJob` stage, else "fetching".
+    static func registrationState(_ stage: SharedJob.Stage?, since: Double) -> LiveContentState {
+        switch stage {
+        case .saving?: return LiveContentState(stage: .saving, rail: 1, since: since)
+        case .ready?: return LiveContentState(stage: .ready, rail: 2, since: since)
+        case .rendering?: return LiveContentState(stage: .rendering, rail: 3, since: since)
+        default: return LiveContentState(stage: .fetching, rail: 0, since: since)
+        }
+    }
+
+    // MARK: - Old-type activities the server started (changeover release)
+
+    /// Follows an old-type save activity the server push-started, so its token reaches the server on the old route.
+    private func adoptOld(_ a: any OldLiveActivity) {
+        guard !a.isEnded, a.saveRun != nil, adoptedOld[a.id] == nil else { return }
+        let id = a.id
+        let tokens = a.pushTokens()
+        adoptedOld[id] = AdoptedOld(activity: a)
+        adoptedOld[id]?.task = Task { [weak self] in
+            for await token in tokens {
+                guard let self else { return }
+                self.adoptedOld[id]?.token = token
+                self.registerOld(id)
+            }
+        }
+    }
+
+    /// `PUT /live/runs/<run>` without `"type": "job"`: the server pushes the old shape, which the old widget draws.
+    private func registerOld(_ id: String) {
+        guard var entry = adoptedOld[id], let token = entry.token, entry.registeredToken != token, !entry.activity.isEnded,
+              pushAvailable, let ctx, let env = environment, let run = entry.activity.saveRun,
+              let runID = UUID(uuidString: id)
+        else { return }
+        entry.registeredToken = token
+        adoptedOld[id] = entry
+        let registration = LiveRunRegistration(
+            run: runID, environment: env, updateToken: token, session: ctx.jobs.all().first { $0.id == runID }?.sessionID,
+            start: false, attributes: run.attributes, state: run.state, job: false)
+        let client = ctx.client
+        network.enqueue { [weak self] in
+            do { _ = try await client.registerLiveRun(registration) }
+            catch { self?.adoptedOld[id]?.registeredToken = nil }
         }
     }
 
@@ -1024,8 +1100,14 @@ final class LiveActivityManager: JobLiveSink {
             }
         }
         // Old-type activities from an older build that nobody writes any more go too (the server still writes the
-        // ones it was told about before the update, and ends them itself).
+        // ones it was told about before the update, and ends them itself). A fresh one hands over its token: the server
+        // may have push-started it after the update, before this build ran (changeover release).
         let old = adapter.oldActivities
+        for a in old where !a.isEnded && a.isFresh(at: t) { adoptOld(a) }
+        for (id, entry) in adoptedOld where entry.activity.isEnded {
+            entry.task?.cancel()
+            adoptedOld[id] = nil
+        }
         writes.enqueue { await OldLiveActivities.end(old, now: t) }
         let alive = Set(live.filter { !$0.isEnded }.map { $0.attributes.id })
         for id in adopted.keys where !alive.contains(id) {

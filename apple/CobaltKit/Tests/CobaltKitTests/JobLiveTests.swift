@@ -399,39 +399,39 @@ struct JobLiveManyTests {
     }
 
     @Test func oneDoneTwoGoing() {
+        // given newest first; each job's own `since` (its stage's) neither orders the rows nor sets the clock
         let m = JobLive.many(id: "busy", jobs: [
-            job("a", since: 100, phase: .working, headline: "downloading from twitch"),
-            job("b", since: 300, phase: .working, headline: "uploading"),
-            job("c", since: 200, phase: .done, headline: "saved"),
-        ])
+            job("b", since: 100, phase: .working, headline: "uploading"),
+            job("c", since: 300, phase: .done, headline: "saved"),
+            job("a", since: 200, phase: .working, headline: "downloading from twitch"),
+        ], since: 50)
         #expect(m.attributes == JobLiveAttributes(id: "busy", kind: "many", title: "3 jobs", agent: false))
         #expect(m.state.headline == "1 done, 2 going")
         #expect(m.state.phase == .working && m.state.steps == ["jobs"] && m.state.step == 0)
-        #expect(m.state.fraction == 0.333 && m.state.compact == "1/3" && m.state.since == 100)
-        // newest first
+        #expect(m.state.fraction == 0.333 && m.state.compact == "1/3" && m.state.since == 50)
         #expect(m.state.rows?.map(\.title) == ["b", "c", "a"])
         #expect(m.state.rows?.map(\.status) == ["uploading", "saved", "downloading from twitch"])
         #expect(m.state.rows?.map(\.phase) == [.working, .done, .working])
     }
 
     @Test func atMostThreeRowsAndTheEndStates() {
-        let five = (0..<5).map { job("j\($0)", since: Double($0), phase: .working, headline: "going") }
-        let m = JobLive.many(id: "x", jobs: five)
+        let five = (0..<5).reversed().map { job("j\($0)", since: Double($0), phase: .working, headline: "going") }
+        let m = JobLive.many(id: "x", jobs: five, since: 0)
         #expect(m.attributes.title == "5 jobs" && m.state.headline == "5 going")
         #expect(m.state.rows?.map(\.title) == ["j4", "j3", "j2"])
 
-        let allDone = JobLive.many(id: "x", jobs: [job("a", since: 1, phase: .done, headline: "saved"), job("b", since: 2, phase: .done, headline: "saved")]).state
+        let allDone = JobLive.many(id: "x", jobs: [job("a", since: 1, phase: .done, headline: "saved"), job("b", since: 2, phase: .done, headline: "saved")], since: 1).state
         #expect(allDone.phase == .done && allDone.headline == "2 done" && allDone.step == 1 && allDone.fraction == 1 && allDone.isTerminal)
 
-        let mixed = JobLive.many(id: "x", jobs: [job("a", since: 1, phase: .done, headline: "saved"), job("b", since: 2, phase: .failed, headline: "couldn't save")]).state
+        let mixed = JobLive.many(id: "x", jobs: [job("a", since: 1, phase: .done, headline: "saved"), job("b", since: 2, phase: .failed, headline: "couldn't save")], since: 1).state
         #expect(mixed.phase == .done && mixed.headline == "1 done, 1 failed" && mixed.fraction == 0.5)
 
-        let none = JobLive.many(id: "x", jobs: [job("a", since: 1, phase: .failed, headline: "couldn't save"), job("b", since: 2, phase: .lost, headline: "lost track of this save")]).state
+        let none = JobLive.many(id: "x", jobs: [job("a", since: 1, phase: .failed, headline: "couldn't save"), job("b", since: 2, phase: .lost, headline: "lost track of this save")], since: 1).state
         #expect(none.phase == .failed && none.headline == "2 failed")
     }
 
     @Test func itEncodesAndDecodesWithItsRows() throws {
-        let m = JobLive.many(id: "x", jobs: [job("a", since: 1, phase: .working, headline: "going"), job("b", since: 2, phase: .done, headline: "saved")])
+        let m = JobLive.many(id: "x", jobs: [job("a", since: 1, phase: .working, headline: "going"), job("b", since: 2, phase: .done, headline: "saved")], since: 1)
         let again = try decodeState(m.state.canonicalJSON())
         #expect(again == m.state)
         #expect(again.rows?.count == 2)

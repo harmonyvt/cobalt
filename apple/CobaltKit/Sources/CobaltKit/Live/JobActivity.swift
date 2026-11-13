@@ -34,12 +34,16 @@ protocol JobActivityHandle: AnyObject, Sendable {
 }
 
 /// An activity of one of the three old types (`CobaltActivityAttributes`, `CobaltEditActivityAttributes`,
-/// `CobaltChatActivityAttributes`) still on screen from an older build. This build never requests one, writes one or hands
-/// one's token to the server. The server keeps pushing what was registered before the update in the old shape and ends it
-/// on its own timings (APP-API-CONTRACT 8.13), so the app only ends the ones nobody writes any more, and any that show a
-/// job the app now shows with a job activity of its own (`endOld`).
+/// `CobaltChatActivityAttributes`) still on screen from an older build. This build never requests one or writes one. The
+/// server keeps pushing what was registered before the update in the old shape and ends it on its own timings
+/// (APP-API-CONTRACT 8.13), so the app only ends the ones nobody writes any more, and any that show a job the app now shows
+/// with a job activity of its own.
+///
+/// Changeover release only: a key with no job start token yet (the first share or agent job after the update, before the
+/// app ran) still gets an old-type save or chat activity push-started. The save and chat managers report its update token
+/// on the old route, without `"type": "job"`, so the server can update and end it.
 @MainActor
-protocol OldLiveActivity: AnyObject {
+protocol OldLiveActivity: AnyObject, Sendable {
     /// The run, render or thread it shows.
     var id: String { get }
     var isEnded: Bool { get }
@@ -47,6 +51,10 @@ protocol OldLiveActivity: AnyObject {
     func isFresh(at now: Date) -> Bool
     /// Ends it at once, showing what it shows now.
     func endNow() async
+    /// Its update push token, lowercase hex: the current value first, then every change.
+    func pushTokens() -> AsyncStream<String>
+    /// A save's activity: its attributes and what it shows now, for `PUT /live/runs/<run>`. Nil for the other types.
+    var saveRun: (attributes: LiveRunAttributes, state: LiveContentState)? { get }
 }
 
 enum OldLiveActivities {
@@ -79,6 +87,13 @@ enum JobLiveTimes {
         case .done: return state.link != nil ? doneWithLinkSeconds : doneSeconds
         default: return failedSeconds         // failed and lost (an end is never working or waiting)
         }
+    }
+
+    /// The dismissal of an ended busy period, from its jobs' rows: a failed or lost job keeps it 300 s, so the failure is
+    /// seen; otherwise 60 s, or 120 s when a job has a link to copy.
+    static func dismissal(ofPeriod jobs: [JobLiveJob]) -> Double {
+        if jobs.contains(where: { $0.state.phase == .failed || $0.state.phase == .lost }) { return failedSeconds }
+        return jobs.contains { $0.state.link != nil } ? doneWithLinkSeconds : doneSeconds
     }
 }
 
@@ -151,15 +166,33 @@ final class ActivityKitJobHandle: JobActivityHandle {
     }
 }
 
-/// An old-type activity (any of the three), for ending only.
+/// An old-type activity (any of the three): ended, and for saves and chats its token reported (changeover release).
 @MainActor
 final class ActivityKitOldActivity<A: ActivityAttributes>: OldLiveActivity {
     nonisolated(unsafe) let activity: Activity<A>
     let id: String
+    private let describe: @MainActor (Activity<A>) -> (attributes: LiveRunAttributes, state: LiveContentState)?
 
-    init(_ activity: Activity<A>, id: String) {
+    init(
+        _ activity: Activity<A>, id: String,
+        describe: @escaping @MainActor (Activity<A>) -> (attributes: LiveRunAttributes, state: LiveContentState)? = { _ in nil }
+    ) {
         self.activity = activity
         self.id = id
+        self.describe = describe
+    }
+
+    var saveRun: (attributes: LiveRunAttributes, state: LiveContentState)? { describe(activity) }
+
+    func pushTokens() -> AsyncStream<String> {
+        let activity = activity
+        return AsyncStream { continuation in
+            let task = Task {
+                for await data in activity.pushTokenUpdates { continuation.yield(data.liveHex) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     var isEnded: Bool {
@@ -183,31 +216,59 @@ final class ActivityKitOldActivity<A: ActivityAttributes>: OldLiveActivity {
 final class ActivityKitJobAdapter: LiveActivityAdapter, EditLiveAdapter, ChatLiveAdapter {
     private let kinds: Set<String>
     private let old: @MainActor () -> [any OldLiveActivity]
+    private let oldCreated: @MainActor () -> AsyncStream<any OldLiveActivity>
 
-    private init(kinds: Set<String>, old: @escaping @MainActor () -> [any OldLiveActivity]) {
+    private init(
+        kinds: Set<String>, old: @escaping @MainActor () -> [any OldLiveActivity],
+        oldCreated: @escaping @MainActor () -> AsyncStream<any OldLiveActivity> = { AsyncStream { $0.finish() } }
+    ) {
         self.kinds = kinds
         self.old = old
+        self.oldCreated = oldCreated
+    }
+
+    /// Old-type activities of `A` the system creates from now on (a push-to-start with an old start token).
+    private static func created<A: ActivityAttributes>(
+        _ type: A.Type, _ wrap: @escaping @MainActor (Activity<A>) -> any OldLiveActivity
+    ) -> AsyncStream<any OldLiveActivity> {
+        AsyncStream { continuation in
+            let task = Task { @MainActor in
+                for await activity in Activity<A>.activityUpdates { continuation.yield(wrap(activity)) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     /// Saves, uploads, makes and the busy period (`LiveActivityManager`); its old type is `CobaltActivityAttributes`.
     static func saves() -> ActivityKitJobAdapter {
-        ActivityKitJobAdapter(kinds: JobLiveKinds.saves) {
-            Activity<CobaltActivityAttributes>.activities.map { ActivityKitOldActivity($0, id: $0.attributes.run) }
+        let wrap: @MainActor (Activity<CobaltActivityAttributes>) -> any OldLiveActivity = { a in
+            ActivityKitOldActivity(a, id: a.attributes.run) { a in
+                guard let run = UUID(uuidString: a.attributes.run) else { return nil }
+                let x = a.attributes
+                return (LiveRunAttributes(run: run, input: x.input, service: x.service, ref: x.ref, origin: x.origin), a.content.state)
+            }
         }
+        return ActivityKitJobAdapter(
+            kinds: JobLiveKinds.saves,
+            old: { Activity<CobaltActivityAttributes>.activities.map(wrap) },
+            oldCreated: { created(CobaltActivityAttributes.self, wrap) })
     }
 
-    /// Editor renders (`EditLiveManager`); its old type is `CobaltEditActivityAttributes`.
+    /// Editor renders (`EditLiveManager`); its old type is `CobaltEditActivityAttributes` (never push-started).
     static func edits() -> ActivityKitJobAdapter {
-        ActivityKitJobAdapter(kinds: JobLiveKinds.edits) {
+        ActivityKitJobAdapter(kinds: JobLiveKinds.edits, old: {
             Activity<CobaltEditActivityAttributes>.activities.map { ActivityKitOldActivity($0, id: $0.attributes.render) }
-        }
+        })
     }
 
     /// Chat replies (`ChatLiveManager`); its old type is `CobaltChatActivityAttributes`.
     static func chats() -> ActivityKitJobAdapter {
-        ActivityKitJobAdapter(kinds: JobLiveKinds.chats) {
-            Activity<CobaltChatActivityAttributes>.activities.map { ActivityKitOldActivity($0, id: $0.attributes.thread) }
-        }
+        let wrap: @MainActor (Activity<CobaltChatActivityAttributes>) -> any OldLiveActivity = { ActivityKitOldActivity($0, id: $0.attributes.thread) }
+        return ActivityKitJobAdapter(
+            kinds: JobLiveKinds.chats,
+            old: { Activity<CobaltChatActivityAttributes>.activities.map(wrap) },
+            oldCreated: { created(CobaltChatActivityAttributes.self, wrap) })
     }
 
     /// Live Activities are allowed for capystore (Settings > capystore > Live Activities).
@@ -222,6 +283,9 @@ final class ActivityKitJobAdapter: LiveActivityAdapter, EditLiveAdapter, ChatLiv
     }
 
     var oldActivities: [any OldLiveActivity] { old() }
+
+    /// Old-type activities the system starts from now on (changeover release, see `OldLiveActivity`).
+    func newOldActivities() -> AsyncStream<any OldLiveActivity> { oldCreated() }
 
     func request(_ job: JobLiveJob, staleDate: Date, push: Bool) throws -> any JobActivityHandle {
         let activity = try Activity.request(

@@ -495,17 +495,18 @@ public enum JobLive {
 
     // MARK: several at once (CONTRACT-JOBLIVE.md 2.1)
 
-    /// One activity for 2+ app-started jobs at once: kind "many", title "3 jobs", headline "1 done, 2 going", `rows` (at most
-    /// 3, newest first, by `since`; jobs with the same `since` keep the order given) and `fraction` = done / total.
+    /// One activity for 2+ app-started jobs at once: kind "many", title "3 jobs", headline "1 done, 2 going", `rows` (the
+    /// first 3 of `jobs`, which the caller gives newest first) and `fraction` = done / total.
     ///
     /// Choices the contract leaves open:
     /// - `steps` is `["jobs"]` (a state needs 1...5 steps), `step` is 0 while any job runs and 1 when all have finished.
     /// - the headline drops a zero part ("3 done", "2 going") and a failed or lost job is not "going" and not "done":
     ///   it adds "1 failed" instead (one phrase, so "1 done, 1 going, 1 failed").
-    /// - `compact` is "done/total" ("1/3"); `since` is the oldest job's, so the clock counts from the first start.
+    /// - `compact` is "done/total" ("1/3"); `since` is the period's start (a job's own `since` is its current stage's, so
+    ///   the clock would jump back as stages change).
     /// - the phase is `working` while any job runs, then `done` (some saved) or `failed` (none did).
     /// - a row's status is that job's headline (its words), capped like a headline.
-    public static func many(id: String, jobs: [JobLiveJob], open: String? = nil) -> JobLiveJob {
+    public static func many(id: String, jobs: [JobLiveJob], since: Double, open: String? = nil) -> JobLiveJob {
         let total = jobs.count
         let done = jobs.filter { $0.state.phase == .done }.count
         let failed = jobs.filter { $0.state.phase == .failed || $0.state.phase == .lost }.count
@@ -517,10 +518,7 @@ public enum JobLive {
         if failed > 0 { words.append("\(failed) failed") }
         let finished = going == 0
 
-        let newestFirst = jobs.enumerated()
-            .sorted { $0.element.state.since != $1.element.state.since ? $0.element.state.since > $1.element.state.since : $0.offset < $1.offset }
-            .map(\.element)
-        let rows = newestFirst.prefix(3).map {
+        let rows = jobs.prefix(3).map {
             JobLiveState.Row(title: JobText.cap($0.attributes.title, 60), status: JobText.cap($0.state.headline, 60), phase: $0.state.phase)
         }
 
@@ -531,7 +529,7 @@ public enum JobLive {
             headline: words.joined(separator: ", "),
             fraction: total > 0 ? Double(done) / Double(total) : 0,
             compact: "\(done)/\(total)",
-            since: jobs.map(\.state.since).min() ?? 0,
+            since: since,
             rows: rows)
         let attributes = JobLiveAttributes(id: id, kind: "many", title: "\(total) jobs", agent: false, open: open)
         return JobLiveJob(attributes: attributes, state: state.canonical())

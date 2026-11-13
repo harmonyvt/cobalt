@@ -228,6 +228,9 @@ final class EditLiveManager {
         else { return }
         // an old-type activity of this render (from an older build) gives way: one island per render
         await OldLiveActivities.end(adapter.oldActivities, now: now(), showing: r.id)
+        // Ending it suspended: another copy of this render (the editor's feed and the queue's each call in) may have
+        // started its activity meanwhile. That one carries on; this copy is not news.
+        guard entry(for: r.id) == nil, !finished.contains(r.id) else { return }
         // ActivityKit refuses a request while the app is in the background: it throws, and the next copy seen in front tries again
         guard let h = try? adapter.request(
             Self.island(next, r), staleDate: now().addingTimeInterval(Self.staleAfter), push: pushAvailable)
@@ -242,6 +245,8 @@ final class EditLiveManager {
         case .failed: now().addingTimeInterval(Self.dismissFailed)
         default: nil                                    // cancelled: the owner did it, it goes at once
         }
+        // what it shows now, before the end suspends: a later copy of the render can no longer move it
+        entries[r.id]?.shown = state
         await h.end(Self.island(state, r).state, dismissAt: dismiss)
         let render = h.attributes.id
         entries[render] = nil

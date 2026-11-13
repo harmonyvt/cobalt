@@ -224,8 +224,18 @@ struct LiveSummaryTests {
         #expect(states.allSatisfy { ($0.rows?.count ?? 0) <= 3 }, "at most 3 rows (CONTRACT-JOBLIVE.md 2.1)")
         #expect(states.contains { $0.rows?.count == 3 })
         #expect(states.allSatisfy { $0.steps == ["jobs"] && $0.compact?.hasSuffix("/4") == true }, "the count covers all four")
+        // newest first by when each job joined, the same rows in the same order on every write (a stage change used to
+        // reshuffle them and hide the newest job)
+        let newestFirst = ["x · 2105435404002562057", "tiktok · @cobalt", "x · 2105435404002562056"]
+        for state in states where state.rows?.count == 3 {
+            #expect(state.rows?.map(\.title) == newestFirst, "\(state.rows?.map(\.title) ?? [])")
+        }
+        // the clock counts from the period's start: it never moves
+        let sinces = Set(states.map(\.since))
+        #expect(sinces.count == 1, "since moved: \(states.map(\.since))")
         let end = try #require(handle.end)
-        #expect(end.state.headline == "4 done" && end.state.rows?.count == 3)
+        #expect(end.state.headline == "4 done" && end.state.rows?.map(\.title) == newestFirst)
+        #expect(end.state.since == states.first?.since)
         #expect(rig.adapter.requests.count == 1)
     }
 
@@ -250,7 +260,7 @@ struct LiveSummaryTests {
 
     // MARK: ending
 
-    @Test func aFailureIsCountedAndAPeriodWithSomethingSavedStaysAMinute() async throws {
+    @Test func aFailureIsCountedAndKeepsAPeriodWithSomethingSavedFiveMinutes() async throws {
         let rig = SummaryRig()
         let jobs = rig.queue.add([.link(linkA), .link(linkPrivate), .link(linkC)], via: .review)
         await rig.drive { jobs.allSatisfy { rig.isSaved($0) || rig.isFailed($0) } }
@@ -259,7 +269,7 @@ struct LiveSummaryTests {
         let end = try #require(handle.end)
         #expect(end.state.headline == "2 done, 1 failed", "\(end.state)")
         #expect(end.state.phase == .done && end.state.rows?.filter { $0.phase == .failed }.count == 1)
-        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 60) < 1)
+        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 300) < 1, "a failure is seen: 300 s")
         #expect(rig.adapter.requests.count == 1)
     }
 
@@ -293,6 +303,26 @@ struct LiveSummaryTests {
         #expect(statuses.filter { $0 == "webp ready" }.count == 1, "the webp is its row: \(statuses)")
         #expect(statuses.filter { $0 == "saved" }.count == 1, "the new save: \(statuses)")
         #expect(end.state.headline == "2 done")
+        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 120) < 1, "all done, one with a link: 120 s")
+    }
+
+    @Test func aJobDismissedWhileItsWebpRendersEndsThePeriodAsSaved() async throws {
+        let rig = SummaryRig()
+        let jobs = rig.queue.add([.link(linkA), .link(linkB), .link(linkC)], via: .review)
+        let first = jobs[0]
+        await rig.drive { rig.isSaved(first) }
+        #expect(rig.manager.inBusyPeriod)
+        first.pipeline.makeWebp()
+        await rig.drive { if case .rendering = first.pipeline.state { true } else { false } }
+        // off the tray mid-render: its save stands, the render goes on unseen
+        rig.queue.dismiss(first.id)
+        await rig.drive { jobs.dropFirst().allSatisfy { rig.isSaved($0) } }
+        await rig.settle()
+        let end = try #require(rig.handle?.end)
+        #expect(end.state.isFinishedPeriod, "\(end.state)")
+        #expect(end.state.count("going") == 0 && end.state.headline == "3 done", "\(end.state.headline)")
+        #expect(end.state.rows?.allSatisfy { $0.phase == .done } == true, "\(end.state.rows ?? [])")
+        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 60) < 1)
     }
 
     @Test func cancellingEveryJobEndsTheActivityQuietly() async throws {

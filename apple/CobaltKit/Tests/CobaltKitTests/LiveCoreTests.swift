@@ -653,9 +653,10 @@ struct LiveManagerLaunchTests {
         #expect(rig.log.runs.count == 1)
         #expect(r.run == run && r.updateToken == hexToken && !r.start && r.session == "PrEvIeWsession00000007")
         #expect(r.job && r.environment == .sandbox, "a job activity's token registers with type: job")
-        // the server holds the run: the body only passes its checks, and "fetching" (a server step) replaces nothing
+        // the server holds the run: the body only passes its checks; the state is the job's real stage ("saving", a server
+        // step, so it replaces nothing the server has)
         #expect(r.attributes == LiveRunAttributes(run: run, input: "link", service: "x", ref: "2105435404002562056", origin: "share"))
-        #expect(r.state.stage == .fetching && r.state.since == started.state.since)
+        #expect(r.state.stage == .saving && r.state.since == started.state.since)
         // reading the same activity again on a foreground does not register it twice
         rig.manager.foreground()
         await rig.settle()
@@ -717,7 +718,63 @@ struct LiveManagerLaunchTests {
         let r = try #require(rig.log.runs.first)
         #expect(r.run == run && r.updateToken == hexToken && r.job)
         #expect(r.attributes.service == "twitch" && r.attributes.ref == "KindStupidClip" && r.attributes.input == "link")
+        #expect(r.state.stage == .fetching, "no job on this device says otherwise")
         #expect(!started.ended && started.updates.isEmpty, "the server writes it: the app only hands over the token")
+    }
+
+    @Test func aReRegisteredPushStartedRunSaysTheStageItsJobIsAt() async throws {
+        // a share-sheet save waiting for its trim: if the server lost the run, the body it makes it again from must not say
+        // "downloading"
+        let rig = LiveRig(push: true, environment: .sandbox)
+        let run = UUID()
+        rig.h.ctx.jobs.upsert(SharedJob(
+            id: run, origin: .shareExtension, link: URL(string: shortLink), sessionID: "PrEvIeWsession00000007",
+            media: nil, trim: nil, stage: .ready, wantsTrim: true, pickedUp: false, updatedAt: rig.h.clock.now()))
+        rig.manager.start(observeLifecycle: false)
+        await rig.h.settle()
+        let started = pushStarted(run: run, clock: rig.h)
+        rig.adapter.systemStarts(started)
+        await rig.h.settle()
+        started.sendToken(hexToken)
+        await rig.settle()
+        let r = try #require(rig.log.runs.first)
+        #expect(r.state.stage == .ready && r.state.rail == 2 && r.job)
+        #expect(LiveActivityManager.registrationState(.rendering(job: "j"), since: 1).stage == .rendering)
+        #expect(LiveActivityManager.registrationState(.failed(code: "x"), since: 1).stage == .fetching)
+        #expect(LiveActivityManager.registrationState(nil, since: 1).stage == .fetching)
+    }
+
+    @Test func anOldTypeActivityTheServerStartedHandsItsTokenToTheOldRoute() async throws {
+        // the first share after the update, before this build ran: the server only had the old start token
+        let rig = LiveRig(push: true, environment: .sandbox)
+        let now = rig.h.clock.now()
+        // one already on screen at launch (fresh), one started while the app runs
+        let onScreenRun = UUID()
+        let onScreen = FakeOldActivity(
+            id: onScreenRun.uuidString.lowercased(), staleDate: now.addingTimeInterval(100),
+            saveRun: (LiveRunAttributes(run: onScreenRun, input: "link", service: "x", ref: "1", origin: "share"), LiveContentState.samples["fetching_waking"]!))
+        rig.adapter.old = [onScreen]
+        rig.manager.start(observeLifecycle: false)
+        await rig.h.settle()
+        let run = UUID()
+        let attributes = LiveRunAttributes(run: run, input: "link", service: "instagram", ref: "Dd7P496wolG", origin: "share")
+        let saving = LiveContentState.samples["saving_storing"]!
+        let started = FakeOldActivity(id: run.uuidString.lowercased(), staleDate: now.addingTimeInterval(120), saveRun: (attributes, saving))
+        rig.adapter.systemStartsOld(started)
+        await rig.h.settle()
+        started.sendToken(hexToken)
+        onScreen.sendToken(String(repeating: "cd", count: 32))
+        await rig.settle()
+        #expect(rig.log.runs.count == 2)
+        let r = try #require(rig.log.runs.first { $0.run == run })
+        #expect(!r.job, "the old type: the server must push the old shape")
+        #expect(r.updateToken == hexToken && r.attributes == attributes && r.state == saving && !r.start)
+        #expect(rig.log.runs.contains { $0.run == onScreenRun && !$0.job })
+        #expect(!started.isEnded && !onScreen.isEnded, "the server writes and ends them")
+        // the same token is not sent twice
+        rig.manager.foreground()
+        await rig.settle()
+        #expect(rig.log.runs.count == 2)
     }
 
     @Test func oldTypeActivitiesNobodyWritesEndAndOneOfARunTheAppShowsGivesWay() async throws {
