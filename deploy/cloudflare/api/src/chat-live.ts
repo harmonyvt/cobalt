@@ -519,8 +519,12 @@ export class ChatLiveService {
 
                 // Step 1: one target per device that registered for chat cards (old registrations are dropped), and
                 // one per device with a job-island start token (8.13), which wins for a key that has both.
+                // the same start token under two keys is one phone: it gets one card, not a second that never moves
+                const seenTokens = new Set<string>();
                 for (const [k, v] of await this.d.storage.list<ChatStartToken>({ prefix: JOB_START_PREFIX })) {
                     if (now - v.updatedAt > CHAT_START_TOKEN_TTL_MS) continue; // live.ts cleans these
+                    if (seenTokens.has(v.token)) continue;
+                    seenTokens.add(v.token);
                     const t = newTarget(k.slice(JOB_START_PREFIX.length), v.env, k.slice(JOB_START_PREFIX.length) === b.key_id);
                     t.job = true;
                     targets.push(t);
@@ -532,7 +536,8 @@ export class ChatLiveService {
                         await this.d.storage.delete(k);
                         continue;
                     }
-                    if (targets.some((t) => t.keyId === keyId)) continue;
+                    if (targets.some((t) => t.keyId === keyId) || seenTokens.has(v.token)) continue;
+                    seenTokens.add(v.token);
                     targets.push(newTarget(keyId, v.env, keyId === b.key_id));
                 }
 

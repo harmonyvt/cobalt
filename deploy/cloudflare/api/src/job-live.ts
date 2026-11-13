@@ -264,7 +264,8 @@ export function jobOfChat(thread: string, prompt: string, s: ChatLiveState): Job
 // ---- payloads -------------------------------------------------------------------------------------------------------
 
 // A module's own payload, re-dressed for a job run: the content state is the job's, a start names the job type and its
-// attributes, and an open state goes stale (the widget's "no news") JOB_STALE_S after this push. Everything else (event,
+// attributes, and an open state goes stale (the widget's "no news") JOB_STALE_S after this push, or at the module's own
+// stale date when that is later. Everything else (event,
 // timestamp, dismissal, alert, input-push-token) is the module's, so the push rules stay in one place each.
 export function asJobPayload(payload: { aps: Record<string, unknown> }, job: Job, now: number): { aps: Record<string, unknown> } {
     const aps: Record<string, unknown> = { ...payload.aps, "content-state": canonicalJob(job.state) };
@@ -274,6 +275,10 @@ export function asJobPayload(payload: { aps: Record<string, unknown> }, job: Job
         if (job.attributes.open) a.open = job.attributes.open;
         aps.attributes = a;
     }
-    if (aps.event !== "end") aps["stale-date"] = Math.floor(now / 1000) + JOB_STALE_S;
+    // never sooner than the module's own: "ready to trim" waits on the owner for 30 minutes and is not "no news"
+    if (aps.event !== "end") {
+        const own = typeof payload.aps["stale-date"] === "number" ? (payload.aps["stale-date"] as number) : 0;
+        aps["stale-date"] = Math.max(own, Math.floor(now / 1000) + JOB_STALE_S);
+    }
     return { aps };
 }

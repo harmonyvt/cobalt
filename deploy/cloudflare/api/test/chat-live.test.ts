@@ -338,5 +338,13 @@ describe("job island (8.13)", () => {
         await w.state(MAC, st({ status: "done", steps: 1, reply: "three cats" }));
         expect(w.apple.pushes.at(-1)!.payload.aps).toMatchObject({ event: "end", "content-state": { phase: "done", headline: "reply ready", detail: "three cats" } });
     });
+
+    it("the same job start token under two keys is one phone: one card", async () => {
+        const w = doWorld();
+        await w.storage.put(`live:jobstart:${PHONE}`, { token: START, env: "production", updatedAt: T0 });
+        await w.storage.put(`live:jobstart:old-key`, { token: START, env: "production", updatedAt: T0 });
+        expect(await (await w.state(MAC, { status: "thinking", since: T0 / 1000, steps: 0, failedSteps: 0, shown: 0 })).json()).toEqual({ status: "success", targets: 1 });
+        expect(w.apple.pushes).toHaveLength(1);
+    });
 });
 

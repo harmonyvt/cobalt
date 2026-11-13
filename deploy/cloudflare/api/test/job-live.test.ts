@@ -54,4 +54,12 @@ describe("job island states (CONTRACT-JOBLIVE 3)", () => {
         expect(end.aps["stale-date"]).toBeUndefined();
         expect(end.aps["dismissal-date"]).toBe(9);
     });
+
+    it("keeps a later stale date of the module's own: `ready to trim` is not 'no news' after 3 minutes", () => {
+        const job = jobCases().app_ready!;
+        const p = asJobPayload({ aps: { event: "update", "stale-date": 5 + 1800 } }, job, 5000);
+        expect(p.aps["stale-date"]).toBe(5 + 1800);
+        const q = asJobPayload({ aps: { event: "update", "stale-date": 5 + 120 } }, job, 5000);
+        expect(q.aps["stale-date"]).toBe(5 + JOB_STALE_S);
+    });
 });
