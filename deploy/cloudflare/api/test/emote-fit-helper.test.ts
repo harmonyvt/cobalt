@@ -102,7 +102,8 @@ real("the real fit (ffmpeg + img2webp)", () => {
             const wide = await fetch(`${base}/emote-fit?crop=0,0,1,0.1&max_bytes=100000`, { method: "POST", headers: { "x-internal-key": KEY }, body });
             expect(wide.status).toBe(400);
             expect(((await wide.json()) as any).error.code).toBe("error.seventv.fit_shape");
-            const bad = await fetch(`${base}/emote-fit?size=5&max_bytes=100000`, { method: "POST", headers: { "x-internal-key": KEY }, body });
+            // a refusal answers before the body is read (and closes the socket), so send a small one: a 2 MB body hits EPIPE
+            const bad = await fetch(`${base}/emote-fit?size=5&max_bytes=100000`, { method: "POST", headers: { "x-internal-key": KEY }, body: "x" });
             expect(bad.status).toBe(400);
         } finally {
             await helper.close();
