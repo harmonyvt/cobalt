@@ -23,6 +23,7 @@ import {
     type SevenTvUploadDeps,
     EMOTE_FIT_PATH,
     sevenTvUploads,
+    sevenTvOwned,
 } from "../../seventv";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
@@ -124,6 +125,27 @@ const UploadsShape = z
         ),
     })
     .meta({ id: "SevenTvUploads" });
+const OwnedShape = z
+    .object({
+        owner_id: z.string(),
+        total: z.number().describe("how many the account owns; at most 500 are listed"),
+        emotes: z.array(
+            z.object({
+                emote_id: z.string(),
+                name: z.string(),
+                animated: z.boolean(),
+                private: z.boolean(),
+                zero_width: z.boolean(),
+                pending: z.boolean().describe("7TV still processing the images"),
+                preview_url: z.string().nullable(),
+                file_url: z.string().nullable(),
+                page_url: z.string(),
+                file_id: z.string().nullable().describe("the library file it was uploaded from, when capystore uploaded it"),
+                created_at: z.number().nullable().describe("ms, from the emote id"),
+            }),
+        ),
+    })
+    .meta({ id: "SevenTvOwned" });
 const EmoteInfo = z
     .object({
         emote_id: z.string(),
@@ -301,6 +323,14 @@ const ROUTE_OPS = [
         output: UploadsShape.extend({ status: Status }),
         summary: "Emotes uploaded to 7TV through capystore, newest first, at most 100 (GET /7tv/uploads).",
         run: (ctx) => sevenTvUploads(deps(ctx)),
+    }),
+    route({
+        name: "seventv_http.owned",
+        method: "GET",
+        path: "/7tv/owned",
+        output: OwnedShape.extend({ status: Status }),
+        summary: "Every emote the linked 7TV account owns (uploaded anywhere), newest first, at most 500 (GET /7tv/owned).",
+        run: (ctx) => sevenTvOwned(deps(ctx)),
     }),
 ];
 
@@ -583,4 +613,15 @@ const uploadsOp = defineOp({
     handler: (ctx) => strip(sevenTvUploads(deps(ctx))),
 });
 
-export const SEVENTV_OPS = [...ROUTE_OPS, statusOp, setsOp, setOp, addOp, removeOp, renameOp, makeLiveOp, createSetOp, renameSetOp, uploadOp, emoteOp, uploadsOp];
+const ownedOp = defineOp({
+    name: "seventv.owned",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({}),
+    output: OwnedShape,
+    ai: { tier: "free", only: true, summary: "Every emote the linked 7TV account owns (uploaded through capystore or on 7tv.app), newest first; add one to a set with seventv.add.", params: [] },
+    handler: (ctx) => strip(sevenTvOwned(deps(ctx))),
+});
+
+export const SEVENTV_OPS = [...ROUTE_OPS, statusOp, setsOp, setOp, addOp, removeOp, renameOp, makeLiveOp, createSetOp, renameSetOp, uploadOp, emoteOp, uploadsOp, ownedOp];

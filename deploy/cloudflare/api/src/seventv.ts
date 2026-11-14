@@ -831,6 +831,69 @@ export async function sevenTvUploads(d: SevenTvDeps): Promise<StudioReply> {
     return success({ uploads: rows.map((r) => ({ file_id: r.file_id, emote_id: r.emote_id, name: r.name, set_id: r.set_id, created_at: r.created_at })) });
 }
 
+const OWNED = `query { users { me { id ownedEmotes { id defaultName deleted imagesPending
+  flags { animated private defaultZeroWidth } ${IMG} } } } }`;
+/** At most this many owned emotes answer (newest first). */
+export const OWNED_MAX = 500;
+
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/** The time in a ULID (7TV ids are ULIDs): its first 10 characters, in ms; null when it is not one. */
+export function ulidTime(id: string): number | null {
+    if (!/^[0-9A-HJKMNP-TV-Z]{26}$/i.test(id)) return null;
+    let t = 0;
+    for (const ch of id.slice(0, 10).toUpperCase()) t = t * 32 + CROCKFORD.indexOf(ch);
+    return t;
+}
+
+/**
+ * GET /7tv/owned (57.14): every emote the linked account owns on 7TV (uploaded here or on 7tv.app), newest first, at most
+ * OWNED_MAX, with the library file it came from when capystore uploaded it (D1 `seventv_uploads`).
+ */
+export async function sevenTvOwned(d: SevenTvDeps): Promise<StudioReply> {
+    return withToken(d, async (token) => {
+        type Raw = {
+            id: string;
+            defaultName: string;
+            deleted?: boolean;
+            imagesPending?: boolean;
+            flags?: { animated?: boolean; private?: boolean; defaultZeroWidth?: boolean };
+            images?: EmoteImage[];
+        };
+        type Data = { users: { me: { id: string; ownedEmotes?: Raw[] } | null } };
+        const me = (await gql<Data>(d, token, OWNED, {})).users?.me;
+        if (!me) return fail(409, "error.seventv.relink");
+        const files = new Map<string, string>();
+        try {
+            const rows = (await d.db.prepare("SELECT emote_id, file_id FROM seventv_uploads").all<{ emote_id: string; file_id: string }>()).results ?? [];
+            for (const r of rows) files.set(r.emote_id, r.file_id);
+        } catch {
+            // before migration 0042: no files to name
+        }
+        const owned = (me.ownedEmotes ?? []).filter((e) => e && typeof e.id === "string" && !e.deleted);
+        const total = owned.length;
+        const emotes = owned
+            .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+            .slice(0, OWNED_MAX)
+            .map((e) => {
+                const shaped = setEmoteShape({ id: e.id, alias: e.defaultName, addedAt: "", emote: { id: e.id, defaultName: e.defaultName, flags: e.flags, images: e.images ?? [] } });
+                return {
+                    emote_id: e.id,
+                    name: e.defaultName,
+                    animated: e.flags?.animated === true,
+                    private: e.flags?.private === true,
+                    zero_width: e.flags?.defaultZeroWidth === true,
+                    pending: e.imagesPending === true,
+                    preview_url: shaped.preview_url,
+                    file_url: shaped.file_url,
+                    page_url: `https://7tv.app/emotes/${e.id}`,
+                    file_id: files.get(e.id) ?? null,
+                    created_at: ulidTime(e.id),
+                };
+            });
+        return success({ owner_id: me.id, total, emotes });
+    });
+}
+
 export async function sevenTvEmote(d: SevenTvDeps, emoteId: string): Promise<StudioReply> {
     if (!SEVENTV_ID.test(emoteId)) return fail(404, "error.seventv.not_found");
     return withToken(d, async (token) => {

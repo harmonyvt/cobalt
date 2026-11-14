@@ -656,6 +656,11 @@ enum Endpoints {
         APIEndpoint(op: "seventv_http.uploads", method: "GET", path: "/7tv/uploads", auth: .key)
     }
 
+    /// `GET /7tv/owned` (op `seventv_http.owned`, auth key): Every emote the linked 7TV account owns (uploaded anywhere), newest first, at most 500 (GET /7tv/owned).
+    static func seventvHttpOwned() -> APIEndpoint<SeventvHttpOwnedResponse> {
+        APIEndpoint(op: "seventv_http.owned", method: "GET", path: "/7tv/owned", auth: .key)
+    }
+
     /// `PUT /live/start-token` (op `live.start_token.put`, auth key): A device's push-to-start token.
     static func liveStartTokenPut() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "live.start_token.put", method: "PUT", path: "/live/start-token", auth: .key)
@@ -1597,6 +1602,31 @@ struct SeventvHttpUploadsResponseUploadsItem: Decodable, Sendable {
 
 struct SeventvHttpUploadsResponse: Decodable, Sendable {
     var uploads: [SeventvHttpUploadsResponseUploadsItem]
+    var status: String
+}
+
+struct SeventvHttpOwnedResponseEmotesItem: Decodable, Sendable {
+    var emoteId: String
+    var name: String
+    var animated: Bool
+    var `private`: Bool
+    var zeroWidth: Bool
+    /// 7TV still processing the images
+    var pending: Bool
+    var previewUrl: String?
+    var fileUrl: String?
+    var pageUrl: String
+    /// the library file it was uploaded from, when capystore uploaded it
+    var fileId: String?
+    /// ms, from the emote id
+    var createdAt: Double?
+}
+
+struct SeventvHttpOwnedResponse: Decodable, Sendable {
+    var ownerId: String
+    /// how many the account owns; at most 500 are listed
+    var total: Double
+    var emotes: [SeventvHttpOwnedResponseEmotesItem]
     var status: String
 }
 
