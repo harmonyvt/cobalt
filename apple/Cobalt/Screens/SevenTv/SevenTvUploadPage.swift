@@ -3,9 +3,11 @@ import SwiftUI
 
 // "upload" of the 7tv tab (APP-API-CONTRACT 57.9, mockup `7tv-tab/` upload): the library's animated pictures (webps and gifs,
 // newest first; 7TV's own emotes saved into the library are left out) with an "on 7tv" mark once one was uploaded
-// (`GET /7tv/uploads` matched by file id); a tap opens the "upload to 7tv" sheet (name, crop, size, set). Then "your uploads":
-// each emote capystore uploaded, its picture, "processing" while 7TV makes its sizes (read every 5 s while this page shows),
-// and where it went; a tap opens it on 7tv.app.
+// (`GET /7tv/uploads` matched by file id); a tap opens the "upload to 7tv" sheet (name, crop, size, set). Then "your emotes on
+// 7tv" (57.14, `GET /7tv/owned`): every emote the account owns, newest first, made here or on 7tv.app: its picture (a still),
+// "processing on 7tv" while 7TV makes its sizes (read again every 5 s while one is), a "from library" mark on what capystore
+// uploaded, private and zero-width marks, and "add to a set…" (the row's button and context menu) over every channel the
+// account edits. A tap opens the emote on 7tv.app. When the list cannot be read, the older "your uploads" list stands in.
 
 /// A library picture the upload grid offers.
 struct SevenTvLibraryPicture: Identifiable, Equatable {
@@ -63,12 +65,7 @@ struct SevenTvUploadPage: View {
                     .foregroundStyle(CobaltColor.caption)
                     .fixedSize(horizontal: false, vertical: true)
                 grid(uploaded: uploaded)
-                Text(Copy.SevenTv.yourUploads)
-                    .font(CobaltType.bodySemibold)
-                    .foregroundStyle(CobaltColor.text)
-                    .padding(.top, 4)
-                    .accessibilityAddTraits(.isHeader)
-                uploadsList
+                ownedSection
             }
             .padding(.horizontal, Metrics.gutter)
             .padding(.bottom, 16)
@@ -78,6 +75,7 @@ struct SevenTvUploadPage: View {
         .refreshable {
             await library.refresh()
             await store.loadUploads()
+            await store.loadOwned()
         }
         .task {
             if library.posts.isEmpty { await library.refresh() }
@@ -85,6 +83,78 @@ struct SevenTvUploadPage: View {
         .task {
             await store.loadUploads()
             await store.watchUploads()
+        }
+        .task {
+            await store.loadOwned()
+            await store.watchOwned()
+        }
+    }
+
+    // MARK: your emotes on 7tv
+
+    private var canAddToSet: Bool { store.channels.contains { $0.can.manageSets } }
+
+    @ViewBuilder
+    private var ownedSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(Copy.SevenTv.ownedTitle)
+                    .font(CobaltType.bodySemibold)
+                    .foregroundStyle(CobaltColor.text)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 6)
+                if !store.owned.isEmpty {
+                    Text(Copy.SevenTv.ownedCount(store.owned.count, total: store.ownedTotal))
+                        .font(CobaltType.captionSmall)
+                        .foregroundStyle(CobaltColor.caption)
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                }
+            }
+            .padding(.top, 4)
+            ownedBody
+        }
+    }
+
+    @ViewBuilder
+    private var ownedBody: some View {
+        if !store.owned.isEmpty {
+            LazyVStack(spacing: 6) {
+                ForEach(store.owned) { emote in
+                    SevenTvOwnedRow(
+                        emote: emote, fallbackPicture: emote.fileID.flatMap(libraryPicture),
+                        ago: emote.createdAt.map { Copy.SevenTv.ago($0, now: store.now()) }, canAddToSet: canAddToSet,
+                        addToSet: { tab.addToSet(emote) }, open: { openURL(emote.pageURL) })
+                }
+            }
+            .motion(Motion.rows, value: store.owned.map(\.id))
+        } else {
+            switch store.ownedState {
+            case .idle, .loading:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(Copy.SevenTv.loading).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.caption)
+                }
+            case .failed(let error):
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(Copy.SevenTv.message(for: error))
+                        .font(CobaltType.captionSmall)
+                        .foregroundStyle(CobaltColor.errorText)
+                    Button(Copy.SevenTv.retry, systemImage: Symbol.SevenTv.retry) { Task { await store.loadOwned() } }
+                        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                    if !store.uploads.isEmpty {
+                        Text(Copy.SevenTv.yourUploads)
+                            .font(CobaltType.captionSmall)
+                            .foregroundStyle(CobaltColor.caption)
+                            .padding(.top, 4)
+                        uploadsList
+                    }
+                }
+            case .loaded:
+                Text(Copy.SevenTv.noOwned)
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(CobaltColor.caption)
+            }
         }
     }
 
@@ -279,5 +349,114 @@ private struct SevenTvUploadRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Copy.SevenTv.uploadRowA11y(upload.name, state: pill?.text ?? ""))
         .accessibilityHint(Copy.SevenTv.openOn7tv)
+    }
+}
+
+
+/// One emote of the account: its still, its name and marks, where it came from, and "add to a set…".
+private struct SevenTvOwnedRow: View {
+    let emote: SevenTvOwnedEmote
+    let fallbackPicture: URL?
+    let ago: String?
+    let canAddToSet: Bool
+    let addToSet: () -> Void
+    let open: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: open) {
+                HStack(spacing: 10) {
+                    tile
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(emote.name)
+                                .font(CobaltType.bodySemibold)
+                                .foregroundStyle(CobaltColor.text)
+                                .lineLimit(1)
+                            if emote.fromLibrary {
+                                Image(systemName: Symbol.SevenTv.library)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(CobaltColor.caption)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        marks
+                        Text(Copy.SevenTv.ownedLine(fromLibrary: emote.fromLibrary, ago: ago))
+                            .font(CobaltType.captionSmall)
+                            .foregroundStyle(CobaltColor.caption)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                Copy.SevenTv.ownedRowA11y(
+                    emote.name, pending: emote.pending, fromLibrary: emote.fromLibrary, isPrivate: emote.isPrivate,
+                    zeroWidth: emote.zeroWidth))
+            .accessibilityHint(Copy.SevenTv.openOn7tv)
+            if canAddToSet {
+                Button(action: addToSet) {
+                    Label(Copy.SevenTv.addToSetAction, systemImage: Symbol.SevenTv.addToSet)
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(CobaltColor.text)
+                        .frame(width: Metrics.hit, height: Metrics.hit)
+                        .background(CobaltColor.elevated, in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Copy.SevenTv.addToSetAction)
+            }
+        }
+        .padding(10)
+        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contextMenu {
+            if canAddToSet {
+                Button(Copy.SevenTv.addToSetAction, systemImage: Symbol.SevenTv.addToSet, action: addToSet)
+            }
+            Button(Copy.SevenTv.openOn7tv, systemImage: Symbol.SevenTv.website, action: open)
+        }
+    }
+
+    @ViewBuilder
+    private var tile: some View {
+        Group {
+            if !emote.pending, let url = emote.previewURL {
+                EmotePicture(url: url, animated: false, side: 40)
+            } else if let fallbackPicture {
+                EmotePicture(url: fallbackPicture, animated: false, side: 40).opacity(0.6)
+            } else {
+                ProgressView().controlSize(.small).frame(width: 40, height: 40)
+            }
+        }
+        .padding(4)
+        .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var marks: some View {
+        if emote.pending || emote.isPrivate || emote.zeroWidth {
+            HStack(spacing: 5) {
+                if emote.pending { pill(Copy.SevenTv.processingOn7tv, tint: CobaltColor.collection, symbol: nil) }
+                if emote.isPrivate { pill(Copy.SevenTv.privateMark, tint: CobaltColor.caption, symbol: Symbol.SevenTv.privateEmote) }
+                if emote.zeroWidth { pill(Copy.SevenTv.zeroWidthMark, tint: CobaltColor.caption, symbol: Symbol.SevenTv.zeroWidth) }
+            }
+        }
+    }
+
+    private func pill(_ text: String, tint: Color, symbol: String?) -> some View {
+        HStack(spacing: 3) {
+            if let symbol { Image(systemName: symbol).font(.system(size: 8, weight: .semibold)) }
+            Text(text)
+        }
+        .font(CobaltType.pill)
+        .foregroundStyle(tint)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(tint.opacity(0.14), in: Capsule())
+        .contentTransition(.opacity)
     }
 }

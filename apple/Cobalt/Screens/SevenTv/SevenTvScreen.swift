@@ -8,7 +8,8 @@ import SwiftUI
 // - iPhone and iPad: the account (avatar, name, "linked · signs out in N days", ⋯ for link again and unlink), channel chips,
 //   then three segments: **sets** (the live set with a peek at its emotes, the other sets with "make live", "new set"; a set
 //   opens the set screen), **search** (7TV's search adding to the open set, picked under "adding to") and **upload** (the
-//   library's webps and gifs with an "on 7tv" mark, then "your uploads" with their processing state).
+//   library's webps and gifs with an "on 7tv" mark, then "your emotes on 7tv": everything the account owns, each with
+//   "add to a set…", 57.14).
 // - The Mac (and a wide iPad window): the app's sidebar, then a middle column (the account, chips, the sets, "search 7tv" and
 //   "upload from library"), then the open set's grid (`SevenTvSetScreen` embedded), the search or the upload grid.
 // - Not linked: "link 7tv", and the plain 7tv search still browses and saves emotes into the library as before.
@@ -44,6 +45,8 @@ final class SevenTvTabController {
     /// The set "search" adds to; nil: the channel's live set (else its first).
     var targetSetID: String?
     var uploading: UploadItem?
+    /// "add to a set…" (57.14): the emote being put in sets.
+    var addingToSet: SevenTvAddToSetModel?
 
     init(model: AppModel) {
         card = SevenTvController(model: model)
@@ -94,6 +97,16 @@ final class SevenTvTabController {
         pane = .search
     }
 
+    /// "add to a set…" on a row of "your emotes on 7tv": the picker shares this tab's set models, so an open set's grid shows it.
+    func addToSet(_ emote: SevenTvOwnedEmote) {
+        addingToSet = store.addToSetPicker(for: emote, setModel: setModels)
+    }
+
+    /// The tab's shared set models (`SevenTvController.setModel`), for the picker and the upload sheet.
+    var setModels: @MainActor (String, String) -> SevenTvSetModel {
+        { [card] setID, channelID in card.setModel(setID, channelID: channelID) }
+    }
+
     func startUpload(_ file: LibraryFile, title: String?) {
         uploading = UploadItem(upload: store.uploader(file: file, title: title), file: file)
     }
@@ -106,12 +119,27 @@ struct SevenTvScreen: View {
     @State private var tab: SevenTvTabController
     @Environment(\.shell) private var shell
 
+    #if DEBUG
+    @State private var debugUpload: SevenTvUploadModel?
+    #endif
+
     /// `segment`: the part it opens on (previews).
     init(model: AppModel, tier: Tier, segment: SevenTvTabController.Segment = .sets) {
         self.model = model
         self.tier = tier
         let controller = SevenTvTabController(model: model)
         controller.segment = segment
+        #if DEBUG
+        // `-previewSevenTvSegment sets|search|upload` (simulator evidence)
+        if segment == .sets, let raw = UserDefaults.standard.string(forKey: "previewSevenTvSegment") {
+            switch raw {
+            case "search": controller.segment = .search
+            case "upload": controller.segment = .upload
+            default: break
+            }
+            if raw == "upload", tier == .wide { controller.pane = .upload }
+        }
+        #endif
         _tab = State(initialValue: controller)
     }
 
@@ -130,6 +158,10 @@ struct SevenTvScreen: View {
         Binding(get: { tab.uploading }, set: { tab.uploading = $0 })
     }
 
+    private var addToSetShown: Binding<SevenTvAddToSetModel?> {
+        Binding(get: { tab.addingToSet }, set: { tab.addingToSet = $0 })
+    }
+
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -139,12 +171,114 @@ struct SevenTvScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .task { await store.load() }
+            #if DEBUG
+            .task { await debugOpenSet() }
+            .task { await debugOpenAddToSet() }
+            .task { await debugUploadDone() }
+            .task { await debugUploadShape() }
+            #endif
             .task(id: store.linkOutcome?.id) { tab.card.sayOutcome(shell: shell) }
             .sevenTvPresentations(tab.card)
             .sheet(item: uploadShown) { item in
-                SevenTvUploadSheet(upload: item.upload, picture: SevenTvUploadIcon.picture(model: model, file: item.file))
+                SevenTvUploadSheet(
+                    upload: item.upload, picture: SevenTvUploadIcon.picture(model: model, file: item.file), setModels: tab.setModels)
             }
+            .sheet(item: addToSetShown) { picker in
+                SevenTvAddToSetSheet(picker: picker)
+            }
+            #if DEBUG
+            .sheet(item: $debugUpload) { upload in
+                SevenTvUploadSheet(
+                    upload: upload,
+                    picture: Self.debugPictureLoader,
+                    setModels: tab.setModels)
+            }
+            #endif
     }
+
+    #if DEBUG
+    /// `-previewSevenTvSet main` (a set's name or id; simulator evidence): pushes that set once the sets are in.
+    private func debugOpenSet() async {
+        guard let want = UserDefaults.standard.string(forKey: "previewSevenTvSet") else { return }
+        for _ in 0..<50 {
+            if let row = tab.sets.first(where: { $0.id == want || $0.name == want }) {
+                tab.open(row)
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+    #endif
+
+    /// `-previewSevenTvAddPicker <emote id or name>` (simulator evidence): opens "add to a set…" for that owned emote once the
+    /// list is in. `-previewSevenTvAddPickerPick main` then adds it to that set (a name or id) in the open picker.
+    private func debugOpenAddToSet() async {
+        guard let want = UserDefaults.standard.string(forKey: "previewSevenTvAddPicker") else { return }
+        await store.load()
+        await store.loadOwned()
+        guard let emote = store.owned.first(where: { $0.emoteID == want || $0.name == want }) else { return }
+        tab.addToSet(emote)
+        guard let name = UserDefaults.standard.string(forKey: "previewSevenTvAddPickerPick"), let picker = tab.addingToSet else { return }
+        await picker.prepare()
+        guard let row = picker.sets.first(where: { $0.id == name || $0.name == name }) else { return }
+        _ = await picker.add(to: row)
+    }
+
+    /// `-previewSevenTvUploadDone 1` (simulator evidence): uploads a preview library file and shows the sheet's result.
+    private func debugUploadDone() async {
+        guard UserDefaults.standard.bool(forKey: "previewSevenTvUploadDone") else { return }
+        await store.load()
+        for _ in 0..<50 where !store.canUpload { try? await Task.sleep(for: .milliseconds(100)) }
+        let made = store.uploader(
+            fileID: "PrEvIeWitem000003", bytes: 412_000, title: "capy dance party", contentType: "image/webp", fileName: "capy.webp")
+        made.pollEvery = 2
+        debugUpload = made
+        await made.upload()
+    }
+
+    #if DEBUG
+    /// `-previewSevenTvUploadShape asIs|square|wide|extraWide` (simulator evidence): opens the upload sheet for a sample 1200×900
+    /// webp with that shape picked (the crop sheet stays closed; tap the chip again to open it locked to the shape).
+    private func debugUploadShape() async {
+        guard let raw = UserDefaults.standard.string(forKey: "previewSevenTvUploadShape"),
+            let shape = SevenTvEmoteShape(rawValue: raw)
+        else { return }
+        await store.load()
+        for _ in 0..<50 where !store.canUpload { try? await Task.sleep(for: .milliseconds(100)) }
+        let made = store.uploader(
+            fileID: "PrEvIeWitem000003", bytes: 412_000, title: "capy dance party", contentType: "image/webp", fileName: "capy.webp",
+            width: 1_200, height: 900)
+        made.pickShape(shape)
+        debugUpload = made
+    }
+
+    /// The crop sheet's picture for the debug upload; only with `-previewSevenTvUploadShape` (the other debug uploads have none).
+    private static var debugPictureLoader: (@MainActor () async throws -> CGImage)? {
+        guard UserDefaults.standard.string(forKey: "previewSevenTvUploadShape") != nil else { return nil }
+        return { @MainActor in debugPicture() }
+    }
+
+    /// A 1200×900 picture (a gradient with a frame and a ring) for the crop sheet of the debug upload above.
+    private static func debugPicture() -> CGImage {
+        let width = 1_200, height = 900
+        let space = CGColorSpaceCreateDeviceRGB()
+        guard
+            let ctx = CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+            let gradient = CGGradient(
+                colorsSpace: space,
+                colors: [CGColor(red: 0.95, green: 0.55, blue: 0.25, alpha: 1), CGColor(red: 0.25, green: 0.45, blue: 0.9, alpha: 1)] as CFArray,
+                locations: [0, 1])
+        else { fatalError("debug picture") }
+        ctx.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: width, y: height), options: [])
+        ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.9))
+        ctx.setLineWidth(12)
+        ctx.stroke(CGRect(x: 6, y: 6, width: width - 12, height: height - 12))
+        ctx.strokeEllipse(in: CGRect(x: 350, y: 250, width: 500, height: 400))
+        return ctx.makeImage()!
+    }
+    #endif
 
     @ViewBuilder
     private var content: some View {

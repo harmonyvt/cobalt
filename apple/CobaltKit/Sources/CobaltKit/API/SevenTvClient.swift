@@ -36,6 +36,9 @@ public protocol SevenTvClient: Sendable {
     func sevenTvEmote(id: String) async throws -> SevenTvEmoteInfo
     /// `GET /7tv/uploads`: the emotes uploaded through capystore (57.9), newest first, at most 100.
     func sevenTvUploads() async throws -> [SevenTvUploadedEmote]
+    /// `GET /7tv/owned` (57.14): every emote the account owns (made here or on 7tv.app), newest first, at most 500, with the
+    /// total. Pending ones have no pictures yet.
+    func sevenTvOwned() async throws -> SevenTvOwnedList
 }
 
 extension SevenTvClient {
@@ -51,6 +54,8 @@ enum SevenTvRoute {
     static let uploads = "/7tv/emotes"
     /// `GET /7tv/uploads`: what capystore uploaded.
     static let myUploads = "/7tv/uploads"
+    /// `GET /7tv/owned`: everything the account owns (57.14).
+    static let owned = "/7tv/owned"
 
     /// `?logout=1` of `DELETE /7tv` (57.12): none unless 7TV's session is to end too.
     static func unlinkQuery(logout: Bool) -> [(String, String)] { logout ? [("logout", "1")] : [] }

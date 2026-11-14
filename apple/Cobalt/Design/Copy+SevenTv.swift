@@ -160,6 +160,19 @@ extension Copy {
         static let shrinkBytesNote = "over 7 mb · will be shrunk to fit"
         static let shrinkSideNote = "over 1000 px a side · will be shrunk to fit"
         static let needsCropNote = "7tv only keeps shapes from 1:32 to 3:1 · crop it first"
+        static let shapeLabel = "shape"
+        static let shapeA11y = "emote shape"
+        static func shapeChoice(_ shape: SevenTvEmoteShape) -> String {
+            switch shape {
+            case .asIs: return "as is"
+            case .square: return "square 1:1"
+            case .wide: return "wide 2:1"
+            case .extraWide: return "extra wide 3:1"
+            }
+        }
+        static let shapeNote = "a wide emote is a picture wider than tall · 7tv keeps up to 3:1 · picking one crops from the middle, move it next"
+        static let shapeNeedsSize = "shapes need the picture's size · open crop… once and they switch on"
+        static func outputLine(_ width: Int, _ height: Int) -> String { "7tv gets \(width)×\(height) px" }
         static let sizeLabel = "size"
         static let sizeAuto = "auto"
         static func sizeChoice(_ px: Int?) -> String { px.map { "\($0)" } ?? sizeAuto }
@@ -258,6 +271,56 @@ extension Copy {
             f.unitsStyle = .short
             return f.localizedString(for: min(date, now), relativeTo: now)
         }
+
+        // MARK: your emotes on 7tv (57.14)
+
+        static let ownedTitle = "your emotes on 7tv"
+        static func ownedCount(_ shown: Int, total: Int) -> String {
+            if total > shown { return "showing \(shown) of \(total)" }
+            return total == 1 ? "1 emote" : "\(total) emotes"
+        }
+        static let noOwned = "no emotes on your 7tv account yet"
+        static let processingOn7tv = "processing on 7tv"
+        static let fromLibraryBadge = "from library"
+        static let privateMark = "private"
+        static let zeroWidthMark = "zero-width"
+        static func ownedLine(fromLibrary: Bool, ago: String?) -> String {
+            switch (fromLibrary, ago) {
+            case let (true, ago?): return "uploaded here · \(ago)"
+            case (true, nil): return "uploaded here"
+            case let (false, ago?): return "made on 7tv.app · \(ago)"
+            case (false, nil): return "made on 7tv.app"
+            }
+        }
+        static func ownedRowA11y(_ name: String, pending: Bool, fromLibrary: Bool, isPrivate: Bool, zeroWidth: Bool) -> String {
+            var parts = [name]
+            if pending { parts.append(processingOn7tv) }
+            if fromLibrary { parts.append("from your library") }
+            if isPrivate { parts.append(privateMark) }
+            if zeroWidth { parts.append(zeroWidthMark) }
+            return parts.joined(separator: ", ")
+        }
+
+        // MARK: add to a set (57.14)
+
+        static let addToSetAction = "add to a set…"
+        static let addToSetTitle = "add to a set"
+        static func addToSetFor(_ name: String) -> String { "put \(name) in any set of a channel you edit" }
+        static let addToSetStays = "stays open · add it to as many sets as you like"
+        static let addToSetPrivate = "a private emote only goes into your own channel's sets"
+        static let addToSetPending = "still processing on 7tv · it can go in a set already"
+        static let addToSetNoSets = "no sets in this channel yet · make one in the sets part first"
+        static let fullPill = "full"
+        static let inSetPill = "in this set"
+        static let addButton = "add"
+        static func addToSetRowA11y(_ name: String, count: Int, capacity: Int?, live: Bool, full: Bool, inSet: Bool) -> String {
+            var line = setA11y(name, count: count, capacity: capacity, live: live)
+            if full { line += ", full" }
+            if inSet { line += ", already has it" }
+            return line
+        }
+        static func addedToSetOn(set: String, channel: String) -> String { "added to \(set) on \(channel)" }
+        static func alreadyInSet(_ set: String) -> String { "\(set) already has it" }
 
         // the Mac's middle column
         static let more = "more"

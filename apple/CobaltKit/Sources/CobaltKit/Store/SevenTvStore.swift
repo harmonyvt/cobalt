@@ -51,6 +51,11 @@ public final class SevenTvStore {
     public internal(set) var uploadInfo: [String: SevenTvEmoteInfo] = [:]
     /// Uploads 7TV answered 404 for.
     public internal(set) var goneUploads: Set<String> = []
+    /// Every emote the account owns (`GET /7tv/owned`, newest first, 57.14; `SevenTvStore+Owned.swift`), and how many it owns in
+    /// all (the server lists at most 500).
+    public internal(set) var owned: [SevenTvOwnedEmote] = []
+    public internal(set) var ownedTotal = 0
+    public internal(set) var ownedState: State = .idle
     /// The current link came from the app's own sign-in sheet (57.12), so it is capystore's own 7TV session and unlinking
     /// ends it (`DELETE /7tv?logout=1`). A pasted or bookmarked token is the browser's session: unlink leaves it alone.
     /// Kept in the app group's defaults; cleared with the link.
@@ -143,12 +148,56 @@ public final class SevenTvStore {
             channelSets[channelID] = SevenTvChannelSets(
                 channelID: channelID, activeSetID: answer.activeSetID, sets: SevenTvChannelSets.ordered(answer.sets))
             setsState[channelID] = .loaded
+            warm(channelID: channelID)
         } catch {
             guard started == generation else { return }
             let refusal = SevenTvError.from(error)
             note(refusal)
             setsState[channelID] = .failed(refusal)
         }
+    }
+
+    /// Sets already paged through this launch (57.13).
+    @ObservationIgnored private var warmed: Set<String> = []
+    @ObservationIgnored private var warming: Task<Void, Never>?
+
+    /// Pages through each set of the channel once a launch, in the background, so every emote in the owner's sets is on
+    /// the device (`EmoteCache`, filled by the live client with each page it reads) and each page's answer is kept for
+    /// offline (`SevenTvAnswerCache`). Only against the live server: previews and tests never page on their own. A set
+    /// that could not be read (no network) is tried again with the next read of the channel's sets. `unlink()` and `reset()`
+    /// stop it.
+    private func warm(channelID: String) {
+        guard !RunningTests.now, let client = client as? HTTPCobaltClient else { return }
+        let ids = sets(of: channelID).map(\.id).filter { !warmed.contains($0) }
+        guard !ids.isEmpty else { return }
+        warmed.formUnion(ids)
+        let previous = warming
+        let started = generation
+        warming = Task(priority: .utility) { [weak self] in
+            // one walk at a time, so two channels do not page the server together
+            await previous?.value
+            for id in ids {
+                var page = 1
+                var read = false
+                while page <= 20, !Task.isCancelled {
+                    guard let answer = try? await client.sevenTvSet(id: id, query: nil, page: page) else { break }
+                    read = true
+                    if !answer.hasMore { break }
+                    page += 1
+                }
+                if !read, !Task.isCancelled { self?.unwarm(id, generation: started) }
+            }
+        }
+    }
+
+    private func unwarm(_ id: String, generation started: Int) {
+        if started == generation { warmed.remove(id) }
+    }
+
+    private func stopWarming() {
+        warming?.cancel()
+        warming = nil
+        warmed = []
     }
 
     /// Picks a channel chip and reads its sets (again).
@@ -234,6 +283,7 @@ public final class SevenTvStore {
         channelSets = [:]
         setsState = [:]
         selectedChannelID = nil
+        stopWarming()
         forgetUploads()
     }
 
@@ -327,6 +377,7 @@ public final class SevenTvStore {
         channelSets = [:]
         setsState = [:]
         linking = false
+        stopWarming()
         forgetUploads()
     }
 
@@ -335,5 +386,8 @@ public final class SevenTvStore {
         uploadsState = .idle
         uploadInfo = [:]
         goneUploads = []
+        owned = []
+        ownedTotal = 0
+        ownedState = .idle
     }
 }

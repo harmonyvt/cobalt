@@ -626,6 +626,129 @@
         }
       }
     },
+    "/7tv/owned": {
+      "get": {
+        "operationId": "seventv_http.owned",
+        "summary": "Every emote the linked 7TV account owns (uploaded anywhere), newest first, at most 500 (GET /7tv/owned).",
+        "tags": [
+          "seventv_http"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "owner_id": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "number",
+                      "description": "how many the account owns; at most 500 are listed"
+                    },
+                    "emotes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "emote_id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "animated": {
+                            "type": "boolean"
+                          },
+                          "private": {
+                            "type": "boolean"
+                          },
+                          "zero_width": {
+                            "type": "boolean"
+                          },
+                          "pending": {
+                            "type": "boolean",
+                            "description": "7TV still processing the images"
+                          },
+                          "preview_url": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "file_url": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "page_url": {
+                            "type": "string"
+                          },
+                          "file_id": {
+                            "description": "the library file it was uploaded from, when capystore uploaded it",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "created_at": {
+                            "description": "ms, from the emote id",
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "emote_id",
+                          "name",
+                          "animated",
+                          "private",
+                          "zero_width",
+                          "pending",
+                          "preview_url",
+                          "file_url",
+                          "page_url",
+                          "file_id",
+                          "created_at"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    }
+                  },
+                  "required": [
+                    "owner_id",
+                    "total",
+                    "emotes",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/7tv/sets": {
       "post": {
         "operationId": "seventv_http.create_set",

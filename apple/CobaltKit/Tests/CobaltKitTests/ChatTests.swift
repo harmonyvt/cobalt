@@ -60,7 +60,7 @@ struct ChatCapabilityTests {
         #expect(!AppTab.chat.isAvailable(with: c))
         c.chat = true
         #expect(AppTab.chat.isAvailable(with: c))
-        #expect(AppTab.allCases == [.save, .library, .links, .chat, .stage, .sevenTv, .names, .queue, .settings])
+        #expect(AppTab.allCases == [.save, .library, .links, .sevenTv, .stage, .chat, .names, .queue, .settings])
     }
 }
 
@@ -791,6 +791,14 @@ struct ChatStoreTests {
         #expect(app.chat.draft(id).postIDs == [post.id] && app.chat.composerFocus == 1)
         app.capabilities.chat = false
         await #expect(throws: ChatError.off) { try await app.askAbout([post]) }
+    }
+
+    @Test func everyWriteOfTheSelectedTabCountsEvenToTheSameValue() {
+        let app = app()
+        let before = app.tabSets
+        app.selectedTab = .chat
+        app.selectedTab = .chat
+        #expect(app.tabSets == before + 2)
     }
 
     @Test func theChatTabFallsBackWhenTheServerLosesChat() {
