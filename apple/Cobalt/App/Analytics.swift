@@ -61,9 +61,9 @@ enum Analytics {
     private static func replay(_ on: Bool) {
         #if os(iOS)
         if on, !PostHogSDK.shared.isSessionReplayActive() {
-            PostHogSDK.shared.startSession()
+            PostHogSDK.shared.startSessionRecording()
         } else if !on, PostHogSDK.shared.isSessionReplayActive() {
-            PostHogSDK.shared.stopSession()
+            PostHogSDK.shared.stopSessionRecording()
         }
         #endif
     }

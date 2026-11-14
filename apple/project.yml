@@ -34,7 +34,7 @@ packages:
   # the extensions never link it. Used through Cobalt/App/Analytics.swift and Cobalt/Shared/MediaMask.swift.
   PostHog:
     url: https://github.com/PostHog/posthog-ios
-    from: "3.56.0"
+    from: "3.97.0"
 
 targets:
   Cobalt:
@@ -128,6 +128,8 @@ targets:
         PRODUCT_NAME: cobalt
         PRODUCT_MODULE_NAME: Cobalt
         PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt
+        # MediaMask.swift masks with PostHog only here: `canImport(PostHog)` is also true in the extensions, which do not link it
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) COBALT_POSTHOG"
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
