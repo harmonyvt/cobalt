@@ -14,6 +14,7 @@ import { YTDLP_START_PATH } from "./ytdlp-path";
 import { fetchWithStartRetry } from "./start-retry";
 import { runSweep, scheduleSweepSoon, type SweepLive, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
+import { capture, cronEvent } from "./posthog";
 import { purgeFrom } from "./visibility";
 import { releaseHeld } from "./hidden";
 import { syncMaintenance } from "./sync";
@@ -508,6 +509,22 @@ export default {
     // Durable Object only writes records and arms its sweep; the container wakes only if
     // there is something to do, and a row that failed is not tried again for a day).
     async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+        // section 58: one PostHog `cron_run` per trigger, whatever happens inside it
+        const started = Date.now();
+        let ok = true;
+        try {
+            await runScheduled(controller, env, ctx);
+        } catch (e) {
+            ok = false;
+            throw e;
+        } finally {
+            await capture(env, (p) => ctx.waitUntil(p), [cronEvent(controller.cron === SEARCH_CRON ? "every-15-min" : "daily", Date.now(), Date.now() - started, ok, { cron: controller.cron })]);
+        }
+    },
+} satisfies ExportedHandler<Env>;
+
+async function runScheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    {
         // Every 15 minutes (the second trigger): the library search indexer drains its queue for up to
         // SEARCH_RUN_BUDGET_MS (APP-API-CONTRACT.md sections 21 and 23). D1 and the Hugging Face Space
         // only; the container is not touched. Awaited, not waitUntil: the run is the handler's work.
@@ -739,5 +756,5 @@ export default {
                         (e) => console.error("[loops] daily kick failed", e instanceof Error ? e.name : "error"),
                     ),
             );
-    },
-} satisfies ExportedHandler<Env>;
+    }
+}

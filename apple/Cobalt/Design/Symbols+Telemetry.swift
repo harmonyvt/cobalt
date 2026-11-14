@@ -7,5 +7,6 @@ extension Symbol {
         static let toggle = "stethoscope"
         static let sendNow = "paperplane"
         static let waiting = "tray.full"
+        static let recordSessions = "record.circle"
     }
 }

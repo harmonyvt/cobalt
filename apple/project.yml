@@ -21,7 +21,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: "8.10"
+    MARKETING_VERSION: "8.11"
     CURRENT_PROJECT_VERSION: "26"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
@@ -30,6 +30,11 @@ packages:
     path: CobaltKit
   SyncGlowKit:
     path: SyncGlowKit
+  # PostHog (APP-API-CONTRACT 58): the app's only third-party package (owner's OK, 2026-11-14). The app target only;
+  # the extensions never link it. Used through Cobalt/App/Analytics.swift and Cobalt/Shared/MediaMask.swift.
+  PostHog:
+    url: https://github.com/PostHog/posthog-ios
+    from: "3.97.0"
 
 targets:
   Cobalt:
@@ -40,6 +45,7 @@ targets:
     dependencies:
       - package: CobaltKit
       - package: SyncGlowKit
+      - package: PostHog
       - sdk: Metal.framework
       - sdk: MetalKit.framework
       - target: CobaltShare
@@ -122,6 +128,8 @@ targets:
         PRODUCT_NAME: cobalt
         PRODUCT_MODULE_NAME: Cobalt
         PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt
+        # MediaMask.swift masks with PostHog only here: `canImport(PostHog)` is also true in the extensions, which do not link it
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) COBALT_POSTHOG"
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor

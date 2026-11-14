@@ -428,7 +428,10 @@ struct FlipbookView: View {
     let fps: Double
     @State private var image: ImageBox?
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         TimelineView(.periodic(from: Date(timeIntervalSinceReferenceDate: 0), by: 1 / fps)) { context in
             let i = Int(context.date.timeIntervalSinceReferenceDate * fps) % max(1, urls.count)
             Color.clear

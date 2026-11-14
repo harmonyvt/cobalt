@@ -130,6 +130,11 @@ the files and a real run before anything is called done.
   7TV's v4 GraphQL (`api/src/seventv.ts`, routes `/7tv*`, chat/MCP `seventv.*`, writes tier `ask`). 7TV has no OAuth: the
   token is 7tv.app's `localStorage["7tv-token"]` session (30 days), brought in by a bookmarklet that opens
   `cobalt-apple://7tv-link?token=` or pasted in the studio tab's link sheet; never through chat.
+- PostHog (`APP-API-CONTRACT.md` section 58): US cloud project "capystore" (735568). The API Worker sends an `op` event for
+  every route, chat and MCP call, plus app warn/error logs, crashes and cron runs (`api/src/posthog.ts`, `background()`,
+  never changes an answer); the token is a public-safe text binding. The apps use `posthog-ios` (the only third-party
+  package, app target only, `apple/Cobalt/App/Analytics.swift`): replay on iPhone/iPad with every media view wearing
+  `.mediaMask()`; a new view that draws media must wear it too. Read it through the claude.ai PostHog connector.
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.
@@ -164,7 +169,7 @@ the files and a real run before anything is called done.
 
 Native SwiftUI app for this fork: one multiplatform target (iPhone, iPad, Mac; not
 Catalyst) plus an iOS share extension. iOS 18 / macOS 15, Swift 6, no third-party
-dependencies. Contracts: `apple/CONTRACT.md` (app: layout, CobaltKit public API, screens,
+dependencies except `posthog-ios` (app target only, section 58). Contracts: `apple/CONTRACT.md` (app: layout, CobaltKit public API, screens,
 copy, motion, lanes, gates) and `deploy/cloudflare/APP-API-CONTRACT.md` (the additive
 backend routes it uses; nothing under `api/` changes). Design source: `apple/mockup/`.
 

@@ -6634,3 +6634,42 @@ the platform back to `https://7tv.app/login/callback`, and the page swaps the co
 
 Apply `0040_seventv.sql` with the global `cf`, then deploy the API, then the apps. Before the migration the routes
 answer 503 `error.seventv.not_ready`.
+
+## 58. PostHog: replays, errors and every server call in one place (addendum, 2026-11-14; owner: "installing PostHog into the macOS and iOS app to record sessions and other data from like MCPs and all that ... so that you can go and corroborate and like trace down issues easily", "I am using us posthog and we can mask media", then yes to the iOS package and to a new project. Plan: https://claude.ai/artifact/6VfRMp4xDrkeZcTcNmPpoQ. Numbering: 57 is 7TV; no migration)
+
+### 58.1 Where it goes
+
+PostHog US cloud, project **capystore** (id 735568, org Harmony). The project token is PostHog's write-only project
+token, safe in clients: it is a text binding in `deploy/cloudflare/api/cloudflare.config.ts` (`POSTHOG_PROJECT_TOKEN`,
+`POSTHOG_HOST`). An empty token turns everything below off, server and app. Claude threads read it through the claude.ai
+PostHog connector (cloud containers cannot reach posthog.com directly); switch the connector to project 735568 first.
+
+### 58.2 Server events (`src/posthog.ts`, plain fetch to `<host>/batch/`, no package)
+
+Sent after the answer through `background()`, 3 s timeout, never changing a response. `distinct_id` is always `owner`.
+
+| event | from | properties |
+|---|---|---|
+| `op` | `handleOp` (every route, every host) and `runOp` (chat, MCP, sub-agents, confirmed cards) | `op`, `surface` (app, web, tool, service, chat, mcp, agent, public), `status`, `ms`, `ok`, `error_code`, `route_host`, `method`, `key_id`, `thread`, `client`, `install`, `$session_id` |
+| `$exception` | an `op` that answered 5xx or threw | the `op` properties + `$exception_list` (`OpFailed`, "<op> answered <status> <code>") |
+| `app_log` | `POST /telemetry`: warn and error lines only | `level`, `cat`, `msg`, `data_<key>`, `platform`, `app_version`, `app_build`, `os_version`, `device`, `process`, `install` |
+| `$exception` | `POST /telemetry` crashes | `crash_kind`, `$exception_list` (kind, summary), `$exception_level` fatal for `crash` |
+| `cron_run` | each scheduled trigger | `job` (every-15-min, daily), `cron`, `ms`, `ok` |
+
+Public hosts (share, stage, studio pages) send only their 5xx; `/telemetry` itself is never an `op` event. Never sent:
+keys, request bodies, saved links, file contents, chat text, tool inputs.
+
+### 58.3 Linking the app to the server
+
+`GET /capabilities` answers `"posthog": {"token", "host"}` to a valid key only. The app's requests to its own server carry
+`x-capy-client: ios|macos` always, and `x-capy-install` (telemetry's install id) plus `x-capy-session` (the SDK's session id,
+a UUIDv7) while the SDK runs. The Worker puts the session id on its events as `$session_id`, so a replay's timeline shows
+the server's `op` events. Ids that are not UUIDs are dropped. Chat and MCP calls carry their `thread` instead.
+
+### 58.4 The apps
+
+`posthog-ios` in the app target only (the extensions never link it), behind `apple/Cobalt/App/Analytics.swift`. Starts
+when the server names a project and "send crash reports and logs" is on; identifies as `owner`. iPhone and iPad record
+session replays (screenshot mode, `maskAllImages`, `maskAllTextInputs`) unless "record sessions" is off; the Mac sends
+events only (PostHog has no Mac replay). Every view that draws media wears `.mediaMask()` (`Cobalt/Shared/MediaMask.swift`,
+`postHogMask()` on iOS). Tabs are `$screen` events.

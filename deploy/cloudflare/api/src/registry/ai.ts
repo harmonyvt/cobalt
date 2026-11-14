@@ -12,6 +12,7 @@ import { OpError, type AiFlags, type Op, type OpContext } from "./op";
 import { CONFIRM_TTL_MS, type PendingConfirm, type PendingPort } from "./pending";
 import type { Registry } from "./registry";
 import { argsToInput } from "./typescript";
+import { capture, opEvent } from "../posthog";
 
 export const chatKeyId = (threadId: string) => `chat:${threadId}`;
 
@@ -27,6 +28,32 @@ const fillPath = (path: string, input: Record<string, unknown>) =>
 
 // Run an op for a non-HTTP caller (the chat AI, a confirmed card). Returns what the model gets; a refusal throws OpError.
 export async function runOp(op: Op, ctx: OpContext, input: unknown): Promise<unknown> {
+    const started = Date.now();
+    let status = 0;
+    let error: string | null = null;
+    try {
+        return await runOpInner(op, ctx, input, (s) => (status = s));
+    } catch (e) {
+        if (e instanceof OpError) {
+            status = e.status;
+            error = e.code;
+        } else error = e instanceof Error ? e.name : "error";
+        throw e;
+    } finally {
+        recordAiOp(op, ctx, status, error, Date.now() - started);
+    }
+}
+
+// A chat, MCP or sub-agent call as a PostHog `op` event (section 58); the thread stands in for the session.
+function recordAiOp(op: Op, ctx: OpContext, status: number, error: string | null, ms: number): void {
+    const env = ctx.env as { POSTHOG_PROJECT_TOKEN?: string; POSTHOG_HOST?: string };
+    if (!env.POSTHOG_PROJECT_TOKEN) return;
+    const chat = ctx.chat;
+    const surface = chat?.agent ? "agent" : chat?.mcp ? "mcp" : "chat";
+    void capture(env, ctx.edge.waitUntil, opEvent({ op: op.name, surface, status, ms, error, keyId: ctx.keyId, thread: chat?.threadId ?? null }, ctx.now()));
+}
+
+async function runOpInner(op: Op, ctx: OpContext, input: unknown, seen: (status: number) => void): Promise<unknown> {
     let status: number;
     let body: unknown;
     if (op.handler) {
@@ -49,6 +76,7 @@ export async function runOp(op: Op, ctx: OpContext, input: unknown): Promise<unk
         status = res.status;
         body = await res.json().catch(() => null);
     }
+    seen(status);
     if (status < 200 || status > 299) {
         const code = (body as { error?: { code?: unknown } } | null)?.error?.code;
         throw new OpError(status, typeof code === "string" ? code : "error.api.generic");

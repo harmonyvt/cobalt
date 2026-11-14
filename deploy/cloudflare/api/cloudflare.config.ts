@@ -184,6 +184,11 @@ export default defineConfig({
 			// post and writes its title (never over one the owner set), from the 15-minute cron. OPENROUTER_API_KEY is a
 			// SECRET from ~/.config/cobalt/secrets.json; missing or empty turns titles off. AI_TITLES "0" also turns them off.
 			OPENROUTER_API_KEY: bindings.secret(),
+			// PostHog (APP-API-CONTRACT.md section 58): the capystore project's token on US cloud (project 735568). A
+			// write-only project token, safe to ship (PostHog puts it in every client); the apps get it from GET
+			// /capabilities. Empty turns every PostHog event off, server and app.
+			POSTHOG_PROJECT_TOKEN: bindings.text("phc_tPNtVxe59nkXC9qPnNJJZFBySbL7j8ZoLnR2CuzXTy3F"),
+			POSTHOG_HOST: bindings.text("https://us.i.posthog.com"),
 			AI_TITLE_MODEL: bindings.text("minimax/minimax-m3.1-flash"),
 			AI_TITLES: bindings.text("1"),
 			// Chat (APP-API-CONTRACT.md section 27): the model (same key as the captions), and the Worker

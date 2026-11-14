@@ -43,7 +43,10 @@ struct EditorCutoutSheet: View {
         "\(mode.rawValue) \(CutoutMaker.hex(rgb(key))) \(tolerance) \(edgesOnly) \(soften) \(trim) \(small != nil)"
     }
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
             stage
