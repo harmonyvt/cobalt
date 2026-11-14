@@ -22,7 +22,7 @@ final class HangSampler: @unchecked Sendable {
     private var mainThread: thread_t = 0
     private var stackLow: UInt = 0
     private var stackHigh: UInt = 0
-    private let buffer = UnsafeMutablePointer<UInt>.allocate(capacity: Self.maxFrames)
+    private let buffer = UnsafeMutablePointer<UInt>.allocate(capacity: HangSampler.maxFrames)
     private let outstanding = Atomic<Bool>(false)
     private let pongAt = Atomic<UInt64>(0)
     private var onHang: (@Sendable (Report) -> Void)?
@@ -65,7 +65,7 @@ final class HangSampler: @unchecked Sendable {
         var lastTick = DispatchTime.now().uptimeNanoseconds
         var samples: [(atMs: Int, frames: [UInt])] = []
         while true {
-            usleep(UInt32(Self.pollNs / 1000))
+            usleep(UInt32(HangSampler.pollNs / 1000))
             let now = DispatchTime.now().uptimeNanoseconds
             // the whole process was paused (the app went to the background): start over, nothing stalled
             if now - lastTick > 1_000_000_000 {
@@ -88,7 +88,7 @@ final class HangSampler: @unchecked Sendable {
                 }
             } else {
                 let stallMs = Int((now - sentAt) / 1_000_000)
-                if samples.count < Self.sampleAtMs.count, stallMs >= Self.sampleAtMs[samples.count] {
+                if samples.count < HangSampler.sampleAtMs.count, stallMs >= HangSampler.sampleAtMs[samples.count] {
                     let frames = sample()
                     if !frames.isEmpty { samples.append((stallMs, frames)) }
                 }
@@ -131,7 +131,7 @@ final class HangSampler: @unchecked Sendable {
         }
         #endif
         // a frame record is [previous frame pointer, return address]; frame pointers only grow toward the stack's top
-        while n < Self.maxFrames, fp >= stackLow, fp &+ 16 <= stackHigh, fp & 0x7 == 0,
+        while n < HangSampler.maxFrames, fp >= stackLow, fp &+ 16 <= stackHigh, fp & 0x7 == 0,
               let record = UnsafePointer<UInt>(bitPattern: fp) {
             let next = record[0]
             let ret = record[1]
@@ -143,14 +143,14 @@ final class HangSampler: @unchecked Sendable {
         thread_resume(mainThread)
         var out: [UInt] = []
         out.reserveCapacity(n)
-        for i in 0..<n { out.append(buffer[i] & Self.addressMask) }
+        for i in 0..<n { out.append(buffer[i] & HangSampler.addressMask) }
         return out
     }
 
     // MARK: the report
 
     private func report(stallMs: Int, samples: [(atMs: Int, frames: [UInt])]) {
-        let named = samples.map { (atMs: $0.atMs, frames: $0.frames.map(Self.describe)) }
+        let named = samples.map { (atMs: $0.atMs, frames: $0.frames.map(HangSampler.describe)) }
         onHang?(Report(stallMs: stallMs, samples: named))
     }
 
