@@ -1,8 +1,8 @@
 import CobaltKit
 import Foundation
 
-/// Copy for 7TV in the studio tab (APP-API-CONTRACT 57.7; all new, lowercase): the card, the link sheet, the set screen, the
-/// emote sheet and the refusals. Plain values only, since `Cobalt/Design` is compiled into the extensions too.
+/// Copy for 7TV (APP-API-CONTRACT 57.7; all new, lowercase): the 7tv tab, the studio's shortcut row, the link sheet, the set
+/// screen, the emote sheet, the name clash sheet and the refusals. Plain values only, since `Cobalt/Design` is compiled into the extensions too.
 extension Copy {
     enum SevenTv {
         static let title = "7tv"
@@ -185,6 +185,121 @@ extension Copy {
         static let addedToSet = "added to the set"
         static func addFailed(_ why: String) -> String { "uploaded, but not added to the set · \(why)" }
 
+        // MARK: the 7tv tab (mockup `7tv-tab/`)
+
+        static let segmentSets = "sets"
+        static let segmentSearch = "search"
+        static let segmentUpload = "upload"
+        static let segmentsA11y = "what to show"
+        static let accountMenuA11y = "7tv account"
+        static func signsOutIn(days: Int?) -> String {
+            switch days {
+            case nil: return "linked"
+            case 0?: return "linked · signs out today"
+            case 1?: return "linked · signs out in 1 day"
+            case let n?: return "linked · signs out in \(n) days"
+            }
+        }
+        static let tabNotLinkedBody =
+            "link your 7tv account to manage the emote sets of your channel and the channels you edit, and upload webps from your library."
+        static let withoutLinking = "without linking"
+        static let browseBody = "browse and save emotes into your library, like today"
+        static let liveNow = "live now"
+        static func emotesOf(_ count: Int, capacity: Int?) -> String {
+            capacity.map { "\(count) of \($0) emotes" } ?? (count == 1 ? "1 emote" : "\(count) emotes")
+        }
+        static func emotesLine(_ count: Int, capacity: Int?, channel: String) -> String {
+            channel.isEmpty ? emotesOf(count, capacity: capacity) : "\(emotesOf(count, capacity: capacity)) · \(channel)"
+        }
+        static let noLiveSet = "no live set in this channel"
+        static let otherSets = "other sets"
+        static let allSets = "sets"
+        static let seeSet = "see all"
+        static func seeSetA11y(_ name: String) -> String { "open \(name)" }
+        static let addingTo = "adding to"
+        static let pickSet = "pick a set"
+        static let noEditableSet = "no set here you can edit · pick another channel or make a set"
+        static let uploadIntro = "animated webps and gifs from your library · tap one to name it, crop it and send it to 7tv"
+        static let onSevenTv = "on 7tv"
+        static let yourUploads = "your uploads"
+        static let noUploads = "nothing uploaded from capystore yet"
+        static let noLibraryPictures = "no webps or gifs in your library yet · make one from a video in the library"
+        static let loadingLibrary = "loading your library…"
+        static let uploadNeedsLink = "link 7tv to upload"
+        static let processingPill = "processing"
+        static let readyPill = "ready"
+        static let gonePill = "not on 7tv"
+        static func uploadLine(set: String?, ago: String?) -> String {
+            switch (set, ago) {
+            case let (set?, ago?): return "added to \(set) · \(ago)"
+            case let (set?, nil): return "added to \(set)"
+            case let (nil, ago?): return "uploaded \(ago)"
+            default: return "uploaded"
+            }
+        }
+        static func libraryTileA11y(_ name: String, onSevenTv: Bool) -> String { onSevenTv ? "\(name), on 7tv" : name }
+        static func uploadRowA11y(_ name: String, state: String) -> String { "\(name), \(state)" }
+        /// "2 min. ago", "3 days ago".
+        static func ago(_ date: Date, now: Date) -> String {
+            let f = RelativeDateTimeFormatter()
+            f.unitsStyle = .short
+            return f.localizedString(for: min(date, now), relativeTo: now)
+        }
+
+        // the Mac's middle column
+        static let more = "more"
+        static let searchSevenTv = "search 7tv"
+        static let uploadFromLibrary = "upload from library"
+        static let addEmotes = "add emotes"
+        static let pickASet = "pick a set on the left"
+
+        // the studio tab's row
+        static let shortcutBody = "emote sets, search and uploads"
+        static let shortcutNotLinked = "link 7tv to manage your emote sets"
+        static let shortcutA11y = "open the 7tv tab"
+
+        // MARK: picking several
+
+        static let select = "select"
+        static let doneSelecting = "done"
+        static func selected(_ n: Int) -> String { "\(n) selected" }
+        static let copyTo = "copy to…"
+        static func removeN(_ n: Int) -> String { "remove \(n)" }
+        static func removeManyTitle(_ n: Int) -> String { n == 1 ? "remove 1 emote from this set?" : "remove \(n) emotes from this set?" }
+        static func copiedMany(_ n: Int, to set: String) -> String { n == 1 ? "copied 1 emote to \(set)" : "copied \(n) emotes to \(set)" }
+        static func removedMany(_ n: Int) -> String { n == 1 ? "removed 1 emote" : "removed \(n) emotes" }
+        static func alreadyThere(_ n: Int) -> String { n == 1 ? "1 name was already there" : "\(n) names were already there" }
+        static let selectHintA11y = "hold to pick several"
+        static let pickA11y = "pick"
+
+        // MARK: the emote sheet
+
+        static func sevenTvNameLine(_ name: String, animated: Bool) -> String {
+            animated ? "7tv name: \(name) · animated" : "7tv name: \(name)"
+        }
+        static let aliasRuleLong = "letters, digits and _-():!+|.'?> · no spaces"
+        static let saveName = "save name"
+        static func resetTo(_ name: String) -> String { "reset to \(name)" }
+
+        // MARK: name clashes
+
+        static func clashTitle(_ alias: String, set: String) -> String {
+            set.isEmpty ? "\"\(alias)\" is already in that set" : "\"\(alias)\" is already in \(set)"
+        }
+        static let inTheSetNow = "in the set now"
+        static let addingNow = "adding"
+        static func addedAgo(_ ago: String) -> String { "added \(ago)" }
+        static let pickOne = "pick one"
+        static let addUnderOther = "add it under another name"
+        static let renameExisting = "rename the one in the set"
+        static func renameExistingNote(_ alias: String) -> String { "then add the new one as \(alias)" }
+        static let replaceIt = "replace it"
+        static let replaceNote = "the old one leaves the set"
+        static func addAs(_ name: String) -> String { "add as \(name)" }
+        static let renameAndAdd = "rename and add"
+        static let replace = "replace"
+        static let unknownEmote = "another emote"
+
         // MARK: refusals
 
         /// The status line for a refused or failed 7TV call; 7TV's own words where it gave them.
@@ -197,6 +312,7 @@ extension Copy {
             case .notFound: return "that isn't on 7tv any more"
             case .rateLimited: return "7tv says slow down · try again in a minute"
             case .rejected(let words): return words ?? "7tv said no to that"
+            case .nameTaken(_, let alias): return alias.map { "\($0) is already in this set" } ?? "that name is already in this set"
             case .unavailable: return "7tv didn't answer · try again"
             case .notReady: return "7tv isn't ready on this server yet"
             case .fileNotFound: return "that file isn't in the library any more"

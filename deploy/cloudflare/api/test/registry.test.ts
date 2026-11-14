@@ -310,6 +310,7 @@ describe("defineOp and the registry", () => {
             "names.delete",
             "stage.get", "stage.set", "stage.store", "stage.pool", "stage.items", "stage.action", "emotes.find", "emotes.save",
             "seventv.status", "seventv.sets", "seventv.set", "seventv.add", "seventv.remove", "seventv.rename", "seventv.makeLive", "seventv.createSet", "seventv.renameSet", "seventv.uploadEmote", "seventv.emote",
+            "seventv.uploads",
             "test.wipe",
             "test.echo",
             "test.do",

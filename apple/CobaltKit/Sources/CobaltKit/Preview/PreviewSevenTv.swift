@@ -9,7 +9,9 @@ import Synchronization
 // refuses, 60 emotes a page, `q` filters by alias. Uploads (57.9) are pending on their first `GET /7tv/emotes/<id>`, done
 // after; a file id with "missing", "video"/"mp4" or "huge" in it is refused like the server would. The fit (57.10): a crop, a
 // size or a file id with "big" in it answers a plausible `fitted` (a 1200 x 1200 source, 48 frames); "tall" is a 1:36 picture
-// that needs a crop, "busy" is refused as busy and "broken" as a fit that failed.
+// that needs a crop, "busy" is refused as busy and "broken" as a fit that failed. An add under a name the set already has
+// is `409 name_taken` with the emote holding it. `GET /7tv/uploads` starts with two uploads of the preview library's webps
+// (`liaSpin` processing, `coffeeLoop` done) and lists every upload made after.
 
 extension PreviewData {
     static let sevenTvUserID = "01GB2S2BCR000AHHX5S1Y9TQW2"
@@ -66,6 +68,8 @@ final class PreviewSevenTvState: Sendable {
         /// Uploaded emotes (57.9) by id, and how often each was read: the first read says 7TV is still processing it.
         var uploads: [String: SevenTvEmoteInfo] = [:]
         var uploadReads: [String: Int] = [:]
+        /// `GET /7tv/uploads`, newest first.
+        var uploadRows: [SevenTvUploadedEmote] = []
     }
 
     private let state = Mutex(State())
@@ -88,7 +92,30 @@ final class PreviewSevenTvState: Sendable {
                 s.status = SevenTvStatus(linked: true, account: Self.account(now: now, status: .ok), channels: Self.channels())
             }
             s.sets = Self.sets(now: now)
+            if s.status.linked { Self.seedUploads(&s, now: now) }
         }
+    }
+
+    /// Two emotes uploaded from the preview library: `liaSpin` (the 4:5 webp of `Dd7P496wolG`, two minutes ago, into main;
+    /// processing on its first read) and `coffeeLoop` (the webp of `Dd5JFkMDt4N`, three days ago, no set; done).
+    private static func seedUploads(_ s: inout State, now: Date) {
+        let picture = PreviewData.sevenTvEmoteID(0)
+        let spin = "01HV0000000000000000000001", coffee = "01HV0000000000000000000002"
+        s.uploads[spin] = SevenTvEmoteInfo(
+            emoteID: spin, name: "liaSpin", ownerID: PreviewData.sevenTvUserID, pending: true, animated: true,
+            previewURL: PreviewData.sevenTvCDN(picture, "2x"), fileURL: PreviewData.sevenTvCDN(picture, "4x"))
+        s.uploads[coffee] = SevenTvEmoteInfo(
+            emoteID: coffee, name: "coffeeLoop", ownerID: PreviewData.sevenTvUserID, pending: false, animated: true,
+            previewURL: PreviewData.sevenTvCDN(PreviewData.sevenTvEmoteID(3), "2x"),
+            fileURL: PreviewData.sevenTvCDN(PreviewData.sevenTvEmoteID(3), "4x"))
+        s.uploadReads[coffee] = 1
+        s.uploadRows = [
+            SevenTvUploadedEmote(
+                fileID: "PrEvIeWitem000013", emoteID: spin, name: "liaSpin", createdAt: now.addingTimeInterval(-120),
+                setID: "01HM0000000000000000MAIN01"),
+            SevenTvUploadedEmote(
+                fileID: "PrEvIeWitem000008", emoteID: coffee, name: "coffeeLoop", createdAt: now.addingTimeInterval(-3 * 86_400)),
+        ]
     }
 
     private static func account(now: Date, status: SevenTvUser.Status) -> SevenTvUser {
@@ -252,7 +279,9 @@ final class PreviewSevenTvState: Sendable {
             guard SevenTvRule.cleanAlias(name) != nil else { throw SevenTvError.rejected("that name won't work") }
             var set = s.sets[channelID]![i]
             if let clash = set.emotes.firstIndex(where: { $0.alias == name }) {
-                guard overrideConflicts else { throw SevenTvError.rejected("an emote named \(name) is already in this set") }
+                guard overrideConflicts else {
+                    throw SevenTvError.nameTaken(conflictEmoteID: set.emotes[clash].emoteID, alias: name)
+                }
                 set.emotes.remove(at: clash)
             }
             if let capacity = set.info.capacity, set.emotes.count >= capacity {
@@ -341,6 +370,9 @@ final class PreviewSevenTvState: Sendable {
                 result.addError = SevenTvError.from(error)
             }
         }
+        let row = SevenTvUploadedEmote(
+            fileID: draft.fileID, emoteID: emoteID, name: draft.name, createdAt: now, setID: result.added?.setID)
+        state.withLock { s in s.uploadRows.insert(row, at: 0) }
         return result
     }
 
@@ -359,6 +391,14 @@ final class PreviewSevenTvState: Sendable {
         let frames = 48
         let bytes = Int64(width * height * frames / 12)
         return SevenTvFitResult(width: width, height: height, frames: frames, bytes: bytes, quality: 82)
+    }
+
+    /// `GET /7tv/uploads`: newest first, at most 100.
+    func uploadList() throws -> [SevenTvUploadedEmote] {
+        try state.withLock { s in
+            try Self.requireLinked(s)
+            return Array(s.uploadRows.prefix(100))
+        }
     }
 
     /// `GET /7tv/emotes/<id>`: an upload is pending on its first read, done after; the preview sets' emotes are done.
@@ -466,5 +506,10 @@ extension PreviewClient: SevenTvClient {
     public func sevenTvEmote(id: String) async throws -> SevenTvEmoteInfo {
         try await sevenTvReady("GET emote \(id)")
         return try sevenTvState.emote(id: id)
+    }
+
+    public func sevenTvUploads() async throws -> [SevenTvUploadedEmote] {
+        try await sevenTvReady("GET uploads")
+        return try sevenTvState.uploadList()
     }
 }

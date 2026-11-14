@@ -22,6 +22,7 @@ import {
     type SevenTvDeps,
     type SevenTvUploadDeps,
     EMOTE_FIT_PATH,
+    sevenTvUploads,
 } from "../../seventv";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
@@ -116,6 +117,13 @@ const UploadShape = z
         add_error: z.object({ code: z.string(), message: z.string().optional() }).optional(),
     })
     .meta({ id: "SevenTvUpload" });
+const UploadsShape = z
+    .object({
+        uploads: z.array(
+            z.object({ file_id: z.string(), emote_id: z.string(), name: z.string(), set_id: z.string().nullable(), created_at: z.number() }),
+        ),
+    })
+    .meta({ id: "SevenTvUploads" });
 const EmoteInfo = z
     .object({
         emote_id: z.string(),
@@ -286,6 +294,14 @@ const ROUTE_OPS = [
         summary: "One 7TV emote: its name, owner, and whether 7TV is still processing it (GET /7tv/emotes/<id>).",
         run: (ctx) => sevenTvEmote(deps(ctx), ctx.params.id!),
     }),
+    route({
+        name: "seventv_http.uploads",
+        method: "GET",
+        path: "/7tv/uploads",
+        output: UploadsShape.extend({ status: Status }),
+        summary: "Emotes uploaded to 7TV through capystore, newest first, at most 100 (GET /7tv/uploads).",
+        run: (ctx) => sevenTvUploads(deps(ctx)),
+    }),
 ];
 
 // ---- the chat AI's calls (57.6) -----------------------------------------------------------------------------------------
@@ -297,6 +313,7 @@ const MESSAGES: Record<string, string> = {
     "error.seventv.not_found": "7TV has no such channel, set or emote",
     "error.seventv.forbidden": "the linked account may not do that on this channel",
     "error.seventv.rate_limited": "7TV is rate limiting: wait a little and try again",
+    "error.seventv.name_taken": "that name is already in the set: add it under another alias, rename the one there, or pass override_conflicts to replace it",
     "error.seventv.rejected": "7TV refused that",
     "error.seventv.unavailable": "7TV is not answering",
     "error.seventv.file_not_found": "no library file or post by that id (show_post lists a post's files)",
@@ -399,7 +416,7 @@ const addOp = defineOp({
     ai: {
         tier: "ask",
         only: true,
-        summary: "Add a 7TV emote to an emote set (find it with emotes.find). Asks Harmony first.",
+        summary: "Add a 7TV emote to an emote set (find it with emotes.find). A name already in the set answers error.seventv.name_taken: pick another alias, rename the one there, or override_conflicts: true to replace it (say which to Harmony). Asks Harmony first.",
         params: ["set_id", "emote_id"],
         options: true,
         preview: async (_ctx, input) => ({
@@ -555,4 +572,15 @@ const emoteOp = defineOp({
     handler: (ctx, input) => strip(sevenTvEmote(deps(ctx), input.emote_id)),
 });
 
-export const SEVENTV_OPS = [...ROUTE_OPS, statusOp, setsOp, setOp, addOp, removeOp, renameOp, makeLiveOp, createSetOp, renameSetOp, uploadOp, emoteOp];
+const uploadsOp = defineOp({
+    name: "seventv.uploads",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({}),
+    output: UploadsShape,
+    ai: { tier: "free", only: true, summary: "Emotes uploaded to 7TV through capystore (which library file became which emote), newest first.", params: [] },
+    handler: (ctx) => strip(sevenTvUploads(deps(ctx))),
+});
+
+export const SEVENTV_OPS = [...ROUTE_OPS, statusOp, setsOp, setOp, addOp, removeOp, renameOp, makeLiveOp, createSetOp, renameSetOp, uploadOp, emoteOp, uploadsOp];

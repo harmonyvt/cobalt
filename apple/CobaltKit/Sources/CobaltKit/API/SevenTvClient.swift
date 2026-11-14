@@ -19,7 +19,8 @@ public protocol SevenTvClient: Sendable {
     func createSevenTvSet(ownerID: String, name: String) async throws -> SevenTvSetInfo
     /// `PATCH /7tv/sets/<id> {name}`.
     func renameSevenTvSet(id: String, name: String) async throws -> SevenTvSetInfo
-    /// `POST /7tv/sets/<id>/emotes {emote_id, alias?, override_conflicts?}` (nil alias and false override are left out).
+    /// `POST /7tv/sets/<id>/emotes {emote_id, alias?, override_conflicts?}` (nil alias and false override are left out). A name
+    /// already in the set without `override_conflicts` is `SevenTvError.nameTaken` (409, with the emote holding it when known).
     func addSevenTvEmote(setID: String, emoteID: String, alias: String?, overrideConflicts: Bool) async throws -> SevenTvEmoteChange
     /// `PATCH /7tv/sets/<id>/emotes/<emote> {alias, from?}`: renames the emote in this set; `from` is its current alias.
     func renameSevenTvEmote(setID: String, emoteID: String, alias: String, from: String?) async throws -> SevenTvEmoteChange
@@ -32,6 +33,8 @@ public protocol SevenTvClient: Sendable {
     func uploadSevenTvEmote(_ draft: SevenTvUploadDraft) async throws -> SevenTvUploadResult
     /// `GET /7tv/emotes/<id>` (57.9): one emote; `pending` while 7TV is still processing a new upload.
     func sevenTvEmote(id: String) async throws -> SevenTvEmoteInfo
+    /// `GET /7tv/uploads`: the emotes uploaded through capystore (57.9), newest first, at most 100.
+    func sevenTvUploads() async throws -> [SevenTvUploadedEmote]
 }
 
 /// The paths and bodies of the routes, in one place so the HTTP client and the tests agree.
@@ -40,6 +43,8 @@ enum SevenTvRoute {
     static let link = "/7tv/link"
     static let sets = "/7tv/sets"
     static let uploads = "/7tv/emotes"
+    /// `GET /7tv/uploads`: what capystore uploaded.
+    static let myUploads = "/7tv/uploads"
 
     static func channelSets(_ channelID: String) -> String { "/7tv/channels/\(segment(channelID))/sets" }
     static func channelLive(_ channelID: String) -> String { "/7tv/channels/\(segment(channelID))/live" }
@@ -81,6 +86,11 @@ enum SevenTvRoute {
         if let alias, !alias.isEmpty { body["alias"] = alias }
         if overrideConflicts { body["override_conflicts"] = true }
         return body
+    }
+
+    /// "copy to set": the emote under the name it has in the set it comes from (always sent, so a renamed emote keeps it).
+    static func copyBody(_ emote: SevenTvSetItem, overrideConflicts: Bool = false) -> [String: Any] {
+        addBody(emoteID: emote.emoteID, alias: emote.alias, overrideConflicts: overrideConflicts)
     }
 
     static func renameBody(alias: String, from: String?) -> [String: Any] {

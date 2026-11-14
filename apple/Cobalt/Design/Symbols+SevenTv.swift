@@ -36,6 +36,26 @@ extension Symbol {
         static let person = "person.crop.circle"
         /// "upload to 7tv" (57.9) and the sheet's "upload".
         static let upload = "arrow.up.circle"
+        /// The 7tv tab (APP-API-CONTRACT 57.7).
+        static let tab = "face.smiling"
+        /// The account's "⋯" menu.
+        static let more = "ellipsis"
+        /// "search 7tv" (the Mac's middle column) and the search segment.
+        static let search = "magnifyingglass"
+        /// "upload from library".
+        static let library = "photo.on.rectangle.angled"
+        /// The "on 7tv" mark of a library picture.
+        static let onSevenTv = "checkmark.seal.fill"
+        /// "select" and a picked tile.
+        static let select = "checkmark.circle"
+        static let picked = "checkmark.circle.fill"
+        /// "reset to <7tv name>".
+        static let reset = "arrow.uturn.backward"
+        /// The clash sheet's choices.
+        static let choiceOn = "largecircle.fill.circle"
+        static let choiceOff = "circle"
+        /// The studio's "7tv →" row.
+        static let shortcut = "chevron.right"
         /// The upload sheet's "crop…" and "use this crop" (57.10).
         static let crop = "crop"
         /// The crop line's "clear".

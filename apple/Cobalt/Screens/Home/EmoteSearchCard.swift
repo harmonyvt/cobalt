@@ -7,7 +7,16 @@ import SwiftUI
 /// copied from here.
 struct EmoteSearchCard: View {
     let model: AppModel
-    let close: () -> Void
+    /// The grid's tallest (the 7tv tab's not-linked page lets it fill the screen).
+    var maxGridHeight: CGFloat
+    /// Nil: no close button (the 7tv tab's not-linked page).
+    let close: (() -> Void)?
+
+    init(model: AppModel, maxGridHeight: CGFloat = 280, close: (() -> Void)? = nil) {
+        self.model = model
+        self.maxGridHeight = maxGridHeight
+        self.close = close
+    }
 
     @State private var query = ""
     /// Nil is `saved`.
@@ -58,7 +67,7 @@ struct EmoteSearchCard: View {
                     #endif
                     .autocorrectionDisabled()
                 if searching { ProgressView().controlSize(.small) }
-                CloseButton { close() }
+                if let close { CloseButton { close() } }
             }
             sortChips
             caption
@@ -99,7 +108,7 @@ struct EmoteSearchCard: View {
                     ProgressView().controlSize(.small).padding(.vertical, 8)
                 }
             }
-            .frame(maxHeight: 280)
+            .frame(maxHeight: maxGridHeight)
         }
         .task { await model.library.refresh() }
         .task(id: Ask(query: query, sort: sort)) { await search() }

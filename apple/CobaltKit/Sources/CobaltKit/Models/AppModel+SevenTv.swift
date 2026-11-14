@@ -1,7 +1,7 @@
 import Foundation
 
 // The bookmarklet's return (APP-API-CONTRACT 57.1): `cobalt-apple://7tv-link?token=<token>`. The app posts the token to
-// `POST /7tv/link` and shows the studio tab, whose 7TV card says what came of it (`SevenTvStore.linkOutcome`). The token is
+// `POST /7tv/link` and shows the 7tv tab, which says what came of it (`SevenTvStore.linkOutcome`). The token is
 // never logged: log `SevenTvLink.redacted(url)` instead of the link.
 
 extension AppModel {
@@ -11,7 +11,7 @@ extension AppModel {
     public func openSevenTvLink(_ url: URL) -> Bool {
         guard SevenTvLink.isLink(url) else { return false }
         queueShown = false
-        if capabilities.stage || capabilities.kind == .unreachable { selectedTab = .stage }
+        if capabilities.stage || capabilities.kind == .unreachable { selectedTab = .sevenTv }
         let token = SevenTvLink.token(from: url) ?? ""
         Task { await self.sevenTv.link(token: token) }
         return true

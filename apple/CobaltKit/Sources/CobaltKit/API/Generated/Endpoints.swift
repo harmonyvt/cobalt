@@ -651,6 +651,11 @@ enum Endpoints {
         APIEndpoint(op: "seventv_http.emote", method: "GET", path: "/7tv/emotes/\(HTTPCobaltClient.encode(id))", auth: .key)
     }
 
+    /// `GET /7tv/uploads` (op `seventv_http.uploads`, auth key): Emotes uploaded to 7TV through capystore, newest first, at most 100 (GET /7tv/uploads).
+    static func seventvHttpUploads() -> APIEndpoint<SeventvHttpUploadsResponse> {
+        APIEndpoint(op: "seventv_http.uploads", method: "GET", path: "/7tv/uploads", auth: .key)
+    }
+
     /// `PUT /live/start-token` (op `live.start_token.put`, auth key): A device's push-to-start token.
     static func liveStartTokenPut() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "live.start_token.put", method: "PUT", path: "/live/start-token", auth: .key)
@@ -1579,6 +1584,19 @@ struct SeventvHttpEmoteResponse: Decodable, Sendable {
     var previewUrl: String?
     var fileUrl: String?
     var pageUrl: String
+    var status: String
+}
+
+struct SeventvHttpUploadsResponseUploadsItem: Decodable, Sendable {
+    var fileId: String
+    var emoteId: String
+    var name: String
+    var setId: String?
+    var createdAt: Double
+}
+
+struct SeventvHttpUploadsResponse: Decodable, Sendable {
+    var uploads: [SeventvHttpUploadsResponseUploadsItem]
     var status: String
 }
 

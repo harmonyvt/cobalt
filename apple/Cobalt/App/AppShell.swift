@@ -355,6 +355,14 @@ struct AppShell: View {
                         .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
                 }
             }
+            // 7TV: the channels' emote sets, 7TV search and uploads from the library (APP-API-CONTRACT 57.7); same rule as the
+            // studio. iPhone puts it under "more"
+            if model.capabilities.stage {
+                Tab(Copy.tab(.sevenTv), systemImage: icon(for: .sevenTv), value: AppTab.sevenTv) {
+                    NavigationStack { SevenTvScreen(model: model, tier: tier) }
+                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
+                }
+            }
             // the words taught to search (APP-API-CONTRACT 48.6); with six tabs iPhone puts it under "more"
             if model.capabilities.names {
                 Tab(Copy.tab(.names), systemImage: icon(for: .names), value: AppTab.names) {
@@ -394,6 +402,7 @@ struct AppShell: View {
                 case .links: NavigationStack { LinksScreen(model: model) }
                 case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
                 case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
+                case .sevenTv: NavigationStack { SevenTvScreen(model: model, tier: tier) }
                 case .names: NavigationStack { NamesScreen(model: model) }
                 case .queue: NavigationStack { QueueScreen(model: model) }
                 case .settings: SettingsScreen(model: model)
@@ -697,6 +706,7 @@ func icon(for tab: AppTab) -> String {
     case .links: return Symbol.links
     case .chat: return Symbol.chat
     case .stage: return Symbol.stage
+    case .sevenTv: return Symbol.SevenTv.tab
     case .names: return Symbol.Names.menu
     case .queue: return Symbol.queue
     case .settings: return Symbol.settings
@@ -732,6 +742,9 @@ private struct QueueShellPreview: View {
 }
 #Preview("shell · studio tab") {
     PreviewHost(.happy, tab: .stage) { AppShell(model: $0) }
+}
+#Preview("shell · 7tv tab") {
+    PreviewHost(.happy, tab: .sevenTv) { AppShell(model: $0) }
 }
 #Preview("shell · queue sheet") {
     PreviewHost(.happy, tab: .queue) { AppShell(model: $0) }

@@ -5,7 +5,8 @@ import Testing
 // 7TV accounts (APP-API-CONTRACT 57): the wire shapes of 57.4/57.5, the refusals, the bookmarklet's link and the token checks,
 // the paths and bodies of every route, and the store and set model on the preview server. Uploading a picture as a new emote
 // (57.9): its shapes, rules, routes and refusals, and the upload model's polling. The fit (57.10): crop and size in the body,
-// `fitted` in the answer, its refusals, and which files are shrunk, refused or need a crop.
+// `fitted` in the answer, its refusals, and which files are shrunk, refused or need a crop. The 7tv tab: `name_taken` and its
+// `conflict`, the local clash check and the suggested names, the three ways out, copy to set, `GET /7tv/uploads`.
 
 private let sevenTvKey = "2d6b9e10-5c3a-4f7e-8a21-9b0c4d7e1f35"
 private let fakeToken = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIwMUdCMlMyQkNSIn0.c2lnbmF0dXJlLXBhcnQ"
@@ -753,7 +754,7 @@ struct SevenTvUploadModelTests {
         await model.prepareSets()
         await model.upload()
         #expect(model.phase == .done && model.result?.added == nil)
-        #expect(model.result?.addError == .rejected("an emote named catJAM is already in this set"))
+        #expect(model.result?.addError == .nameTaken(conflictEmoteID: PreviewData.sevenTvEmoteID(0), alias: "catJAM"))
     }
 
     @Test func refusalsAndChecksStopBeforeOrAfterAsking() async throws {
@@ -845,5 +846,256 @@ struct SevenTvUploadModelTests {
         model.maxPolls = 1
         await model.upload()
         #expect(model.phase == .done && model.timedOut && model.emote?.pending == true)
+    }
+}
+
+// MARK: - the 7tv tab: name clashes, copies, uploads (57.4, 57.7, 57.9)
+
+private let wireUploads = """
+{"status":"success","uploads":[
+ {"file_id":"f_old","emote_id":"01HU0000000000000000000002","name":"coffeeLoop","created_at":1790000000000,"set_id":null},
+ {"file_id":"f_new","emote_id":"01HU0000000000000000000001","name":"liaSpin","created_at":1790000600000,"set_id":"01HM0000000000000000MAIN01"},
+ {"file_id":"f_bad","name":"no emote id, dropped"}]}
+"""
+
+private let wireNameTaken = """
+{"status":"error","error":{"code":"error.seventv.name_taken"},"message":"an emote named catJam is already in this set",
+ "conflict":{"emote_id":"01F6MQ33FG000FFJ97ZB8MWV52","alias":"catJam"}}
+"""
+
+/// An emote that is in none of the preview sets.
+private func outsider(_ n: Int, name: String) -> EmoteHit {
+    let id = "01FZZ" + String(format: "%021d", n)
+    return EmoteHit(
+        id: id, name: name, animated: true, previewURL: PreviewData.sevenTvCDN(id, "2x"), fileURL: PreviewData.sevenTvCDN(id, "4x"))
+}
+
+struct SevenTvManageShapeTests {
+    @Test func nameTakenDecodesWithTheEmoteHoldingTheName() throws {
+        #expect(SevenTvError(code: "error.seventv.name_taken") == .nameTaken(conflictEmoteID: nil, alias: nil))
+        #expect(
+            SevenTvError.from(CobaltError.api(code: "error.seventv.name_taken", httpStatus: 409))
+                == .nameTaken(conflictEmoteID: nil, alias: nil))
+        #expect(SevenTvRefusal.parse(Data(wireNameTaken.utf8)) == .nameTaken(conflictEmoteID: "01F6MQ33FG000FFJ97ZB8MWV52", alias: "catJam"))
+        let bare = SevenTvRefusal.parse(Data(#"{"status":"error","error":{"code":"error.seventv.name_taken"}}"#.utf8))
+        #expect(bare == .nameTaken(conflictEmoteID: nil, alias: nil))
+        let odd = SevenTvRefusal.parse(Data(#"{"status":"error","error":{"code":"error.seventv.name_taken"},"conflict":"catJam"}"#.utf8))
+        #expect(odd == .nameTaken(conflictEmoteID: nil, alias: nil), "an odd conflict never loses the code")
+        let empty = SevenTvRefusal.parse(
+            Data(#"{"status":"error","error":{"code":"error.seventv.name_taken"},"conflict":{"emote_id":"","alias":null}}"#.utf8))
+        #expect(empty == .nameTaken(conflictEmoteID: nil, alias: nil))
+        #expect(SevenTvError.nameTaken(conflictEmoteID: nil, alias: "x").isNameTaken && !SevenTvError.rejected(nil).isNameTaken)
+        #expect(SevenTvRefusal.parse(Data(#"{"status":"error","error":{"code":"error.seventv.rejected"},"conflict":{"alias":"x"}}"#.utf8)) == .rejected(nil))
+    }
+
+    @Test func uploadsDecodeNewestFirst() throws {
+        let list = try decode(SevenTvUploadList.self, wireUploads)
+        #expect(list.uploads.map(\.name) == ["liaSpin", "coffeeLoop"], "newest first; a row without an emote id is dropped")
+        let spin = try #require(list.uploads.first)
+        #expect(spin.fileID == "f_new" && spin.emoteID == "01HU0000000000000000000001" && spin.setID == "01HM0000000000000000MAIN01")
+        #expect(spin.createdAt == Date(timeIntervalSince1970: 1_790_000_600))
+        #expect(list.uploads[1].setID == nil && list.uploads[1].fileID == "f_old")
+        #expect(spin.pageURL.absoluteString == "https://7tv.app/emotes/01HU0000000000000000000001")
+        #expect(try decode(SevenTvUploadList.self, #"{"status":"success"}"#).uploads.isEmpty)
+    }
+
+    @Test func theClashIsFoundInTheLoadedSetAndAFreeNameSuggested() {
+        #expect(SevenTvRule.nextAlias(after: "catJam") == "catJam2")
+        #expect(SevenTvRule.nextAlias(after: "catJam2") == "catJam3")
+        #expect(SevenTvRule.nextAlias(after: "catJam9") == "catJam10")
+        #expect(SevenTvRule.suggestAlias(for: "catJam", taken: ["catJam"]) == "catJam2")
+        #expect(SevenTvRule.suggestAlias(for: "catJam2", taken: ["catJam2"]) == "catJam3")
+        #expect(SevenTvRule.suggestAlias(for: "catJam", taken: ["catJam", "catJam2", "catJam3"]) == "catJam4")
+        #expect(SevenTvRule.freeAlias("catJamOld", taken: ["catJam"]) == "catJamOld")
+        #expect(SevenTvRule.freeAlias("catJamOld", taken: ["catJamOld"]) == "catJamOld2")
+        let next = SevenTvRule.nextAlias(after: String(repeating: "a", count: 100))
+        #expect(next.count == 100 && next.hasSuffix("a2"), "kept to 100 characters by cutting the name")
+        let emotes = PreviewData.sevenTvEmotes(count: 3, renameSecond: true, now: Date())
+        #expect(SevenTvRule.clash(alias: "catJAM", in: emotes)?.emoteID == PreviewData.sevenTvEmoteID(0))
+        #expect(SevenTvRule.clash(alias: "catjam", in: emotes) == nil, "7TV compares names exactly")
+        #expect(SevenTvRule.clash(alias: "liaWave", in: emotes) != nil && SevenTvRule.clash(alias: "peepoHey", in: emotes) == nil)
+        let clash = SevenTvNameClash.make(
+            setID: "s1", setName: "main", alias: "catJam", incoming: outsider(1, name: "catJam"), existing: nil,
+            conflictEmoteID: "e9", taken: ["catJam2"])
+        #expect(clash.suggestion == "catJam3" && clash.renameSuggestion == "catJamOld" && clash.existingEmoteID == "e9")
+        #expect(clash.canRenameExisting)
+    }
+
+    @Test func copyToSetSendsTheEmoteAndTheAliasItHasHere() throws {
+        let renamed = SevenTvSetItem(emoteID: "e1", alias: "liaWave", name: "peepoHey", animated: true, previewURL: nil, fileURL: nil)
+        let body = SevenTvRoute.copyBody(renamed)
+        #expect(body["emote_id"] as? String == "e1" && body["alias"] as? String == "liaWave" && body["override_conflicts"] == nil)
+        let plain = SevenTvSetItem(emoteID: "e2", alias: "catJAM", name: "catJAM", animated: true, previewURL: nil, fileURL: nil)
+        #expect(SevenTvRoute.copyBody(plain)["alias"] as? String == "catJAM", "the alias always goes, renamed or not")
+        #expect(SevenTvRoute.copyBody(plain, overrideConflicts: true)["override_conflicts"] as? Bool == true)
+        let hit = renamed.asHit
+        #expect(hit.id == "e1" && hit.name == "peepoHey" && hit.previewURL.absoluteString == "https://cdn.7tv.app/emote/e1/2x.webp")
+        #expect(SevenTvRoute.myUploads == "/7tv/uploads")
+    }
+}
+
+struct SevenTvManageHTTPTests {
+    private func client(_ server: LoopbackServer) -> HTTPCobaltClient {
+        HTTPCobaltClient(baseURL: server.base, apiKey: { sevenTvKey })
+    }
+
+    @Test func aTakenNameIsA409WithTheEmoteHoldingIt() async throws {
+        let server = try await LoopbackServer.start { req in
+            switch (req.method, req.path) {
+            case ("POST", "/7tv/sets/s1/emotes"): return .json(wireNameTaken, status: 409)
+            case ("POST", "/7tv/sets/s2/emotes"):
+                return .json(#"{"status":"success","set_id":"s2","emote_id":"e1","alias":"liaWave"}"#, status: 201)
+            default: return .init(status: 404)
+            }
+        }
+        defer { server.stop() }
+        let c = client(server)
+        await #expect(throws: SevenTvError.nameTaken(conflictEmoteID: "01F6MQ33FG000FFJ97ZB8MWV52", alias: "catJam")) {
+            _ = try await c.addSevenTvEmote(setID: "s1", emoteID: "e1", alias: "catJam", overrideConflicts: false)
+        }
+        // copy to set: the emote and the alias it has in the set it comes from
+        let copied = try await c.addSevenTvEmote(setID: "s2", emoteID: "e1", alias: "liaWave", overrideConflicts: false)
+        #expect(copied.alias == "liaWave")
+        let body = try #require(JSONSerialization.jsonObject(with: server.requests[1].body) as? [String: Any])
+        #expect(body["emote_id"] as? String == "e1" && body["alias"] as? String == "liaWave" && body["override_conflicts"] == nil)
+    }
+
+    @Test func uploadsIsAKeyedGet() async throws {
+        let server = try await LoopbackServer.start { req in
+            req.method == "GET" && req.path == "/7tv/uploads" ? .json(wireUploads) : .init(status: 404)
+        }
+        defer { server.stop() }
+        let uploads = try await client(server).sevenTvUploads()
+        #expect(uploads.map(\.fileID) == ["f_new", "f_old"])
+        let req = try #require(server.requests.first)
+        #expect(req.headers["authorization"] == "Api-Key \(sevenTvKey)" && req.body.isEmpty)
+    }
+}
+
+@MainActor
+struct SevenTvManageModelTests {
+    private func linkedApp(_ scenario: PreviewScenario = .happy) async -> AppModel {
+        let app = AppModel.makePreview(scenario, timeScale: 0.01, clock: SystemClock())
+        await app.sevenTv.load()
+        return app
+    }
+
+    @Test func theTabIsRightAfterTheStudioOnTheSameRule() {
+        var c = Capabilities.unknown
+        #expect(!AppTab.sevenTv.isAvailable(with: c))
+        c.stage = true
+        #expect(AppTab.sevenTv.isAvailable(with: c))
+        let all = AppTab.allCases
+        #expect(all.firstIndex(of: .sevenTv) == all.firstIndex(of: .stage).map { $0 + 1 })
+    }
+
+    @Test func aTakenNameIsCaughtBeforeAskingAndResolvedThreeWays() async throws {
+        let app = await linkedApp()
+        let own = try #require(app.sevenTv.selectedChannel)
+        let main = try #require(app.sevenTv.sets(of: own.id).first)
+        let set = app.sevenTv.openSet(main.id, channelID: own.id)
+        await set.load()
+        await set.loadEverything()
+        let preview = try #require(app.ctx.client as? PreviewClient)
+        let jam = try #require(set.emote(aliased: "catJAM"))
+
+        // the loaded set answers without asking 7TV; main has catJAM2…catJAM11 too
+        let calls = preview.sevenTvState.calls.count
+        let first = try #require(try await set.addChecking(outsider(1, name: "catJAM"), alias: nil))
+        #expect(preview.sevenTvState.calls.count == calls, "no request for a name the loaded set has")
+        #expect(first.alias == "catJAM" && first.setName == "main" && first.existing?.emoteID == jam.emoteID)
+        #expect(first.suggestion == "catJAM12" && first.renameSuggestion == "catJAMOld" && first.canRenameExisting)
+        #expect(set.suggestedAlias(for: "catJAM") == "catJAM12")
+
+        // 1. under another name
+        #expect(try await set.resolve(first, .addAs(first.suggestion)) == nil)
+        #expect(set.emote(aliased: "catJAM12")?.emoteID == first.incoming.id && set.info?.count == 311)
+
+        // 2. rename the one in the set, then the new one goes in under the name
+        let second = try #require(try await set.addChecking(outsider(2, name: "catJAM"), alias: nil))
+        await #expect(throws: SevenTvError.self) { try await set.resolve(second, .renameExisting(to: "BOOBA")) }
+        #expect(try await set.resolve(second, .renameExisting(to: second.renameSuggestion)) == nil)
+        #expect(set.emote(aliased: "catJAMOld")?.emoteID == jam.emoteID)
+        #expect(set.emote(aliased: "catJAM")?.emoteID == second.incoming.id && set.info?.count == 312)
+
+        // 3. replace it: the old one leaves
+        let clap = try #require(set.emote(aliased: "Clap"))
+        let third = try #require(try await set.addChecking(outsider(3, name: "Clap"), alias: nil))
+        #expect(try await set.resolve(third, .replace) == nil)
+        #expect(set.emote(aliased: "Clap")?.emoteID == third.incoming.id && !set.all.contains { $0.id == clap.id })
+        #expect(set.info?.count == 312, "a swap keeps the count")
+
+        // a name past the loaded pages: 7TV's 409 answers, with the emote holding it
+        let fresh = app.sevenTv.openSet(main.id, channelID: own.id)
+        await fresh.load()
+        let late = try #require(try await fresh.addChecking(outsider(4, name: "x"), alias: "catJAM5"))
+        #expect(late.existing == nil && late.existingEmoteID == PreviewData.sevenTvEmoteID(400) && late.alias == "catJAM5")
+    }
+
+    @Test func copiesGoUnderTheAliasAndAClashInTheOtherSetIsAnswered() async throws {
+        let app = await linkedApp()
+        let own = try #require(app.sevenTv.selectedChannel)
+        let main = try #require(app.sevenTv.sets(of: own.id).first)
+        let set = app.sevenTv.openSet(main.id, channelID: own.id)
+        await set.load()
+        let christmas = try #require(set.otherSets.first { $0.name == "christmas" })
+
+        let wave = try #require(set.emote(aliased: "liaWave"))
+        #expect(try await set.copy(wave, to: christmas.id) == nil)
+        #expect(app.sevenTv.sets(of: own.id).first { $0.id == christmas.id }?.count == christmas.count + 1)
+        let target = app.sevenTv.openSet(christmas.id, channelID: own.id)
+        await target.load()
+        #expect(target.all.first?.alias == "liaWave" && target.all.first?.emoteID == wave.emoteID, "copied under its name here")
+
+        let booba = try #require(set.emote(aliased: "BOOBA"))
+        let clash = try #require(try await set.copy(booba, to: christmas.id))
+        #expect(clash.setID == christmas.id && clash.setName == "christmas" && clash.existing == nil)
+        #expect(clash.existingEmoteID == PreviewData.sevenTvEmoteID(2) && clash.suggestion == "BOOBA2")
+        // christmas has BOOBA2 too: the answer is the next clash
+        let again = try #require(try await set.resolve(clash, .addAs(clash.suggestion)))
+        #expect(again.alias == "BOOBA2" && again.suggestion == "BOOBA3")
+        let before = app.sevenTv.sets(of: own.id).first { $0.id == christmas.id }?.count
+        #expect(try await set.resolve(clash, .replace) == nil)
+        #expect(app.sevenTv.sets(of: own.id).first { $0.id == christmas.id }?.count == before, "a swap keeps the count")
+
+        // several at once: the clash is left for its sheet, the rest go
+        let subathon = try #require(set.otherSets.first { $0.name == "subathon" })
+        let sadge = try #require(set.emote(aliased: "Sadge"))
+        let copied = await set.copyMany([sadge, wave], to: subathon.id)
+        #expect(copied.done == 1 && copied.clashes.map(\.alias) == ["Sadge"] && copied.failed == 0)
+        let removed = await set.removeMany(Array(set.all.prefix(3)))
+        #expect(removed.done == 3 && set.info?.count == 307)
+    }
+
+    @Test func uploadsMarkTheLibraryFilesAndFollowTheirState() async throws {
+        let app = await linkedApp()
+        await app.sevenTv.loadUploads()
+        #expect(app.sevenTv.uploadsState == .loaded && app.sevenTv.uploads.map(\.name) == ["liaSpin", "coffeeLoop"])
+        #expect(app.sevenTv.uploadedFileIDs == ["PrEvIeWitem000013", "PrEvIeWitem000008"])
+        #expect(app.sevenTv.upload(forFile: "PrEvIeWitem000008")?.name == "coffeeLoop")
+        let spin = app.sevenTv.uploads[0]
+        #expect(app.sevenTv.state(of: spin) == .unknown)
+        await app.sevenTv.readUploadStates()
+        #expect(app.sevenTv.state(of: spin) == .processing && app.sevenTv.state(of: app.sevenTv.uploads[1]) == .ready)
+        #expect(app.sevenTv.hasProcessingUploads)
+        await app.sevenTv.watchUploads(every: 0.01, rounds: 3)
+        #expect(app.sevenTv.state(of: spin) == .ready && !app.sevenTv.hasProcessingUploads)
+
+        // an upload from the sheet joins the list at once, and its polling fills the state
+        let upload = app.sevenTv.uploader(fileID: "PrEvIeWitem000003", bytes: 200_000, title: "dog dance")
+        upload.pollEvery = 0.01
+        await upload.upload()
+        #expect(app.sevenTv.uploads.first?.fileID == "PrEvIeWitem000003" && app.sevenTv.uploads.first?.name == "dogDance")
+        #expect(app.sevenTv.uploadedFileIDs.contains("PrEvIeWitem000003"))
+        let newest = try #require(app.sevenTv.uploads.first)
+        #expect(app.sevenTv.state(of: newest) == .ready)
+        await app.sevenTv.loadUploads()
+        #expect(app.sevenTv.uploads.count == 3, "the server lists it too, once")
+
+        let off = await linkedApp(.stageNotConnected)
+        await off.sevenTv.loadUploads()
+        #expect(off.sevenTv.uploadsState == .failed(.notLinked) && off.sevenTv.uploads.isEmpty)
+        app.sevenTv.reset()
+        #expect(app.sevenTv.uploads.isEmpty && app.sevenTv.uploadsState == .idle && app.sevenTv.uploadInfo.isEmpty)
     }
 }

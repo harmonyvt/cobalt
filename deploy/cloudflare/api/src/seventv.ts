@@ -112,6 +112,10 @@ const errorFor = (e: GqlError): StudioReply => {
     if (status === 404) return fail(404, "error.seventv.not_found", msg);
     if (status === 429) return fail(429, "error.seventv.rate_limited", msg);
     if (status >= 500) return fail(502, "error.seventv.unavailable");
+    // a name already in the set (addEmote, updateEmoteAlias): 7TV answers 409 CONFLICT (57.11)
+    if (status === 409 || (typeof e.extensions?.code === "string" && /CONFLICT/i.test(e.extensions.code)) || (msg && /conflict/i.test(msg))) {
+        return fail(409, "error.seventv.name_taken", msg);
+    }
     return fail(400, "error.seventv.rejected", msg);
 };
 
@@ -752,6 +756,12 @@ export async function sevenTvUpload(
         }
         if (typeof emoteId !== "string" || !SEVENTV_ID.test(emoteId)) throw new SevenTvError(fail(502, "error.seventv.unavailable"));
 
+        // Remembered for the 7tv tab (57.11). Before migration 0042 the table is missing: the upload still stands.
+        await d.db
+            .prepare("INSERT OR REPLACE INTO seventv_uploads (emote_id, file_id, name, set_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
+            .bind(emoteId, row.id, name, typeof setId === "string" ? setId : null, d.now())
+            .run()
+            .catch(() => {});
         // Put it in a set too when asked. The emote exists now even if this part fails, so that is reported, not thrown.
         let added: { set_id: string; alias: string | null } | null = null;
         let addError: { code: string; message?: string } | null = null;
@@ -783,6 +793,18 @@ export async function sevenTvUpload(
 
 const EMOTE = `query($id: Id!) { emotes { emote(id: $id) { id defaultName deleted imagesPending ownerId
   flags { animated private defaultZeroWidth } ${IMG} } } }`;
+
+/** GET /7tv/uploads (57.11): what capystore uploaded, newest first. No 7TV call; empty before migration 0042. */
+export async function sevenTvUploads(d: SevenTvDeps): Promise<StudioReply> {
+    type Row = { emote_id: string; file_id: string; name: string; set_id: string | null; created_at: number };
+    let rows: Row[] = [];
+    try {
+        rows = (await d.db.prepare("SELECT emote_id, file_id, name, set_id, created_at FROM seventv_uploads ORDER BY created_at DESC LIMIT 100").all<Row>()).results ?? [];
+    } catch {
+        rows = [];
+    }
+    return success({ uploads: rows.map((r) => ({ file_id: r.file_id, emote_id: r.emote_id, name: r.name, set_id: r.set_id, created_at: r.created_at })) });
+}
 
 export async function sevenTvEmote(d: SevenTvDeps, emoteId: string): Promise<StudioReply> {
     if (!SEVENTV_ID.test(emoteId)) return fail(404, "error.seventv.not_found");

@@ -44,10 +44,17 @@ public final class SevenTvStore {
     public private(set) var linkOutcome: LinkOutcome?
     /// The last outcome the card has said (`acknowledge`).
     public private(set) var acknowledgedOutcome = 0
+    /// What capystore uploaded to 7TV (`GET /7tv/uploads`, newest first; `SevenTvStore+Uploads.swift`).
+    public internal(set) var uploads: [SevenTvUploadedEmote] = []
+    public internal(set) var uploadsState: State = .idle
+    /// `GET /7tv/emotes/<id>` of each upload read so far, by emote id (whether 7TV is still processing it, its picture).
+    public internal(set) var uploadInfo: [String: SevenTvEmoteInfo] = [:]
+    /// Uploads 7TV answered 404 for.
+    public internal(set) var goneUploads: Set<String> = []
 
     @ObservationIgnored private let ctx: PipelineContext
     /// Bumped by `reset()`: an answer from the old server arriving later is dropped.
-    @ObservationIgnored private var generation = 0
+    @ObservationIgnored var generation = 0
     @ObservationIgnored private var outcomeCounter = 0
 
     init(context: PipelineContext) {
@@ -159,6 +166,7 @@ public final class SevenTvStore {
             status = .notLinked
             channelSets = [:]
             setsState = [:]
+            forgetUploads()
         default:
             break
         }
@@ -206,6 +214,7 @@ public final class SevenTvStore {
         channelSets = [:]
         setsState = [:]
         selectedChannelID = nil
+        forgetUploads()
     }
 
     // MARK: sets
@@ -297,5 +306,13 @@ public final class SevenTvStore {
         channelSets = [:]
         setsState = [:]
         linking = false
+        forgetUploads()
+    }
+
+    func forgetUploads() {
+        uploads = []
+        uploadsState = .idle
+        uploadInfo = [:]
+        goneUploads = []
     }
 }

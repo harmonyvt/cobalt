@@ -298,10 +298,21 @@ describe("sets and edits (57.3, 57.4)", () => {
         answer = () => ({ body: { data: null, errors: [{ message: "you do not have permission to manage this user's emote sets", extensions: { status: 403, code: "LACKING_PRIVILEGES" } }] } });
         const r = await json(await send(`/7tv/sets/${SET_MAIN}/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE }) }));
         expect(r).toEqual({ status: 403, body: { status: "error", error: { code: "error.seventv.forbidden" }, message: "you do not have permission to manage this user's emote sets" } });
-        answer = () => ({ body: { data: null, errors: [{ message: "emote name conflict", extensions: { status: 409 } }] } });
+        answer = () => ({ body: { data: null, errors: [{ message: "emote set is full", extensions: { status: 400 } }] } });
         expect((await json(await send(`/7tv/sets/${SET_MAIN}/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE }) }))).body.error.code).toBe("error.seventv.rejected");
         answer = () => ({ status: 429, body: {} });
         expect((await send(`/7tv/sets/${SET_MAIN}/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE }) })).status).toBe(429);
+    });
+
+    it("a name already in the set is error.seventv.name_taken (57.11)", async () => {
+        answer = () => ({ body: { data: null, errors: [{ message: "emote name conflict", extensions: { status: 409, code: "CONFLICT" } }] } });
+        const r = await json(await send(`/7tv/sets/${SET_MAIN}/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE }) }));
+        expect(r).toEqual({ status: 409, body: { status: "error", error: { code: "error.seventv.name_taken" }, message: "emote name conflict" } });
+        const ren = await json(await send(`/7tv/sets/${SET_MAIN}/emotes/${EMOTE}`, { method: "PATCH", body: JSON.stringify({ alias: "taken" }) }));
+        expect(ren.body.error.code).toBe("error.seventv.name_taken");
+        answer = () => ({ body: { data: { emoteSets: { emoteSet: { addEmote: { id: SET_MAIN } } } } } });
+        await send(`/7tv/sets/${SET_MAIN}/emotes`, { method: "POST", body: JSON.stringify({ emote_id: EMOTE, override_conflicts: true }) });
+        expect(calls.at(-1)!.variables.over).toBe(true);
     });
 
     it("makes a set live, new set, rename set", async () => {
@@ -430,6 +441,22 @@ describe("uploading a library picture as a new emote (57.9)", () => {
         fitAnswer = err(422, "error.seventv.fit_failed", "a frame would not decode");
         expect(await go()).toMatchObject({ error: { code: "error.seventv.fit_failed" }, message: "a frame would not decode" });
         expect(uploads).toHaveLength(0);
+    });
+
+    it("remembers each upload and lists them newest first (57.11)", async () => {
+        put("file-a", "image/webp", 10);
+        put("file-b", "image/gif", 10);
+        expect((await json(await send("/7tv/uploads"))).body).toEqual({ status: "success", uploads: [] });
+        upload = { status: 201, body: { emote_id: "01JUP0000000000000000000AA" } };
+        await send("/7tv/emotes", { method: "POST", body: JSON.stringify({ file: "file-a", name: "first" }) });
+        clock += 1000;
+        upload = { status: 201, body: { emote_id: "01JUP0000000000000000000AB" } };
+        answer = () => ({ body: { data: { emoteSets: { emoteSet: { addEmote: { id: SET_MAIN } } } } } });
+        await send("/7tv/emotes", { method: "POST", body: JSON.stringify({ file: "file-b", name: "second", set_id: SET_MAIN }) });
+        expect((await json(await send("/7tv/uploads"))).body.uploads).toEqual([
+            { file_id: "file-b", emote_id: "01JUP0000000000000000000AB", name: "second", set_id: SET_MAIN, created_at: clock },
+            { file_id: "file-a", emote_id: "01JUP0000000000000000000AA", name: "first", set_id: null, created_at: clock - 1000 },
+        ]);
     });
 
     it("passes 7TV's REST refusals on", async () => {

@@ -5,9 +5,10 @@ import UserNotifications
 /// The tabs, in the order they show. `queue` is everything cobalt is doing (apple/CONTRACT.md section 12).
 /// `links` lists the gallery share links (APP-API-CONTRACT 24) and shows only with `features.share_sets`; `chat` holds the
 /// threads with Claude about the library (APP-API-CONTRACT 27) and shows only with `features.chat`; `stage` is the "studio"
-/// tab, the stream canvas and the viewer store (APP-API-CONTRACT 30), after chat, and shows only with `features.stage`.
+/// tab, the stream canvas and the viewer store (APP-API-CONTRACT 30), after chat, and shows only with `features.stage`;
+/// `sevenTv` is the "7tv" tab (APP-API-CONTRACT 57.7: sets, search, upload), right after the studio and on the same rule.
 public enum AppTab: String, Sendable, CaseIterable {
-    case save, library, links, chat, stage, names, queue, settings
+    case save, library, links, chat, stage, sevenTv, names, queue, settings
 
     /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
     /// chat needs `features.chat`, the studio needs `features.stage`, search names need `features.names` (48.6).
@@ -16,7 +17,7 @@ public enum AppTab: String, Sendable, CaseIterable {
         case .library: return caps.library
         case .links: return caps.shareSets
         case .chat: return caps.chat
-        case .stage: return caps.stage
+        case .stage, .sevenTv: return caps.stage
         case .names: return caps.names
         case .save, .queue, .settings: return true
         }
@@ -114,7 +115,7 @@ public final class AppModel {
     public let searchNames: SearchNamesModel
     /// Settings › account (APP-API-CONTRACT 42): who is signed in, the devices and the keys for tools. Idle until `refresh()`.
     public let account: AccountStore
-    /// 7TV accounts (APP-API-CONTRACT 57; the studio tab's 7TV card): the linked account, its channels and their sets.
+    /// 7TV accounts (APP-API-CONTRACT 57; the 7tv tab): the linked account, its channels, their sets and the uploads.
     public let sevenTv: SevenTvStore
     /// The video editor (APP-API-CONTRACT 31): the projects, this key's renders and the open project. Idle until `refresh()`.
     public let editor: EditorStore
