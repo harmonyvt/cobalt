@@ -152,8 +152,9 @@ public final class LibraryModel {
     }
     #endif
 
-    // 60, not 20: each page that lands rebuilds the whole library screen, and a small page lands mid-scroll (8.15)
-    static let pageSize = 60
+    // 50 (the client's cap), not 20: each page that lands rebuilds the whole library screen, and a small page lands
+    // mid-scroll (8.15)
+    static let pageSize = 50
     static let wholePageSize = 50
     /// The most hidden posts one whole-album read collects; past it the device's memory only grows.
     static let syncCap = 2000

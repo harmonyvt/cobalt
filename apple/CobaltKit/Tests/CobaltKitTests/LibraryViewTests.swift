@@ -376,9 +376,9 @@ struct LibraryPagingTests {
         defer { server.stop() }
         let app = app(on: server)
         await app.library.refresh()
-        #expect(app.library.posts.count == 60 && app.library.hasMore)
+        #expect(app.library.posts.count == 50 && app.library.hasMore)
         await app.library.loadAll()
-        #expect(server.requests.map(\.query) == ["limit=60", "limit=50&cursor=60", "limit=50&cursor=110"])
+        #expect(server.requests.map(\.query) == ["limit=50", "limit=50&cursor=50", "limit=50&cursor=100"])
         #expect(app.library.posts.count == 120 && Set(app.library.posts.map(\.id)).count == 120)
     }
 
