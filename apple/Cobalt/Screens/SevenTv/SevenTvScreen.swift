@@ -208,7 +208,6 @@ struct SevenTvScreen: View {
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
-    #endif
 
     /// `-previewSevenTvAddPicker <emote id or name>` (simulator evidence): opens "add to a set…" for that owned emote once the
     /// list is in. `-previewSevenTvAddPickerPick main` then adds it to that set (a name or id) in the open picker.
@@ -236,7 +235,6 @@ struct SevenTvScreen: View {
         await made.upload()
     }
 
-    #if DEBUG
     /// `-previewSevenTvUploadShape asIs|square|wide|extraWide` (simulator evidence): opens the upload sheet for a sample 1200×900
     /// webp with that shape picked (the crop sheet stays closed; tap the chip again to open it locked to the shape).
     private func debugUploadShape() async {
