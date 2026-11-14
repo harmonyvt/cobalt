@@ -79,7 +79,12 @@ final class LibraryController {
     let fold = LibraryBarFold()
 
     /// The phone's pushed detail.
-    var opened: OpenedMedia?
+    var opened: OpenedMedia? {
+        didSet {
+            guard opened?.id != oldValue?.id else { return }
+            if opened != nil { Breadcrumbs.add("detail.open") } else { Breadcrumbs.add("detail.close") }
+        }
+    }
     /// The row the inspector shows (iPad, Mac).
     var selection: String?
     /// The inspector's open state (remembered per device once the owner or the width decides).

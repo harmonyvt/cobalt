@@ -142,6 +142,9 @@ struct MediaDetail: View {
             }
         }
         .environment(\.subtitles, subtitlesShown(item, selected) ? subtitles : nil)
+        // the freeze hunt (owner, 2026-11-14): when the detail is really on screen and really gone
+        .onAppear { Breadcrumbs.add("detail.appear") }
+        .onDisappear { Breadcrumbs.add("detail.disappear") }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .navigationTitle(title(item))
         // omitted when not selecting (an empty subtitle reserves a blank line under the title). Set from an empty
