@@ -21,12 +21,27 @@ import {
     type Channel,
     type SevenTvDeps,
     type SevenTvUploadDeps,
+    EMOTE_FIT_PATH,
 } from "../../seventv";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
 
 const deps = (ctx: OpContext): SevenTvDeps => ({ db: ctx.db, now: ctx.now, secret: ctx.env.COBALT_API_KEY });
-const uploadDeps = (ctx: OpContext): SevenTvUploadDeps => ({ ...deps(ctx), media: ctx.env.MEDIA, originals: ctx.env.ORIGINALS });
+const uploadDeps = (ctx: OpContext): SevenTvUploadDeps => ({
+    ...deps(ctx),
+    media: ctx.env.MEDIA,
+    originals: ctx.env.ORIGINALS,
+    // the container's emote fit (57.10), through the Durable Object with the internal key
+    fit: (body, bytes, query) =>
+        ctx.container.fetch(
+            new Request(`https://do.internal${EMOTE_FIT_PATH}?${query}`, {
+                method: "POST",
+                headers: { "x-internal-key": ctx.env.COBALT_API_KEY, "content-length": String(bytes), "content-type": "application/octet-stream" },
+                body,
+                duplex: "half",
+            } as RequestInit),
+        ),
+});
 const reply = (r: StudioReply): OpReply => ({ status: r.status, body: r.body });
 
 const Id = SEVENTV_ID;
@@ -81,6 +96,10 @@ const SetInfo = z
     })
     .meta({ id: "SevenTvSet" });
 
+const FitCrop = z
+    .object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().gt(0).max(1), h: z.number().gt(0).max(1) })
+    .describe("crop box before uploading, fractions of the picture: left, top, width, height (look at it with a grid first; never guess)");
+const FitSize = z.number().int().min(32).max(1000).describe("longest side in px after fitting (default 512 when it has to shrink; never enlarged)");
 const UploadShape = z
     .object({
         status: Status,
@@ -89,6 +108,10 @@ const UploadShape = z
         file_id: z.string().describe("the library file that was uploaded"),
         page_url: z.string(),
         pending: z.boolean().describe("7TV still processing the images (usually a minute)"),
+        fitted: z
+            .object({ width: z.number(), height: z.number(), frames: z.number(), bytes: z.number(), quality: z.number() })
+            .nullable()
+            .describe("what was sent when the picture was cropped or resized first; null when it went as it was"),
         added: z.object({ set_id: z.string(), alias: z.string().nullable() }).nullable(),
         add_error: z.object({ code: z.string(), message: z.string().optional() }).optional(),
     })
@@ -247,9 +270,11 @@ const ROUTE_OPS = [
             private: z.boolean().optional(),
             set_id: z.string().max(64).nullable().optional(),
             alias: z.string().max(400).nullable().optional(),
+            crop: FitCrop.nullable().optional(),
+            size: FitSize.nullable().optional(),
         }),
         output: UploadShape,
-        summary: "Upload a library picture (webp, gif, png, avif, jpeg; up to 7 MB) as a new 7TV emote, optionally into a set (POST /7tv/emotes).",
+        summary: "Upload a library picture (webp, gif, png, avif, jpeg) as a new 7TV emote, optionally cropped and resized first and added to a set (POST /7tv/emotes).",
         run: (ctx, input) => sevenTvUpload(uploadDeps(ctx), input),
     }),
     route({
@@ -278,6 +303,8 @@ const MESSAGES: Record<string, string> = {
     "error.seventv.file_type": "7TV takes webp, gif, png, avif or jpeg pictures, not videos",
     "error.seventv.too_big": "7TV takes files up to 7 MB",
     "error.seventv.too_large": "7TV would drop this picture",
+    "error.seventv.fit_failed": "the picture could not be resized for 7TV",
+    "error.seventv.busy": "the media helper is busy; try again in a minute",
     "error.seventv.bad": "a 7TV id is 20-32 letters or digits; names are 1-100 characters, an emote's name has no spaces",
 };
 
@@ -498,18 +525,20 @@ const uploadOp = defineOp({
         private: z.boolean().optional().describe("hidden from 7TV search (still usable in sets)"),
         set_id: SetId.optional().describe("also add it to this emote set"),
         alias: Alias.optional().describe("its name in that set, when different"),
+        crop: FitCrop.optional(),
+        size: FitSize.optional(),
     }),
     output: UploadShape.omit({ status: true }),
     ai: {
         tier: "ask",
         only: true,
         summary:
-            "Upload a library picture (an animated webp, gif, png...) to 7TV as a NEW emote owned by the linked account, and optionally add it to a set. 7TV processes it for about a minute (seventv.emote shows when it is ready; an upload over 1000x1000 px, 1000 frames or outside 1:32..3:1 is dropped). A private emote can only go into the uploader's own sets. Asks Harmony first.",
+            "Upload a library picture (an animated webp, gif, png...) to 7TV as a NEW emote owned by the linked account, and optionally add it to a set. Pictures over 7 MB or 1000 px are shrunk first (longest side 512 px, animation kept, at most 1000 frames); pass crop (look at the picture with a grid first, never guess) to cut a box out, or size to choose the longest side. A picture wider than 3:1 needs a crop. 7TV processes it for about a minute (seventv.emote shows when it is ready). A private emote can only go into the uploader's own sets. Asks Harmony first.",
         params: ["file", "name"],
         options: true,
         preview: async (_ctx, input) => ({
             summary: `upload ${input.file} to 7TV as “${input.name}”${input.set_id ? ` and add it to set ${input.set_id}` : ""}`,
-            effect: { file: input.file, name: input.name, ...(input.set_id ? { set_id: input.set_id } : {}), ...(input.private ? { private: true } : {}) },
+            effect: { file: input.file, name: input.name, ...(input.set_id ? { set_id: input.set_id } : {}), ...(input.private ? { private: true } : {}), ...(input.crop ? { crop: input.crop } : {}), ...(input.size ? { size: input.size } : {}) },
         }),
     },
     handler: (ctx, input) => strip(sevenTvUpload(uploadDeps(ctx), input)),

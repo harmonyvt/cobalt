@@ -641,7 +641,7 @@ enum Endpoints {
         APIEndpoint(op: "seventv_http.remove", method: "DELETE", path: "/7tv/sets/\(HTTPCobaltClient.encode(id))/emotes/\(HTTPCobaltClient.encode(emote))", auth: .key)
     }
 
-    /// `POST /7tv/emotes` (op `seventv_http.upload`, auth key): Upload a library picture (webp, gif, png, avif, jpeg; up to 7 MB) as a new 7TV emote, optionally into a set (POST /7tv/emotes).
+    /// `POST /7tv/emotes` (op `seventv_http.upload`, auth key): Upload a library picture (webp, gif, png, avif, jpeg) as a new 7TV emote, optionally cropped and resized first and added to a set (POST /7tv/emotes).
     static func seventvHttpUpload() -> APIEndpoint<SevenTvUpload> {
         APIEndpoint(op: "seventv_http.upload", method: "POST", path: "/7tv/emotes", auth: .key)
     }
@@ -1535,6 +1535,14 @@ struct SeventvHttpRemoveResponse: Decodable, Sendable {
     var removed: Bool
 }
 
+struct SevenTvUploadFitted: Decodable, Sendable {
+    var width: Double
+    var height: Double
+    var frames: Double
+    var bytes: Double
+    var quality: Double
+}
+
 struct SevenTvUploadAdded: Decodable, Sendable {
     var setId: String
     var alias: String?
@@ -1554,6 +1562,8 @@ struct SevenTvUpload: Decodable, Sendable {
     var pageUrl: String
     /// 7TV still processing the images (usually a minute)
     var pending: Bool
+    /// what was sent when the picture was cropped or resized first; null when it went as it was
+    var fitted: SevenTvUploadFitted?
     var added: SevenTvUploadAdded?
     var addError: SevenTvUploadAddError?
 }

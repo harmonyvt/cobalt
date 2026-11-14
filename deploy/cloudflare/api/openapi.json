@@ -306,7 +306,7 @@
     "/7tv/emotes": {
       "post": {
         "operationId": "seventv_http.upload",
-        "summary": "Upload a library picture (webp, gif, png, avif, jpeg; up to 7 MB) as a new 7TV emote, optionally into a set (POST /7tv/emotes).",
+        "summary": "Upload a library picture (webp, gif, png, avif, jpeg) as a new 7TV emote, optionally cropped and resized first and added to a set (POST /7tv/emotes).",
         "tags": [
           "seventv_http"
         ],
@@ -355,6 +355,59 @@
                       {
                         "type": "string",
                         "maxLength": 400
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "crop": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "y": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "w": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1
+                          },
+                          "h": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y",
+                          "w",
+                          "h"
+                        ],
+                        "additionalProperties": false,
+                        "description": "crop box before uploading, fractions of the picture: left, top, width, height (look at it with a grid first; never guess)"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "size": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 32,
+                        "maximum": 1000,
+                        "description": "longest side in px after fitting (default 512 when it has to shrink; never enlarged)"
                       },
                       {
                         "type": "null"
@@ -9713,6 +9766,42 @@
             "type": "boolean",
             "description": "7TV still processing the images (usually a minute)"
           },
+          "fitted": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "width": {
+                    "type": "number"
+                  },
+                  "height": {
+                    "type": "number"
+                  },
+                  "frames": {
+                    "type": "number"
+                  },
+                  "bytes": {
+                    "type": "number"
+                  },
+                  "quality": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "width",
+                  "height",
+                  "frames",
+                  "bytes",
+                  "quality"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "what was sent when the picture was cropped or resized first; null when it went as it was"
+          },
           "added": {
             "anyOf": [
               {
@@ -9762,6 +9851,7 @@
           "file_id",
           "page_url",
           "pending",
+          "fitted",
           "added"
         ],
         "additionalProperties": false

@@ -556,17 +556,41 @@ const TAG = /^\w{3,30}$/;
 const UPLOAD_TYPES = ["image/webp", "image/gif", "image/png", "image/avif", "image/jpeg"];
 
 type ReadBucket = { get(key: string): Promise<{ body: ReadableStream; size: number; httpMetadata?: { contentType?: string } } | null> };
-export type SevenTvUploadDeps = SevenTvDeps & { media: ReadBucket; originals: ReadBucket };
+/** The container's emote fit (57.10), reached through the Durable Object; absent: nothing is fitted. */
+export type EmoteFit = (body: ReadableStream, bytes: number, query: string) => Promise<Response>;
+export type SevenTvUploadDeps = SevenTvDeps & { media: ReadBucket; originals: ReadBucket; fit?: EmoteFit };
+/** The Durable Object's internal path for the fit (src/index.ts). */
+export const EMOTE_FIT_PATH = "/internal/7tv-fit";
+/** Pictures the fit can read (ffmpeg plus the animated WebP composer). */
+const FIT_TYPES = ["image/webp", "image/gif", "image/png", "image/jpeg"];
+const FIT_INPUT_MAX = 64 * 1024 * 1024;
+type Crop = { x: number; y: number; w: number; h: number };
+
+function cleanCrop(v: unknown): Crop | null | false {
+    if (v === undefined || v === null) return null;
+    if (typeof v !== "object") return false;
+    const c = v as Record<string, unknown>;
+    const n = [c.x, c.y, c.w, c.h];
+    if (!n.every((x) => typeof x === "number" && Number.isFinite(x))) return false;
+    const [x, y, w, h] = n as number[];
+    if (x! < 0 || y! < 0 || w! <= 0 || h! <= 0 || x! + w! > 1.0001 || y! + h! > 1.0001) return false;
+    return { x: x!, y: y!, w: w!, h: h! };
+}
 
 type FileRow = { id: string; bucket: string; r2_key: string; content_type: string | null; bytes: number | null; name: string | null; width: number | null; height: number | null };
 
 // 7TV's processing drops (soft-deletes) an emote over 1000 px a side or outside 1:32..3:1; caught here when the size is known.
+// A side over 1000 px is shrunk by the fit (57.10); the shape only changes with a crop box the caller picks.
+export function ratioProblem(w: number | null, h: number | null): string | null {
+    if (!w || !h) return null;
+    const r = w / h;
+    return r > 3 || r < 1 / 32 ? `7TV takes width:height between 1:32 and 3:1; this is ${w}x${h}: pass a crop box` : null;
+}
+
 export function sizeProblem(w: number | null, h: number | null): string | null {
     if (!w || !h) return null;
     if (w > 1000 || h > 1000) return `7TV takes at most 1000x1000 px; this is ${w}x${h}`;
-    const r = w / h;
-    if (r > 3 || r < 1 / 32) return `7TV takes width:height between 1:32 and 3:1; this is ${w}x${h}`;
-    return null;
+    return ratioProblem(w, h);
 }
 
 export function cleanEmoteName(v: unknown): string | null {
@@ -615,13 +639,24 @@ async function uploadError(res: Response): Promise<SevenTvError> {
 
 export async function sevenTvUpload(
     d: SevenTvUploadDeps,
-    body: { file?: unknown; name?: unknown; tags?: unknown; zero_width?: unknown; private?: unknown; set_id?: unknown; alias?: unknown },
+    body: {
+        file?: unknown; name?: unknown; tags?: unknown; zero_width?: unknown; private?: unknown; set_id?: unknown; alias?: unknown;
+        crop?: unknown; size?: unknown;
+    },
 ): Promise<StudioReply> {
     const ref = typeof body.file === "string" ? body.file.trim() : "";
     const name = cleanEmoteName(body.name);
     const tags = body.tags === undefined || body.tags === null ? [] : body.tags;
     const setId = body.set_id === undefined || body.set_id === null || body.set_id === "" ? null : body.set_id;
     const alias = body.alias === undefined || body.alias === null || body.alias === "" ? null : cleanEmoteName(body.alias);
+    const crop = cleanCrop(body.crop);
+    const sizeAsk = body.size === undefined || body.size === null ? null : body.size;
+    if (
+        crop === false ||
+        (sizeAsk !== null && !(typeof sizeAsk === "number" && Number.isInteger(sizeAsk) && sizeAsk >= 32 && sizeAsk <= 1000))
+    ) {
+        return fail(400, "error.seventv.bad", "crop is {x, y, w, h} as fractions of the picture; size is 32 to 1000 px");
+    }
     if (
         !ref ||
         ref.length > 64 ||
@@ -638,24 +673,64 @@ export async function sevenTvUpload(
     if (!row) return fail(404, "error.seventv.file_not_found");
     const type = (row.content_type ?? "").toLowerCase().split(";")[0]!.trim();
     if (!UPLOAD_TYPES.includes(type)) return fail(415, "error.seventv.file_type");
-    if (row.bytes !== null && row.bytes > UPLOAD_MAX) return fail(413, "error.seventv.too_big");
-    const size = sizeProblem(row.width, row.height);
-    if (size) return fail(400, "error.seventv.too_large", size);
+    const canFit = !!d.fit && FIT_TYPES.includes(type);
+    // Fit (57.10) when asked (a crop box or a size) or when the file is over 7TV's bytes or 1000 px a side.
+    const overBytes = row.bytes !== null && row.bytes > UPLOAD_MAX;
+    const overSide = (row.width ?? 0) > 1000 || (row.height ?? 0) > 1000;
+    let wantFit = crop !== null || sizeAsk !== null || overBytes || overSide;
+    if (wantFit && !canFit) {
+        if (crop !== null || sizeAsk !== null) return fail(415, "error.seventv.file_type", "this kind of picture cannot be resized or cropped here");
+        if (overBytes) return fail(413, "error.seventv.too_big");
+    }
+    // the shape is only fixed by a crop box: never guessed
+    const ratio = crop === null ? ratioProblem(row.width, row.height) : null;
+    if (ratio) return fail(400, "error.seventv.too_large", ratio);
+    if (overSide && !canFit) return fail(400, "error.seventv.too_large", sizeProblem(row.width, row.height) ?? undefined);
+    if (row.bytes !== null && row.bytes > FIT_INPUT_MAX) return fail(413, "error.seventv.too_big");
 
     return withToken(d, async (token) => {
         const obj = await (row.bucket === "media" ? d.media : d.originals).get(row.r2_key).catch(() => null);
         if (!obj) return fail(404, "error.seventv.file_not_found");
-        if (obj.size > UPLOAD_MAX) {
+        if (obj.size > UPLOAD_MAX && !canFit) {
             await obj.body.cancel().catch(() => {});
             return fail(413, "error.seventv.too_big");
         }
-        const bytes = await new Response(obj.body).arrayBuffer();
+        if (obj.size > UPLOAD_MAX) wantFit = true;
+        let bytes: ArrayBuffer;
+        let sendType = type;
+        let fitted: { width: number; height: number; frames: number; bytes: number; quality: number } | null = null;
+        if (wantFit && d.fit) {
+            const q = new URLSearchParams({ max_bytes: String(UPLOAD_MAX) });
+            if (crop) q.set("crop", [crop.x, crop.y, crop.w, crop.h].map((n) => +n.toFixed(5)).join(","));
+            if (sizeAsk !== null) q.set("size", String(sizeAsk));
+            let res: Response;
+            try {
+                res = await d.fit(obj.body, obj.size, q.toString());
+            } catch {
+                return fail(502, "error.seventv.fit_failed", "the resize step did not answer; try again");
+            }
+            if (!res.ok) {
+                const b = (await res.json().catch(() => null)) as { error?: { code?: string; detail?: string } } | null;
+                const code = b?.error?.code ?? "";
+                const detail = b?.error?.detail || undefined;
+                if (res.status === 429) return fail(429, "error.seventv.busy", "the media helper is busy with another job; try again in a minute");
+                if (code === "error.seventv.fit_shape") return fail(400, "error.seventv.too_large", detail);
+                if (code === "error.seventv.fit_too_big" || res.status === 413) return fail(413, "error.seventv.too_big", detail);
+                return fail(422, "error.seventv.fit_failed", detail);
+            }
+            bytes = await res.arrayBuffer();
+            const num = (h: string) => Number(res.headers.get(h)) || 0;
+            fitted = { width: num("x-emote-width"), height: num("x-emote-height"), frames: num("x-emote-frames"), bytes: bytes.byteLength, quality: num("x-emote-quality") };
+            sendType = "image/webp";
+        } else {
+            bytes = await new Response(obj.body).arrayBuffer();
+        }
         const form = new FormData();
         form.append(
             "metadata",
             JSON.stringify({ name, tags, default_zero_width: body.zero_width === true, private: body.private === true }),
         );
-        form.append("file", new Blob([bytes], { type }), `${row.id}.${type.split("/")[1]}`);
+        form.append("file", new Blob([bytes], { type: sendType }), `${row.id}.${sendType.split("/")[1]}`);
         const f = d.fetch ?? fetch;
         let res: Response;
         try {
@@ -697,6 +772,7 @@ export async function sevenTvUpload(
                 file_id: row.id,
                 page_url: `https://7tv.app/emotes/${emoteId}`,
                 pending: true,
+                fitted,
                 added,
                 ...(addError ? { add_error: addError } : {}),
             },

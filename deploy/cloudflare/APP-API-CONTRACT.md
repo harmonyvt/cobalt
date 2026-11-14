@@ -6527,12 +6527,15 @@ for a while (`imagesPending`); it can be put in a set at once (7TV does not chec
 
 | route | answer |
 |---|---|
-| `POST /7tv/emotes` `{ "file", "name", "tags"?, "zero_width"?, "private"?, "set_id"?, "alias"? }` | 201 `{ emote_id, name, file_id, page_url, pending: true, added, add_error? }` |
+| `POST /7tv/emotes` `{ "file", "name", "tags"?, "zero_width"?, "private"?, "set_id"?, "alias"?, "crop"?, "size"? }` | 201 `{ emote_id, name, file_id, page_url, pending: true, fitted, added, add_error? }` |
 | `GET /7tv/emotes/:id` | `{ emote_id, name, owner_id, pending, animated, private, zero_width, preview_url, file_url, page_url }` |
 
 - `file` is a library file id (or its public id); a post id means that post's first picture. The file must be
-  `image/webp`, `image/gif`, `image/png`, `image/avif` or `image/jpeg` → else 415 `error.seventv.file_type`; over
-  7 MiB less 64 KiB → 413 `error.seventv.too_big`; a known size over 1000 px a side or outside width:height 1:32..3:1 → 400 `error.seventv.too_large` (7TV's processing would drop it: it soft-deletes such uploads, and `GET /7tv/emotes/:id` then answers 404); unknown → 404 `error.seventv.file_not_found`. The Worker reads the
+  `image/webp`, `image/gif`, `image/png`, `image/avif` or `image/jpeg` → else 415 `error.seventv.file_type`. A file
+  over 7 MiB less 64 KiB or over 1000 px a side is fitted first (57.10); one that cannot be (avif) → 413
+  `error.seventv.too_big` / 400 `error.seventv.too_large`. A known shape outside width:height 1:32..3:1 without a `crop`
+  → 400 `error.seventv.too_large` ("pass a crop box"; 7TV's processing would drop it: it soft-deletes such uploads,
+  and `GET /7tv/emotes/:id` then answers 404); unknown → 404 `error.seventv.file_not_found`. The Worker reads the
   bytes from R2 (public or private bucket); nothing is written on our side.
 - With `set_id` the emote is added to that set after the upload (`alias` = its name there). If that add fails the
   upload still stands: `added: null` and `add_error: { code, message? }` with the 57.4 codes.
@@ -6542,6 +6545,29 @@ for a while (`imagesPending`); it can be put in a set at once (7TV does not chec
 - Apps: an "upload to 7tv" action on a picture's page (webp, gif, png...): name (prefilled from the title, spaces
   dropped), private and zero-width toggles, and an optional set (channel + set pickers from 57.4). The answer shows
   "processing on 7tv" until `GET /7tv/emotes/:id` says `pending: false`.
+
+### 57.10 Fitting a picture for 7TV before the upload (addendum, 2026-11-14; owner: "we might need to resize the webp or crop it too before uploading")
+
+7TV's limits are 7 MiB, 1000x1000 px, 1000 frames and width:height 1:32..3:1, and its processing drops a file over any
+of them without a word. `POST /7tv/emotes` therefore runs the picture through the container's helper first when:
+`crop` is given (`{ x, y, w, h }`, fractions of the picture, like make.crop), or `size` (the longest side, 32-1000 px),
+or the file is over 7 MiB less 64 KiB, or over 1000 px a side. Otherwise the file goes as it is and `fitted` is null.
+
+- The fit (`helper/emote-fit.js`, helper route `POST /emote-fit?crop=x,y,w,h&size=&max_bytes=`, reached through the
+  Durable Object's internal path `/internal/7tv-fit`, which only answers the Worker's `x-internal-key`): webp (an
+  animated one is composed frame by frame, as ffmpeg cannot read ANMF), gif (with its own frame delays), png, jpeg.
+  Over 1000 frames, frames are dropped evenly and their time goes to the frame before. One ffmpeg pass crops and
+  scales (lanczos) to a longest side of `size`, default 512, never larger than the source. img2webp packs a lossy
+  WebP with alpha at quality 82, 65, 45, then at 75 % size (60, 40), then 50 % (50, 30) until it is under the cap.
+  64 MB in at most, 150 s, one at a time with the other helper jobs.
+- The shape is never guessed: a picture outside 1:32..3:1 needs a `crop` (the chat and MCP tools say to look at it
+  with a grid first, like make.crop).
+- `fitted: { width, height, frames, bytes, quality }` says what was sent. Errors: a crop or size on avif → 415
+  `error.seventv.file_type`; the cropped shape still wrong → 400 `error.seventv.too_large`; over the cap even at half
+  size → 413 `error.seventv.too_big`; the helper busy → 429 `error.seventv.busy`; will not decode or out of time → 422
+  `error.seventv.fit_failed` (with the helper's short reason as `message`); no answer → 502 `error.seventv.fit_failed`.
+- Chat and MCP: `seventv.uploadEmote` takes `crop` and `size` too. Apps: the upload sheet shrinks a big file by itself
+  and offers a crop box (fractions) and size.
 
 ### 57.8 Rollout
 
