@@ -139,12 +139,29 @@ struct SevenTvScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .task { await store.load() }
+            #if DEBUG
+            .task { await debugOpenSet() }
+            #endif
             .task(id: store.linkOutcome?.id) { tab.card.sayOutcome(shell: shell) }
             .sevenTvPresentations(tab.card)
             .sheet(item: uploadShown) { item in
                 SevenTvUploadSheet(upload: item.upload, picture: SevenTvUploadIcon.picture(model: model, file: item.file))
             }
     }
+
+    #if DEBUG
+    /// `-previewSevenTvSet main` (a set's name or id; simulator evidence): pushes that set once the sets are in.
+    private func debugOpenSet() async {
+        guard let want = UserDefaults.standard.string(forKey: "previewSevenTvSet") else { return }
+        for _ in 0..<50 {
+            if let row = tab.sets.first(where: { $0.id == want || $0.name == want }) {
+                tab.open(row)
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+    #endif
 
     @ViewBuilder
     private var content: some View {

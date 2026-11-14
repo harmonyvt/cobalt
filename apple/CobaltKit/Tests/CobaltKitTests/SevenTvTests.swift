@@ -1069,13 +1069,13 @@ struct SevenTvManageModelTests {
         return app
     }
 
-    @Test func theTabIsRightAfterTheStudioOnTheSameRule() {
+    @Test func theTabIsRightAfterLinksOnTheStudiosRule() {
         var c = Capabilities.unknown
         #expect(!AppTab.sevenTv.isAvailable(with: c))
         c.stage = true
         #expect(AppTab.sevenTv.isAvailable(with: c))
         let all = AppTab.allCases
-        #expect(all.firstIndex(of: .sevenTv) == all.firstIndex(of: .stage).map { $0 + 1 })
+        #expect(all.firstIndex(of: .sevenTv) == all.firstIndex(of: .links).map { $0 + 1 })
     }
 
     @Test func aTakenNameIsCaughtBeforeAskingAndResolvedThreeWays() async throws {
