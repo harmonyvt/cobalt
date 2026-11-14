@@ -171,6 +171,8 @@ public final class AppModel {
     public var requestedJobs = false
 
     /// Live Activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
+    /// The last `libraryRows` and what it was built from (`LibraryView.swift`): the library screen asks on every redraw.
+    @ObservationIgnored var libraryRowsMemo: LibraryRowsMemo?
     @ObservationIgnored var liveManager: LiveActivityManager?
     /// The editor's render activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
     @ObservationIgnored var editLive: EditLiveManager? {

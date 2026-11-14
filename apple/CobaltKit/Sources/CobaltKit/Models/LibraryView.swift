@@ -237,6 +237,22 @@ extension AppModel {
     /// first in score order (the loaded copy of each when there is one), then the name matches it did not return, in
     /// `sort` order; `show` and the kind chip still apply.
     public var libraryRows: [LibraryRow] {
+        // Every input is read here (so a view reading `libraryRows` is still invalidated by each of them), but the rows
+        // are rebuilt only when one really changed. Joining, filtering and sorting every post on each redraw of the
+        // library screen (a tab switch, a tick, a sheet) cost hundreds of milliseconds on the main thread (8.15 frame
+        // telemetry). Unchanged arrays compare in O(1): same storage.
+        let key = LibraryRowsKey(
+            posts: library.posts, hiddenPosts: library.hiddenPosts, showingHidden: library.showingHidden,
+            hiddenServed: capabilities.hidden, search: library.activeSearchResults, hiddenIndex: hiddenIndex,
+            show: library.show, kind: library.kindFilter, query: library.trimmedQuery, sort: library.sort,
+            media: store.media, localTitles: library.localTitles)
+        if let memo = libraryRowsMemo, memo.key == key { return memo.rows }
+        let rows = buildLibraryRows()
+        libraryRowsMemo = LibraryRowsMemo(key: key, rows: rows)
+        return rows
+    }
+
+    private func buildLibraryRows() -> [LibraryRow] {
         // The hidden chip shows the album (name search only: the server's search never lists a hidden post); every other
         // view leaves hidden posts out, whatever list they came in (APP-API-CONTRACT 37.2).
         // The album is served only while the server still has `features.hidden`.
@@ -281,4 +297,25 @@ extension AppModel {
             .sorted { LibraryRow.areInIncreasingOrder($0, $1, by: sort) }
         return rows + extra
     }
+}
+
+/// What `AppModel.libraryRows` is built from.
+struct LibraryRowsKey: Equatable {
+    var posts: [LibraryPost]
+    var hiddenPosts: [LibraryPost]
+    var showingHidden: Bool
+    var hiddenServed: Bool
+    var search: [LibraryPost]?
+    var hiddenIndex: HiddenIndex
+    var show: LibraryShow
+    var kind: LibraryKindFilter
+    var query: String
+    var sort: LibrarySort
+    var media: [StoredMedia]
+    var localTitles: [String: String]
+}
+
+struct LibraryRowsMemo {
+    var key: LibraryRowsKey
+    var rows: [LibraryRow]
 }

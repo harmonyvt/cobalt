@@ -35,6 +35,10 @@ enum Analytics {
             }
             running = true
             if !screenSent { screen(currentScreen) }
+            // where the main thread was when it stalled (`hang_stack`)
+            HangSampler.shared.start { report in
+                Task { @MainActor in Analytics.hang(report) }
+            }
             // MetricKit's daily averages (scroll hitch ratio, launch, hangs), a day late at worst (`daily_metrics`)
             Telemetry.metricsDelivered = { values in
                 Task { @MainActor in Analytics.event("daily_metrics", values: values) }
@@ -101,6 +105,23 @@ enum Analytics {
     static func event(_ name: String, _ properties: [String: Any] = [:]) {
         guard running else { return }
         PostHogSDK.shared.capture(name, properties: properties)
+    }
+
+    /// A main-thread stall the sampler caught: `hang_stack` with each sample's frames, newest first, one per line.
+    static func hang(_ report: HangSampler.Report) {
+        var props: [String: Any] = [
+            "ms": report.stallMs, "screen": currentScreen, "breadcrumbs": Breadcrumbs.recent(), "samples": report.samples.count,
+        ]
+        for (i, sample) in report.samples.enumerated() {
+            props["at_\(i + 1)"] = sample.atMs
+            props["stack_\(i + 1)"] = sample.frames.joined(separator: "\n")
+        }
+        if let top = report.samples.first?.frames.prefix(12) { props["top"] = top.joined(separator: " | ") }
+        Telemetry.log(.info, .ui, "hang stack", data: [
+            "ms": .int(report.stallMs), "screen": .string(currentScreen),
+            "top": .string(String((report.samples.first?.frames.prefix(6) ?? []).joined(separator: " | ").prefix(280))),
+        ])
+        event("hang_stack", props)
     }
 
     /// The same, from a log line's flat values.

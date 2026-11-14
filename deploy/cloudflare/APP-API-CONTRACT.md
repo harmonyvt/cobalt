@@ -6683,6 +6683,7 @@ App events (all flat, never titles, text or links):
 | `tap_probe` | a short tap (iOS) | `hit`, `under`, `x`, `y`, `breadcrumbs`, `dead` |
 | `frames` | one stretch of interaction: a touch (iOS) or scroll/click (Mac) until 1.6 s after it ends (0.6 s after a Mac scroll) | `screen`, `to` (when it changed), `kind` (tap, scroll, swipe), `frames`, `hitches`, `severe` (frames of 50 ms or more), `hitch_ms`, `hitch_ratio` (ms/s), `worst_ms`, `span_ms`, `hz`, `fps`, `move`, `thermal`, `low_power`, `breadcrumbs` (worst frame 100 ms or more) |
 | `frame_hang` | a single frame of 250 ms or more (at most 3 per stretch) | `ms`, `screen`, `breadcrumbs` |
+| `hang_stack` | the main thread did not answer a 50 ms ping for 250 ms or more (`Cobalt/App/HangSampler.swift`); sent when it answers | `ms` (the stall), `screen`, `breadcrumbs`, `samples`, `at_N` (ms into the stall) and `stack_N` (frames newest first, one per line: `image symbol+off` or `image+0xoffset`; app frames symbolicate with `atos -o <dSYM> -l 0x100000000`), `top` (the first sample's 12 frames) |
 | `daily_metrics` | MetricKit's daily payload | `scroll_hitch_ratio` (iOS), `launch_ms`/`_n`, `resume_ms`/`_n`, `hang_ms`/`_n`, `cpu_s`, `gpu_s`, `peak_mb`, `foreground_s`, `version`, `build`, `hours` |
 
 A hitch is a frame more than half a refresh late; hitch ratio is hitch time per second (Apple's measure: under 5 smooth,

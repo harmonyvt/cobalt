@@ -27,12 +27,17 @@ enum TouchProbe {
 
     private static var lastSent: TimeInterval = 0
 
+    /// Told when a tap lands on an empty `UIViewControllerWrapperView` (the library's stuck zoom back; set by
+    /// `LibraryController`).
+    static var emptyWrapperTapped: (() -> Void)?
+
     fileprivate static func tapped(at point: CGPoint, in window: UIWindow) {
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastSent > 0.4 else { return }
         lastSent = now
         let hit = window.hitTest(point, with: nil)
         let dead = hit == nil || hit === window
+        if let hit, String(describing: type(of: hit)) == "UIViewControllerWrapperView" { emptyWrapperTapped?() }
         // the names and the walk wait until the tap's own frames are drawn: done here they landed in the frame that
         // stops a fling or opens a page (8.15, scroll jitter)
         Task { @MainActor [weak window, weak hit] in
