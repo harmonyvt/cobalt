@@ -34,6 +34,9 @@ public final class SevenTvUploadModel: Identifiable {
     public var crop: ImageCropRect?
     /// The longest side in px (one of `SevenTvEmoteRule.sizeChoices`); nil = auto.
     public var size: Int?
+    /// The shape the chips show: the one picked (`pickShape`), `asIs` without a crop, or the shape the box of the crop sheet
+    /// came to match (its px ratio to a pixel or two). Nil = a custom crop: no chip lit, the crop row names the box.
+    public private(set) var shape: SevenTvEmoteShape? = .asIs
     public var isPrivate = false
     public var zeroWidth = false
     /// Put the new emote in a set too.
@@ -90,6 +93,13 @@ public final class SevenTvUploadModel: Identifiable {
         guard crop != nil else { return nil }
         return SevenTvEmoteRule.croppedSize(width: width, height: height, crop: crop)
     }
+    /// What 7TV gets in px once the crop and the size are applied (the server's own rounding); nil when the size is unknown.
+    public var outputPixels: (width: Int, height: Int)? {
+        guard fittable else { return SevenTvEmoteRule.croppedSize(width: width, height: height, crop: nil) }
+        return SevenTvEmoteRule.outputSize(width: width, height: height, crop: crop, size: size, overBytes: isOverBytes)
+    }
+    /// The shape chips work: a file the server can crop, and the picture's size known (the box is cut from it).
+    public var canPickShape: Bool { fittable && width != nil && height != nil }
     /// The picture (or its crop box) is outside 7TV's 1:32..3:1: a crop box has to fix it first. An unknown size passes.
     public var needsCrop: Bool {
         guard let shape = SevenTvEmoteRule.croppedSize(width: width, height: height, crop: crop) else { return false }
@@ -147,14 +157,28 @@ public final class SevenTvUploadModel: Identifiable {
     // MARK: the fit
 
     /// The crop sheet's box (fractions of the picture; the whole picture or nil clears it). `width`/`height` are the picture's
-    /// size as the sheet opened it, kept when the library did not know it.
+    /// size as the sheet opened it, kept when the library did not know it. A box a pixel or two over 3:1 is narrowed to 3:1
+    /// (`SevenTvEmoteRule.snappedToLimit`). The shape label follows the box: `asIs` without one, else the shape its px ratio
+    /// matches, else nil (custom).
     public func useCrop(_ rect: ImageCropRect?, width: Int? = nil, height: Int? = nil) {
-        crop = rect.map(\.clamped).flatMap { $0.isWhole ? nil : $0 }
         if let width, let height, width > 0, height > 0 {
             self.width = width
             self.height = height
         }
+        let box = rect.map(\.clamped).flatMap { $0.isWhole ? nil : $0 }
+        crop = box.map { SevenTvEmoteRule.snappedToLimit($0, width: self.width, height: self.height) }
+        shape = SevenTvEmoteShape.matching(width: self.width, height: self.height, crop: crop)
         edit()
+    }
+
+    /// A shape chip: `asIs` clears the crop; the others cut the largest centred box of that shape from the picture (its known
+    /// width and height), which the crop sheet can then move. A picture that already is that shape needs no box: the crop is
+    /// cleared and the shape stays picked. Does nothing when the shapes are off (`canPickShape`).
+    public func pickShape(_ new: SevenTvEmoteShape) {
+        guard new == .asIs || canPickShape else { return }
+        let box = width.flatMap { w in height.flatMap { new.box(width: w, height: $0) } }
+        useCrop(box)
+        shape = new
     }
 
     // MARK: uploading

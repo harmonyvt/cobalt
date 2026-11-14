@@ -160,6 +160,19 @@ extension Copy {
         static let shrinkBytesNote = "over 7 mb · will be shrunk to fit"
         static let shrinkSideNote = "over 1000 px a side · will be shrunk to fit"
         static let needsCropNote = "7tv only keeps shapes from 1:32 to 3:1 · crop it first"
+        static let shapeLabel = "shape"
+        static let shapeA11y = "emote shape"
+        static func shapeChoice(_ shape: SevenTvEmoteShape) -> String {
+            switch shape {
+            case .asIs: return "as is"
+            case .square: return "square 1:1"
+            case .wide: return "wide 2:1"
+            case .extraWide: return "extra wide 3:1"
+            }
+        }
+        static let shapeNote = "a wide emote is a picture wider than tall · 7tv keeps up to 3:1 · picking one crops from the middle, move it next"
+        static let shapeNeedsSize = "shapes need the picture's size · open crop… once and they switch on"
+        static func outputLine(_ width: Int, _ height: Int) -> String { "7tv gets \(width)×\(height) px" }
         static let sizeLabel = "size"
         static let sizeAuto = "auto"
         static func sizeChoice(_ px: Int?) -> String { px.map { "\($0)" } ?? sizeAuto }

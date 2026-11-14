@@ -175,6 +175,7 @@ struct SevenTvScreen: View {
             .task { await debugOpenSet() }
             .task { await debugOpenAddToSet() }
             .task { await debugUploadDone() }
+            .task { await debugUploadShape() }
             #endif
             .task(id: store.linkOutcome?.id) { tab.card.sayOutcome(shell: shell) }
             .sevenTvPresentations(tab.card)
@@ -187,7 +188,10 @@ struct SevenTvScreen: View {
             }
             #if DEBUG
             .sheet(item: $debugUpload) { upload in
-                SevenTvUploadSheet(upload: upload, setModels: tab.setModels)
+                SevenTvUploadSheet(
+                    upload: upload,
+                    picture: Self.debugPictureLoader,
+                    setModels: tab.setModels)
             }
             #endif
     }
@@ -231,6 +235,50 @@ struct SevenTvScreen: View {
         debugUpload = made
         await made.upload()
     }
+
+    #if DEBUG
+    /// `-previewSevenTvUploadShape asIs|square|wide|extraWide` (simulator evidence): opens the upload sheet for a sample 1200×900
+    /// webp with that shape picked (the crop sheet stays closed; tap the chip again to open it locked to the shape).
+    private func debugUploadShape() async {
+        guard let raw = UserDefaults.standard.string(forKey: "previewSevenTvUploadShape"),
+            let shape = SevenTvEmoteShape(rawValue: raw)
+        else { return }
+        await store.load()
+        for _ in 0..<50 where !store.canUpload { try? await Task.sleep(for: .milliseconds(100)) }
+        let made = store.uploader(
+            fileID: "PrEvIeWitem000003", bytes: 412_000, title: "capy dance party", contentType: "image/webp", fileName: "capy.webp",
+            width: 1_200, height: 900)
+        made.pickShape(shape)
+        debugUpload = made
+    }
+
+    /// The crop sheet's picture for the debug upload; only with `-previewSevenTvUploadShape` (the other debug uploads have none).
+    private static var debugPictureLoader: (@MainActor () async throws -> CGImage)? {
+        guard UserDefaults.standard.string(forKey: "previewSevenTvUploadShape") != nil else { return nil }
+        return { @MainActor in debugPicture() }
+    }
+
+    /// A 1200×900 picture (a gradient with a frame and a ring) for the crop sheet of the debug upload above.
+    private static func debugPicture() -> CGImage {
+        let width = 1_200, height = 900
+        let space = CGColorSpaceCreateDeviceRGB()
+        guard
+            let ctx = CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+            let gradient = CGGradient(
+                colorsSpace: space,
+                colors: [CGColor(red: 0.95, green: 0.55, blue: 0.25, alpha: 1), CGColor(red: 0.25, green: 0.45, blue: 0.9, alpha: 1)] as CFArray,
+                locations: [0, 1])
+        else { fatalError("debug picture") }
+        ctx.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: width, y: height), options: [])
+        ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.9))
+        ctx.setLineWidth(12)
+        ctx.stroke(CGRect(x: 6, y: 6, width: width - 12, height: height - 12))
+        ctx.strokeEllipse(in: CGRect(x: 350, y: 250, width: 500, height: 400))
+        return ctx.makeImage()!
+    }
+    #endif
 
     @ViewBuilder
     private var content: some View {
