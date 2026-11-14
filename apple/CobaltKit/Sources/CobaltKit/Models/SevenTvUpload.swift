@@ -342,12 +342,49 @@ public enum SevenTvEmoteRule {
         return ratio >= minAspect - 1e-9 && ratio <= maxAspect + 1e-9
     }
 
-    /// The shape of a `width` x `height` picture once `crop` (fractions) is taken out of it; nil when the size is unknown.
-    public static func croppedSize(width: Int?, height: Int?, crop: ImageCropRect?) -> (width: Int, height: Int)? {
+    /// The box the server cuts, in whole px, as its fit rounds it (`helper/emote-fit.js` `planFit`): `x`/`y` rounded, then
+    /// `w`/`h` rounded and held inside the picture, at least 1 px. Nil when the picture's size is unknown.
+    public static func cropPixels(width: Int?, height: Int?, crop: ImageCropRect?) -> (x: Int, y: Int, w: Int, h: Int)? {
         guard let width, let height, width > 0, height > 0 else { return nil }
-        guard let crop else { return (width, height) }
+        guard let crop else { return (0, 0, width, height) }
         let box = crop.clamped
-        return (max(1, Int((box.w * Double(width)).rounded())), max(1, Int((box.h * Double(height)).rounded())))
+        let x = min(max(0, Int((box.x * Double(width)).rounded())), width - 1)
+        let y = min(max(0, Int((box.y * Double(height)).rounded())), height - 1)
+        let w = max(1, min(width - x, Int((box.w * Double(width)).rounded())))
+        let h = max(1, min(height - y, Int((box.h * Double(height)).rounded())))
+        return (x, y, w, h)
+    }
+
+    /// The shape of a `width` x `height` picture once `crop` (fractions) is taken out of it, in whole px as the server cuts
+    /// it; nil when the size is unknown.
+    public static func croppedSize(width: Int?, height: Int?, crop: ImageCropRect?) -> (width: Int, height: Int)? {
+        cropPixels(width: width, height: height, crop: crop).map { ($0.w, $0.h) }
+    }
+
+    /// What 7TV gets, in px: the picture (or its box) with its longest side brought to `size`, never larger than the picture,
+    /// each side rounded (`planFit`). The fit runs when a crop or a `size` is set, when the picture is over 1000 px a side or
+    /// `overBytes`; its default longest side is 512. Without the fit the file goes as it is. Nil when the size is unknown.
+    public static func outputSize(
+        width: Int?, height: Int?, crop: ImageCropRect?, size: Int?, overBytes: Bool = false
+    ) -> (width: Int, height: Int)? {
+        guard let box = croppedSize(width: width, height: height, crop: crop) else { return nil }
+        let fits = crop != nil || size != nil || overBytes || isOverSide(width: width, height: height)
+        guard fits else { return box }
+        let target = Double(clampSize(size ?? 512) ?? 512)
+        let scale = min(1, target / Double(max(box.width, box.height)))
+        return (max(1, Int((Double(box.width) * scale).rounded())), max(1, Int((Double(box.height) * scale).rounded())))
+    }
+
+    /// A crop box a pixel or two over 3:1 (a locked 3:1 box drawn in floats, rounded by the server one side at a time) brought
+    /// back to exactly 3:1 by narrowing it, so the server's shape check passes. A box clearly wider, any smaller than 64 px
+    /// high, or with the size unknown is returned as it is.
+    public static func snappedToLimit(_ crop: ImageCropRect, width: Int?, height: Int?) -> ImageCropRect {
+        guard let px = cropPixels(width: width, height: height, crop: crop), let width, let height, px.h >= 64 else { return crop }
+        let limit = Int((Double(px.h) * maxAspect + 1e-9).rounded(.down))
+        guard px.w > limit, px.w - limit <= 2 else { return crop }
+        let x = Double(px.x) / Double(width)
+        return ImageCropRect(
+            x: x, y: Double(px.y) / Double(height), w: min(Double(limit) / Double(width), 1 - x), h: Double(px.h) / Double(height))
     }
 
     /// The `size` as the route takes it: 32...1000, nil left out.

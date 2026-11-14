@@ -92,13 +92,13 @@ struct StageCapabilityTests {
         #expect(!PreviewData.capabilities(for: .chatEmpty).stage)
     }
 
-    @Test func theTabIsAfterChatAndShowsOnlyWithTheFlag() {
+    @Test func theTabIsAfterTheSevenTvTabAndShowsOnlyWithTheFlag() {
         var c = Capabilities.unknown
         #expect(!AppTab.stage.isAvailable(with: c))
         c.stage = true
         #expect(AppTab.stage.isAvailable(with: c))
         let all = AppTab.allCases
-        #expect(all.firstIndex(of: .stage) == all.firstIndex(of: .chat).map { $0 + 1 })
+        #expect(all.firstIndex(of: .stage) == all.firstIndex(of: .sevenTv).map { $0 + 1 })
     }
 }
 

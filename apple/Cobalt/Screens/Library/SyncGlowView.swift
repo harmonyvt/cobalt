@@ -385,6 +385,8 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
             fullSince = nil
         }
         guard let drawable = view.currentDrawable, let command = resources.queue?.makeCommandBuffer() else { return }
+        #if !targetEnvironment(simulator)
+        // The iOS 27 simulator's Metal has no `addPresentedHandler`; there the count is simply not kept.
         inFlight += 1
         drawable.addPresentedHandler { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -393,6 +395,7 @@ final class SyncGlowRenderer: NSObject, MTKViewDelegate {
                 if self.inFlight < Self.maxInFlight { self.fullSince = nil }
             }
         }
+        #endif
         let width = drawable.texture.width
         let height = drawable.texture.height
         guard width > 0, height > 0 else { return }

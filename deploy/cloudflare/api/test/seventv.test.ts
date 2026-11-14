@@ -482,6 +482,29 @@ describe("uploading a library picture as a new emote (57.9)", () => {
         ]);
     });
 
+    it("GET /7tv/owned lists every owned emote, newest first, naming capystore's files (57.14)", async () => {
+        put("file-a", "image/webp", 10);
+        upload = { status: 201, body: { emote_id: "01JUP0000000000000000000AA" } };
+        await send("/7tv/emotes", { method: "POST", body: JSON.stringify({ file: "file-a", name: "mine" }) });
+        const raw = (id: string, name: string, extra: object = {}) => ({
+            id, defaultName: name, deleted: false, imagesPending: false, flags: { animated: false, private: false, defaultZeroWidth: false }, images: [img(2, 1)], ...extra,
+        });
+        answer = (q) =>
+            q.includes("ownedEmotes")
+                ? { body: { data: { users: { me: { id: ME_ID, ownedEmotes: [raw("01F6MZGCNG000255K4X1K7NTHR", "old"), raw("01JUP0000000000000000000AA", "mine"), raw("01JUP0000000000000000000ZZ", "gone", { deleted: true })] } } } } }
+                : { body: { data: null } };
+        const r = await json(await send("/7tv/owned"));
+        expect(r.status).toBe(200);
+        expect(r.body.owner_id).toBe(ME_ID);
+        expect(r.body.total).toBe(2);
+        expect(r.body.emotes.map((e: any) => [e.emote_id, e.name, e.file_id])).toEqual([
+            ["01JUP0000000000000000000AA", "mine", "file-a"],
+            ["01F6MZGCNG000255K4X1K7NTHR", "old", null],
+        ]);
+        expect(r.body.emotes[1]).toMatchObject({ page_url: "https://7tv.app/emotes/01F6MZGCNG000255K4X1K7NTHR", pending: false, animated: false });
+        expect(typeof r.body.emotes[1].created_at).toBe("number");
+    });
+
     it("passes 7TV's REST refusals on", async () => {
         put("file-ok", "image/png", 10);
         upload = { status: 400, body: { status: "Bad Request", error_code: 0, error: "bad image format" } };

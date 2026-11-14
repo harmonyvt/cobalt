@@ -2,13 +2,15 @@ import Foundation
 import Observation
 import UserNotifications
 
-/// The tabs, in the order they show. `queue` is everything cobalt is doing (apple/CONTRACT.md section 12).
-/// `links` lists the gallery share links (APP-API-CONTRACT 24) and shows only with `features.share_sets`; `chat` holds the
-/// threads with Claude about the library (APP-API-CONTRACT 27) and shows only with `features.chat`; `stage` is the "studio"
-/// tab, the stream canvas and the viewer store (APP-API-CONTRACT 30), after chat, and shows only with `features.stage`;
-/// `sevenTv` is the "7tv" tab (APP-API-CONTRACT 57.7: sets, search, upload), right after the studio and on the same rule.
+/// The tabs, in the order they show: save, library, links, 7tv, studio, chat, names, (queue), settings. `queue` is everything
+/// cobalt is doing (apple/CONTRACT.md section 12). `links` lists the gallery share links (APP-API-CONTRACT 24) and shows
+/// only with `features.share_sets`; `sevenTv` is the "7tv" tab (APP-API-CONTRACT 57.7: sets, search, upload), right after links,
+/// and shows only with `features.stage`; `stage` is the "studio" tab, the stream canvas and the viewer store
+/// (APP-API-CONTRACT 30), after 7tv, on the same rule; `chat` holds the threads with Claude about the library
+/// (APP-API-CONTRACT 27), after the studio, and shows only with `features.chat`. iPhone shows the first four of these
+/// (the queue is a sheet there) and a "more" tab for the rest.
 public enum AppTab: String, Sendable, CaseIterable {
-    case save, library, links, chat, stage, sevenTv, names, queue, settings
+    case save, library, links, sevenTv, stage, chat, names, queue, settings
 
     /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
     /// chat needs `features.chat`, the studio needs `features.stage`, search names need `features.names` (48.6).
@@ -150,7 +152,10 @@ public final class AppModel {
     /// What the focus screens read: the focused job's pipeline, or an idle one when nothing is focused. A run started
     /// on it by hand becomes the focused job at once.
     public var pipeline: Pipeline { queue.focused?.pipeline ?? queue.idlePipeline }
-    public var selectedTab: AppTab = .save
+    public var selectedTab: AppTab = .save { didSet { tabSets &+= 1 } }
+    /// How many times `selectedTab` was written, even to the value it had: iPhone's "more" tab reads it to push a
+    /// screen when something asks for the tab that is already the selected one (a deep link while "more" shows its list).
+    public private(set) var tabSets = 0
     /// iPhone and iPad: the queue is a sheet over the shell (opened from a toolbar button), not a tab. Use `showQueue()`
     /// to open it from anywhere; the shell presents the sheet while this is true. The Mac keeps the queue as a tab and
     /// never sets this.

@@ -66,5 +66,13 @@ extension Symbol {
         static let crop = "crop"
         /// The crop line's "clear".
         static let clearCrop = "xmark"
+        /// "add to a set…" (57.14) on a row of "your emotes on 7tv" and on the upload sheet's result.
+        static let addToSet = "text.badge.plus"
+        /// The "private" mark of an owned emote.
+        static let privateEmote = "lock.fill"
+        /// The "zero-width" mark of an owned emote.
+        static let zeroWidth = "square.stack.3d.up"
+        /// A set already holding the emote (the picker's check).
+        static let setHasIt = "checkmark.circle.fill"
     }
 }

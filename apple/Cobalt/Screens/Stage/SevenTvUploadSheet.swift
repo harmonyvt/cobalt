@@ -7,7 +7,9 @@ import SwiftUI
 // (from the post's title, spaces dropped), private and zero-width, an optional set (channel chips, then the set), "upload";
 // then "processing on 7tv" until 7TV is done, the emote, "open on 7tv" and where it went. The fit (57.10): for webp, gif, png
 // and jpeg a "size" row (auto, 128, 256, 512, 1000) and "crop…" (the picture crop sheet with one button, "use this crop"; the
-// box only); a big file is shrunk by the server, so it only gets a calm note; an avif that big is refused here. The answer's
+// box only), and a "shape" row (as is, square 1:1, wide 2:1, extra wide 3:1: a wide emote is only a picture wider than tall,
+// 7TV keeps up to 3:1, so a shape is the largest centred crop box of that ratio, and the crop sheet opens locked to it so the
+// box can be moved; the size chips still set the longest side, and a line under them says the px 7TV gets); a big file is shrunk by the server, so it only gets a calm note; an avif that big is refused here. The answer's
 // `fitted` shows as "sent as W×H · N frames · X kb".
 
 /// The secondary-row icon. Nothing at all unless the file can go to 7TV and the account can upload.
@@ -58,8 +60,13 @@ struct SevenTvUploadSheet: View {
     let upload: SevenTvUploadModel
     /// The picture for "crop…"; nil hides it (the size row still shows).
     var picture: (@MainActor () async throws -> CGImage)? = nil
+    /// The 7tv tab's shared set models, for "add to a set…" (57.14); nil: the picker uses models of its own.
+    var setModels: (@MainActor (String, String) -> SevenTvSetModel)? = nil
 
-    @State private var cropping = false
+    /// The crop sheet being shown, with where its box starts (from a shape chip: locked to the shape, at the box cut; from
+    /// "crop…": the whole picture, free). The start travels with the sheet so it is never read stale.
+    @State private var cropRequest: CropRequest?
+    @State private var picker: SevenTvAddToSetModel?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.shell) private var shell
@@ -83,9 +90,11 @@ struct SevenTvUploadSheet: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 if showsResult {
-                    SevenTvUploadResultView(upload: upload) { dismiss() }
+                    SevenTvUploadResultView(upload: upload, addToSet: openPicker) { dismiss() }
                 } else {
-                    SevenTvUploadForm(upload: upload, sending: sending, canCrop: picture != nil, crop: { cropping = true }, send: send)
+                    SevenTvUploadForm(
+                        upload: upload, sending: sending, canCrop: picture != nil, crop: { openCrop(start: nil) },
+                        cropShape: { openCrop(start: Self.start(for: upload)) }, send: send)
                 }
             }
             .padding(.horizontal, 16)
@@ -105,12 +114,42 @@ struct SevenTvUploadSheet: View {
             if case .failed = phase { return true }
             return false
         }
-        .sheet(isPresented: $cropping) {
+        .sheet(item: $cropRequest) { request in
             if let picture {
-                ImageCropSheet.sevenTv(upload: upload, load: picture) { cropping = false }
+                ImageCropSheet.sevenTv(upload: upload, load: picture, start: request.start) { cropRequest = nil }
             }
         }
+        .sheet(item: $picker) { picker in
+            SevenTvAddToSetSheet(picker: picker)
+        }
         .onDisappear { upload.stop() }
+    }
+
+    private struct CropRequest: Identifiable {
+        let id = UUID()
+        let start: ImageCropStart?
+    }
+
+    private func openCrop(start: ImageCropStart?) {
+        cropRequest = CropRequest(start: start)
+    }
+
+    /// The crop sheet's start for the shape picked: locked to its ratio, at the box already cut (so it can be moved).
+    private static func start(for upload: SevenTvUploadModel) -> ImageCropStart {
+        let aspect: ImageCropModel.Aspect
+        switch upload.shape {
+        case .square: aspect = .square
+        case .wide: aspect = .twoToOne
+        case .extraWide: aspect = .threeToOne
+        case .asIs, nil: aspect = .free
+        }
+        return ImageCropStart(aspect: aspect, box: upload.crop)
+    }
+
+    /// "add to a set…": the emote this upload made, into any set of any channel the account edits (57.14).
+    private func openPicker() {
+        // the upload's own set is marked from the start; the tab's shared set models keep an open grid right
+        picker = upload.addToSetPicker(setModel: setModels)
     }
 
     private var header: some View {
@@ -145,6 +184,8 @@ private struct SevenTvUploadForm: View {
     let sending: Bool
     let canCrop: Bool
     let crop: () -> Void
+    /// A shape was picked: open the crop sheet locked to it (so the box can be moved).
+    let cropShape: () -> Void
     let send: () -> Void
 
     private var problem: String? {
@@ -159,7 +200,7 @@ private struct SevenTvUploadForm: View {
             nameField
             sizeNotes
             if upload.fittable {
-                SevenTvUploadFitRow(upload: upload, canCrop: canCrop, crop: crop)
+                SevenTvUploadFitRow(upload: upload, canCrop: canCrop, crop: crop, cropShape: cropShape)
                     .disabled(sending)
             }
             VStack(alignment: .leading, spacing: 4) {
@@ -225,14 +266,17 @@ private struct SevenTvUploadForm: View {
     }
 }
 
-/// The fit (57.10): the size chips (the longest side; auto = the server's choice), then "crop…" or the crop set.
+/// The fit (57.10): the shape chips (a centred box of that shape, which the crop sheet can move), the size chips (the longest
+/// side; auto = the server's choice), what 7TV will get in px, then "crop…" or the crop set.
 private struct SevenTvUploadFitRow: View {
     @Bindable var upload: SevenTvUploadModel
     let canCrop: Bool
     let crop: () -> Void
+    let cropShape: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            shapeRow
             HStack(spacing: 10) {
                 Text(Copy.SevenTv.sizeLabel)
                     .font(CobaltType.captionSmall)
@@ -252,10 +296,52 @@ private struct SevenTvUploadFitRow: View {
                 .font(CobaltType.badge)
                 .foregroundStyle(CobaltColor.caption)
                 .fixedSize(horizontal: false, vertical: true)
+            if let out = upload.outputPixels {
+                Text(Copy.SevenTv.outputLine(out.width, out.height))
+                    .font(CobaltType.captionSmall.monospacedDigit())
+                    .foregroundStyle(CobaltColor.text)
+                    .accessibilityIdentifier("sevenTvOutputLine")
+            }
             if canCrop {
                 cropRow
             }
         }
+    }
+
+    private var shapeRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                Text(Copy.SevenTv.shapeLabel)
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(CobaltColor.caption)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(SevenTvEmoteShape.allCases, id: \.self) { choice in
+                            SevenTvChip(title: Copy.SevenTv.shapeChoice(choice), selected: upload.shape == choice) {
+                                pick(choice)
+                            }
+                        }
+                    }
+                }
+                .accessibilityLabel(Text(Copy.SevenTv.shapeA11y))
+            }
+            .disabled(!upload.canPickShape)
+            Text(upload.canPickShape ? Copy.SevenTv.shapeNote : Copy.SevenTv.shapeNeedsSize)
+                .font(CobaltType.badge)
+                .foregroundStyle(CobaltColor.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// A new shape cuts its centred box and opens the crop sheet on it; the shape already picked opens the sheet on the box as
+    /// it is now (so a moved box is not put back in the middle). "as is" only clears.
+    private func pick(_ choice: SevenTvEmoteShape) {
+        if choice == upload.shape, choice != .asIs {
+            if canCrop, upload.crop != nil { cropShape() }
+            return
+        }
+        upload.pickShape(choice)
+        if choice != .asIs, canCrop, upload.crop != nil { cropShape() }
     }
 
     private var cropText: String {
@@ -290,7 +376,8 @@ extension ImageCropSheet {
     /// crops it, 57.10). Turning, flipping and removing the background are not sent, so a crop with any of them is refused.
     @MainActor
     static func sevenTv(
-        upload: SevenTvUploadModel, load: @escaping @MainActor () async throws -> CGImage, close: @escaping () -> Void
+        upload: SevenTvUploadModel, load: @escaping @MainActor () async throws -> CGImage, start: ImageCropStart? = nil,
+        close: @escaping () -> Void
     ) -> ImageCropSheet {
         let use = ImageCropAction(title: Copy.SevenTv.useCrop, symbol: Symbol.SevenTv.crop) { spec, picture in
             guard spec.rotate == 0, spec.flip == .none, !spec.cutout else {
@@ -300,8 +387,8 @@ extension ImageCropSheet {
         }
         let serverCan: @MainActor (Bool) -> Bool = { _ in false }
         return ImageCropSheet(
-            name: upload.cleanName, load: load, serverCan: serverCan, note: Copy.SevenTv.cropNote, primary: use, secondary: nil,
-            close: close)
+            name: upload.cleanName, load: load, serverCan: serverCan, note: Copy.SevenTv.cropNote,
+            aspects: ImageCropModel.Aspect.sevenTv, start: start, primary: use, secondary: nil, close: close)
     }
 }
 
@@ -393,6 +480,7 @@ private struct SevenTvUploadSetPicker: View {
 
 private struct SevenTvUploadResultView: View {
     let upload: SevenTvUploadModel
+    let addToSet: () -> Void
     let close: () -> Void
 
     @Environment(\.openURL) private var openURL
@@ -430,6 +518,10 @@ private struct SevenTvUploadResultView: View {
                 SevenTvUploadNote(
                     text: Copy.SevenTv.sentAs(width: fitted.width, height: fitted.height, frames: fitted.frames, bytes: fitted.bytes),
                     tint: CobaltColor.caption)
+            }
+            if upload.result != nil, !upload.channels.isEmpty {
+                Button(Copy.SevenTv.addToSetAction, systemImage: Symbol.SevenTv.addToSet, action: addToSet)
+                    .buttonStyle(.cobaltSecondary(compact: true))
             }
             buttons
         }

@@ -1,3 +1,4 @@
+import CobaltKit
 import ImageIO
 import SwiftUI
 import Synchronization
@@ -23,13 +24,7 @@ struct EmotePicture: View {
             // The still leaves once a frame is playing. An emote's frames are transparent, so a
             // first frame left underneath shows as a second, frozen copy.
             if !moves || !playing {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFit()
-                    } else {
-                        Color.clear
-                    }
-                }
+                EmoteStill(url: url)
             }
             if moves, let url {
                 // a new emote is a new player: the old one's last frame never sits under the new animation
@@ -88,11 +83,70 @@ private struct EmoteMotion: View {
                 if up, started.wrappedValue != true { started.wrappedValue = true }
             }
             .task(id: url) {
-                guard let (data, _) = try? await URLSession.shared.data(from: url), !Task.isCancelled else { return }
+                // the same bytes as the still, from the device's emote cache (57.13)
+                guard let data = await EmoteCache.shared.data(for: url), !Task.isCancelled else { return }
                 model.play(data: data)
             }
             .onDisappear { model.stop() }
     }
+}
+
+/// The first frame, from `EmoteCache` (memory at once when it is there, else disk or the network), decoded off the main
+/// thread. Replaces `AsyncImage`, which kept nothing between launches.
+private struct EmoteStill: View {
+    let url: URL?
+    @State private var still: EmoteFrame?
+    @State private var shown: URL?
+
+    var body: some View {
+        Group {
+            if let frame = current {
+                Image(decorative: frame.image, scale: 1).resizable().scaledToFit()
+            } else {
+                Color.clear
+            }
+        }
+        .task(id: url) {
+            guard let url else { still = nil; shown = nil; return }
+            if shown == url, still != nil { return }
+            let frame = await Task.detached(priority: .userInitiated) { () -> EmoteFrame? in
+                guard let data = await EmoteCache.shared.data(for: url) else { return nil }
+                return EmoteStill.decode(data, url: url)
+            }.value
+            guard !Task.isCancelled else { return }
+            still = frame
+            shown = url
+        }
+    }
+
+    /// The still for this url: the one this tile decoded, else one decoded before (no blank first frame on scroll back).
+    private var current: EmoteFrame? {
+        if let still, shown == url { return still }
+        guard let url else { return nil }
+        return Self.decoded.object(forKey: url as NSURL)?.frame
+    }
+
+    /// Decoded stills, about 400 (thread safe).
+    nonisolated(unsafe) private static let decoded: NSCache<NSURL, FrameHolder> = {
+        let c = NSCache<NSURL, FrameHolder>()
+        c.countLimit = 400
+        return c
+    }()
+
+    nonisolated static func decode(_ data: Data, url: URL) -> EmoteFrame? {
+        if let hit = decoded.object(forKey: url as NSURL) { return hit.frame }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
+        let frame = EmoteFrame(image: image)
+        decoded.setObject(FrameHolder(frame), forKey: url as NSURL)
+        return frame
+    }
+}
+
+private final class FrameHolder: Sendable {
+    let frame: EmoteFrame
+    init(_ frame: EmoteFrame) { self.frame = frame }
 }
 
 private struct EmoteFrame: @unchecked Sendable {
