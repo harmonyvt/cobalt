@@ -303,6 +303,200 @@
         }
       }
     },
+    "/7tv/emotes": {
+      "post": {
+        "operationId": "seventv_http.upload",
+        "summary": "Upload a library picture (webp, gif, png, avif, jpeg; up to 7 MB) as a new 7TV emote, optionally into a set (POST /7tv/emotes).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 400
+                  },
+                  "tags": {
+                    "maxItems": 6,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 64
+                    }
+                  },
+                  "zero_width": {
+                    "type": "boolean"
+                  },
+                  "private": {
+                    "type": "boolean"
+                  },
+                  "set_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "alias": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 400
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "file",
+                  "name"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SevenTvUpload"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/emotes/{id}": {
+      "get": {
+        "operationId": "seventv_http.emote",
+        "summary": "One 7TV emote: its name, owner, and whether 7TV is still processing it (GET /7tv/emotes/<id>).",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "emote_id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "owner_id": {
+                      "type": "string"
+                    },
+                    "pending": {
+                      "type": "boolean"
+                    },
+                    "animated": {
+                      "type": "boolean"
+                    },
+                    "private": {
+                      "type": "boolean"
+                    },
+                    "zero_width": {
+                      "type": "boolean"
+                    },
+                    "preview_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "file_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "page_url": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    }
+                  },
+                  "required": [
+                    "emote_id",
+                    "name",
+                    "owner_id",
+                    "pending",
+                    "animated",
+                    "private",
+                    "zero_width",
+                    "preview_url",
+                    "file_url",
+                    "page_url",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/7tv/link": {
       "post": {
         "operationId": "seventv_http.link",
@@ -9492,6 +9686,83 @@
           "capacity",
           "count",
           "live"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvUpload": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "success"
+          },
+          "emote_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string",
+            "description": "the library file that was uploaded"
+          },
+          "page_url": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean",
+            "description": "7TV still processing the images (usually a minute)"
+          },
+          "added": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "set_id": {
+                    "type": "string"
+                  },
+                  "alias": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "set_id",
+                  "alias"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "add_error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "status",
+          "emote_id",
+          "name",
+          "file_id",
+          "page_url",
+          "pending",
+          "added"
         ],
         "additionalProperties": false
       },

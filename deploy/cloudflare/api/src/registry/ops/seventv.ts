@@ -8,6 +8,8 @@ import {
     sevenTvAddEmote,
     sevenTvChannelSets,
     sevenTvCreateSet,
+    sevenTvEmote,
+    sevenTvUpload,
     sevenTvLink,
     sevenTvMakeLive,
     sevenTvRemoveEmote,
@@ -18,11 +20,13 @@ import {
     sevenTvUnlink,
     type Channel,
     type SevenTvDeps,
+    type SevenTvUploadDeps,
 } from "../../seventv";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
 
 const deps = (ctx: OpContext): SevenTvDeps => ({ db: ctx.db, now: ctx.now, secret: ctx.env.COBALT_API_KEY });
+const uploadDeps = (ctx: OpContext): SevenTvUploadDeps => ({ ...deps(ctx), media: ctx.env.MEDIA, originals: ctx.env.ORIGINALS });
 const reply = (r: StudioReply): OpReply => ({ status: r.status, body: r.body });
 
 const Id = SEVENTV_ID;
@@ -76,6 +80,33 @@ const SetInfo = z
         live: z.boolean().optional(),
     })
     .meta({ id: "SevenTvSet" });
+
+const UploadShape = z
+    .object({
+        status: Status,
+        emote_id: z.string(),
+        name: z.string(),
+        file_id: z.string().describe("the library file that was uploaded"),
+        page_url: z.string(),
+        pending: z.boolean().describe("7TV still processing the images (usually a minute)"),
+        added: z.object({ set_id: z.string(), alias: z.string().nullable() }).nullable(),
+        add_error: z.object({ code: z.string(), message: z.string().optional() }).optional(),
+    })
+    .meta({ id: "SevenTvUpload" });
+const EmoteInfo = z
+    .object({
+        emote_id: z.string(),
+        name: z.string(),
+        owner_id: z.string(),
+        pending: z.boolean(),
+        animated: z.boolean(),
+        private: z.boolean(),
+        zero_width: z.boolean(),
+        preview_url: z.string().nullable(),
+        file_url: z.string().nullable(),
+        page_url: z.string(),
+    })
+    .meta({ id: "SevenTvEmote" });
 
 // ---- the routes (57.4) --------------------------------------------------------------------------------------------------
 
@@ -204,6 +235,32 @@ const ROUTE_OPS = [
         summary: "Remove an emote from a set (DELETE /7tv/sets/<id>/emotes/<emote>?alias=).",
         run: (ctx) => sevenTvRemoveEmote(deps(ctx), ctx.params.id!, ctx.params.emote!, ctx.query.get("alias")),
     }),
+    route({
+        name: "seventv_http.upload",
+        method: "POST",
+        path: "/7tv/emotes",
+        input: z.looseObject({
+            file: z.string().max(64),
+            name: z.string().max(400),
+            tags: z.array(z.string().max(64)).max(6).optional(),
+            zero_width: z.boolean().optional(),
+            private: z.boolean().optional(),
+            set_id: z.string().max(64).nullable().optional(),
+            alias: z.string().max(400).nullable().optional(),
+        }),
+        output: UploadShape,
+        summary: "Upload a library picture (webp, gif, png, avif, jpeg; up to 7 MB) as a new 7TV emote, optionally into a set (POST /7tv/emotes).",
+        run: (ctx, input) => sevenTvUpload(uploadDeps(ctx), input),
+    }),
+    route({
+        name: "seventv_http.emote",
+        method: "GET",
+        path: "/7tv/emotes/:id",
+        params: { id: Id },
+        output: EmoteInfo.extend({ status: Status }),
+        summary: "One 7TV emote: its name, owner, and whether 7TV is still processing it (GET /7tv/emotes/<id>).",
+        run: (ctx) => sevenTvEmote(deps(ctx), ctx.params.id!),
+    }),
 ];
 
 // ---- the chat AI's calls (57.6) -----------------------------------------------------------------------------------------
@@ -217,6 +274,9 @@ const MESSAGES: Record<string, string> = {
     "error.seventv.rate_limited": "7TV is rate limiting: wait a little and try again",
     "error.seventv.rejected": "7TV refused that",
     "error.seventv.unavailable": "7TV is not answering",
+    "error.seventv.file_not_found": "no library file or post by that id (show_post lists a post's files)",
+    "error.seventv.file_type": "7TV takes webp, gif, png, avif or jpeg pictures, not videos",
+    "error.seventv.too_big": "7TV takes files up to 7 MB",
     "error.seventv.bad": "a 7TV id is 20-32 letters or digits; names are 1-100 characters, an emote's name has no spaces",
 };
 
@@ -424,4 +484,45 @@ const renameSetOp = defineOp({
     handler: (ctx, input) => strip(sevenTvRenameSet(deps(ctx), input.set_id, input)),
 });
 
-export const SEVENTV_OPS = [...ROUTE_OPS, statusOp, setsOp, setOp, addOp, removeOp, renameOp, makeLiveOp, createSetOp, renameSetOp];
+const uploadOp = defineOp({
+    name: "seventv.uploadEmote",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({
+        file: z.string().trim().min(1).max(64).describe("a library file id (or a post id: its first picture), e.g. an animated webp"),
+        name: z.string().trim().min(1).max(100).describe("the emote's name on 7TV: letters, digits and _-():!+|.'?><*$#, no spaces"),
+        tags: z.array(z.string()).max(6).optional().describe("up to 6 tags, 3-30 word characters each"),
+        zero_width: z.boolean().optional().describe("an overlay emote that sits on the emote before it"),
+        private: z.boolean().optional().describe("hidden from 7TV search (still usable in sets)"),
+        set_id: SetId.optional().describe("also add it to this emote set"),
+        alias: Alias.optional().describe("its name in that set, when different"),
+    }),
+    output: UploadShape.omit({ status: true }),
+    ai: {
+        tier: "ask",
+        only: true,
+        summary:
+            "Upload a library picture (an animated webp, gif, png...) to 7TV as a NEW emote owned by the linked account, and optionally add it to a set. 7TV processes it for about a minute (seventv.emote shows when it is ready). Asks Harmony first.",
+        params: ["file", "name"],
+        options: true,
+        preview: async (_ctx, input) => ({
+            summary: `upload ${input.file} to 7TV as “${input.name}”${input.set_id ? ` and add it to set ${input.set_id}` : ""}`,
+            effect: { file: input.file, name: input.name, ...(input.set_id ? { set_id: input.set_id } : {}), ...(input.private ? { private: true } : {}) },
+        }),
+    },
+    handler: (ctx, input) => strip(sevenTvUpload(uploadDeps(ctx), input)),
+});
+
+const emoteOp = defineOp({
+    name: "seventv.emote",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({ emote_id: EmoteId }),
+    output: EmoteInfo,
+    ai: { tier: "free", only: true, summary: "One 7TV emote: name, owner, flags, and pending = 7TV is still processing an upload.", params: ["emote_id"] },
+    handler: (ctx, input) => strip(sevenTvEmote(deps(ctx), input.emote_id)),
+});
+
+export const SEVENTV_OPS = [...ROUTE_OPS, statusOp, setsOp, setOp, addOp, removeOp, renameOp, makeLiveOp, createSetOp, renameSetOp, uploadOp, emoteOp];

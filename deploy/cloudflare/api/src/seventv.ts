@@ -269,7 +269,7 @@ async function session(d: SevenTvDeps): Promise<{ row: Row; token: string } | St
 const isReply = (v: unknown): v is StudioReply => !!v && typeof v === "object" && "status" in v && "body" in v;
 
 // Runs `fn` with the token; a 7TV refusal becomes its reply, and a dead session marks the row.
-async function withToken(d: SevenTvDeps, fn: (token: string, row: Row) => Promise<StudioReply>): Promise<StudioReply> {
+export async function withToken(d: SevenTvDeps, fn: (token: string, row: Row) => Promise<StudioReply>): Promise<StudioReply> {
     const s = await session(d);
     if (isReply(s)) return s;
     try {
@@ -542,5 +542,191 @@ export async function sevenTvMakeLive(d: SevenTvDeps, channelId: string, body: {
         const r = await gql<Data>(d, token, LIVE, { user: channelId, set: setId });
         if (!r.users?.user) return fail(404, "error.seventv.not_found");
         return success({ channel_id: channelId, active_set_id: r.users.user.activeEmoteSet.style?.activeEmoteSetId ?? setId });
+    });
+}
+
+// ---- uploading a library picture as a new 7TV emote (57.9) ---------------------------------------------------------------
+
+// 7TV's REST upload (apps/api/src/http/v4/rest/emotes.rs): multipart `file` + `metadata` JSON, 7 MiB body cap.
+export const SEVENTV_UPLOAD = "https://api.7tv.app/v4/emotes";
+export const UPLOAD_MAX = 7 * 1024 * 1024 - 64 * 1024; // room for the multipart wrapping
+// 7TV's own name and tag rules (apps/api/src/http/validators.rs)
+const EMOTE_NAME = /^[a-zA-Z0-9_\-():!+|.'?><\p{Emoji_Presentation}*$#]{1,100}$/u;
+const TAG = /^\w{3,30}$/;
+const UPLOAD_TYPES = ["image/webp", "image/gif", "image/png", "image/avif", "image/jpeg"];
+
+type ReadBucket = { get(key: string): Promise<{ body: ReadableStream; size: number; httpMetadata?: { contentType?: string } } | null> };
+export type SevenTvUploadDeps = SevenTvDeps & { media: ReadBucket; originals: ReadBucket };
+
+type FileRow = { id: string; bucket: string; r2_key: string; content_type: string | null; bytes: number | null; name: string | null };
+
+export function cleanEmoteName(v: unknown): string | null {
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    return EMOTE_NAME.test(t) ? t : null;
+}
+
+// A file id (or its public id) of the library; a post id answers its first picture.
+async function fileRow(db: D1Database, ref: string): Promise<FileRow | null> {
+    const cols = "id, bucket, r2_key, content_type, bytes, name";
+    const direct = await db
+        .prepare(`SELECT ${cols} FROM media_items WHERE (id = ?1 OR public_id = ?1) AND deleted_at IS NULL ORDER BY (id = ?1) DESC LIMIT 1`)
+        .bind(ref)
+        .first<FileRow>();
+    if (direct) return direct;
+    try {
+        return (
+            (await db
+                .prepare(
+                    `SELECT ${cols} FROM media_items WHERE post_key = ?1 AND deleted_at IS NULL AND content_type LIKE 'image/%' ORDER BY created_at, id LIMIT 1`,
+                )
+                .bind(ref)
+                .first<FileRow>()) ?? null
+        );
+    } catch {
+        return null;
+    }
+}
+
+async function uploadError(res: Response): Promise<SevenTvError> {
+    let msg: string | undefined;
+    try {
+        const b = (await res.json()) as { error?: unknown; message?: unknown };
+        msg = typeof b.error === "string" ? b.error : typeof b.message === "string" ? b.message : undefined;
+    } catch {
+        msg = undefined;
+    }
+    if (res.status === 401) return new SevenTvError(fail(409, "error.seventv.relink"), true);
+    if (res.status === 403) return new SevenTvError(fail(403, "error.seventv.forbidden", msg));
+    if (res.status === 413) return new SevenTvError(fail(413, "error.seventv.too_big"));
+    if (res.status === 429) return new SevenTvError(fail(429, "error.seventv.rate_limited", msg));
+    if (res.status >= 500) return new SevenTvError(fail(502, "error.seventv.unavailable"));
+    return new SevenTvError(fail(400, "error.seventv.rejected", msg));
+}
+
+export async function sevenTvUpload(
+    d: SevenTvUploadDeps,
+    body: { file?: unknown; name?: unknown; tags?: unknown; zero_width?: unknown; private?: unknown; set_id?: unknown; alias?: unknown },
+): Promise<StudioReply> {
+    const ref = typeof body.file === "string" ? body.file.trim() : "";
+    const name = cleanEmoteName(body.name);
+    const tags = body.tags === undefined || body.tags === null ? [] : body.tags;
+    const setId = body.set_id === undefined || body.set_id === null || body.set_id === "" ? null : body.set_id;
+    const alias = body.alias === undefined || body.alias === null || body.alias === "" ? null : cleanEmoteName(body.alias);
+    if (
+        !ref ||
+        ref.length > 64 ||
+        !name ||
+        !Array.isArray(tags) ||
+        tags.length > 6 ||
+        !tags.every((t) => typeof t === "string" && TAG.test(t)) ||
+        (setId !== null && !(typeof setId === "string" && SEVENTV_ID.test(setId))) ||
+        (body.alias !== undefined && body.alias !== null && body.alias !== "" && !alias)
+    ) {
+        return fail(400, "error.seventv.bad");
+    }
+    const row = await fileRow(d.db, ref);
+    if (!row) return fail(404, "error.seventv.file_not_found");
+    const type = (row.content_type ?? "").toLowerCase().split(";")[0]!.trim();
+    if (!UPLOAD_TYPES.includes(type)) return fail(415, "error.seventv.file_type");
+    if (row.bytes !== null && row.bytes > UPLOAD_MAX) return fail(413, "error.seventv.too_big");
+
+    return withToken(d, async (token) => {
+        const obj = await (row.bucket === "media" ? d.media : d.originals).get(row.r2_key).catch(() => null);
+        if (!obj) return fail(404, "error.seventv.file_not_found");
+        if (obj.size > UPLOAD_MAX) {
+            await obj.body.cancel().catch(() => {});
+            return fail(413, "error.seventv.too_big");
+        }
+        const bytes = await new Response(obj.body).arrayBuffer();
+        const form = new FormData();
+        form.append(
+            "metadata",
+            JSON.stringify({ name, tags, default_zero_width: body.zero_width === true, private: body.private === true }),
+        );
+        form.append("file", new Blob([bytes], { type }), `${row.id}.${type.split("/")[1]}`);
+        const f = d.fetch ?? fetch;
+        let res: Response;
+        try {
+            res = await f(SEVENTV_UPLOAD, {
+                method: "POST",
+                headers: { accept: "application/json", authorization: `Bearer ${token}` },
+                body: form,
+                signal: AbortSignal.timeout(60_000),
+            });
+        } catch {
+            throw new SevenTvError(fail(502, "error.seventv.unavailable"));
+        }
+        if (!res.ok) throw await uploadError(res);
+        let emoteId: unknown;
+        try {
+            emoteId = ((await res.json()) as { emote_id?: unknown }).emote_id;
+        } catch {
+            emoteId = undefined;
+        }
+        if (typeof emoteId !== "string" || !SEVENTV_ID.test(emoteId)) throw new SevenTvError(fail(502, "error.seventv.unavailable"));
+
+        // Put it in a set too when asked. The emote exists now even if this part fails, so that is reported, not thrown.
+        let added: { set_id: string; alias: string | null } | null = null;
+        let addError: { code: string; message?: string } | null = null;
+        if (typeof setId === "string") {
+            try {
+                await gql(d, token, ADD, { set: setId, e: { emoteId, ...(alias ? { alias } : {}) }, over: null });
+                added = { set_id: setId, alias };
+            } catch (e) {
+                if (!(e instanceof SevenTvError)) throw e;
+                const b = e.reply.body as { error: { code: string }; message?: string };
+                addError = { code: b.error.code, ...(b.message ? { message: b.message } : {}) };
+            }
+        }
+        return success(
+            {
+                emote_id: emoteId,
+                name,
+                file_id: row.id,
+                page_url: `https://7tv.app/emotes/${emoteId}`,
+                pending: true,
+                added,
+                ...(addError ? { add_error: addError } : {}),
+            },
+            201,
+        );
+    });
+}
+
+const EMOTE = `query($id: Id!) { emotes { emote(id: $id) { id defaultName deleted imagesPending ownerId
+  flags { animated private defaultZeroWidth } ${IMG} } } }`;
+
+export async function sevenTvEmote(d: SevenTvDeps, emoteId: string): Promise<StudioReply> {
+    if (!SEVENTV_ID.test(emoteId)) return fail(404, "error.seventv.not_found");
+    return withToken(d, async (token) => {
+        type Data = {
+            emotes: {
+                emote: {
+                    id: string;
+                    defaultName: string;
+                    deleted: boolean;
+                    imagesPending: boolean;
+                    ownerId: string;
+                    flags: { animated: boolean; private: boolean; defaultZeroWidth: boolean };
+                    images: EmoteImage[];
+                } | null;
+            };
+        };
+        const e = (await gql<Data>(d, token, EMOTE, { id: emoteId })).emotes?.emote;
+        if (!e || e.deleted) return fail(404, "error.seventv.not_found");
+        const shaped = setEmoteShape({ id: e.id, alias: e.defaultName, addedAt: "", emote: { id: e.id, defaultName: e.defaultName, flags: e.flags, images: e.images ?? [] } });
+        return success({
+            emote_id: e.id,
+            name: e.defaultName,
+            owner_id: e.ownerId,
+            pending: e.imagesPending,
+            animated: e.flags?.animated === true,
+            private: e.flags?.private === true,
+            zero_width: e.flags?.defaultZeroWidth === true,
+            preview_url: shaped.preview_url,
+            file_url: shaped.file_url,
+            page_url: `https://7tv.app/emotes/${e.id}`,
+        });
     });
 }
