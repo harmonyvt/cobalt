@@ -191,6 +191,9 @@ struct AppShell: View {
                 #if DEBUG
                 DebugHooks.log("AppShell .task")
                 #endif
+                #if os(iOS)
+                TouchProbe.install()
+                #endif
                 await model.foreground()
             }
             .onChange(of: scenePhase) { _, phase in
@@ -202,6 +205,10 @@ struct AppShell: View {
                 // the queue tab polls the server only while the app is in front (apple/CONTRACT.md 12)
                 model.unifiedQueue.setForeground(phase == .active)
                 guard phase == .active else { return }
+                #if os(iOS)
+                // where taps really land (the library freeze hunt, owner 2026-11-14)
+                TouchProbe.install()
+                #endif
                 Task {
                     await model.foreground()                 // shares the launch task's run when they overlap
                     await model.store.backfillPreviewFrames()
@@ -316,7 +323,10 @@ struct AppShell: View {
                 #endif
                 .modifier(MoveOverPresenter(model: model))
                 // PostHog (APP-API-CONTRACT 58): each tab the owner opens is a `$screen`, so a replay reads by tab
-                .onChange(of: model.selectedTab, initial: true) { Analytics.screen(model.selectedTab.rawValue) }
+                .onChange(of: model.selectedTab, initial: true) {
+                    Analytics.screen(model.selectedTab.rawValue)
+                    Breadcrumbs.add("tab.\(model.selectedTab.rawValue)")
+                }
         }
     }
 

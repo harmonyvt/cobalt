@@ -300,6 +300,9 @@ private struct LibraryContent: View {
             .statusConfirm(controller: controller)
             .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
             .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
+            // the freeze hunt (owner, 2026-11-14): the grid is back on screen after a detail
+            .onAppear { Breadcrumbs.add("library.appear") }
+            .onDisappear { Breadcrumbs.add("library.disappear") }
             .modifier(LibrarySkyMapPresenter(model: model, controller: controller))
             .modifier(NamesPresenter(model: model))
             // a collection chip on the shelves pushes the same screen the links tab does
