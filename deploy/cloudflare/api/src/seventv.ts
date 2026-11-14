@@ -558,7 +558,16 @@ const UPLOAD_TYPES = ["image/webp", "image/gif", "image/png", "image/avif", "ima
 type ReadBucket = { get(key: string): Promise<{ body: ReadableStream; size: number; httpMetadata?: { contentType?: string } } | null> };
 export type SevenTvUploadDeps = SevenTvDeps & { media: ReadBucket; originals: ReadBucket };
 
-type FileRow = { id: string; bucket: string; r2_key: string; content_type: string | null; bytes: number | null; name: string | null };
+type FileRow = { id: string; bucket: string; r2_key: string; content_type: string | null; bytes: number | null; name: string | null; width: number | null; height: number | null };
+
+// 7TV's processing drops (soft-deletes) an emote over 1000 px a side or outside 1:32..3:1; caught here when the size is known.
+export function sizeProblem(w: number | null, h: number | null): string | null {
+    if (!w || !h) return null;
+    if (w > 1000 || h > 1000) return `7TV takes at most 1000x1000 px; this is ${w}x${h}`;
+    const r = w / h;
+    if (r > 3 || r < 1 / 32) return `7TV takes width:height between 1:32 and 3:1; this is ${w}x${h}`;
+    return null;
+}
 
 export function cleanEmoteName(v: unknown): string | null {
     if (typeof v !== "string") return null;
@@ -568,7 +577,7 @@ export function cleanEmoteName(v: unknown): string | null {
 
 // A file id (or its public id) of the library; a post id answers its first picture.
 async function fileRow(db: D1Database, ref: string): Promise<FileRow | null> {
-    const cols = "id, bucket, r2_key, content_type, bytes, name";
+    const cols = "id, bucket, r2_key, content_type, bytes, name, width, height";
     const direct = await db
         .prepare(`SELECT ${cols} FROM media_items WHERE (id = ?1 OR public_id = ?1) AND deleted_at IS NULL ORDER BY (id = ?1) DESC LIMIT 1`)
         .bind(ref)
@@ -630,6 +639,8 @@ export async function sevenTvUpload(
     const type = (row.content_type ?? "").toLowerCase().split(";")[0]!.trim();
     if (!UPLOAD_TYPES.includes(type)) return fail(415, "error.seventv.file_type");
     if (row.bytes !== null && row.bytes > UPLOAD_MAX) return fail(413, "error.seventv.too_big");
+    const size = sizeProblem(row.width, row.height);
+    if (size) return fail(400, "error.seventv.too_large", size);
 
     return withToken(d, async (token) => {
         const obj = await (row.bucket === "media" ? d.media : d.originals).get(row.r2_key).catch(() => null);
@@ -714,7 +725,8 @@ export async function sevenTvEmote(d: SevenTvDeps, emoteId: string): Promise<Stu
             };
         };
         const e = (await gql<Data>(d, token, EMOTE, { id: emoteId })).emotes?.emote;
-        if (!e || e.deleted) return fail(404, "error.seventv.not_found");
+        // 7TV soft-deletes an upload whose processing failed (too big, too many frames, odd shape): it reads as gone
+        if (!e || e.deleted) return fail(404, "error.seventv.not_found", "no such emote; a fresh upload that vanished failed 7TV's processing (at most 1000x1000 px, 1000 frames, width:height 1:32 to 3:1)");
         const shaped = setEmoteShape({ id: e.id, alias: e.defaultName, addedAt: "", emote: { id: e.id, defaultName: e.defaultName, flags: e.flags, images: e.images ?? [] } });
         return success({
             emote_id: e.id,

@@ -507,6 +507,12 @@ public enum SevenTvError: Error, Sendable, Equatable {
     case unavailable
     /// `503 error.seventv.not_ready`: the server's migration has not run yet.
     case notReady
+    /// `404 error.seventv.file_not_found` (57.9): the library file to upload is not there.
+    case fileNotFound
+    /// `415 error.seventv.file_type` (57.9): only webp, gif, png, avif and jpeg go to 7TV.
+    case fileType
+    /// `413 error.seventv.too_big` (57.9): over 7 MiB less 64 KiB.
+    case tooBig
     /// The server has no `/7tv` routes (an older server, or a client without them).
     case off
     /// The server could not be reached.
@@ -527,6 +533,9 @@ public enum SevenTvError: Error, Sendable, Equatable {
         case "error.seventv.rejected": self = .rejected(message)
         case "error.seventv.unavailable": self = .unavailable
         case "error.seventv.not_ready": self = .notReady
+        case "error.seventv.file_not_found": self = .fileNotFound
+        case "error.seventv.file_type": self = .fileType
+        case "error.seventv.too_big": self = .tooBig
         default: return nil
         }
     }

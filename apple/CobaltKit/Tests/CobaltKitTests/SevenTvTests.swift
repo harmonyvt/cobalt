@@ -3,7 +3,8 @@ import Testing
 @testable import CobaltKit
 
 // 7TV accounts (APP-API-CONTRACT 57): the wire shapes of 57.4/57.5, the refusals, the bookmarklet's link and the token checks,
-// the paths and bodies of every route, and the store and set model on the preview server.
+// the paths and bodies of every route, and the store and set model on the preview server. Uploading a picture as a new emote
+// (57.9): its shapes, rules, routes and refusals, and the upload model's polling.
 
 private let sevenTvKey = "2d6b9e10-5c3a-4f7e-8a21-9b0c4d7e1f35"
 private let fakeToken = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIwMUdCMlMyQkNSIn0.c2lnbmF0dXJlLXBhcnQ"
@@ -467,5 +468,238 @@ struct SevenTvStoreTests {
         await app.sevenTv.load()
         app.sevenTv.reset()
         #expect(app.sevenTv.status == nil && app.sevenTv.state == .idle && app.sevenTv.channelSets.isEmpty)
+    }
+}
+
+// MARK: - uploading a picture as a new emote (57.9)
+
+private let wireUpload = """
+{"status":"success","emote_id":"01HU0000000000000000000001","name":"capyDance","file_id":"f_123","page_url":"https://7tv.app/emotes/01HU0000000000000000000001",
+ "pending":true,"added":{"set_id":"01HM0000000000000000MAIN01","alias":"capyDance"}}
+"""
+
+private let wireEmote = """
+{"status":"success","emote_id":"01HU0000000000000000000001","name":"capyDance","owner_id":"01GB2S2BCR000AHHX5S1Y9TQW2","pending":false,
+ "animated":true,"private":true,"zero_width":false,"preview_url":"https://cdn.7tv.app/emote/01HU0000000000000000000001/2x.webp",
+ "file_url":"https://cdn.7tv.app/emote/01HU0000000000000000000001/4x.webp","page_url":"https://7tv.app/emotes/01HU0000000000000000000001"}
+"""
+
+struct SevenTvUploadShapeTests {
+    @Test func anUploadAnswerDecodesWithWhereItWent() throws {
+        let result = try decode(SevenTvUploadResult.self, wireUpload)
+        #expect(result.emoteID == "01HU0000000000000000000001" && result.name == "capyDance" && result.fileID == "f_123")
+        #expect(result.pending && result.addError == nil)
+        #expect(result.added == SevenTvUploadPlacement(setID: "01HM0000000000000000MAIN01", alias: "capyDance"))
+        #expect(result.pageURL.absoluteString == "https://7tv.app/emotes/01HU0000000000000000000001")
+    }
+
+    @Test func aRefusedAddKeepsTheUploadAndSaysWhy() throws {
+        let json = """
+        {"status":"success","emote_id":"e1","name":"x","file_id":"f","page_url":"","pending":true,"added":null,
+         "add_error":{"code":"error.seventv.forbidden","message":"you do not have permission to manage this emote set"}}
+        """
+        let result = try decode(SevenTvUploadResult.self, json)
+        #expect(result.added == nil)
+        #expect(result.addError == .forbidden("you do not have permission to manage this emote set"))
+        #expect(result.pageURL.absoluteString == "https://7tv.app/emotes/e1", "a missing page falls back to 7tv.app")
+        let odd = try decode(SevenTvUploadResult.self, #"{"emote_id":"e1","add_error":{"code":"error.seventv.weird","message":"no"}}"#)
+        #expect(odd.addError == .rejected("no"))
+    }
+
+    @Test func anEmoteDecodesPrivateAndPending() throws {
+        let info = try decode(SevenTvEmoteInfo.self, wireEmote)
+        #expect(!info.pending && info.animated && info.isPrivate && !info.zeroWidth)
+        #expect(info.ownerID == "01GB2S2BCR000AHHX5S1Y9TQW2" && info.previewURL != nil && info.fileURL != nil)
+        let bare = try decode(SevenTvEmoteInfo.self, #"{"emote_id":"e1","name":"x","pending":true,"preview_url":null}"#)
+        #expect(bare.pending && bare.previewURL == nil && bare.pageURL.absoluteString == "https://7tv.app/emotes/e1")
+    }
+
+    @Test func theUploadsRefusalsHaveTheirOwnCodes() {
+        #expect(SevenTvError(code: "error.seventv.file_not_found") == .fileNotFound)
+        #expect(SevenTvError(code: "error.seventv.file_type") == .fileType)
+        #expect(SevenTvError(code: "error.seventv.too_big") == .tooBig)
+        #expect(SevenTvError.from(CobaltError.api(code: "error.seventv.too_big", httpStatus: 413)) == .tooBig)
+    }
+
+    @Test func namesFollowSevenTvsRule() {
+        #expect(SevenTvEmoteRule.isValidName("catJAM"))
+        #expect(SevenTvEmoteRule.isValidName("(:!+|.'?><*$#)_-"))
+        #expect(SevenTvEmoteRule.isValidName("pepe😀"), "an emoji shown as an emoji is fine")
+        #expect(!SevenTvEmoteRule.isValidName(""))
+        #expect(!SevenTvEmoteRule.isValidName("cat jam"))
+        #expect(!SevenTvEmoteRule.isValidName("café"))
+        #expect(!SevenTvEmoteRule.isValidName("a©"), "© is text, not an emoji presentation")
+        #expect(SevenTvEmoteRule.isValidName(String(repeating: "a", count: 100)))
+        #expect(!SevenTvEmoteRule.isValidName(String(repeating: "a", count: 101)))
+    }
+
+    @Test func tagsAreCleanedAndCapped() {
+        let tags = SevenTvEmoteRule.cleanTags(["#cat", "ab", "Cat", "funny_one", "two words", "dance", "x1y", "capy", "more", "last"])
+        #expect(tags == ["cat", "funny_one", "dance", "x1y", "capy", "more"])
+        #expect(SevenTvEmoteRule.isValidTag("abc") && !SevenTvEmoteRule.isValidTag(String(repeating: "a", count: 31)))
+    }
+
+    @Test func aNameIsSuggestedFromTheTitle() {
+        #expect(SevenTvEmoteRule.suggestName(from: "cat jam!!") == "catJam")
+        #expect(SevenTvEmoteRule.suggestName(from: "Peepo Héy") == "PeepoHey")
+        #expect(SevenTvEmoteRule.suggestName(from: "BOOBA 2") == "BOOBA2")
+        #expect(SevenTvEmoteRule.suggestName(from: "capy's dance-off") == "capySDanceOff")
+        #expect(SevenTvEmoteRule.suggestName(from: "dance party.webp") == "danceParty", "a file name's extension goes")
+        #expect(SevenTvEmoteRule.suggestName(from: "v1.2") == "v12")
+        #expect(SevenTvEmoteRule.suggestName(from: nil) == "emote")
+        #expect(SevenTvEmoteRule.suggestName(from: "🎉 🎉") == "emote")
+        #expect(SevenTvEmoteRule.suggestName(from: String(repeating: "ab ", count: 80)).count == 100)
+        #expect(SevenTvEmoteRule.isValidName(SevenTvEmoteRule.suggestName(from: "über-cool ✨ clip #3")))
+    }
+
+    @Test func onlyPictures7tvTakesAreUploadable() {
+        #expect(SevenTvEmoteRule.isUploadable(contentType: "image/webp", name: nil))
+        #expect(SevenTvEmoteRule.isUploadable(contentType: "image/JPEG; q=1", name: nil))
+        #expect(SevenTvEmoteRule.isUploadable(contentType: "image/avif", name: "x.bin"))
+        #expect(!SevenTvEmoteRule.isUploadable(contentType: "video/mp4", name: "x.gif"), "the type wins over the name")
+        #expect(!SevenTvEmoteRule.isUploadable(contentType: "image/heic", name: nil))
+        #expect(SevenTvEmoteRule.isUploadable(contentType: nil, name: "dance.GIF"))
+        #expect(!SevenTvEmoteRule.isUploadable(contentType: nil, name: "webp"))
+        #expect(!SevenTvEmoteRule.isUploadable(contentType: nil, name: nil))
+        #expect(SevenTvEmoteRule.maxBytes == 7_274_496)
+        #expect(SevenTvEmoteRule.isTooBig(7_274_497) && !SevenTvEmoteRule.isTooBig(7_274_496) && !SevenTvEmoteRule.isTooBig(nil))
+    }
+
+    @Test func uploadPathsAndBodiesAreTheContracts() throws {
+        #expect(SevenTvRoute.uploads == "/7tv/emotes")
+        #expect(SevenTvRoute.emoteInfo("01HU0000000000000000000001") == "/7tv/emotes/01HU0000000000000000000001")
+        let bare = SevenTvRoute.uploadBody(SevenTvUploadDraft(fileID: "f1", name: "capyDance"))
+        #expect(bare.count == 2 && bare["file"] as? String == "f1" && bare["name"] as? String == "capyDance")
+        let aliasWithoutSet = SevenTvRoute.uploadBody(SevenTvUploadDraft(fileID: "f1", name: "n", alias: "a"))
+        #expect(aliasWithoutSet["alias"] == nil, "an alias only means something with a set")
+        let full = SevenTvRoute.uploadBody(SevenTvUploadDraft(
+            fileID: "f1", name: "capyDance", tags: ["capy", "no"], zeroWidth: true, isPrivate: true, setID: "s1", alias: "dance"))
+        #expect(full["tags"] as? [String] == ["capy"])
+        #expect(full["zero_width"] as? Bool == true && full["private"] as? Bool == true)
+        #expect(full["set_id"] as? String == "s1" && full["alias"] as? String == "dance")
+    }
+}
+
+struct SevenTvUploadHTTPTests {
+    private func client(_ server: LoopbackServer) -> HTTPCobaltClient {
+        HTTPCobaltClient(baseURL: server.base, apiKey: { sevenTvKey })
+    }
+
+    @Test func uploadPostsTheDraftAndStatusIsAGet() async throws {
+        let server = try await LoopbackServer.start { req in
+            switch (req.method, req.path) {
+            case ("POST", "/7tv/emotes"): return .json(wireUpload, status: 201)
+            case ("GET", "/7tv/emotes/01HU0000000000000000000001"): return .json(wireEmote)
+            default: return .init(status: 404)
+            }
+        }
+        defer { server.stop() }
+        let c = client(server)
+        let result = try await c.uploadSevenTvEmote(
+            SevenTvUploadDraft(fileID: "f_123", name: "capyDance", isPrivate: true, setID: "01HM0000000000000000MAIN01"))
+        let info = try await c.sevenTvEmote(id: result.emoteID)
+        #expect(result.pending && result.added?.setID == "01HM0000000000000000MAIN01")
+        #expect(!info.pending && info.isPrivate)
+        let post = try #require(server.requests.first)
+        #expect(post.headers["authorization"] == "Api-Key \(sevenTvKey)")
+        let body = try #require(JSONSerialization.jsonObject(with: post.body) as? [String: Any])
+        #expect(body["file"] as? String == "f_123" && body["name"] as? String == "capyDance")
+        #expect(body["private"] as? Bool == true && body["zero_width"] == nil && body["set_id"] as? String == "01HM0000000000000000MAIN01")
+        #expect(server.requests.count == 2 && server.requests[1].body.isEmpty)
+    }
+
+    @Test func theUploadsRefusalsAreTyped() async throws {
+        let server = try await LoopbackServer.start { req in
+            let body = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any]
+            switch body?["file"] as? String {
+            case "gone": return .json(#"{"status":"error","error":{"code":"error.seventv.file_not_found"}}"#, status: 404)
+            case "clip": return .json(#"{"status":"error","error":{"code":"error.seventv.file_type"}}"#, status: 415)
+            case "huge": return .json(#"{"status":"error","error":{"code":"error.seventv.too_big"}}"#, status: 413)
+            default: return .json(#"{"status":"error","error":{"code":"error.seventv.rejected"},"message":"emote name is taken"}"#, status: 400)
+            }
+        }
+        defer { server.stop() }
+        let c = client(server)
+        await #expect(throws: SevenTvError.fileNotFound) { _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "gone", name: "a")) }
+        await #expect(throws: SevenTvError.fileType) { _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "clip", name: "a")) }
+        await #expect(throws: SevenTvError.tooBig) { _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "huge", name: "a")) }
+        await #expect(throws: SevenTvError.rejected("emote name is taken")) {
+            _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "ok", name: "a"))
+        }
+    }
+}
+
+@MainActor
+struct SevenTvUploadModelTests {
+    private func linkedApp(_ scenario: PreviewScenario = .happy) async -> AppModel {
+        let app = AppModel.makePreview(scenario, timeScale: 0.01, clock: SystemClock())
+        await app.sevenTv.load()
+        return app
+    }
+
+    private func fast(_ model: SevenTvUploadModel) -> SevenTvUploadModel {
+        model.pollEvery = 0.01
+        return model
+    }
+
+    @Test func anUploadIntoASetProcessesThenIsDone() async throws {
+        let app = await linkedApp()
+        let own = try #require(app.sevenTv.selectedChannel)
+        let before = try #require(app.sevenTv.sets(of: own.id).first?.count)
+        let model = fast(app.sevenTv.uploader(fileID: "f_webp_1", bytes: 200_000, title: "capy dance"))
+        #expect(model.name == "capyDance" && model.nameIsValid && model.canUpload)
+        model.addToSet = true
+        await model.prepareSets()
+        #expect(model.channelID == own.id && model.pickedSet?.name == "main", "the account's own live set is picked")
+        model.isPrivate = true
+        await model.upload()
+        #expect(model.phase == .done && !model.timedOut)
+        let result = try #require(model.result)
+        #expect(result.added?.setID == "01HM0000000000000000MAIN01" && result.addError == nil)
+        #expect(model.addedSetName == "main")
+        #expect(model.emote?.pending == false && model.emote?.isPrivate == true)
+        #expect(app.sevenTv.sets(of: own.id).first?.count == before + 1)
+        let preview = try #require(app.ctx.client as? PreviewClient)
+        let reads = preview.sevenTvState.calls.filter { $0.hasPrefix("GET emote") }.count
+        #expect(reads == 2, "pending on the first read, done on the second")
+    }
+
+    @Test func aRefusedAddStillUploads() async throws {
+        let app = await linkedApp()
+        let model = fast(app.sevenTv.uploader(fileID: "f_webp_2", bytes: nil, title: "catJAM"))
+        model.addToSet = true
+        await model.prepareSets()
+        await model.upload()
+        #expect(model.phase == .done && model.result?.added == nil)
+        #expect(model.result?.addError == .rejected("an emote named catJAM is already in this set"))
+    }
+
+    @Test func refusalsAndChecksStopBeforeOrAfterAsking() async throws {
+        let app = await linkedApp()
+        let video = fast(app.sevenTv.uploader(fileID: "f_video_1", bytes: nil, title: "clip"))
+        await video.upload()
+        #expect(video.phase == .failed(.fileType))
+        video.edit()
+        #expect(video.phase == .editing)
+
+        let big = app.sevenTv.uploader(fileID: "f_webp_3", bytes: 8_000_000, title: "big")
+        #expect(big.isTooBig && !big.canUpload)
+        let badName = app.sevenTv.uploader(fileID: "f_webp_4", bytes: nil, title: "x")
+        badName.name = "two words"
+        #expect(!badName.canUpload)
+        let noSet = app.sevenTv.uploader(fileID: "f_webp_5", bytes: nil, title: "x")
+        noSet.addToSet = true
+        #expect(!noSet.canUpload, "add to a set needs a set")
+
+        let relink = await linkedApp(.renditions)
+        #expect(!relink.sevenTv.canUpload && !relink.sevenTv.uploader(fileID: "f", bytes: nil, title: "x").canUpload)
+    }
+
+    @Test func pollingGivesUpAfterItsReads() async throws {
+        let app = await linkedApp()
+        let model = fast(app.sevenTv.uploader(fileID: "f_webp_6", bytes: nil, title: "slow"))
+        model.maxPolls = 1
+        await model.upload()
+        #expect(model.phase == .done && model.timedOut && model.emote?.pending == true)
     }
 }

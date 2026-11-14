@@ -34,5 +34,7 @@ extension Symbol {
         static let retry = "arrow.clockwise"
         /// A channel or account without a picture.
         static let person = "person.crop.circle"
+        /// "upload to 7tv" (57.9) and the sheet's "upload".
+        static let upload = "arrow.up.circle"
     }
 }

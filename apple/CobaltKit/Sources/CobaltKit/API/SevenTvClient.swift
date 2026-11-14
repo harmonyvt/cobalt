@@ -27,6 +27,10 @@ public protocol SevenTvClient: Sendable {
     func removeSevenTvEmote(setID: String, emoteID: String, alias: String?) async throws -> SevenTvEmoteChange
     /// `POST /7tv/channels/<id>/live {set_id}`: the channel's live set (nil clears it).
     func makeSevenTvSetLive(channelID: String, setID: String?) async throws -> SevenTvLiveChange
+    /// `POST /7tv/emotes` (57.9): a library picture as a new emote of the linked account (201), added to `setID` when given.
+    func uploadSevenTvEmote(_ draft: SevenTvUploadDraft) async throws -> SevenTvUploadResult
+    /// `GET /7tv/emotes/<id>` (57.9): one emote; `pending` while 7TV is still processing a new upload.
+    func sevenTvEmote(id: String) async throws -> SevenTvEmoteInfo
 }
 
 /// The paths and bodies of the routes, in one place so the HTTP client and the tests agree.
@@ -34,12 +38,29 @@ enum SevenTvRoute {
     static let status = "/7tv"
     static let link = "/7tv/link"
     static let sets = "/7tv/sets"
+    static let uploads = "/7tv/emotes"
 
     static func channelSets(_ channelID: String) -> String { "/7tv/channels/\(segment(channelID))/sets" }
     static func channelLive(_ channelID: String) -> String { "/7tv/channels/\(segment(channelID))/live" }
     static func set(_ setID: String) -> String { "/7tv/sets/\(segment(setID))" }
     static func emotes(_ setID: String) -> String { "/7tv/sets/\(segment(setID))/emotes" }
     static func emote(_ setID: String, _ emoteID: String) -> String { "/7tv/sets/\(segment(setID))/emotes/\(segment(emoteID))" }
+
+    static func emoteInfo(_ emoteID: String) -> String { "/7tv/emotes/\(segment(emoteID))" }
+
+    /// `POST /7tv/emotes`: empty tags, false toggles and a missing set or alias are left out.
+    static func uploadBody(_ draft: SevenTvUploadDraft) -> [String: Any] {
+        var body: [String: Any] = ["file": draft.fileID, "name": draft.name]
+        let tags = SevenTvEmoteRule.cleanTags(draft.tags)
+        if !tags.isEmpty { body["tags"] = tags }
+        if draft.zeroWidth { body["zero_width"] = true }
+        if draft.isPrivate { body["private"] = true }
+        if let setID = draft.setID, !setID.isEmpty {
+            body["set_id"] = setID
+            if let alias = draft.alias, !alias.isEmpty { body["alias"] = alias }
+        }
+        return body
+    }
 
     /// `?q=&page=` of a set's page: `q` only when there is one, `page` at least 1.
     static func setQuery(query: String?, page: Int) -> [(String, String)] {

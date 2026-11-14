@@ -6522,7 +6522,7 @@ and a 7TV refusal shows its message.
 7TV's upload is REST, not GraphQL (`apps/api/src/http/v4/rest/emotes.rs`): `POST https://api.7tv.app/v4/emotes`,
 multipart with a `file` part and a `metadata` part `{ name, tags, default_zero_width, private }`, `Authorization: Bearer`,
 a 7 MiB body cap, answer 201 `{ "emote_id" }`. The new emote belongs to the linked account and 7TV processes its images
-for a while (`imagesPending`); it can be put in a set at once. Names follow 7TV's rule
+for a while (`imagesPending`); it can be put in a set at once (7TV does not check `imagesPending` on `addEmote`). A private emote only goes into sets its uploader owns. Names follow 7TV's rule
 `^[a-zA-Z0-9_\-():!+|.'?><\p{Emoji_Presentation}*$#]{1,100}$`, tags `^\w{3,30}$`, at most 6. No migration.
 
 | route | answer |
@@ -6532,7 +6532,7 @@ for a while (`imagesPending`); it can be put in a set at once. Names follow 7TV'
 
 - `file` is a library file id (or its public id); a post id means that post's first picture. The file must be
   `image/webp`, `image/gif`, `image/png`, `image/avif` or `image/jpeg` → else 415 `error.seventv.file_type`; over
-  7 MiB less 64 KiB → 413 `error.seventv.too_big`; unknown → 404 `error.seventv.file_not_found`. The Worker reads the
+  7 MiB less 64 KiB → 413 `error.seventv.too_big`; a known size over 1000 px a side or outside width:height 1:32..3:1 → 400 `error.seventv.too_large` (7TV's processing would drop it: it soft-deletes such uploads, and `GET /7tv/emotes/:id` then answers 404); unknown → 404 `error.seventv.file_not_found`. The Worker reads the
   bytes from R2 (public or private bucket); nothing is written on our side.
 - With `set_id` the emote is added to that set after the upload (`alias` = its name there). If that add fails the
   upload still stands: `added: null` and `add_error: { code, message? }` with the 57.4 codes.

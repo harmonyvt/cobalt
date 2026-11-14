@@ -277,6 +277,7 @@ const MESSAGES: Record<string, string> = {
     "error.seventv.file_not_found": "no library file or post by that id (show_post lists a post's files)",
     "error.seventv.file_type": "7TV takes webp, gif, png, avif or jpeg pictures, not videos",
     "error.seventv.too_big": "7TV takes files up to 7 MB",
+    "error.seventv.too_large": "7TV would drop this picture",
     "error.seventv.bad": "a 7TV id is 20-32 letters or digits; names are 1-100 characters, an emote's name has no spaces",
 };
 
@@ -503,7 +504,7 @@ const uploadOp = defineOp({
         tier: "ask",
         only: true,
         summary:
-            "Upload a library picture (an animated webp, gif, png...) to 7TV as a NEW emote owned by the linked account, and optionally add it to a set. 7TV processes it for about a minute (seventv.emote shows when it is ready). Asks Harmony first.",
+            "Upload a library picture (an animated webp, gif, png...) to 7TV as a NEW emote owned by the linked account, and optionally add it to a set. 7TV processes it for about a minute (seventv.emote shows when it is ready; an upload over 1000x1000 px, 1000 frames or outside 1:32..3:1 is dropped). A private emote can only go into the uploader's own sets. Asks Harmony first.",
         params: ["file", "name"],
         options: true,
         preview: async (_ctx, input) => ({

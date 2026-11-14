@@ -135,6 +135,35 @@ extension Copy {
         static func copied(_ alias: String, to set: String) -> String { "copied \(alias) to \(set)" }
         static let noOtherSets = "no other sets in this channel"
 
+        // MARK: uploading a picture (57.9)
+
+        static let uploadAction = "upload to 7tv"
+        static let uploadTitle = "upload to 7tv"
+        static let uploadNew = "new emote"
+        static let emoteName = "emote name"
+        static let nameRule = "1–100 characters: letters, digits, emoji and _-():!+|.'?><*$#. no spaces."
+        static let tooBigNote = "this file is over 7 mb · 7tv won't take it"
+        static let privateToggle = "private"
+        static let privateNote = "only you see it on 7tv"
+        static let zeroWidthToggle = "zero-width"
+        static let zeroWidthNote = "sits on top of the emote before it in chat"
+        static let addToSetToggle = "add to a set"
+        static let noEditableChannels = "none of your channels lets you edit its sets"
+        static let setLabel = "set"
+        static func setChoice(_ name: String, live: Bool) -> String { live ? "\(name) · live" : name }
+        static let uploadButton = "upload"
+        static let uploading = "uploading…"
+        static let processing = "processing on 7tv…"
+        static let processingNote = "7tv makes its sizes first. this usually takes a minute; you can close this."
+        static let ready = "ready on 7tv"
+        static let stillProcessing = "7tv is still processing it · its page shows it once it's done"
+        static let openOn7tv = "open on 7tv"
+        static let done = "done"
+        static func uploaded(_ name: String) -> String { "uploaded \(name) to 7tv" }
+        static func addedTo(_ set: String) -> String { "added to \(set)" }
+        static let addedToSet = "added to the set"
+        static func addFailed(_ why: String) -> String { "uploaded, but not added to the set · \(why)" }
+
         // MARK: refusals
 
         /// The status line for a refused or failed 7TV call; 7TV's own words where it gave them.
@@ -149,6 +178,9 @@ extension Copy {
             case .rejected(let words): return words ?? "7tv said no to that"
             case .unavailable: return "7tv didn't answer · try again"
             case .notReady: return "7tv isn't ready on this server yet"
+            case .fileNotFound: return "that file isn't in the library any more"
+            case .fileType: return "7tv takes webp, gif, png, avif and jpeg"
+            case .tooBig: return "too big for 7tv · 7 mb at most"
             case .off: return "7tv isn't on this server"
             case .offline: return "can't reach the server"
             case .other: return Copy.actionFailed

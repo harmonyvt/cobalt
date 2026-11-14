@@ -93,6 +93,7 @@ struct GalleryActions: View {
         .haptic(.success, trigger: controller.flash, enabled: haptics) { $0 != nil }
         .haptic(.error, trigger: controller.notice, enabled: haptics) { $0 != nil }
         .frame(maxWidth: .infinity)
+        .sevenTvUploadReady(model, file: r.file)  // 7TV upload (57.9)
         .accessibilityElement(children: .contain)
         .background { GalleryFileShare(fileURLs: $filesToShare) }
     }
@@ -192,7 +193,10 @@ struct GalleryActions: View {
 
     /// The secondary row: one icon circle per choice (icon-first controls).
     private func secondaryRow(_ items: [Choice]) -> some View {
-        IconRow { ForEach(items, id: \.self) { secondary($0) } }
+        IconRow {
+            ForEach(items, id: \.self) { secondary($0) }
+            SevenTvUploadIcon(model: model, file: r.file, title: item.titleText)  // 7TV upload (57.9)
+        }
     }
 
     @ViewBuilder

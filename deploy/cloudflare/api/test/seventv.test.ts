@@ -361,6 +361,11 @@ describe("uploading a library picture as a new emote (57.9)", () => {
         expect(await code({ file: "file-big", name: "a" })).toBe("error.seventv.too_big");
         expect(await code({ file: "nope", name: "a" })).toBe("error.seventv.file_not_found");
         expect(await code({ file: "file-ok", name: "two words" })).toBe("error.seventv.bad");
+        db.raw.prepare("UPDATE media_items SET width = 1920, height = 1080 WHERE id = 'file-ok'").run();
+        expect(await code({ file: "file-ok", name: "a" })).toBe("error.seventv.too_large");
+        db.raw.prepare("UPDATE media_items SET width = 512, height = 128 WHERE id = 'file-ok'").run();
+        expect(await code({ file: "file-ok", name: "a" })).toBe("error.seventv.too_large");
+        db.raw.prepare("UPDATE media_items SET width = 300, height = 100 WHERE id = 'file-ok'").run();
         expect(await code({ file: "file-ok", name: "a", tags: ["x"] })).toBe("error.seventv.bad");
         expect(uploads).toHaveLength(0);
     });
