@@ -142,7 +142,8 @@ const isolateDbs = new WeakMap<object, D1Database>();
 // only when it is at most 20 lowercase letters and hyphens. Every token this Worker mints is 22 characters or more, so
 // none can pass; ids and file names go too (a 10-character public file name with no capital and no digit, about one in
 // six thousand, is the one thing that can slip through as a word). The lines then group by route.
-const ROUTE_WORD = /^[a-z][a-z-]{0,19}$/;
+// "7tv" is the one route word that starts with a digit (APP-API-CONTRACT.md section 57)
+const ROUTE_WORD = /^(?:[a-z][a-z-]{0,19}|7tv)$/;
 export function maskPath(pathname: string): string {
     return pathname
         .split("/")

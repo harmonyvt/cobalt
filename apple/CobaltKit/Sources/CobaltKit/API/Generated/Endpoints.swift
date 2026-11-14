@@ -586,6 +586,61 @@ enum Endpoints {
         APIEndpoint(op: "emotes_http.save", method: "POST", path: "/emotes", auth: .keyOrService)
     }
 
+    /// `GET /7tv` (op `seventv_http.status`, auth key): The linked 7TV account and the channels it can edit (GET /7tv).
+    static func seventvHttpStatus() -> APIEndpoint<SeventvHttpStatusResponse> {
+        APIEndpoint(op: "seventv_http.status", method: "GET", path: "/7tv", auth: .key)
+    }
+
+    /// `POST /7tv/link` (op `seventv_http.link`, auth key): Link a 7TV account with its session token from 7tv.app (POST /7tv/link).
+    static func seventvHttpLink() -> APIEndpoint<SeventvHttpLinkResponse> {
+        APIEndpoint(op: "seventv_http.link", method: "POST", path: "/7tv/link", auth: .key)
+    }
+
+    /// `DELETE /7tv` (op `seventv_http.unlink`, auth key): Forget the 7TV token (DELETE /7tv).
+    static func seventvHttpUnlink() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "seventv_http.unlink", method: "DELETE", path: "/7tv", auth: .key)
+    }
+
+    /// `GET /7tv/channels/:id/sets` (op `seventv_http.sets`, auth key): A channel's emote sets, live first (GET /7tv/channels/<id>/sets).
+    static func seventvHttpSets(id: String) -> APIEndpoint<SeventvHttpSetsResponse> {
+        APIEndpoint(op: "seventv_http.sets", method: "GET", path: "/7tv/channels/\(HTTPCobaltClient.encode(id))/sets", auth: .key)
+    }
+
+    /// `POST /7tv/channels/:id/live` (op `seventv_http.live`, auth key): Make an emote set the channel's live set (POST /7tv/channels/<id>/live).
+    static func seventvHttpLive(id: String) -> APIEndpoint<SeventvHttpLiveResponse> {
+        APIEndpoint(op: "seventv_http.live", method: "POST", path: "/7tv/channels/\(HTTPCobaltClient.encode(id))/live", auth: .key)
+    }
+
+    /// `GET /7tv/sets/:id` (op `seventv_http.set`, auth key): An emote set and a page of its emotes (GET /7tv/sets/<id>?q=&page=).
+    static func seventvHttpSet(id: String) -> APIEndpoint<SeventvHttpSetResponse> {
+        APIEndpoint(op: "seventv_http.set", method: "GET", path: "/7tv/sets/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
+    /// `POST /7tv/sets` (op `seventv_http.create_set`, auth key): Make a new emote set on a channel (POST /7tv/sets).
+    static func seventvHttpCreateSet() -> APIEndpoint<SeventvHttpCreateSetResponse> {
+        APIEndpoint(op: "seventv_http.create_set", method: "POST", path: "/7tv/sets", auth: .key)
+    }
+
+    /// `PATCH /7tv/sets/:id` (op `seventv_http.rename_set`, auth key): Rename an emote set (PATCH /7tv/sets/<id>).
+    static func seventvHttpRenameSet(id: String) -> APIEndpoint<SeventvHttpRenameSetResponse> {
+        APIEndpoint(op: "seventv_http.rename_set", method: "PATCH", path: "/7tv/sets/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
+    /// `POST /7tv/sets/:id/emotes` (op `seventv_http.add`, auth key): Add a 7TV emote to a set (POST /7tv/sets/<id>/emotes).
+    static func seventvHttpAdd(id: String) -> APIEndpoint<SeventvHttpAddResponse> {
+        APIEndpoint(op: "seventv_http.add", method: "POST", path: "/7tv/sets/\(HTTPCobaltClient.encode(id))/emotes", auth: .key)
+    }
+
+    /// `PATCH /7tv/sets/:id/emotes/:emote` (op `seventv_http.rename`, auth key): Rename an emote in a set (PATCH /7tv/sets/<id>/emotes/<emote>).
+    static func seventvHttpRename(id: String, emote: String) -> APIEndpoint<SeventvHttpRenameResponse> {
+        APIEndpoint(op: "seventv_http.rename", method: "PATCH", path: "/7tv/sets/\(HTTPCobaltClient.encode(id))/emotes/\(HTTPCobaltClient.encode(emote))", auth: .key)
+    }
+
+    /// `DELETE /7tv/sets/:id/emotes/:emote` (op `seventv_http.remove`, auth key): Remove an emote from a set (DELETE /7tv/sets/<id>/emotes/<emote>?alias=).
+    static func seventvHttpRemove(id: String, emote: String) -> APIEndpoint<SeventvHttpRemoveResponse> {
+        APIEndpoint(op: "seventv_http.remove", method: "DELETE", path: "/7tv/sets/\(HTTPCobaltClient.encode(id))/emotes/\(HTTPCobaltClient.encode(emote))", auth: .key)
+    }
+
     /// `PUT /live/start-token` (op `live.start_token.put`, auth key): A device's push-to-start token.
     static func liveStartTokenPut() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "live.start_token.put", method: "PUT", path: "/live/start-token", auth: .key)
@@ -1346,6 +1401,128 @@ struct LibraryNamesPostResponse: Decodable, Sendable {
 struct LibraryNamesUpdateResponse: Decodable, Sendable {
     var status: String
     var name: SearchName
+}
+
+struct SevenTvAccount: Decodable, Sendable {
+    var id: String
+    var name: String
+    var avatarUrl: String?
+    var linkedAt: Int
+    var expiresAt: Int?
+    var status: String
+}
+
+struct SevenTvChannelCan: Decodable, Sendable {
+    var manageSets: Bool
+    var createSets: Bool
+    var makeLive: Bool
+}
+
+struct SevenTvChannel: Decodable, Sendable {
+    var id: String
+    var name: String
+    var avatarUrl: String?
+    /// the linked account's own channel
+    var you: Bool
+    /// the live emote set
+    var activeSetId: String?
+    var can: SevenTvChannelCan
+}
+
+struct SeventvHttpStatusResponse: Decodable, Sendable {
+    var status: String
+    var linked: Bool
+    var account: SevenTvAccount?
+    var channels: [SevenTvChannel]?
+}
+
+struct SeventvHttpLinkResponse: Decodable, Sendable {
+    var status: String
+    var linked: Bool
+    var account: SevenTvAccount?
+    var channels: [SevenTvChannel]?
+}
+
+struct SevenTvSetSummary: Decodable, Sendable {
+    var id: String
+    var name: String
+    var capacity: Int?
+    var count: Int
+    var live: Bool
+}
+
+struct SeventvHttpSetsResponse: Decodable, Sendable {
+    var status: String
+    var channelId: String
+    var activeSetId: String?
+    var sets: [SevenTvSetSummary]
+}
+
+struct SeventvHttpLiveResponse: Decodable, Sendable {
+    var status: String
+    var channelId: String
+    var activeSetId: String?
+}
+
+struct SevenTvSet: Decodable, Sendable {
+    var id: String
+    var name: String
+    var capacity: Int?
+    var count: Int?
+    var ownerId: String?
+    var live: Bool?
+}
+
+struct SevenTvSetEmote: Decodable, Sendable {
+    var emoteId: String
+    /// its name in this set
+    var alias: String
+    /// its own 7TV name
+    var name: String
+    var renamed: Bool
+    var animated: Bool
+    var previewUrl: String?
+    var fileUrl: String?
+    var addedAt: Int?
+}
+
+struct SeventvHttpSetResponse: Decodable, Sendable {
+    var status: String
+    var set: SevenTvSet
+    var page: Int
+    var hasMore: Bool
+    var emotes: [SevenTvSetEmote]
+}
+
+struct SeventvHttpCreateSetResponse: Decodable, Sendable {
+    var status: String
+    var set: SevenTvSet
+}
+
+struct SeventvHttpRenameSetResponse: Decodable, Sendable {
+    var status: String
+    var set: SevenTvSet
+}
+
+struct SeventvHttpAddResponse: Decodable, Sendable {
+    var status: String
+    var setId: String
+    var emoteId: String
+    var alias: String?
+}
+
+struct SeventvHttpRenameResponse: Decodable, Sendable {
+    var status: String
+    var setId: String
+    var emoteId: String
+    var alias: String
+}
+
+struct SeventvHttpRemoveResponse: Decodable, Sendable {
+    var status: String
+    var setId: String
+    var emoteId: String
+    var removed: Bool
 }
 
 struct McpSettingsResponseLink: Decodable, Sendable {

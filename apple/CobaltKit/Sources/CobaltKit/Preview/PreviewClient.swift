@@ -207,6 +207,8 @@ public struct PreviewClient: CobaltClient {
     let accountState = PreviewAccountState()
     /// The post details the "server" holds and Harmony's edits of them (`PreviewPostFrame.swift`).
     let postFrameState = PreviewPostFrameState()
+    /// The linked 7TV account, its channels and their sets (`PreviewSevenTv.swift`).
+    let sevenTvState = PreviewSevenTvState()
 
     public var baseURL: URL { PreviewData.base }
 

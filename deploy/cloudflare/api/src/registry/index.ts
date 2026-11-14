@@ -22,6 +22,7 @@ import { MCP_OPS } from "./ops/mcp";
 import { NAMES_OPS } from "./ops/names";
 import { PRIVATE_OPS } from "./ops/private";
 import { SHARE_OPS } from "./ops/share";
+import { SEVENTV_OPS } from "./ops/seventv";
 import { STAGE_OPS } from "./ops/stage";
 import { SYSTEM_OPS } from "./ops/system";
 import { Registry } from "./registry";
@@ -45,6 +46,7 @@ export const REGISTRY = new Registry([
     ...HIDDEN_OPS,
     ...NAMES_OPS,
     ...STAGE_OPS,
+    ...SEVENTV_OPS,
     ...BOX_OPS,
     ...YTDLP_OPS,
     ...FRAME_OPS,

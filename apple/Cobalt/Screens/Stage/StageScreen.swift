@@ -148,6 +148,7 @@ private struct StageBody: View {
                 ScrollView {
                     VStack(spacing: 14) {
                         StageTwitchCard(model: model, stage: stage, controller: controller)
+                        StageSevenTvCard(model: model)
                         StageRewardsCard(store: store, controller: controller)
                         StageFeedCard(store: store)
                         StageLinksCard(stage: stage, controller: controller)
@@ -195,6 +196,7 @@ private struct StageBody: View {
         switch controller.panel {
         case .rewards:
             StageTwitchCard(model: model, stage: stage, controller: controller)
+            StageSevenTvCard(model: model)
             StageRewardsCard(store: store, controller: controller)
         case .feed:
             StageFeedCard(store: store)

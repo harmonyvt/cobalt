@@ -59,6 +59,830 @@
         }
       }
     },
+    "/7tv": {
+      "get": {
+        "operationId": "seventv_http.status",
+        "summary": "The linked 7TV account and the channels it can edit (GET /7tv).",
+        "tags": [
+          "seventv_http"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "linked": {
+                      "type": "boolean"
+                    },
+                    "account": {
+                      "$ref": "#/components/schemas/SevenTvAccount"
+                    },
+                    "channels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SevenTvChannel"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "linked"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "seventv_http.unlink",
+        "summary": "Forget the 7TV token (DELETE /7tv).",
+        "tags": [
+          "seventv_http"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/channels/{id}/live": {
+      "post": {
+        "operationId": "seventv_http.live",
+        "summary": "Make an emote set the channel's live set (POST /7tv/channels/<id>/live).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "set_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "set_id"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "channel_id": {
+                      "type": "string"
+                    },
+                    "active_set_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "channel_id",
+                    "active_set_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/channels/{id}/sets": {
+      "get": {
+        "operationId": "seventv_http.sets",
+        "summary": "A channel's emote sets, live first (GET /7tv/channels/<id>/sets).",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "channel_id": {
+                      "type": "string"
+                    },
+                    "active_set_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "sets": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SevenTvSetSummary"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "channel_id",
+                    "active_set_id",
+                    "sets"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/link": {
+      "post": {
+        "operationId": "seventv_http.link",
+        "summary": "Link a 7TV account with its session token from 7tv.app (POST /7tv/link).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "maxLength": 8192
+                  }
+                },
+                "required": [
+                  "token"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "linked": {
+                      "type": "boolean"
+                    },
+                    "account": {
+                      "$ref": "#/components/schemas/SevenTvAccount"
+                    },
+                    "channels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SevenTvChannel"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "linked"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/sets": {
+      "post": {
+        "operationId": "seventv_http.create_set",
+        "summary": "Make a new emote set on a channel (POST /7tv/sets).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "owner_id": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 400
+                  }
+                },
+                "required": [
+                  "owner_id",
+                  "name"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set": {
+                      "$ref": "#/components/schemas/SevenTvSet"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/sets/{id}": {
+      "get": {
+        "operationId": "seventv_http.set",
+        "summary": "An emote set and a page of its emotes (GET /7tv/sets/<id>?q=&page=).",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set": {
+                      "$ref": "#/components/schemas/SevenTvSet"
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    },
+                    "emotes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SevenTvSetEmote"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set",
+                    "page",
+                    "has_more",
+                    "emotes"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "patch": {
+        "operationId": "seventv_http.rename_set",
+        "summary": "Rename an emote set (PATCH /7tv/sets/<id>).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 400
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set": {
+                      "$ref": "#/components/schemas/SevenTvSet"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/sets/{id}/emotes": {
+      "post": {
+        "operationId": "seventv_http.add",
+        "summary": "Add a 7TV emote to a set (POST /7tv/sets/<id>/emotes).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "emote_id": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "alias": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 400
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "override_conflicts": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "emote_id"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set_id": {
+                      "type": "string"
+                    },
+                    "emote_id": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set_id",
+                    "emote_id",
+                    "alias"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/sets/{id}/emotes/{emote}": {
+      "patch": {
+        "operationId": "seventv_http.rename",
+        "summary": "Rename an emote in a set (PATCH /7tv/sets/<id>/emotes/<emote>).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "alias": {
+                    "type": "string",
+                    "maxLength": 400
+                  },
+                  "from": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 400
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "alias"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          },
+          {
+            "name": "emote",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set_id": {
+                      "type": "string"
+                    },
+                    "emote_id": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set_id",
+                    "emote_id",
+                    "alias"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "seventv_http.remove",
+        "summary": "Remove an emote from a set (DELETE /7tv/sets/<id>/emotes/<emote>?alias=).",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          },
+          {
+            "name": "emote",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set_id": {
+                      "type": "string"
+                    },
+                    "emote_id": {
+                      "type": "string"
+                    },
+                    "removed": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set_id",
+                    "emote_id",
+                    "removed"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/auth/exchange": {
       "post": {
         "operationId": "auth.exchange",
@@ -8436,6 +9260,238 @@
           "embedded",
           "created_at",
           "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linked_at": {
+            "type": "integer"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "relink"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "avatar_url",
+          "linked_at",
+          "expires_at",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvChannel": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "you": {
+            "type": "boolean",
+            "description": "the linked account's own channel"
+          },
+          "active_set_id": {
+            "description": "the live emote set",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "can": {
+            "type": "object",
+            "properties": {
+              "manage_sets": {
+                "type": "boolean"
+              },
+              "create_sets": {
+                "type": "boolean"
+              },
+              "make_live": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "manage_sets",
+              "create_sets",
+              "make_live"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "avatar_url",
+          "you",
+          "active_set_id",
+          "can"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvSet": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "capacity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "count": {
+            "type": "integer"
+          },
+          "owner_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "live": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "capacity"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvSetEmote": {
+        "type": "object",
+        "properties": {
+          "emote_id": {
+            "type": "string"
+          },
+          "alias": {
+            "type": "string",
+            "description": "its name in this set"
+          },
+          "name": {
+            "type": "string",
+            "description": "its own 7TV name"
+          },
+          "renamed": {
+            "type": "boolean"
+          },
+          "animated": {
+            "type": "boolean"
+          },
+          "preview_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "added_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "emote_id",
+          "alias",
+          "name",
+          "renamed",
+          "animated",
+          "preview_url",
+          "file_url",
+          "added_at"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvSetSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "capacity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "count": {
+            "type": "integer"
+          },
+          "live": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "capacity",
+          "count",
+          "live"
         ],
         "additionalProperties": false
       },
