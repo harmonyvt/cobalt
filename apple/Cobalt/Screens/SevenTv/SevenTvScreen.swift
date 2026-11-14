@@ -459,37 +459,40 @@ private struct SevenTvNotLinkedPage: View {
     private var store: SevenTvStore { tab.store }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            StageCard(title: Copy.SevenTv.title) {
-                Text(Copy.SevenTv.tabNotLinkedBody)
-                    .font(CobaltType.caption)
-                    .foregroundStyle(CobaltColor.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button(store.linking ? Copy.SevenTv.linking : Copy.SevenTv.link, systemImage: Symbol.SevenTv.link) {
-                    tab.card.linkShown = true
+        // A scroll view with a bounded search grid: an unbounded grid (maxGridHeight .infinity) made the Mac window's content
+        // taller than the window, pushing the whole page off screen (a blank tab).
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                StageCard(title: Copy.SevenTv.title) {
+                    Text(Copy.SevenTv.tabNotLinkedBody)
+                        .font(CobaltType.caption)
+                        .foregroundStyle(CobaltColor.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(store.linking ? Copy.SevenTv.linking : Copy.SevenTv.link, systemImage: Symbol.SevenTv.link) {
+                        tab.card.linkShown = true
+                    }
+                    .buttonStyle(.cobaltPrimary(compact: true))
+                    .disabled(store.linking)
                 }
-                .buttonStyle(.cobaltPrimary(compact: true))
-                .disabled(store.linking)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(Copy.SevenTv.withoutLinking)
+                        .font(CobaltType.captionSmall)
+                        .foregroundStyle(CobaltColor.caption)
+                        .accessibilityAddTraits(.isHeader)
+                    Text(Copy.SevenTv.browseBody)
+                        .font(CobaltType.caption)
+                        .foregroundStyle(CobaltColor.text)
+                }
+                EmoteSearchCard(model: tab.model, maxGridHeight: 480)
+                    .padding(14)
+                    .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(Copy.SevenTv.withoutLinking)
-                    .font(CobaltType.captionSmall)
-                    .foregroundStyle(CobaltColor.caption)
-                    .accessibilityAddTraits(.isHeader)
-                Text(Copy.SevenTv.browseBody)
-                    .font(CobaltType.caption)
-                    .foregroundStyle(CobaltColor.text)
-            }
-            EmoteSearchCard(model: tab.model, maxGridHeight: .infinity)
-                .padding(14)
-                .frame(maxHeight: .infinity, alignment: .top)
-                .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, Metrics.gutter)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
+            .frame(maxWidth: Metrics.columnMax)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
-        .padding(.horizontal, Metrics.gutter)
-        .padding(.top, 8)
-        .padding(.bottom, 12)
-        .frame(maxWidth: Metrics.columnMax)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
