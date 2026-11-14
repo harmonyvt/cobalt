@@ -98,6 +98,13 @@ extension HTTPCobaltClient: SevenTvClient {
         return try sevenTvAnswer(SevenTvUploadList.self, data, http).uploads
     }
 
+    public func sevenTvOwned() async throws -> SevenTvOwnedList {
+        let req = try makeRequest("GET", SevenTvRoute.owned, keyed: true, timeout: 20)
+        let answer = try await sevenTvRead(SevenTvOwnedList.self, req)
+        await EmoteCache.shared.prefetch(answer.emotes.compactMap(\.previewURL))
+        return answer
+    }
+
     public func sevenTvEmote(id: String) async throws -> SevenTvEmoteInfo {
         let req = try makeRequest("GET", SevenTvRoute.emoteInfo(id), keyed: true, timeout: 20)
         let (data, http) = try await send(req)

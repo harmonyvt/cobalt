@@ -51,6 +51,11 @@ public final class SevenTvStore {
     public internal(set) var uploadInfo: [String: SevenTvEmoteInfo] = [:]
     /// Uploads 7TV answered 404 for.
     public internal(set) var goneUploads: Set<String> = []
+    /// Every emote the account owns (`GET /7tv/owned`, newest first, 57.14; `SevenTvStore+Owned.swift`), and how many it owns in
+    /// all (the server lists at most 500).
+    public internal(set) var owned: [SevenTvOwnedEmote] = []
+    public internal(set) var ownedTotal = 0
+    public internal(set) var ownedState: State = .idle
     /// The current link came from the app's own sign-in sheet (57.12), so it is capystore's own 7TV session and unlinking
     /// ends it (`DELETE /7tv?logout=1`). A pasted or bookmarked token is the browser's session: unlink leaves it alone.
     /// Kept in the app group's defaults; cleared with the link.
@@ -381,5 +386,8 @@ public final class SevenTvStore {
         uploadsState = .idle
         uploadInfo = [:]
         goneUploads = []
+        owned = []
+        ownedTotal = 0
+        ownedState = .idle
     }
 }

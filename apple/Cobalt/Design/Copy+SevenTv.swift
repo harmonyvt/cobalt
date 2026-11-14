@@ -259,6 +259,56 @@ extension Copy {
             return f.localizedString(for: min(date, now), relativeTo: now)
         }
 
+        // MARK: your emotes on 7tv (57.14)
+
+        static let ownedTitle = "your emotes on 7tv"
+        static func ownedCount(_ shown: Int, total: Int) -> String {
+            if total > shown { return "showing \(shown) of \(total)" }
+            return total == 1 ? "1 emote" : "\(total) emotes"
+        }
+        static let noOwned = "no emotes on your 7tv account yet"
+        static let processingOn7tv = "processing on 7tv"
+        static let fromLibraryBadge = "from library"
+        static let privateMark = "private"
+        static let zeroWidthMark = "zero-width"
+        static func ownedLine(fromLibrary: Bool, ago: String?) -> String {
+            switch (fromLibrary, ago) {
+            case let (true, ago?): return "uploaded here · \(ago)"
+            case (true, nil): return "uploaded here"
+            case let (false, ago?): return "made on 7tv.app · \(ago)"
+            case (false, nil): return "made on 7tv.app"
+            }
+        }
+        static func ownedRowA11y(_ name: String, pending: Bool, fromLibrary: Bool, isPrivate: Bool, zeroWidth: Bool) -> String {
+            var parts = [name]
+            if pending { parts.append(processingOn7tv) }
+            if fromLibrary { parts.append("from your library") }
+            if isPrivate { parts.append(privateMark) }
+            if zeroWidth { parts.append(zeroWidthMark) }
+            return parts.joined(separator: ", ")
+        }
+
+        // MARK: add to a set (57.14)
+
+        static let addToSetAction = "add to a set…"
+        static let addToSetTitle = "add to a set"
+        static func addToSetFor(_ name: String) -> String { "put \(name) in any set of a channel you edit" }
+        static let addToSetStays = "stays open · add it to as many sets as you like"
+        static let addToSetPrivate = "a private emote only goes into your own channel's sets"
+        static let addToSetPending = "still processing on 7tv · it can go in a set already"
+        static let addToSetNoSets = "no sets in this channel yet · make one in the sets part first"
+        static let fullPill = "full"
+        static let inSetPill = "in this set"
+        static let addButton = "add"
+        static func addToSetRowA11y(_ name: String, count: Int, capacity: Int?, live: Bool, full: Bool, inSet: Bool) -> String {
+            var line = setA11y(name, count: count, capacity: capacity, live: live)
+            if full { line += ", full" }
+            if inSet { line += ", already has it" }
+            return line
+        }
+        static func addedToSetOn(set: String, channel: String) -> String { "added to \(set) on \(channel)" }
+        static func alreadyInSet(_ set: String) -> String { "\(set) already has it" }
+
         // the Mac's middle column
         static let more = "more"
         static let searchSevenTv = "search 7tv"

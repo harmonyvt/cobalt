@@ -181,6 +181,7 @@ public final class SevenTvUploadModel: Identifiable {
             return
         }
         store.noteUploaded(answer, fileID: fileID)       // the upload stands even when the sheet closed meanwhile
+        store.noteOwnedUploaded(answer, fileID: fileID)
         guard mine == token else { return }
         result = answer
         if let added = answer.added, let channelID {
@@ -220,6 +221,19 @@ public final class SevenTvUploadModel: Identifiable {
         guard mine == token else { return }
         timedOut = true
         phase = .done
+    }
+
+    /// "add to a set…" for the emote this upload made (57.14): known as soon as the upload answered, while 7TV is still processing
+    /// it too. Nil before that.
+    public func addToSetPicker(setModel: (@MainActor (String, String) -> SevenTvSetModel)? = nil) -> SevenTvAddToSetModel? {
+        guard let result else { return nil }
+        let hit = EmoteHit(
+            id: result.emoteID, name: result.name, animated: emote?.animated ?? true,
+            previewURL: emote?.previewURL ?? SevenTvEmoteRule.cdnURL(result.emoteID, size: "2x"),
+            fileURL: emote?.fileURL ?? SevenTvEmoteRule.cdnURL(result.emoteID, size: "4x"))
+        return store.addToSetPicker(
+            emote: hit, isPrivate: isPrivate, pending: emote?.pending ?? result.pending,
+            alreadyIn: result.added.map { [$0.setID] } ?? [], setModel: setModel)
     }
 
     /// Back to the form after a refusal.

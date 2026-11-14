@@ -11,7 +11,10 @@ import Synchronization
 // size or a file id with "big" in it answers a plausible `fitted` (a 1200 x 1200 source, 48 frames); "tall" is a 1:36 picture
 // that needs a crop, "busy" is refused as busy and "broken" as a fit that failed. An add under a name the set already has
 // is `409 name_taken` with the emote holding it. `GET /7tv/uploads` starts with two uploads of the preview library's webps
-// (`liaSpin` processing, `coffeeLoop` done) and lists every upload made after.
+// (`liaSpin` processing, `coffeeLoop` done) and lists every upload made after. `GET /7tv/owned` (57.14) lists those with
+// their `file_id` and five more made on 7tv.app (no `file_id`: one pending, one private, one zero-width, one named like an emote `main` has) and every upload made
+// after, newest first; a pending emote has no pictures and can be put in a set at once. `.stageFail` (or the launch flag
+// `-previewSevenTvOwned fail`) cannot read the list, `-previewSevenTvOwned empty` is an account with none.
 
 extension PreviewData {
     static let sevenTvUserID = "01GB2S2BCR000AHHX5S1Y9TQW2"
@@ -70,6 +73,10 @@ final class PreviewSevenTvState: Sendable {
         var uploadReads: [String: Int] = [:]
         /// `GET /7tv/uploads`, newest first.
         var uploadRows: [SevenTvUploadedEmote] = []
+        /// Emotes made on 7tv.app (57.14): owned, with no library file. By id; `pending` ones turn ready after their first read
+        /// of `GET /7tv/owned`.
+        var madeOnSite: [String: SevenTvOwnedEmote] = [:]
+        var ownedReads = 0
     }
 
     private let state = Mutex(State())
@@ -92,7 +99,10 @@ final class PreviewSevenTvState: Sendable {
                 s.status = SevenTvStatus(linked: true, account: Self.account(now: now, status: .ok), channels: Self.channels())
             }
             s.sets = Self.sets(now: now)
-            if s.status.linked { Self.seedUploads(&s, now: now) }
+            if s.status.linked {
+                Self.seedUploads(&s, now: now)
+                Self.seedOwned(&s, now: now)
+            }
         }
     }
 
@@ -116,6 +126,30 @@ final class PreviewSevenTvState: Sendable {
             SevenTvUploadedEmote(
                 fileID: "PrEvIeWitem000008", emoteID: coffee, name: "coffeeLoop", createdAt: now.addingTimeInterval(-3 * 86_400)),
         ]
+    }
+
+    /// Five emotes made on 7tv.app (57.14): `coffeeSteam` (4 minutes ago, still processing, no pictures yet), `Clap` (6 days; the
+    /// name `main` already has), `peepoSpin` (12 days), `catBonk` (private, 20 days) and `ghostHat` (zero-width, a still, 31
+    /// days). No library file.
+    private static func seedOwned(_ s: inout State, now: Date) {
+        func made(_ id: String, _ name: String, picture: Int?, ago: TimeInterval, pending: Bool = false, animated: Bool = true,
+                  isPrivate: Bool = false, zeroWidth: Bool = false) -> SevenTvOwnedEmote {
+            SevenTvOwnedEmote(
+                emoteID: id, name: name, animated: animated, isPrivate: isPrivate, zeroWidth: zeroWidth, pending: pending,
+                previewURL: picture.map { PreviewData.sevenTvCDN(PreviewData.sevenTvEmoteID($0), "2x") },
+                fileURL: picture.map { PreviewData.sevenTvCDN(PreviewData.sevenTvEmoteID($0), "4x") },
+                createdAt: now.addingTimeInterval(-ago))
+        }
+        for e in [
+            made("01HV00000000000000000000A1", "coffeeSteam", picture: nil, ago: 240, pending: true),
+            made("01HV00000000000000000000A2", "peepoSpin", picture: 5, ago: 12 * 86_400),
+            made("01HV00000000000000000000A3", "catBonk", picture: 9, ago: 20 * 86_400, isPrivate: true),
+            made("01HV00000000000000000000A4", "ghostHat", picture: 16, ago: 31 * 86_400, animated: false, zeroWidth: true),
+            // the name of an emote `main` already has (adding it there is a name clash)
+            made("01HV00000000000000000000A5", "Clap", picture: 3, ago: 6 * 86_400),
+        ] {
+            s.madeOnSite[e.emoteID] = e
+        }
     }
 
     private static func account(now: Date, status: SevenTvUser.Status) -> SevenTvUser {
@@ -158,6 +192,8 @@ final class PreviewSevenTvState: Sendable {
             ],
             "01GD0000000000000000M0CH1V": [
                 make("01HM00000000000000M0CH1000", "mochi", 400, 18, owner: "01GD0000000000000000M0CH1V", live: true),
+                // a set with no room left (57.14: the picker dims it)
+                make("01HM00000000000000M0CH1T1N", "mochi tiny", 24, 24, owner: "01GD0000000000000000M0CH1V", live: false),
             ],
         ]
     }
@@ -274,7 +310,7 @@ final class PreviewSevenTvState: Sendable {
             }
             let names = PreviewData.sevenTvNames
             let known = (0..<names.count).first { PreviewData.sevenTvEmoteID($0) == emoteID }
-            let own = known.map { names[$0] } ?? s.uploads[emoteID]?.name ?? "emote"
+            let own = known.map { names[$0] } ?? s.uploads[emoteID]?.name ?? s.madeOnSite[emoteID]?.name ?? "emote"
             let name = alias ?? own
             guard SevenTvRule.cleanAlias(name) != nil else { throw SevenTvError.rejected("that name won't work") }
             var set = s.sets[channelID]![i]
@@ -401,6 +437,38 @@ final class PreviewSevenTvState: Sendable {
         }
     }
 
+    /// `GET /7tv/owned` (57.14): the uploads (with their library file) and what was made on 7tv.app, newest first. A pending
+    /// emote has no pictures; the first read after it is made says it is still pending, the next that it is done.
+    func ownedList() throws -> SevenTvOwnedList {
+        try state.withLock { s in
+            try Self.requireLinked(s)
+            s.ownedReads += 1
+            var rows: [SevenTvOwnedEmote] = []
+            for upload in s.uploadRows {
+                guard let info = s.uploads[upload.emoteID] else { continue }
+                // processing until the first read of `GET /7tv/emotes/<id>` (the upload screen's watch), as there
+                let pending = info.pending && s.uploadReads[upload.emoteID, default: 0] == 0
+                rows.append(
+                    SevenTvOwnedEmote(
+                        emoteID: info.emoteID, name: info.name, animated: info.animated, isPrivate: info.isPrivate,
+                        zeroWidth: info.zeroWidth, pending: pending, previewURL: pending ? nil : info.previewURL,
+                        fileURL: pending ? nil : info.fileURL, fileID: upload.fileID, createdAt: upload.createdAt))
+            }
+            for var e in s.madeOnSite.values {
+                if e.pending, s.ownedReads > 1 {
+                    // 7TV is done with it by the second read
+                    e.pending = false
+                    e.previewURL = PreviewData.sevenTvCDN(PreviewData.sevenTvEmoteID(11), "2x")
+                    e.fileURL = PreviewData.sevenTvCDN(PreviewData.sevenTvEmoteID(11), "4x")
+                    s.madeOnSite[e.emoteID] = e
+                }
+                rows.append(e)
+            }
+            rows.sort { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+            return SevenTvOwnedList(ownerID: PreviewData.sevenTvUserID, total: rows.count, emotes: Array(rows.prefix(500)))
+        }
+    }
+
     /// `GET /7tv/emotes/<id>`: an upload is pending on its first read, done after; the preview sets' emotes are done.
     func emote(id: String) throws -> SevenTvEmoteInfo {
         try state.withLock { s in
@@ -501,6 +569,15 @@ extension PreviewClient: SevenTvClient {
         try await sevenTvReady("POST upload \(draft.fileID)")
         try await clock.sleep(seconds: 1.0 * timeScale)
         return try sevenTvState.upload(draft, now: clock.now())
+    }
+
+    public func sevenTvOwned() async throws -> SevenTvOwnedList {
+        try await sevenTvReady("GET owned")
+        // `.stageFail`, or the launch flag `-previewSevenTvOwned fail`: 7TV does not answer; `empty`: an account with no emotes
+        let mode = UserDefaults.standard.string(forKey: "previewSevenTvOwned")
+        if scenario == .stageFail || mode == "fail" { throw SevenTvError.unavailable }
+        if mode == "empty" { return SevenTvOwnedList(ownerID: PreviewData.sevenTvUserID, total: 0, emotes: []) }
+        return try sevenTvState.ownedList()
     }
 
     public func sevenTvEmote(id: String) async throws -> SevenTvEmoteInfo {

@@ -58,8 +58,11 @@ struct SevenTvUploadSheet: View {
     let upload: SevenTvUploadModel
     /// The picture for "crop…"; nil hides it (the size row still shows).
     var picture: (@MainActor () async throws -> CGImage)? = nil
+    /// The 7tv tab's shared set models, for "add to a set…" (57.14); nil: the picker uses models of its own.
+    var setModels: (@MainActor (String, String) -> SevenTvSetModel)? = nil
 
     @State private var cropping = false
+    @State private var picker: SevenTvAddToSetModel?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.shell) private var shell
@@ -83,7 +86,7 @@ struct SevenTvUploadSheet: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 if showsResult {
-                    SevenTvUploadResultView(upload: upload) { dismiss() }
+                    SevenTvUploadResultView(upload: upload, addToSet: openPicker) { dismiss() }
                 } else {
                     SevenTvUploadForm(upload: upload, sending: sending, canCrop: picture != nil, crop: { cropping = true }, send: send)
                 }
@@ -110,7 +113,16 @@ struct SevenTvUploadSheet: View {
                 ImageCropSheet.sevenTv(upload: upload, load: picture) { cropping = false }
             }
         }
+        .sheet(item: $picker) { picker in
+            SevenTvAddToSetSheet(picker: picker)
+        }
         .onDisappear { upload.stop() }
+    }
+
+    /// "add to a set…": the emote this upload made, into any set of any channel the account edits (57.14).
+    private func openPicker() {
+        // the upload's own set is marked from the start; the tab's shared set models keep an open grid right
+        picker = upload.addToSetPicker(setModel: setModels)
     }
 
     private var header: some View {
@@ -393,6 +405,7 @@ private struct SevenTvUploadSetPicker: View {
 
 private struct SevenTvUploadResultView: View {
     let upload: SevenTvUploadModel
+    let addToSet: () -> Void
     let close: () -> Void
 
     @Environment(\.openURL) private var openURL
@@ -430,6 +443,10 @@ private struct SevenTvUploadResultView: View {
                 SevenTvUploadNote(
                     text: Copy.SevenTv.sentAs(width: fitted.width, height: fitted.height, frames: fitted.frames, bytes: fitted.bytes),
                     tint: CobaltColor.caption)
+            }
+            if upload.result != nil, !upload.channels.isEmpty {
+                Button(Copy.SevenTv.addToSetAction, systemImage: Symbol.SevenTv.addToSet, action: addToSet)
+                    .buttonStyle(.cobaltSecondary(compact: true))
             }
             buttons
         }
