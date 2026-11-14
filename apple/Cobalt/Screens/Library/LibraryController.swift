@@ -82,8 +82,37 @@ final class LibraryController {
     var opened: OpenedMedia? {
         didSet {
             guard opened?.id != oldValue?.id else { return }
-            if opened != nil { Breadcrumbs.add("detail.open") } else { Breadcrumbs.add("detail.close") }
+            if opened != nil { Breadcrumbs.add("detail.open") } else { Breadcrumbs.add("detail.close"); checkStackSoon() }
         }
+    }
+
+    // MARK: the stuck zoom back (owner, 2026-11-14)
+
+    /// Bumped to rebuild the phone's navigation stack from scratch.
+    private(set) var stackID = 0
+    #if os(iOS)
+    /// A plain view inside the library's own content: in a window whenever the grid really is on screen.
+    @ObservationIgnored weak var anchor: UIView?
+    #endif
+    @ObservationIgnored private var stackCheck: Task<Void, Never>?
+
+    /// iOS 26's zoom back from a playing video, after an edge swipe, can finish with the library's view left out of the
+    /// navigation controller: SwiftUI reports the pop done (the grid "appears", `opened` is nil) while the screen keeps
+    /// the transition's last picture and the detail's bar, and no tap reaches the grid (8.13 tap probe: taps land on an
+    /// empty `UIViewControllerWrapperView`). A moment after the grid should be back, if its anchor has no window while
+    /// the library tab is showing, the stack is rebuilt.
+    func checkStackSoon() {
+        #if os(iOS)
+        stackCheck?.cancel()
+        stackCheck = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled, let self else { return }
+            guard self.opened == nil, self.model.selectedTab == .library,
+                  let anchor = self.anchor, anchor.window == nil else { return }
+            Breadcrumbs.add("library.unstuck")
+            self.stackID += 1
+        }
+        #endif
     }
     /// The row the inspector shows (iPad, Mac).
     var selection: String?

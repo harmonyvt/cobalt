@@ -29,6 +29,8 @@ struct LibraryScreen: View {
             #if os(iOS)
             // Always its own stack (the shell adds none), so the tier never changes this screen's identity.
             NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
+                // rebuilt when the zoom back from a video leaves the grid out of the stack (LibraryController.checkStackSoon)
+                .id(controller.stackID)
             #else
             if tier == .compact {
                 NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
@@ -301,7 +303,13 @@ private struct LibraryContent: View {
             .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
             .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
             // the freeze hunt (owner, 2026-11-14): the grid is back on screen after a detail
-            .onAppear { Breadcrumbs.add("library.appear") }
+            .onAppear {
+                Breadcrumbs.add("library.appear")
+                controller.checkStackSoon()
+            }
+            #if os(iOS)
+            .background(LibraryAnchor(controller: controller))
+            #endif
             .onDisappear { Breadcrumbs.add("library.disappear") }
             .modifier(LibrarySkyMapPresenter(model: model, controller: controller))
             .modifier(NamesPresenter(model: model))
@@ -1024,3 +1032,23 @@ private struct LibraryClickRows: ViewModifier {
         content.onChange(of: rows, initial: true) { controller.shownRows = rows }
     }
 }
+
+#if os(iOS)
+/// A plain, untouchable view inside the library's content, so the controller can tell whether the grid really is in a
+/// window (the stuck zoom back, `LibraryController.checkStackSoon`).
+private struct LibraryAnchor: UIViewRepresentable {
+    let controller: LibraryController
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        controller.anchor = view
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        controller.anchor = view
+    }
+}
+#endif
