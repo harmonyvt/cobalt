@@ -50,6 +50,37 @@ const getNumberFromQuery = (name, data) => {
     if (+s) return +s;
 }
 
+const decodeEntities = (str) => str
+    .replace(/&amp;/g, '&')
+    .replace(/&#x?([0-9a-f]+);/gi, (match, code) => {
+        const n = parseInt(code, match.startsWith('&#x') ? 16 : 10);
+        return Number.isFinite(n) ? String.fromCodePoint(n) : match;
+    });
+
+// the largest picture of an embed page's EmbeddedMediaImage (srcset, else src)
+export const embedPhotoURL = (html) => {
+    const tag = html?.match(/<img[^>]*class="[^"]*EmbeddedMediaImage[^"]*"[^>]*>/)?.[0];
+    if (!tag) return;
+
+    const attr = (name) => {
+        const value = tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1];
+        return value && decodeEntities(value);
+    }
+
+    let best, bestWidth = -1;
+    for (const entry of (attr('srcset') || '').split(',')) {
+        const [url, size] = entry.trim().split(/\s+/);
+        const width = parseInt(size) || 0;
+        if (url && width > bestWidth) {
+            best = url;
+            bestWidth = width;
+        }
+    }
+
+    const url = best || attr('src');
+    if (url?.startsWith('https://')) return url;
+}
+
 const getObjectFromEntries = (name, data) => {
     const obj = data?.match(new RegExp('\\["' + name + '",.*?,({.*?}),\\d+\\]'))?.[1];
     return obj && JSON.parse(obj);
@@ -144,9 +175,16 @@ export default function instagram(obj) {
             dispatcher
         }).then(r => r.text()).catch(() => {});
 
-        let embedData = JSON.parse(data?.match(/"init",\[\],\[(.*?)\]\],/)[1]);
+        const init = data?.match(/"init",\[\],\[(.*?)\]\],/)?.[1];
+        let embedData = init && JSON.parse(init);
 
-        if (!embedData || !embedData?.contextJSON) return false;
+        // a plain picture post's embed has no context json, but its
+        // page still shows the full-size picture in an <img>
+        if (!embedData?.contextJSON) {
+            // a carousel is left to the lookups after this one
+            const url = !embedData?.isSidecar && embedPhotoURL(data);
+            return url ? { embed_photo: url } : false;
+        }
 
         embedData = JSON.parse(embedData.contextJSON);
 
@@ -414,9 +452,12 @@ export default function instagram(obj) {
     }
 
     async function getPost(id, alwaysProxy) {
+        // a graphql answer without data (a login wall) is no data either
         const hasData = (data) => data
-                                    && data.gql_data !== null
-                                    && data?.gql_data?.xdt_shortcode_media !== null;
+                                    && (!('gql_data' in data) || (
+                                        data.gql_data
+                                        && data.gql_data.xdt_shortcode_media !== null
+                                    ));
         let data, result;
         try {
             const cookie = getCookie('instagram');
@@ -449,7 +490,13 @@ export default function instagram(obj) {
             return getErrorContext(id);
         }
 
-        if (data?.gql_data) {
+        if (data?.embed_photo) {
+            result = {
+                urls: data.embed_photo,
+                isPhoto: true,
+                filename: `instagram_${id}.jpg`,
+            }
+        } else if (data?.gql_data) {
             result = extractOldPost(data, id, alwaysProxy)
         } else {
             result = extractNewPost(data, id, alwaysProxy)
