@@ -533,11 +533,14 @@ struct OfflineBadge: View {
     var style: Style = .tile
 
     var body: some View {
-        let mark = OfflineMark(item: item, model: model)
-        if model.store.canKeep, mark.isVisible {
-            switch style {
-            case .tile: tile(mark)
-            case .row: row(mark)
+        // `canKeep` first: without it the mark (and the download state it reads) is never needed
+        if model.store.canKeep {
+            let mark = OfflineMark(item: item, model: model)
+            if mark.isVisible {
+                switch style {
+                case .tile: tile(mark)
+                case .row: row(mark)
+                }
             }
         }
     }

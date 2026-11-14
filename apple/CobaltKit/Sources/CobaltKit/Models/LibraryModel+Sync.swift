@@ -13,10 +13,18 @@ extension LibraryModel {
     /// cursor's, not the library's, so a filter does not ask `GET /library` for the rest.
     func replaceFromSync(_ snapshot: SyncLibrarySnapshot, source: String) {
         let wasEmpty = posts.isEmpty
-        posts = snapshot.visible.filter { !$0.hidden }
+        let visible = snapshot.visible.filter { !$0.hidden }
         var seen = Set<String>()
         let album = snapshot.hidden + snapshot.visible.filter(\.hidden)
-        hiddenPosts = album.filter { seen.insert($0.id).inserted }
+        let hidden = album.filter { seen.insert($0.id).inserted }
+        // A publish that changes nothing writes nothing: every write here invalidates the whole library screen (its rows,
+        // the mosaic and each visible tile), and a sync pass publishes often, mid-scroll included (8.15, scroll jitter).
+        if !wasEmpty, visible == posts, hidden == hiddenPosts, !hasMore, !hiddenHasMore, cursor == nil, hiddenCursor == nil,
+            failure == nil, hiddenFailure == nil {
+            return
+        }
+        posts = visible
+        hiddenPosts = hidden
         postCount = posts.count
         fileCount = posts.reduce(0) { $0 + $1.files.count }
         hiddenCount = hiddenPosts.count

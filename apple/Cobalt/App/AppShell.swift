@@ -192,7 +192,9 @@ struct AppShell: View {
                 DebugHooks.log("AppShell .task")
                 #endif
                 #if os(iOS)
-                TouchProbe.install()
+                TouchProbe.install()                         // also feeds the frame monitor its touches
+                #else
+                FrameMonitor.install()
                 #endif
                 await model.foreground()
             }

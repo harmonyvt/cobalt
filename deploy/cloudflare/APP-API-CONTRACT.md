@@ -6654,7 +6654,7 @@ Sent after the answer through `background()`, 3 s timeout, never changing a resp
 | `$exception` | an `op` that answered 5xx or threw | the `op` properties + `$exception_list` (`OpFailed`, "<op> answered <status> <code>") |
 | `app_log` | `POST /telemetry`: warn and error lines only | `level`, `cat`, `msg`, `data_<key>`, `platform`, `app_version`, `app_build`, `os_version`, `device`, `process`, `install` |
 | `$exception` | `POST /telemetry` crashes | `crash_kind`, `$exception_list` (kind, summary), `$exception_level` fatal for `crash` |
-| `cron_run` | each scheduled trigger | `job` (every-15-min, daily), `cron`, `ms`, `ok` |
+| `cron_run` | each scheduled trigger | `job` (every-15-min, daily), `cron`, `ms`, `ok`, and `<step>_ms` for each step the 15-minute run reached (`sync`, `edits`, `captions`, `titles`, `about_kick`, `transcripts`, `about`, `safety_kick`, `safety`, `hidden`, `post_details`, `space_wake`, `names`, `index`, `moments`, `terms`) |
 
 Public hosts (share, stage, studio pages) send only their 5xx; `/telemetry` itself is never an `op` event. Never sent:
 keys, request bodies, saved links, file contents, chat text, tool inputs.
@@ -6672,4 +6672,19 @@ the server's `op` events. Ids that are not UUIDs are dropped. Chat and MCP calls
 when the server names a project and "send crash reports and logs" is on; identifies as `owner`. iPhone and iPad record
 session replays (screenshot mode, `maskAllImages`, `maskAllTextInputs`) unless "record sessions" is off; the Mac sends
 events only (PostHog has no Mac replay). Every view that draws media wears `.mediaMask()` (`Cobalt/Shared/MediaMask.swift`,
-`postHogMask()` on iOS). Tabs are `$screen` events.
+`postHogMask()` on iOS). Tabs, and the library's detail page (`library.detail`), are `$screen` events and the `screen`
+super property on every later event.
+
+App events (all flat, never titles, text or links):
+
+| event | when | properties |
+|---|---|---|
+| `step` | a breadcrumb (detail open/close, video ready/failed, tab, `library.unstuck`) | `step` and the step's own values |
+| `tap_probe` | a short tap (iOS) | `hit`, `under`, `x`, `y`, `breadcrumbs`, `dead` |
+| `frames` | one stretch of interaction: a touch (iOS) or scroll/click (Mac) until 1.6 s after it ends (0.6 s after a Mac scroll) | `screen`, `to` (when it changed), `kind` (tap, scroll, swipe), `frames`, `hitches`, `severe` (frames of 50 ms or more), `hitch_ms`, `hitch_ratio` (ms/s), `worst_ms`, `span_ms`, `hz`, `fps`, `move`, `thermal`, `low_power`, `breadcrumbs` (worst frame 100 ms or more) |
+| `frame_hang` | a single frame of 250 ms or more (at most 3 per stretch) | `ms`, `screen`, `breadcrumbs` |
+| `daily_metrics` | MetricKit's daily payload | `scroll_hitch_ratio` (iOS), `launch_ms`/`_n`, `resume_ms`/`_n`, `hang_ms`/`_n`, `cpu_s`, `gpu_s`, `peak_mb`, `foreground_s`, `version`, `build`, `hours` |
+
+A hitch is a frame more than half a refresh late; hitch ratio is hitch time per second (Apple's measure: under 5 smooth,
+5 to 10 noticeable, over 10 bad). The frame monitor (`Cobalt/App/FrameMonitor.swift`) runs a display link only during a
+stretch, so an untouched app pays nothing.

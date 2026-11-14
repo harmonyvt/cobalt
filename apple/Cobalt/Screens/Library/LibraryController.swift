@@ -82,7 +82,14 @@ final class LibraryController {
     var opened: OpenedMedia? {
         didSet {
             guard opened?.id != oldValue?.id else { return }
-            if opened != nil { Breadcrumbs.add("detail.open") } else { Breadcrumbs.add("detail.close"); checkStackSoon() }
+            if opened != nil {
+                Breadcrumbs.add("detail.open")
+                Analytics.screen("library.detail")
+            } else {
+                Breadcrumbs.add("detail.close")
+                if model.selectedTab == .library { Analytics.screen("library") }
+                checkStackSoon()
+            }
         }
     }
 

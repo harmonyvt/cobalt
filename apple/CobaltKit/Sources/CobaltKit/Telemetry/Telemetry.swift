@@ -56,6 +56,10 @@ public enum Telemetry {
     /// Set by the app: told when a new crash record lands, so it can upload soon. Called on whatever queue
     /// MetricKit used, so it must be `@Sendable` and never assume the main actor.
     nonisolated(unsafe) static var crashIngested: (@Sendable () -> Void)?
+
+    /// Set by the app: MetricKit's daily averages (scroll hitch ratio, launch, hangs, CPU, memory) as flat values, so the
+    /// app can send them on to analytics. Called on MetricKit's own queue; must be `@Sendable` and hop by itself.
+    nonisolated(unsafe) public static var metricsDelivered: (@Sendable ([String: TelemetryValue]) -> Void)?
 }
 
 /// The buffer, the crash records and the files around them, for one process.
@@ -177,6 +181,17 @@ final class MetricKitSubscriber: NSObject, MXMetricManagerSubscriber, @unchecked
     init(runtime: TelemetryRuntime) {
         self.runtime = runtime
         super.init()
+    }
+
+    /// The daily metrics (a day late at worst): one `ui` "daily metrics" log line per payload, and the same values to
+    /// `Telemetry.metricsDelivered`.
+    func didReceive(_ payloads: [MXMetricPayload]) {
+        for payload in payloads {
+            let data = MetricSummary.values(payload)
+            guard !data.isEmpty else { continue }
+            Telemetry.log(.info, .ui, "daily metrics", data: data)
+            Telemetry.metricsDelivered?(data)
+        }
     }
 
     func didReceive(_ payloads: [MXDiagnosticPayload]) {

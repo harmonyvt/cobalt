@@ -511,19 +511,32 @@ export default {
     async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
         // section 58: one PostHog `cron_run` per trigger, whatever happens inside it
         const started = Date.now();
+        const laps: Record<string, number> = {};
         let ok = true;
         try {
-            await runScheduled(controller, env, ctx);
+            await runScheduled(controller, env, ctx, laps);
         } catch (e) {
             ok = false;
             throw e;
         } finally {
-            await capture(env, (p) => ctx.waitUntil(p), [cronEvent(controller.cron === SEARCH_CRON ? "every-15-min" : "daily", Date.now(), Date.now() - started, ok, { cron: controller.cron })]);
+            await capture(env, (p) => ctx.waitUntil(p), [cronEvent(controller.cron === SEARCH_CRON ? "every-15-min" : "daily", Date.now(), Date.now() - started, ok, { cron: controller.cron, ...laps })]);
         }
     },
 } satisfies ExportedHandler<Env>;
 
-async function runScheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+async function runScheduled(
+    controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+    laps: Record<string, number> = {},
+): Promise<void> {
+    // section 58: how long each step of the run took (`<step>_ms` on the `cron_run` event), so a slow run names its step
+    let lapStart = Date.now();
+    const lap = (name: string) => {
+        const now = Date.now();
+        laps[`${name}_ms`] = now - lapStart;
+        lapStart = now;
+    };
     {
         // Every 15 minutes (the second trigger): the library search indexer drains its queue for up to
         // SEARCH_RUN_BUDGET_MS (APP-API-CONTRACT.md sections 21 and 23). D1 and the Hugging Face Space
@@ -536,6 +549,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
             } catch (e) {
                 console.error("[sync] maintenance failed", e instanceof Error ? e.message.slice(0, 200) : "error");
             }
+            lap("sync");
             // Editor (section 31.9): re-queue renders whose renderer went away, and kick both instances when anything is
             // queued. D1 only unless there is work; an owner without migration 0021 just logs.
             if (env.EDIT_RENDERER) {
@@ -550,6 +564,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
                 } catch (e) {
                     console.error("[edits] recover failed", e instanceof Error ? e.name : "error");
                 }
+                lap("edits");
             }
             // Roast captions (section 25): new public files and gallery links, and the backfill. Anthropic
             // and D1 only; up to ROAST_RUN_BUDGET_MS, then the search indexer below.
@@ -568,6 +583,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
                 } catch (e) {
                     console.error("[roast] backfill failed", e instanceof Error ? e.name : "error");
                 }
+                lap("captions");
             }
             // AI video titles (section 53): new public videos and the backlog. OpenRouter and D1 only; up to
             // AI_TITLE_RUN_BUDGET_MS. Before migration 0037 it just logs.
@@ -579,6 +595,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
                 } catch (e) {
                     console.error("[titles] run failed", e instanceof Error ? e.message.slice(0, 200) : "error");
                 }
+                lap("titles");
             }
             const client = embedFrom(env);
             // "What it's about" (section 34): with search on and the Anthropic key. The kick brings the rows up to date and
@@ -595,6 +612,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
                 } catch (e) {
                     console.error("[about] kick failed", e instanceof Error ? e.name : "error");
                 }
+                lap("about_kick");
                 // Timed transcripts (section 47): the probes' sound heard with the time of every word (and every post heard
                 // before this section heard again), before the writer, which then reuses the words.
                 const transcriber = transcriberFrom(env.AI, env.TRANSCRIBE_MODEL);
@@ -605,6 +623,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
                     } catch (e) {
                         console.error("[transcript] pass failed", e instanceof Error ? e.message.slice(0, 200) : "error");
                     }
+                    lap("transcripts");
                 }
                 try {
                     const r = await writeAbouts({
@@ -621,6 +640,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
                 } catch (e) {
                     console.error("[about] words failed", e instanceof Error ? e.name : "error");
                 }
+                lap("about");
             }
             // Safety clips and Clef ratings (section 51). The kick only writes records; the sweep cuts the clip.
             // New files and the pilot list, unless SAFETY_BACKFILL=1. Clef runs here, on the Workers AI binding.
@@ -636,6 +656,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
             } catch (e) {
                 console.error("[safety] kick failed", e instanceof Error ? e.name : "error");
             }
+            lap("safety_kick");
             if (env.AI) {
                 try {
                     const r = await rateSafety({ db: env.DB, originals: env.ORIGINALS, ai: env.AI, now: () => Date.now(), cfg: safetyCfg });
@@ -643,6 +664,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
                 } catch (e) {
                     console.error("[safety] rate failed", e instanceof Error ? e.name : "error");
                 }
+                lap("safety");
             }
             // Hidden posts (section 37.3): saves held for an about rule are hidden or published once their words are
             // written (at once while "what it's about" is off; at the latest an hour after they were held). D1 and R2.
@@ -661,6 +683,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
             } catch (e) {
                 console.error("[hidden] held failed", e instanceof Error ? e.name : "error");
             }
+            lap("hidden");
             // Post frames (section 52.1): the details of new saves, looked up while the post is still there. D1, the
             // yt-dlp box (only when there is a new save) and the sites' public lookups.
             try {
@@ -669,11 +692,13 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
             } catch (e) {
                 console.error("[post] details failed", e instanceof Error ? e.name : "error");
             }
+            lap("post_details");
             if (!client) return;
             // Keep the Space awake: a free Space sleeps after 48 h without traffic, a sleeping one answers the
             // indexer's POSTs at once without waking, and a search would then wait while it boots. A GET every
             // run is traffic (and wakes it if it slept anyway). Under a second when it is up.
             if (client.wake && !(await client.wake(SPACE_WAKE_MS))) console.log("[search] space did not answer its wake-up");
+            lap("space_wake");
             // Search names (section 48.2): meanings embedded, then every name's point rewritten. D1 and the Space.
             try {
                 const r = await refreshNames({ db: env.DB, client, now: () => Date.now() });
@@ -681,6 +706,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
             } catch (e) {
                 console.error("[names] refresh failed", e instanceof Error ? e.name : "error");
             }
+            lap("names");
             let indexed = 0;
             try {
                 const r = await drainIndexer({
@@ -697,6 +723,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
             } catch (e) {
                 console.error("[search] index failed", e instanceof Error ? e.name : "error");
             }
+            lap("index");
             // Moments (section 47.4): a vector for each stretch of speech, so a search finds the moment.
             try {
                 const m = await indexMoments({ db: env.DB, client, now: () => Date.now(), budgetMs: MOMENTS_RUN_BUDGET_MS });
@@ -704,6 +731,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
             } catch (e) {
                 console.error("[moments] index failed", e instanceof Error ? e.message.slice(0, 200) : "error");
             }
+            lap("moments");
             // The word list (section 34.5): new terms embedded in query mode, and every term's average after posts moved.
             try {
                 const t = await indexTerms({ db: env.DB, client, now: () => Date.now(), budgetMs: TERMS_RUN_BUDGET_MS, refreshMeans: indexed > 0 });
@@ -711,6 +739,7 @@ async function runScheduled(controller: ScheduledController, env: Env, ctx: Exec
             } catch (e) {
                 console.error("[about] terms failed", e instanceof Error ? e.name : "error");
             }
+            lap("terms");
             return;
         }
         ctx.waitUntil(

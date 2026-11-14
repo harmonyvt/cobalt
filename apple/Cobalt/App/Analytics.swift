@@ -34,6 +34,11 @@ enum Analytics {
                 PostHogSDK.shared.optIn()
             }
             running = true
+            if !screenSent { screen(currentScreen) }
+            // MetricKit's daily averages (scroll hitch ratio, launch, hangs), a day late at worst (`daily_metrics`)
+            Telemetry.metricsDelivered = { values in
+                Task { @MainActor in Analytics.event("daily_metrics", values: values) }
+            }
             replay(settings.recordSessions)
             AnalyticsContext.setSessionProvider { PostHogSDK.shared.getSessionId() }
         } else if running {
@@ -76,15 +81,40 @@ enum Analytics {
         #endif
     }
 
-    /// A screen the owner opened (`$screen`).
+    /// The screen in front (a tab, or `library.detail`), for the frame monitor and every event's `screen` property.
+    private(set) static var currentScreen = "library"
+
+    /// A screen the owner opened (`$screen`). Also registered as the `screen` super property, so rage taps and every other
+    /// event name the screen instead of the hosting controller's class.
     static func screen(_ name: String) {
+        guard name != currentScreen || !screenSent else { return }
+        currentScreen = name
         guard running else { return }
+        screenSent = true
+        PostHogSDK.shared.register(["screen": name])
         PostHogSDK.shared.screen(name)
     }
+
+    private static var screenSent = false
 
     /// A named event with flat properties. Never a link, a title or a file: hosts, counts, times and results only.
     static func event(_ name: String, _ properties: [String: Any] = [:]) {
         guard running else { return }
         PostHogSDK.shared.capture(name, properties: properties)
+    }
+
+    /// The same, from a log line's flat values.
+    static func event(_ name: String, values: [String: TelemetryValue]) {
+        guard running else { return }
+        var props: [String: Any] = [:]
+        for (key, value) in values {
+            switch value {
+            case .string(let s): props[key] = s
+            case .int(let i): props[key] = i
+            case .double(let d): props[key] = d
+            case .bool(let b): props[key] = b
+            }
+        }
+        PostHogSDK.shared.capture(name, properties: props)
     }
 }

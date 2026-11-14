@@ -32,6 +32,17 @@ enum TouchProbe {
         guard now - lastSent > 0.4 else { return }
         lastSent = now
         let hit = window.hitTest(point, with: nil)
+        let dead = hit == nil || hit === window
+        // the names and the walk wait until the tap's own frames are drawn: done here they landed in the frame that
+        // stops a fling or opens a page (8.15, scroll jitter)
+        Task { @MainActor [weak window, weak hit] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard let window else { return }
+            describe(hit: hit, dead: dead, at: point, in: window)
+        }
+    }
+
+    private static func describe(hit: UIView?, dead: Bool, at point: CGPoint, in window: UIWindow) {
         let hitChain = chain(from: hit, to: window)
         let drawn = deepestDrawn(at: point, in: window)
         var data: [String: TelemetryValue] = [
@@ -42,18 +53,9 @@ enum TouchProbe {
         if let drawn, drawn !== hit {
             data["under"] = .string(chain(from: drawn, to: window, flags: true))
         }
-        if hit == nil || hit === window { data["dead"] = .bool(true) }
+        if dead { data["dead"] = .bool(true) }
         Telemetry.log(.info, .ui, "tap", data: data)
-        var props: [String: Any] = [:]
-        for (key, value) in data {
-            switch value {
-            case .string(let s): props[key] = s
-            case .int(let i): props[key] = i
-            case .double(let d): props[key] = d
-            case .bool(let b): props[key] = b
-            }
-        }
-        Analytics.event("tap_probe", props)
+        Analytics.event("tap_probe", values: data)
     }
 
     /// `Leaf < Parent < … ` up to the window, class names shortened, repeats folded, at most 12.
@@ -114,6 +116,9 @@ private final class ProbeRecognizer: UIGestureRecognizer, UIGestureRecognizerDel
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let t = touches.first, let window = view as? UIWindow {
+            FrameMonitor.touchBegan(at: t.location(in: window))
+        }
         if touches.count == 1, let t = touches.first, let window = view as? UIWindow {
             began = (t.location(in: window), t.timestamp)
         } else {
@@ -121,8 +126,14 @@ private final class ProbeRecognizer: UIGestureRecognizer, UIGestureRecognizerDel
         }
     }
 
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let t = touches.first, let window = view as? UIWindow {
+            FrameMonitor.touchMoved(to: t.location(in: window))
+        }
+    }
+
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        defer { began = nil; state = .failed }
+        defer { began = nil; state = .failed; FrameMonitor.touchEnded() }
         guard let began, let t = touches.first, let window = view as? UIWindow else { return }
         let end = t.location(in: window)
         guard hypot(end.x - began.point.x, end.y - began.point.y) < 12, t.timestamp - began.at < 0.6 else { return }
@@ -130,11 +141,13 @@ private final class ProbeRecognizer: UIGestureRecognizer, UIGestureRecognizerDel
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        FrameMonitor.touchEnded()
         began = nil
         state = .failed
     }
 
     override func reset() {
+        FrameMonitor.touchEnded()
         began = nil
     }
 

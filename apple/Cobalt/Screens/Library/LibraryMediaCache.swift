@@ -76,7 +76,8 @@ final class LibraryPictureCache: @unchecked Sendable {
     private let cache: NSCache<NSString, Holder> = {
         let c = NSCache<NSString, Holder>()
         c.countLimit = 300
-        c.totalCostLimit = 64 * 1024 * 1024
+        // Scrolling back up must find its pictures again: 64 MB held about 27 iPad tiles (8.15, scroll jitter)
+        c.totalCostLimit = 160 * 1024 * 1024
         return c
     }()
 
@@ -210,6 +211,8 @@ actor LibraryPictureLoader {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
+            // decoded here, off the main thread, not on first draw mid-scroll (8.15)
+            kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixel,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary).map(ImageBox.init)

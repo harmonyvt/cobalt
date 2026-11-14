@@ -13,16 +13,9 @@ enum Breadcrumbs {
         steps.append((now, what))
         if steps.count > 12 { steps.removeFirst(steps.count - 12) }
         Telemetry.log(.info, .ui, what, data: data)
-        var props: [String: Any] = ["step": what]
-        for (key, value) in data {
-            switch value {
-            case .string(let s): props[key] = s
-            case .int(let i): props[key] = i
-            case .double(let d): props[key] = d
-            case .bool(let b): props[key] = b
-            }
-        }
-        Analytics.event("step", props)
+        var props = data
+        props["step"] = .string(what)
+        Analytics.event("step", values: props)
     }
 
     /// `-4.1s detail.open | -0.3s video.ready`, newest last, short enough for one log value.
