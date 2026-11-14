@@ -507,6 +507,19 @@ public enum SevenTvError: Error, Sendable, Equatable {
     case unavailable
     /// `503 error.seventv.not_ready`: the server's migration has not run yet.
     case notReady
+    /// `404 error.seventv.file_not_found` (57.9): the library file to upload is not there.
+    case fileNotFound
+    /// `415 error.seventv.file_type` (57.9): only webp, gif, png, avif and jpeg go to 7TV.
+    case fileType
+    /// `413 error.seventv.too_big` (57.9, 57.10): over 7 MiB less 64 KiB, even after the fit (or an avif).
+    case tooBig
+    /// `400 error.seventv.too_large` (57.10): a shape outside width:height 1:32..3:1 (pass a crop box), or an avif over
+    /// 1000 px a side.
+    case tooLarge
+    /// `422/502 error.seventv.fit_failed` (57.10): the picture would not decode or the fit ran out of time; the helper's reason.
+    case fitFailed(String?)
+    /// `429 error.seventv.busy` (57.10): the server is fitting another picture.
+    case busy
     /// The server has no `/7tv` routes (an older server, or a client without them).
     case off
     /// The server could not be reached.
@@ -527,6 +540,12 @@ public enum SevenTvError: Error, Sendable, Equatable {
         case "error.seventv.rejected": self = .rejected(message)
         case "error.seventv.unavailable": self = .unavailable
         case "error.seventv.not_ready": self = .notReady
+        case "error.seventv.file_not_found": self = .fileNotFound
+        case "error.seventv.file_type": self = .fileType
+        case "error.seventv.too_big": self = .tooBig
+        case "error.seventv.too_large": self = .tooLarge
+        case "error.seventv.fit_failed": self = .fitFailed(message)
+        case "error.seventv.busy": self = .busy
         default: return nil
         }
     }
@@ -556,10 +575,10 @@ public enum SevenTvError: Error, Sendable, Equatable {
         }
     }
 
-    /// 7TV's own words, for `forbidden` and `rejected`.
+    /// 7TV's own words, for `forbidden` and `rejected`; the fit's reason for `fitFailed`.
     public var message: String? {
         switch self {
-        case .forbidden(let m), .rejected(let m): return m
+        case .forbidden(let m), .rejected(let m), .fitFailed(let m): return m
         default: return nil
         }
     }

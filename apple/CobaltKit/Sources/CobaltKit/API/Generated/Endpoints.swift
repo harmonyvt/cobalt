@@ -641,6 +641,16 @@ enum Endpoints {
         APIEndpoint(op: "seventv_http.remove", method: "DELETE", path: "/7tv/sets/\(HTTPCobaltClient.encode(id))/emotes/\(HTTPCobaltClient.encode(emote))", auth: .key)
     }
 
+    /// `POST /7tv/emotes` (op `seventv_http.upload`, auth key): Upload a library picture (webp, gif, png, avif, jpeg) as a new 7TV emote, optionally cropped and resized first and added to a set (POST /7tv/emotes).
+    static func seventvHttpUpload() -> APIEndpoint<SevenTvUpload> {
+        APIEndpoint(op: "seventv_http.upload", method: "POST", path: "/7tv/emotes", auth: .key)
+    }
+
+    /// `GET /7tv/emotes/:id` (op `seventv_http.emote`, auth key): One 7TV emote: its name, owner, and whether 7TV is still processing it (GET /7tv/emotes/<id>).
+    static func seventvHttpEmote(id: String) -> APIEndpoint<SeventvHttpEmoteResponse> {
+        APIEndpoint(op: "seventv_http.emote", method: "GET", path: "/7tv/emotes/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
     /// `PUT /live/start-token` (op `live.start_token.put`, auth key): A device's push-to-start token.
     static func liveStartTokenPut() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "live.start_token.put", method: "PUT", path: "/live/start-token", auth: .key)
@@ -1523,6 +1533,53 @@ struct SeventvHttpRemoveResponse: Decodable, Sendable {
     var setId: String
     var emoteId: String
     var removed: Bool
+}
+
+struct SevenTvUploadFitted: Decodable, Sendable {
+    var width: Double
+    var height: Double
+    var frames: Double
+    var bytes: Double
+    var quality: Double
+}
+
+struct SevenTvUploadAdded: Decodable, Sendable {
+    var setId: String
+    var alias: String?
+}
+
+struct SevenTvUploadAddError: Decodable, Sendable {
+    var code: String
+    var message: String?
+}
+
+struct SevenTvUpload: Decodable, Sendable {
+    var status: String
+    var emoteId: String
+    var name: String
+    /// the library file that was uploaded
+    var fileId: String
+    var pageUrl: String
+    /// 7TV still processing the images (usually a minute)
+    var pending: Bool
+    /// what was sent when the picture was cropped or resized first; null when it went as it was
+    var fitted: SevenTvUploadFitted?
+    var added: SevenTvUploadAdded?
+    var addError: SevenTvUploadAddError?
+}
+
+struct SeventvHttpEmoteResponse: Decodable, Sendable {
+    var emoteId: String
+    var name: String
+    var ownerId: String
+    var pending: Bool
+    var animated: Bool
+    var `private`: Bool
+    var zeroWidth: Bool
+    var previewUrl: String?
+    var fileUrl: String?
+    var pageUrl: String
+    var status: String
 }
 
 struct McpSettingsResponseLink: Decodable, Sendable {

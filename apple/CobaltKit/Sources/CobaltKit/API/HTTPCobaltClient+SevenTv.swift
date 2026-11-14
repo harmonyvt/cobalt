@@ -75,6 +75,19 @@ extension HTTPCobaltClient: SevenTvClient {
         return try sevenTvAnswer(SevenTvLiveChange.self, data, http)
     }
 
+    public func uploadSevenTvEmote(_ draft: SevenTvUploadDraft) async throws -> SevenTvUploadResult {
+        // The Worker reads the file from R2, may fit it in the container first (57.10: up to 150 s), then sends it to 7TV.
+        let req = try makeRequest("POST", SevenTvRoute.uploads, keyed: true, timeout: 240)
+        let (data, http) = try await send(req, body: Self.jsonBody(SevenTvRoute.uploadBody(draft)))
+        return try sevenTvAnswer(SevenTvUploadResult.self, data, http)
+    }
+
+    public func sevenTvEmote(id: String) async throws -> SevenTvEmoteInfo {
+        let req = try makeRequest("GET", SevenTvRoute.emoteInfo(id), keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        return try sevenTvAnswer(SevenTvEmoteInfo.self, data, http)
+    }
+
     // MARK: answers
 
     private struct SetWire: Decodable { var set: SevenTvSetInfo }

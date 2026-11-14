@@ -303,6 +303,253 @@
         }
       }
     },
+    "/7tv/emotes": {
+      "post": {
+        "operationId": "seventv_http.upload",
+        "summary": "Upload a library picture (webp, gif, png, avif, jpeg) as a new 7TV emote, optionally cropped and resized first and added to a set (POST /7tv/emotes).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 400
+                  },
+                  "tags": {
+                    "maxItems": 6,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 64
+                    }
+                  },
+                  "zero_width": {
+                    "type": "boolean"
+                  },
+                  "private": {
+                    "type": "boolean"
+                  },
+                  "set_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "alias": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 400
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "crop": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "y": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "w": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1
+                          },
+                          "h": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y",
+                          "w",
+                          "h"
+                        ],
+                        "additionalProperties": false,
+                        "description": "crop box before uploading, fractions of the picture: left, top, width, height (look at it with a grid first; never guess)"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "size": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 32,
+                        "maximum": 1000,
+                        "description": "longest side in px after fitting (default 512 when it has to shrink; never enlarged)"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "file",
+                  "name"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SevenTvUpload"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/emotes/{id}": {
+      "get": {
+        "operationId": "seventv_http.emote",
+        "summary": "One 7TV emote: its name, owner, and whether 7TV is still processing it (GET /7tv/emotes/<id>).",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "emote_id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "owner_id": {
+                      "type": "string"
+                    },
+                    "pending": {
+                      "type": "boolean"
+                    },
+                    "animated": {
+                      "type": "boolean"
+                    },
+                    "private": {
+                      "type": "boolean"
+                    },
+                    "zero_width": {
+                      "type": "boolean"
+                    },
+                    "preview_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "file_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "page_url": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    }
+                  },
+                  "required": [
+                    "emote_id",
+                    "name",
+                    "owner_id",
+                    "pending",
+                    "animated",
+                    "private",
+                    "zero_width",
+                    "preview_url",
+                    "file_url",
+                    "page_url",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/7tv/link": {
       "post": {
         "operationId": "seventv_http.link",
@@ -9492,6 +9739,120 @@
           "capacity",
           "count",
           "live"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvUpload": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "success"
+          },
+          "emote_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string",
+            "description": "the library file that was uploaded"
+          },
+          "page_url": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean",
+            "description": "7TV still processing the images (usually a minute)"
+          },
+          "fitted": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "width": {
+                    "type": "number"
+                  },
+                  "height": {
+                    "type": "number"
+                  },
+                  "frames": {
+                    "type": "number"
+                  },
+                  "bytes": {
+                    "type": "number"
+                  },
+                  "quality": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "width",
+                  "height",
+                  "frames",
+                  "bytes",
+                  "quality"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "what was sent when the picture was cropped or resized first; null when it went as it was"
+          },
+          "added": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "set_id": {
+                    "type": "string"
+                  },
+                  "alias": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "set_id",
+                  "alias"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "add_error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "status",
+          "emote_id",
+          "name",
+          "file_id",
+          "page_url",
+          "pending",
+          "fitted",
+          "added"
         ],
         "additionalProperties": false
       },

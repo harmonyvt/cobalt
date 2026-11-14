@@ -283,6 +283,9 @@ public final class SevenTvStore {
     /// The client, for the set screen's model.
     func setClient() throws -> any SevenTvClient { try requireClient() }
 
+    /// A pause on the context's clock (the upload's polling; virtual in tests and previews).
+    func sleep(seconds: Double) async throws { try await ctx.clock.sleep(seconds: seconds) }
+
     // MARK: server change
 
     /// A new server: nothing from the old one is kept.

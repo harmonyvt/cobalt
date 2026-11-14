@@ -2,6 +2,7 @@ import { Container, getContainer } from "@cloudflare/containers";
 import { backfillPostDetails, postDetailsConfigFrom } from "./post-details";
 import { lookupDepsFrom } from "./registry/ops/post-frame";
 import { PORT_HEADER, stripInternalHeaders, KEY_ID_HEADER, SERVICE_HEADER } from "./headers";
+import { EMOTE_FIT_PATH } from "./seventv";
 import { handleWebpRoute, isWebpRoute, WebpService, type WebpDeps } from "./webp";
 import { ApnsClient, apnsConfigFrom, fetchTransport, helperTransport } from "./apns";
 import { handleLiveRoute, isLiveRoute, LiveService } from "./live";
@@ -106,6 +107,7 @@ export class CobaltContainer extends Container<Env> {
     sleepAfter = "45s";
 
     private webp: WebpService;
+    private helperCall!: WebpDeps["helper"];
     private studio: StudioService;
     private live: LiveService;
     private editLive: EditLiveService;
@@ -170,6 +172,7 @@ export class CobaltContainer extends Container<Env> {
                     path.startsWith("/poster") ||
                     path.startsWith("/about") ||
                     path.startsWith("/safety") ||
+                    path.startsWith("/emote-fit") ||
                     (path.startsWith("/fetch/") && path.endsWith("/file"));
                 // A clip's own signal sits past the worker's SAFETY_CALL_MS. Stills and /about stay on 300 s.
                 const safetyClip = path.startsWith("/safety") && path.includes("kind=clip");
@@ -187,6 +190,7 @@ export class CobaltContainer extends Container<Env> {
             },
         };
         this.webp = new WebpService(webpDeps);
+        this.helperCall = webpDeps.helper;
 
         // Live Activity push (APP-API-CONTRACT.md section 8). The APNs secrets are read
         // here and by the Worker (the capability flag); none of them goes into
@@ -429,6 +433,18 @@ export class CobaltContainer extends Container<Env> {
         }
 
         const { pathname } = new URL(request.url);
+        // 7TV emote fit (APP-API-CONTRACT.md 57.10): the Worker's upload op hands the picture to the helper. Internal
+        // only: the caller proves itself with COBALT_API_KEY, which no client holds.
+        if (pathname === EMOTE_FIT_PATH) {
+            if (request.method !== "POST" || request.headers.get("x-internal-key") !== this.env.COBALT_API_KEY) {
+                return new Response(JSON.stringify({ status: "error", error: { code: "error.api.not_found" } }), { status: 404, headers: { "content-type": "application/json" } });
+            }
+            await this.startAndWaitForPorts([COBALT_PORT, HELPER_PORT]);
+            const headers: Record<string, string> = { "content-type": "application/octet-stream" };
+            const len = request.headers.get("content-length");
+            if (len) headers["content-length"] = len;
+            return this.helperCall(`/emote-fit${new URL(request.url).search}`, { method: "POST", headers, body: request.body });
+        }
         if (isStudioRoute(pathname)) {
             // POST /studio carries the key id the Worker set after its D1
             // lookup; the render routes are capability URLs (no key).
