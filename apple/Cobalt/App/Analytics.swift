@@ -26,7 +26,11 @@ enum Analytics {
             if configured == nil {
                 setup(project, replay: settings.recordSessions)
                 configured = project
-            } else if !running {
+            }
+            // The SDK saves an opt-out on the phone and reads it back in setup(): an optOut() from an earlier launch
+            // (the server stopped sending the project, or "send logs" was off) would otherwise keep it silent for good
+            // while it still hands out session ids (8.11, 2026-11-14).
+            if PostHogSDK.shared.isOptOut() {
                 PostHogSDK.shared.optIn()
             }
             running = true
