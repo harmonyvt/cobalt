@@ -21,6 +21,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     /// Studio uploads go through the system's background session when set (the iOS app); nil sends them on
     /// `urlSession` (the Mac, extensions, tests).
     let backgroundUploads: BackgroundUploads?
+    /// The kept 7TV answers (57.13): the device's folder, or nothing under test; a test sets its own.
+    var answers: SevenTvAnswerCache = .standard
 
     public init(
         baseURL: URL, apiKey: @escaping @Sendable () -> String?, session: URLSession = .shared,

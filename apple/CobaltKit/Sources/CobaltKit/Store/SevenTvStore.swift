@@ -154,24 +154,45 @@ public final class SevenTvStore {
 
     /// Sets already paged through this launch (57.13).
     @ObservationIgnored private var warmed: Set<String> = []
+    @ObservationIgnored private var warming: Task<Void, Never>?
 
     /// Pages through each set of the channel once a launch, in the background, so every emote in the owner's sets is on
     /// the device (`EmoteCache`, filled by the live client with each page it reads) and each page's answer is kept for
-    /// offline (`SevenTvAnswerCache`). Only against the live server: previews and tests never page on their own.
+    /// offline (`SevenTvAnswerCache`). Only against the live server: previews and tests never page on their own. A set
+    /// that could not be read (no network) is tried again with the next read of the channel's sets. `unlink()` and `reset()`
+    /// stop it.
     private func warm(channelID: String) {
         guard !RunningTests.now, let client = client as? HTTPCobaltClient else { return }
         let ids = sets(of: channelID).map(\.id).filter { !warmed.contains($0) }
         guard !ids.isEmpty else { return }
         warmed.formUnion(ids)
-        Task(priority: .utility) {
+        let previous = warming
+        let started = generation
+        warming = Task(priority: .utility) { [weak self] in
+            // one walk at a time, so two channels do not page the server together
+            await previous?.value
             for id in ids {
                 var page = 1
+                var read = false
                 while page <= 20, !Task.isCancelled {
-                    guard let answer = try? await client.sevenTvSet(id: id, query: nil, page: page), answer.hasMore else { break }
+                    guard let answer = try? await client.sevenTvSet(id: id, query: nil, page: page) else { break }
+                    read = true
+                    if !answer.hasMore { break }
                     page += 1
                 }
+                if !read, !Task.isCancelled { self?.unwarm(id, generation: started) }
             }
         }
+    }
+
+    private func unwarm(_ id: String, generation started: Int) {
+        if started == generation { warmed.remove(id) }
+    }
+
+    private func stopWarming() {
+        warming?.cancel()
+        warming = nil
+        warmed = []
     }
 
     /// Picks a channel chip and reads its sets (again).
@@ -257,6 +278,7 @@ public final class SevenTvStore {
         channelSets = [:]
         setsState = [:]
         selectedChannelID = nil
+        stopWarming()
         forgetUploads()
     }
 
@@ -350,6 +372,7 @@ public final class SevenTvStore {
         channelSets = [:]
         setsState = [:]
         linking = false
+        stopWarming()
         forgetUploads()
     }
 

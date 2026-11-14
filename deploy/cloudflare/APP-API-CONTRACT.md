@@ -6615,8 +6615,10 @@ the platform back to `https://7tv.app/login/callback`, and the page swaps the co
 - Filled ahead of a look: every page of `GET /7tv/sets/:id` and every `GET /emotes` answer the app reads queues its previews;
   after a channel's sets load, the app pages through each of its sets once a launch (at most 20 pages a set).
 - Offline: the last 2xx answer of `GET /7tv`, `GET /7tv/channels/:id/sets` and `GET /7tv/sets/:id` is kept
-  (`Caches/cobalt-7tv-answers`, keyed by the full URL) and read back only when the request fails for lack of network, so the
-  7tv tab shows the account, sets and emotes; writes still need the network. Forgotten when `GET /7tv` answers not linked.
+  (`Caches/cobalt-7tv-answers`, keyed by a hash of the request's key and the full URL, so another key or sign-in never sees it;
+  at most 400 files and 24 MB, least recently used out first) and read back only when the request fails for lack of network
+  (not on a cancel), so the 7tv tab shows the account, sets and emotes; writes still need the network. Forgotten after a 2xx
+  link or unlink, and when `GET /7tv` answers not linked. Prefetch gives up its queue after 8 failures in a row.
 
 ### 57.14 Every emote the account owns (addendum, 2026-11-14; owner: "I can't see all the emotes I've uploaded to my account. And after I upload an emote, I should be able to add it to any of the channels")
 

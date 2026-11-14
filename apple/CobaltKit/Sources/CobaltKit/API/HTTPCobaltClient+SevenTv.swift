@@ -9,21 +9,28 @@ extension HTTPCobaltClient: SevenTvClient {
         let req = try makeRequest("GET", SevenTvRoute.status, keyed: true, timeout: 20)
         let status = try await sevenTvRead(SevenTvStatus.self, req)
         // no account: nothing of the old one stays on the device
-        if !status.linked { SevenTvAnswerCache.clear() }
+        if !status.linked { answers.clear() }
         return status
     }
 
     public func linkSevenTv(token: String) async throws -> SevenTvStatus {
         let req = try makeRequest("POST", SevenTvRoute.link, keyed: true, timeout: 30)
         let (data, http) = try await send(req, body: Self.jsonBody(["token": token]))
-        return try sevenTvAnswer(SevenTvStatus.self, data, http)
+        let status = try sevenTvAnswer(SevenTvStatus.self, data, http)
+        // another account may now stand behind the same routes: nothing of the old one is read back
+        answers.clear()
+        return status
     }
 
     public func unlinkSevenTv(logout: Bool) async throws -> SevenTvStatus {
         // the server calls 7TV's logout first when asked, so it gets a little longer
         let req = try makeRequest("DELETE", SevenTvRoute.status, query: SevenTvRoute.unlinkQuery(logout: logout), keyed: true, timeout: logout ? 30 : 20)
         let (data, http) = try await send(req)
-        return try sevenTvAnswer(SevenTvStatus.self, data, http)
+        let status = try sevenTvAnswer(SevenTvStatus.self, data, http)
+        // unlinked: the account's sets and emotes are not shown again offline (a refused unlink throws above and keeps them;
+        // the store reads even a linked answer to a 2xx unlink as unlinked, so this does too)
+        answers.clear()
+        return status
     }
 
     public func sevenTvSets(channelID: String) async throws -> SevenTvChannelSets {
@@ -101,23 +108,26 @@ extension HTTPCobaltClient: SevenTvClient {
 
     private struct SetWire: Decodable { var set: SevenTvSetInfo }
 
-    /// A 2xx whose body decodes as `T`; a refusal as `SevenTvError`; an unreadable answer as `.invalidResponse`.
     /// A read that is kept (`SevenTvAnswerCache`): a 2xx answer is saved, and when the network fails the last saved answer
-    /// stands in for it (57.13). Any other failure throws as before.
+    /// stands in for it (57.13), for this request only: the same URL signed with the same key. Any other failure throws as
+    /// before, and so does a read that was cancelled.
     private func sevenTvRead<T: Decodable>(_ type: T.Type, _ req: URLRequest) async throws -> T {
+        let scope = SevenTvAnswerCache.scope(of: req)
         do {
             let (data, http) = try await send(req)
             let answer = try sevenTvAnswer(type, data, http)
-            SevenTvAnswerCache.save(data, for: req.url)
+            answers.save(data, for: req.url, scope: scope)
             return answer
         } catch let e as CobaltError {
-            guard case .network = e, let saved = SevenTvAnswerCache.load(for: req.url),
+            guard case .network(let code) = e, code != .cancelled, !Task.isCancelled,
+                let saved = answers.load(for: req.url, scope: scope),
                 let answer = try? CobaltJSON.decoder().decode(T.self, from: saved)
             else { throw e }
             return answer
         }
     }
 
+    /// A 2xx whose body decodes as `T`; a refusal as `SevenTvError`; an unreadable answer as `.invalidResponse`.
     private func sevenTvAnswer<T: Decodable>(_ type: T.Type, _ data: Data, _ http: HTTPURLResponse) throws -> T {
         guard (200..<300).contains(http.statusCode) else { throw sevenTvError(data, status: http.statusCode) }
         guard let wire = try? CobaltJSON.decoder().decode(T.self, from: data) else {
