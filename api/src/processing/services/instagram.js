@@ -50,6 +50,22 @@ const getNumberFromQuery = (name, data) => {
     if (+s) return +s;
 }
 
+// a post's shortcode is its numeric media id in base64url, so the mobile api can be
+// asked without oembed, which answers nothing for posts whose owner turned embeds off
+const shortcodeAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+export const shortcodeToMediaId = (shortcode) => {
+    // longer shortcodes (private posts) carry more than the id
+    if (typeof shortcode !== 'string' || !shortcode.length || shortcode.length > 11) return;
+
+    let id = 0n;
+    for (const char of shortcode) {
+        const value = shortcodeAlphabet.indexOf(char);
+        if (value < 0) return;
+        id = id * 64n + BigInt(value);
+    }
+    return id > 0n ? id.toString() : undefined;
+}
+
 const getObjectFromEntries = (name, data) => {
     const obj = data?.match(new RegExp('\\["' + name + '",.*?,({.*?}),\\d+\\]'))?.[1];
     return obj && JSON.parse(obj);
@@ -144,7 +160,12 @@ export default function instagram(obj) {
             dispatcher
         }).then(r => r.text()).catch(() => {});
 
-        let embedData = JSON.parse(data?.match(/"init",\[\],\[(.*?)\]\],/)[1]);
+        // the embed page no longer always carries this blob: no match must not
+        // throw, or the graphql lookups after it never run
+        const init = data?.match(/"init",\[\],\[(.*?)\]\],/)?.[1];
+        if (!init) return false;
+
+        let embedData = JSON.parse(init);
 
         if (!embedData || !embedData?.contextJSON) return false;
 
@@ -428,6 +449,7 @@ export default function instagram(obj) {
             let media_id = await getMediaId(id);
             if (!media_id && token) media_id = await getMediaId(id, { token });
             if (!media_id && cookie) media_id = await getMediaId(id, { cookie });
+            if (!media_id) media_id = shortcodeToMediaId(id);
 
             // mobile api (bearer)
             if (media_id && token) data = await requestMobileApi(media_id, { token });
