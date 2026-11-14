@@ -36,5 +36,9 @@ extension Symbol {
         static let person = "person.crop.circle"
         /// "upload to 7tv" (57.9) and the sheet's "upload".
         static let upload = "arrow.up.circle"
+        /// The upload sheet's "crop…" and "use this crop" (57.10).
+        static let crop = "crop"
+        /// The crop line's "clear".
+        static let clearCrop = "xmark"
     }
 }

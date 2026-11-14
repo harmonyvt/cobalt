@@ -143,6 +143,27 @@ extension Copy {
         static let emoteName = "emote name"
         static let nameRule = "1–100 characters: letters, digits, emoji and _-():!+|.'?><*$#. no spaces."
         static let tooBigNote = "this file is over 7 mb · 7tv won't take it"
+        static let tooWideNote = "this file is over 1000 px a side · 7tv won't take it"
+        static let shrinkBytesNote = "over 7 mb · will be shrunk to fit"
+        static let shrinkSideNote = "over 1000 px a side · will be shrunk to fit"
+        static let needsCropNote = "7tv only keeps shapes from 1:32 to 3:1 · crop it first"
+        static let sizeLabel = "size"
+        static let sizeAuto = "auto"
+        static func sizeChoice(_ px: Int?) -> String { px.map { "\($0)" } ?? sizeAuto }
+        static let sizeNote = "longest side in px · auto keeps it unless it's too big"
+        static let sizeA11y = "longest side"
+        static let cropAction = "crop…"
+        static let cropSet = "crop set"
+        static func cropLine(_ width: Int, _ height: Int) -> String { "crop \(width)×\(height)" }
+        static let clearCrop = "clear"
+        static let useCrop = "use this crop"
+        static let cropNote = "7tv gets the box only · turning, flipping and removing the background stay off"
+        static let cropBoxOnly = "7tv crop takes the box only"
+        static func sentAs(width: Int, height: Int, frames: Int, bytes: Int64) -> String {
+            let kb = max(1, Int((Double(bytes) / 1024).rounded()))
+            let frameWord = frames == 1 ? "1 frame" : "\(frames) frames"
+            return "sent as \(width)×\(height) · \(frameWord) · \(kb) kb"
+        }
         static let privateToggle = "private"
         static let privateNote = "only you see it on 7tv"
         static let zeroWidthToggle = "zero-width"
@@ -180,7 +201,10 @@ extension Copy {
             case .notReady: return "7tv isn't ready on this server yet"
             case .fileNotFound: return "that file isn't in the library any more"
             case .fileType: return "7tv takes webp, gif, png, avif and jpeg"
-            case .tooBig: return "too big for 7tv · 7 mb at most"
+            case .tooBig: return "too big for 7tv even shrunk · pick a smaller size or a crop"
+            case .tooLarge: return "7tv only keeps shapes from 1:32 to 3:1 · pick a crop box"
+            case .fitFailed(let words): return words.map { "couldn't fit it for 7tv · \($0)" } ?? "couldn't fit it for 7tv · try again"
+            case .busy: return "the server is fitting another picture · try again in a minute"
             case .off: return "7tv isn't on this server"
             case .offline: return "can't reach the server"
             case .other: return Copy.actionFailed

@@ -27,7 +27,8 @@ public protocol SevenTvClient: Sendable {
     func removeSevenTvEmote(setID: String, emoteID: String, alias: String?) async throws -> SevenTvEmoteChange
     /// `POST /7tv/channels/<id>/live {set_id}`: the channel's live set (nil clears it).
     func makeSevenTvSetLive(channelID: String, setID: String?) async throws -> SevenTvLiveChange
-    /// `POST /7tv/emotes` (57.9): a library picture as a new emote of the linked account (201), added to `setID` when given.
+    /// `POST /7tv/emotes` (57.9): a library picture as a new emote of the linked account (201), added to `setID` when given;
+    /// cropped and shrunk first by the server when the draft asks or the file is too big (57.10, `fitted`).
     func uploadSevenTvEmote(_ draft: SevenTvUploadDraft) async throws -> SevenTvUploadResult
     /// `GET /7tv/emotes/<id>` (57.9): one emote; `pending` while 7TV is still processing a new upload.
     func sevenTvEmote(id: String) async throws -> SevenTvEmoteInfo
@@ -48,7 +49,8 @@ enum SevenTvRoute {
 
     static func emoteInfo(_ emoteID: String) -> String { "/7tv/emotes/\(segment(emoteID))" }
 
-    /// `POST /7tv/emotes`: empty tags, false toggles and a missing set or alias are left out.
+    /// `POST /7tv/emotes`: empty tags, false toggles, a missing set or alias, and no crop or size are left out. `crop` is
+    /// `{x, y, w, h}` (fractions, clamped into the picture; the whole picture is left out), `size` 32...1000.
     static func uploadBody(_ draft: SevenTvUploadDraft) -> [String: Any] {
         var body: [String: Any] = ["file": draft.fileID, "name": draft.name]
         let tags = SevenTvEmoteRule.cleanTags(draft.tags)
@@ -59,6 +61,10 @@ enum SevenTvRoute {
             body["set_id"] = setID
             if let alias = draft.alias, !alias.isEmpty { body["alias"] = alias }
         }
+        if let crop = draft.crop?.clamped, !crop.isWhole {
+            body["crop"] = ["x": crop.x, "y": crop.y, "w": crop.w, "h": crop.h]
+        }
+        if let size = SevenTvEmoteRule.clampSize(draft.size) { body["size"] = size }
         return body
     }
 

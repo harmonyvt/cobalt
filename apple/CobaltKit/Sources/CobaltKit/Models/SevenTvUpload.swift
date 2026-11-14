@@ -1,7 +1,8 @@
 import Foundation
 
 // Uploading a library picture as a new 7TV emote (APP-API-CONTRACT 57.9): `POST /7tv/emotes` and `GET /7tv/emotes/:id`.
-// Names here stay clear of the generated `SevenTvUpload`, `SevenTvUploadAdded` and `SevenTvUploadAddError`.
+// Names here stay clear of the generated `SevenTvUpload`, `SevenTvUploadAdded`, `SevenTvUploadAddError` and `SevenTvUploadFitted`.
+// The fit step (57.10): an optional crop box and size; a big file is shrunk by the server (not an avif).
 
 /// What `POST /7tv/emotes` sends. `fileID` is the library file id (or its public id).
 public struct SevenTvUploadDraft: Sendable, Equatable {
@@ -13,10 +14,14 @@ public struct SevenTvUploadDraft: Sendable, Equatable {
     /// Add the new emote to this set at once (`alias` = its name there; nil keeps the emote's own name).
     public var setID: String?
     public var alias: String?
+    /// The box to keep (57.10), fractions of the picture from its top-left corner; nil sends the whole picture.
+    public var crop: ImageCropRect?
+    /// The longest side in px (32...1000); nil lets the server pick (512 when it has to fit, else the file as it is).
+    public var size: Int?
 
     public init(
         fileID: String, name: String, tags: [String] = [], zeroWidth: Bool = false, isPrivate: Bool = false,
-        setID: String? = nil, alias: String? = nil
+        setID: String? = nil, alias: String? = nil, crop: ImageCropRect? = nil, size: Int? = nil
     ) {
         self.fileID = fileID
         self.name = name
@@ -25,6 +30,48 @@ public struct SevenTvUploadDraft: Sendable, Equatable {
         self.isPrivate = isPrivate
         self.setID = setID
         self.alias = alias
+        self.crop = crop
+        self.size = size
+    }
+}
+
+/// `fitted` of the upload's answer (57.10): what the server sent to 7TV after cropping or shrinking the picture.
+public struct SevenTvFitResult: Sendable, Equatable, Decodable {
+    public var width: Int
+    public var height: Int
+    public var frames: Int
+    public var bytes: Int64
+    /// The WebP quality it took (nil when the server did not say).
+    public var quality: Int?
+
+    public init(width: Int, height: Int, frames: Int = 1, bytes: Int64, quality: Int? = nil) {
+        self.width = width
+        self.height = height
+        self.frames = frames
+        self.bytes = bytes
+        self.quality = quality
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case width, height, frames, bytes, quality
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        /// JSON numbers as whole numbers, whether the server wrote `512` or `512.0`.
+        func whole(_ key: CodingKeys) -> Int? {
+            if let n = try? c.decodeIfPresent(Int.self, forKey: key) { return n }
+            if let d = try? c.decodeIfPresent(Double.self, forKey: key), d.isFinite { return Int(d.rounded()) }
+            return nil
+        }
+        guard let width = whole(.width), let height = whole(.height) else {
+            throw DecodingError.dataCorruptedError(forKey: .width, in: c, debugDescription: "fitted needs width and height")
+        }
+        self.width = width
+        self.height = height
+        frames = max(1, whole(.frames) ?? 1)
+        bytes = Int64(whole(.bytes) ?? 0)
+        quality = whole(.quality)
     }
 }
 
@@ -60,10 +107,12 @@ public struct SevenTvUploadResult: Sendable, Equatable, Decodable {
     public var pending: Bool
     public var added: SevenTvUploadPlacement?
     public var addError: SevenTvError?
+    /// What was sent when the picture was cropped or shrunk first (57.10); nil when it went as it was.
+    public var fitted: SevenTvFitResult?
 
     public init(
         emoteID: String, name: String, fileID: String, pageURL: URL? = nil, pending: Bool = true,
-        added: SevenTvUploadPlacement? = nil, addError: SevenTvError? = nil
+        added: SevenTvUploadPlacement? = nil, addError: SevenTvError? = nil, fitted: SevenTvFitResult? = nil
     ) {
         self.emoteID = emoteID
         self.name = name
@@ -72,6 +121,7 @@ public struct SevenTvUploadResult: Sendable, Equatable, Decodable {
         self.pending = pending
         self.added = added
         self.addError = addError
+        self.fitted = fitted
     }
 
     private struct AddErrorWire: Decodable {
@@ -80,7 +130,7 @@ public struct SevenTvUploadResult: Sendable, Equatable, Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, pending, added, addError
+        case name, pending, added, addError, fitted
         case emoteID = "emoteId"
         case fileID = "fileId"
         case pageURL = "pageUrl"
@@ -94,6 +144,7 @@ public struct SevenTvUploadResult: Sendable, Equatable, Decodable {
         pageURL = SevenTvWire.url(try? c.decodeIfPresent(String.self, forKey: .pageURL)) ?? SevenTvEmoteRule.pageURL(emoteID)
         pending = (try? c.decodeIfPresent(Bool.self, forKey: .pending)) ?? true
         added = try? c.decodeIfPresent(SevenTvUploadPlacement.self, forKey: .added)
+        fitted = try? c.decodeIfPresent(SevenTvFitResult.self, forKey: .fitted)
         if let wire = try? c.decodeIfPresent(AddErrorWire.self, forKey: .addError) {
             addError = SevenTvError(code: wire.code, message: wire.message) ?? .rejected(SevenTvWire.nonEmpty(wire.message))
         } else {
@@ -157,16 +208,30 @@ public struct SevenTvEmoteInfo: Sendable, Equatable, Identifiable, Decodable {
     }
 }
 
-/// 7TV's rules for a new emote (57.9), checked before asking: the name
-/// `^[a-zA-Z0-9_\-():!+|.'?><\p{Emoji_Presentation}*$#]{1,100}$`, tags `^\w{3,30}$` (at most 6), the file's type and size.
+/// 7TV's rules for a new emote (57.9, 57.10), checked before asking: the name
+/// `^[a-zA-Z0-9_\-():!+|.'?><\p{Emoji_Presentation}*$#]{1,100}$`, tags `^\w{3,30}$` (at most 6), the file's type, size and
+/// shape. A file over the byte cap or 1000 px a side is shrunk by the server unless it is an avif; a shape outside
+/// width:height 1:32..3:1 needs a crop box.
 public enum SevenTvEmoteRule {
     public static let nameMax = 100
     public static let tagMax = 6
     /// 7TV's 7 MiB body cap less 64 KiB for the multipart wrapping.
     public static let maxBytes: Int64 = 7 * 1024 * 1024 - 64 * 1024
+    /// 7TV's largest side in px.
+    public static let maxSide = 1000
+    /// The `size` the fit takes (the longest side in px).
+    public static let sizeRange = 32...1000
+    /// The size chips of the upload sheet (nil = auto).
+    public static let sizeChoices: [Int?] = [nil, 128, 256, 512, 1000]
+    /// 7TV's shape limits, width over height: 1:32 to 3:1.
+    public static let minAspect = 1.0 / 32
+    public static let maxAspect = 3.0
     /// The types 7TV takes.
     public static let contentTypes: Set<String> = ["image/webp", "image/gif", "image/png", "image/avif", "image/jpeg"]
     static let extensions: Set<String> = ["webp", "gif", "png", "avif", "jpg", "jpeg"]
+    /// The types the server's fit can crop and shrink (not avif).
+    public static let fittableTypes: Set<String> = ["image/webp", "image/gif", "image/png", "image/jpeg", "image/jpg"]
+    static let fittableExtensions: Set<String> = ["webp", "gif", "png", "jpg", "jpeg"]
     private static let fileExtensions = extensions.union(["mp4", "mov", "webm", "heic"])
     private static let punctuation = Set("_-():!+|.'?><*$#".unicodeScalars)
 
@@ -253,6 +318,41 @@ public enum SevenTvEmoteRule {
     public static func isTooBig(_ bytes: Int64?) -> Bool {
         guard let bytes else { return false }
         return bytes > maxBytes
+    }
+
+    /// A file the server can crop and shrink for 7TV (57.10): webp, gif, png or jpeg by its content type, else by its name's
+    /// extension. An unknown type passes (the server checks again).
+    public static func isFittable(contentType: String?, name: String?) -> Bool {
+        if let type = contentType?.split(separator: ";").first?.trimmingCharacters(in: .whitespaces).lowercased(), !type.isEmpty {
+            return fittableTypes.contains(type)
+        }
+        guard let name, name.contains("."), let ext = name.split(separator: ".").last else { return true }
+        return fittableExtensions.contains(ext.lowercased())
+    }
+
+    /// Over 1000 px a side (unknown sizes pass).
+    public static func isOverSide(width: Int?, height: Int?) -> Bool {
+        max(width ?? 0, height ?? 0) > maxSide
+    }
+
+    /// A shape 7TV keeps: width:height from 1:32 to 3:1 (unknown or empty sizes pass).
+    public static func shapeFits(width: Double, height: Double) -> Bool {
+        guard width > 0, height > 0, width.isFinite, height.isFinite else { return true }
+        let ratio = width / height
+        return ratio >= minAspect - 1e-9 && ratio <= maxAspect + 1e-9
+    }
+
+    /// The shape of a `width` x `height` picture once `crop` (fractions) is taken out of it; nil when the size is unknown.
+    public static func croppedSize(width: Int?, height: Int?, crop: ImageCropRect?) -> (width: Int, height: Int)? {
+        guard let width, let height, width > 0, height > 0 else { return nil }
+        guard let crop else { return (width, height) }
+        let box = crop.clamped
+        return (max(1, Int((box.w * Double(width)).rounded())), max(1, Int((box.h * Double(height)).rounded())))
+    }
+
+    /// The `size` as the route takes it: 32...1000, nil left out.
+    public static func clampSize(_ size: Int?) -> Int? {
+        size.map { min(max($0, sizeRange.lowerBound), sizeRange.upperBound) }
     }
 
     /// An emote's page on 7tv.app.

@@ -7,7 +7,9 @@ import Synchronization
 // linked; linking works with any token that looks like one (a token with "bad" in it is refused). Writes behave like the
 // routes: a channel's rights are checked, an alias already in the set is refused without `override_conflicts`, a full set
 // refuses, 60 emotes a page, `q` filters by alias. Uploads (57.9) are pending on their first `GET /7tv/emotes/<id>`, done
-// after; a file id with "missing", "video"/"mp4" or "huge" in it is refused like the server would.
+// after; a file id with "missing", "video"/"mp4" or "huge" in it is refused like the server would. The fit (57.10): a crop, a
+// size or a file id with "big" in it answers a plausible `fitted` (a 1200 x 1200 source, 48 frames); "tall" is a 1:36 picture
+// that needs a crop, "busy" is refused as busy and "broken" as a fit that failed.
 
 extension PreviewData {
     static let sevenTvUserID = "01GB2S2BCR000AHHX5S1Y9TQW2"
@@ -312,6 +314,14 @@ final class PreviewSevenTvState: Sendable {
             if lower.contains("missing") { throw SevenTvError.fileNotFound }
             if lower.contains("mp4") || lower.contains("video") { throw SevenTvError.fileType }
             if lower.contains("huge") { throw SevenTvError.tooBig }
+            if lower.contains("busy") { throw SevenTvError.busy }
+            if lower.contains("broken") { throw SevenTvError.fitFailed("could not decode the picture") }
+            if lower.contains("tall") {
+                let shape = SevenTvEmoteRule.croppedSize(width: 100, height: 3_600, crop: draft.crop)
+                if let shape, !SevenTvEmoteRule.shapeFits(width: Double(shape.width), height: Double(shape.height)) {
+                    throw SevenTvError.tooLarge
+                }
+            }
             guard SevenTvEmoteRule.isValidName(draft.name) else { throw SevenTvError.rejected("invalid emote name") }
             s.counter += 1
             let id = "01HU" + String(format: "%022d", s.counter)
@@ -321,7 +331,8 @@ final class PreviewSevenTvState: Sendable {
                 fileURL: PreviewData.sevenTvCDN(PreviewData.sevenTvEmoteID(0), "4x"))
             return id
         }
-        var result = SevenTvUploadResult(emoteID: emoteID, name: draft.name, fileID: draft.fileID, pending: true)
+        var result = SevenTvUploadResult(
+            emoteID: emoteID, name: draft.name, fileID: draft.fileID, pending: true, fitted: Self.fitted(draft))
         if let setID = draft.setID {
             do {
                 let change = try add(setID: setID, emoteID: emoteID, alias: draft.alias, overrideConflicts: false, now: now)
@@ -331,6 +342,23 @@ final class PreviewSevenTvState: Sendable {
             }
         }
         return result
+    }
+
+    /// What the fit would send (57.10): nil unless the draft has a crop or a size or the file id says "big". The crop is taken
+    /// out of a 1200 x 1200 source ("tall": 100 x 3600), scaled to a longest side of `size` (512 by default, never larger).
+    static func fitted(_ draft: SevenTvUploadDraft) -> SevenTvFitResult? {
+        let lower = draft.fileID.lowercased()
+        guard draft.crop != nil || draft.size != nil || lower.contains("big") || lower.contains("tall") else { return nil }
+        let source = lower.contains("tall") ? (width: 100, height: 3_600) : (width: 1_200, height: 1_200)
+        guard let box = SevenTvEmoteRule.croppedSize(width: source.width, height: source.height, crop: draft.crop) else { return nil }
+        let longest = max(box.width, box.height)
+        let target = min(SevenTvEmoteRule.clampSize(draft.size) ?? 512, longest)
+        let scale = Double(target) / Double(longest)
+        let width = max(1, Int((Double(box.width) * scale).rounded()))
+        let height = max(1, Int((Double(box.height) * scale).rounded()))
+        let frames = 48
+        let bytes = Int64(width * height * frames / 12)
+        return SevenTvFitResult(width: width, height: height, frames: frames, bytes: bytes, quality: 82)
     }
 
     /// `GET /7tv/emotes/<id>`: an upload is pending on its first read, done after; the preview sets' emotes are done.

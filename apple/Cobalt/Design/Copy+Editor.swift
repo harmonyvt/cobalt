@@ -414,6 +414,8 @@ extension Copy {
             case .offline: return "you're offline · try again"
             case .off: return "this server can't crop that picture"
             case .notFound: return "that picture is gone from your library"
+            // the 7tv upload's crop takes the box only (Stage/SevenTvUploadSheet.swift)
+            case .other(let words) where words == Copy.SevenTv.cropBoxOnly: return words
             default: return "couldn't crop it · try again"
             }
         }

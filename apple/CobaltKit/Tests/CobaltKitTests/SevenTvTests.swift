@@ -4,7 +4,8 @@ import Testing
 
 // 7TV accounts (APP-API-CONTRACT 57): the wire shapes of 57.4/57.5, the refusals, the bookmarklet's link and the token checks,
 // the paths and bodies of every route, and the store and set model on the preview server. Uploading a picture as a new emote
-// (57.9): its shapes, rules, routes and refusals, and the upload model's polling.
+// (57.9): its shapes, rules, routes and refusals, and the upload model's polling. The fit (57.10): crop and size in the body,
+// `fitted` in the answer, its refusals, and which files are shrunk, refused or need a crop.
 
 private let sevenTvKey = "2d6b9e10-5c3a-4f7e-8a21-9b0c4d7e1f35"
 private let fakeToken = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIwMUdCMlMyQkNSIn0.c2lnbmF0dXJlLXBhcnQ"
@@ -521,6 +522,50 @@ struct SevenTvUploadShapeTests {
         #expect(SevenTvError.from(CobaltError.api(code: "error.seventv.too_big", httpStatus: 413)) == .tooBig)
     }
 
+    @Test func theFitsRefusalsHaveTheirOwnCodes() {
+        #expect(SevenTvError(code: "error.seventv.fit_failed", message: "ffmpeg could not decode it") == .fitFailed("ffmpeg could not decode it"))
+        #expect(SevenTvError(code: "error.seventv.fit_failed", message: "  ") == .fitFailed(nil))
+        #expect(SevenTvError(code: "error.seventv.fit_failed", message: "out of time")?.message == "out of time")
+        #expect(SevenTvError(code: "error.seventv.busy") == .busy)
+        #expect(SevenTvError(code: "error.seventv.too_large") == .tooLarge)
+        #expect(SevenTvError.from(CobaltError.api(code: "error.seventv.busy", httpStatus: 429)) == .busy)
+        #expect(SevenTvError.from(CobaltError.api(code: "error.seventv.fit_failed", httpStatus: 502)) == .fitFailed(nil))
+    }
+
+    @Test func aFittedAnswerSaysWhatWasSent() throws {
+        let json = """
+        {"status":"success","emote_id":"e1","name":"capyDance","file_id":"f","page_url":"","pending":true,
+         "fitted":{"width":512,"height":288,"frames":48,"bytes":812345,"quality":65},"added":null}
+        """
+        let result = try decode(SevenTvUploadResult.self, json)
+        #expect(result.fitted == SevenTvFitResult(width: 512, height: 288, frames: 48, bytes: 812_345, quality: 65))
+        let floats = try decode(
+            SevenTvUploadResult.self, #"{"emote_id":"e1","fitted":{"width":512.0,"height":512,"frames":1,"bytes":1024.0,"quality":82.0}}"#)
+        #expect(floats.fitted == SevenTvFitResult(width: 512, height: 512, frames: 1, bytes: 1_024, quality: 82))
+        #expect(try decode(SevenTvUploadResult.self, #"{"emote_id":"e1","fitted":null}"#).fitted == nil)
+        #expect(try decode(SevenTvUploadResult.self, wireUpload).fitted == nil, "an answer without fitted went as it was")
+    }
+
+    @Test func bigFilesAreShrunkUnlessAvifAndOddShapesNeedACrop() {
+        #expect(SevenTvEmoteRule.isFittable(contentType: "image/webp", name: nil))
+        #expect(SevenTvEmoteRule.isFittable(contentType: "image/JPEG; q=1", name: nil))
+        #expect(SevenTvEmoteRule.isFittable(contentType: "image/gif", name: "x.avif"), "the type wins over the name")
+        #expect(!SevenTvEmoteRule.isFittable(contentType: "image/avif", name: nil))
+        #expect(!SevenTvEmoteRule.isFittable(contentType: nil, name: "dance.AVIF"))
+        #expect(SevenTvEmoteRule.isFittable(contentType: nil, name: "dance.png"))
+        #expect(SevenTvEmoteRule.isFittable(contentType: nil, name: nil), "unknown passes; the server checks")
+        #expect(SevenTvEmoteRule.isOverSide(width: 1_001, height: 10) && !SevenTvEmoteRule.isOverSide(width: 1_000, height: 1_000))
+        #expect(!SevenTvEmoteRule.isOverSide(width: nil, height: nil))
+        #expect(SevenTvEmoteRule.shapeFits(width: 300, height: 100) && SevenTvEmoteRule.shapeFits(width: 10, height: 320))
+        #expect(!SevenTvEmoteRule.shapeFits(width: 301, height: 100) && !SevenTvEmoteRule.shapeFits(width: 10, height: 321))
+        #expect(SevenTvEmoteRule.shapeFits(width: 0, height: 100), "an unknown size passes")
+        let box = SevenTvEmoteRule.croppedSize(width: 1_280, height: 720, crop: ImageCropRect(x: 0.25, y: 0, w: 0.5, h: 0.5))
+        #expect(box?.width == 640 && box?.height == 360)
+        #expect(SevenTvEmoteRule.croppedSize(width: nil, height: 720, crop: nil) == nil)
+        #expect(SevenTvEmoteRule.clampSize(8) == 32 && SevenTvEmoteRule.clampSize(4_000) == 1_000 && SevenTvEmoteRule.clampSize(nil) == nil)
+        #expect(SevenTvEmoteRule.sizeChoices == [nil, 128, 256, 512, 1_000])
+    }
+
     @Test func namesFollowSevenTvsRule() {
         #expect(SevenTvEmoteRule.isValidName("catJAM"))
         #expect(SevenTvEmoteRule.isValidName("(:!+|.'?><*$#)_-"))
@@ -577,6 +622,28 @@ struct SevenTvUploadShapeTests {
         #expect(full["tags"] as? [String] == ["capy"])
         #expect(full["zero_width"] as? Bool == true && full["private"] as? Bool == true)
         #expect(full["set_id"] as? String == "s1" && full["alias"] as? String == "dance")
+        #expect(full["crop"] == nil && full["size"] == nil, "no crop or size: the file goes as it is")
+    }
+
+    @Test func cropAndSizeGoInTheBody() throws {
+        let draft = SevenTvUploadDraft(fileID: "f1", name: "n", crop: ImageCropRect(x: 0.1, y: 0.2, w: 0.5, h: 0.25), size: 256)
+        let body = SevenTvRoute.uploadBody(draft)
+        let crop = try #require(body["crop"] as? [String: Double])
+        #expect(crop == ["x": 0.1, "y": 0.2, "w": 0.5, "h": 0.25])
+        #expect(body["size"] as? Int == 256)
+        let wire = try #require(HTTPCobaltClient.jsonBody(body))
+        let parsed = try #require(JSONSerialization.jsonObject(with: wire) as? [String: Any])
+        let parsedCrop = try #require(parsed["crop"] as? [String: Double])
+        #expect(Set(parsedCrop.keys) == ["x", "y", "w", "h"] && parsedCrop["w"] == 0.5)
+        #expect(parsed["size"] as? Int == 256)
+        let whole = SevenTvRoute.uploadBody(SevenTvUploadDraft(fileID: "f1", name: "n", crop: .whole, size: 5_000))
+        #expect(whole["crop"] == nil, "the whole picture is no crop")
+        #expect(whole["size"] as? Int == 1_000, "size is clamped to 32...1000")
+        let outside = SevenTvRoute.uploadBody(
+            SevenTvUploadDraft(fileID: "f1", name: "n", crop: ImageCropRect(x: 0.8, y: -1, w: 0.5, h: 0.5)))
+        let clamped = try #require(outside["crop"] as? [String: Double])
+        let x = try #require(clamped["x"]), w = try #require(clamped["w"])
+        #expect(clamped["y"] == 0 && abs(x + w - 1) < 1e-9, "a box is clamped into the picture")
     }
 }
 
@@ -615,6 +682,13 @@ struct SevenTvUploadHTTPTests {
             case "gone": return .json(#"{"status":"error","error":{"code":"error.seventv.file_not_found"}}"#, status: 404)
             case "clip": return .json(#"{"status":"error","error":{"code":"error.seventv.file_type"}}"#, status: 415)
             case "huge": return .json(#"{"status":"error","error":{"code":"error.seventv.too_big"}}"#, status: 413)
+            case "busy": return .json(#"{"status":"error","error":{"code":"error.seventv.busy"}}"#, status: 429)
+            case "tall":
+                return .json(#"{"status":"error","error":{"code":"error.seventv.too_large"},"message":"pass a crop box"}"#, status: 400)
+            case "broken":
+                return .json(
+                    #"{"status":"error","error":{"code":"error.seventv.fit_failed","message":"could not decode the picture"}}"#, status: 422)
+            case "gateway": return .json(#"{"status":"error","error":{"code":"error.seventv.fit_failed"}}"#, status: 502)
             default: return .json(#"{"status":"error","error":{"code":"error.seventv.rejected"},"message":"emote name is taken"}"#, status: 400)
             }
         }
@@ -623,6 +697,14 @@ struct SevenTvUploadHTTPTests {
         await #expect(throws: SevenTvError.fileNotFound) { _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "gone", name: "a")) }
         await #expect(throws: SevenTvError.fileType) { _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "clip", name: "a")) }
         await #expect(throws: SevenTvError.tooBig) { _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "huge", name: "a")) }
+        await #expect(throws: SevenTvError.busy) { _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "busy", name: "a")) }
+        await #expect(throws: SevenTvError.tooLarge) { _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "tall", name: "a")) }
+        await #expect(throws: SevenTvError.fitFailed("could not decode the picture")) {
+            _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "broken", name: "a"))
+        }
+        await #expect(throws: SevenTvError.fitFailed(nil)) {
+            _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "gateway", name: "a"))
+        }
         await #expect(throws: SevenTvError.rejected("emote name is taken")) {
             _ = try await c.uploadSevenTvEmote(SevenTvUploadDraft(fileID: "ok", name: "a"))
         }
@@ -682,8 +764,11 @@ struct SevenTvUploadModelTests {
         video.edit()
         #expect(video.phase == .editing)
 
-        let big = app.sevenTv.uploader(fileID: "f_webp_3", bytes: 8_000_000, title: "big")
-        #expect(big.isTooBig && !big.canUpload)
+        let big = app.sevenTv.uploader(fileID: "f_webp_3", bytes: 8_000_000, title: "big", contentType: "image/avif")
+        #expect(big.isTooBig && !big.willShrink && !big.canUpload, "an avif over the cap can't be shrunk")
+        let wideAvif = app.sevenTv.uploader(
+            fileID: "f_avif", bytes: 100, title: "w", contentType: "image/avif", width: 1_200, height: 600)
+        #expect(wideAvif.isTooBig && !wideAvif.isOverBytes && wideAvif.isOverSide && !wideAvif.fittable)
         let badName = app.sevenTv.uploader(fileID: "f_webp_4", bytes: nil, title: "x")
         badName.name = "two words"
         #expect(!badName.canUpload)
@@ -693,6 +778,65 @@ struct SevenTvUploadModelTests {
 
         let relink = await linkedApp(.renditions)
         #expect(!relink.sevenTv.canUpload && !relink.sevenTv.uploader(fileID: "f", bytes: nil, title: "x").canUpload)
+    }
+
+    @Test func bigFittableFilesAreShrunkNotRefused() async throws {
+        let app = await linkedApp()
+        let big = fast(app.sevenTv.uploader(fileID: "f_big_webp", bytes: 9_400_000, title: "big", contentType: "image/webp"))
+        #expect(big.fittable && big.isOverBytes && big.willShrink && !big.isTooBig && big.canUpload)
+        let wide = app.sevenTv.uploader(fileID: "f_png", bytes: 100, title: "w", contentType: "image/png", width: 2_000, height: 1_000)
+        #expect(wide.willShrink && wide.isOverSide && !wide.isOverBytes && wide.canUpload)
+        let unknown = app.sevenTv.uploader(fileID: "f_x", bytes: 9_400_000, title: "x")
+        #expect(unknown.willShrink && unknown.canUpload, "an unknown type is left to the server")
+        await big.upload()
+        #expect(big.phase == .done)
+        let fitted = try #require(big.result?.fitted)
+        #expect(fitted.width == 512 && fitted.height == 512 && fitted.frames == 48 && fitted.quality == 82)
+    }
+
+    @Test func anOddShapeNeedsACropAndTheCropAndSizeAreSent() async throws {
+        let app = await linkedApp()
+        let file = LibraryFile(
+            id: "f_tall_webp", kind: .public, source: .upload, name: "tall.webp", url: nil, contentType: "image/webp", bytes: 400_000,
+            width: 100, height: 3_600, duration: nil, createdAt: Date(timeIntervalSince1970: 1_790_000_000), mediaName: nil,
+            deletable: true)
+        let model = fast(app.sevenTv.uploader(file: file, title: "tall"))
+        #expect(model.needsCrop && !model.canUpload, "1:36 is outside 1:32..3:1")
+        #expect(model.cropPixels == nil)
+        model.useCrop(ImageCropRect(x: 0, y: 0, w: 1, h: 0.95))
+        #expect(model.needsCrop, "100 x 3420 is still too tall")
+        model.useCrop(ImageCropRect(x: 0, y: 0.4, w: 1, h: 0.05))
+        #expect(!model.needsCrop && model.canUpload)
+        #expect(model.cropPixels?.width == 100 && model.cropPixels?.height == 180)
+        model.size = 128
+        await model.upload()
+        #expect(model.phase == .done)
+        let fitted = try #require(model.result?.fitted)
+        #expect(fitted.width == 71 && fitted.height == 128, "the box scaled to a longest side of 128")
+        model.useCrop(.whole)
+        #expect(model.crop == nil && model.needsCrop, "the whole picture clears the crop")
+    }
+
+    @Test func theCropSheetsSizeFillsAnUnknownSize() async throws {
+        let app = await linkedApp()
+        let model = app.sevenTv.uploader(fileID: "f_webp_7", bytes: nil, title: "x", contentType: "image/webp")
+        #expect(model.width == nil && !model.needsCrop)
+        model.useCrop(ImageCropRect(x: 0.25, y: 0.25, w: 0.5, h: 0.5), width: 1_280, height: 720)
+        #expect(model.width == 1_280 && model.height == 720 && model.isOverSide && model.willShrink)
+        #expect(model.cropPixels?.width == 640 && model.cropPixels?.height == 360)
+    }
+
+    @Test func theFitsRefusalsFailTheUpload() async throws {
+        let app = await linkedApp()
+        let busy = fast(app.sevenTv.uploader(fileID: "f_busy_webp", bytes: nil, title: "b"))
+        await busy.upload()
+        #expect(busy.phase == .failed(.busy))
+        let broken = fast(app.sevenTv.uploader(fileID: "f_broken_webp", bytes: nil, title: "b"))
+        await broken.upload()
+        #expect(broken.phase == .failed(.fitFailed("could not decode the picture")))
+        let tall = fast(app.sevenTv.uploader(fileID: "f_tall_webp", bytes: nil, title: "t"))
+        await tall.upload()
+        #expect(tall.phase == .failed(.tooLarge), "the server refuses a shape the app could not see")
     }
 
     @Test func pollingGivesUpAfterItsReads() async throws {

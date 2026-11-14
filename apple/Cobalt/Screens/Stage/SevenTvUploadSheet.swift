@@ -5,7 +5,10 @@ import SwiftUI
 // 7TV account. The detail page's secondary row shows the icon (`SevenTvUploadIcon`) when the file is one 7TV takes and the
 // account is linked and not signed out; `sevenTvUploadReady` reads the account once so the icon can know. The sheet: the name
 // (from the post's title, spaces dropped), private and zero-width, an optional set (channel chips, then the set), "upload";
-// then "processing on 7tv" until 7TV is done, the emote, "open on 7tv" and where it went.
+// then "processing on 7tv" until 7TV is done, the emote, "open on 7tv" and where it went. The fit (57.10): for webp, gif, png
+// and jpeg a "size" row (auto, 128, 256, 512, 1000) and "crop…" (the picture crop sheet with one button, "use this crop"; the
+// box only); a big file is shrunk by the server, so it only gets a calm note; an avif that big is refused here. The answer's
+// `fitted` shows as "sent as W×H · N frames · X kb".
 
 /// The secondary-row icon. Nothing at all unless the file can go to 7TV and the account can upload.
 struct SevenTvUploadIcon: View {
@@ -22,12 +25,19 @@ struct SevenTvUploadIcon: View {
     var body: some View {
         if visible, let file {
             DetailChoiceButton(title: Copy.SevenTv.uploadAction, symbol: Symbol.SevenTv.upload) {
-                upload = model.sevenTv.uploader(fileID: file.id, bytes: file.bytes, title: title)
+                upload = model.sevenTv.uploader(file: file, title: title)
             }
             .sheet(item: $upload) { sheetModel in
-                SevenTvUploadSheet(upload: sheetModel)
+                SevenTvUploadSheet(upload: sheetModel, picture: Self.picture(model: model, file: file))
             }
         }
+    }
+
+    /// The file's picture at full size for the crop sheet (the copy on this device, else a download), as the library's crop does.
+    @MainActor
+    static func picture(model: AppModel, file: LibraryFile) -> @MainActor () async throws -> CGImage {
+        let rendition = Rendition(id: "f:\(file.id)", kind: .item(index: 0, type: .photo), file: file, createdAt: file.createdAt)
+        return { try await model.cropPicture(of: rendition) }
     }
 }
 
@@ -46,7 +56,10 @@ extension View {
 
 struct SevenTvUploadSheet: View {
     let upload: SevenTvUploadModel
+    /// The picture for "crop…"; nil hides it (the size row still shows).
+    var picture: (@MainActor () async throws -> CGImage)? = nil
 
+    @State private var cropping = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.shell) private var shell
@@ -72,7 +85,7 @@ struct SevenTvUploadSheet: View {
                 if showsResult {
                     SevenTvUploadResultView(upload: upload) { dismiss() }
                 } else {
-                    SevenTvUploadForm(upload: upload, sending: sending, send: send)
+                    SevenTvUploadForm(upload: upload, sending: sending, canCrop: picture != nil, crop: { cropping = true }, send: send)
                 }
             }
             .padding(.horizontal, 16)
@@ -91,6 +104,11 @@ struct SevenTvUploadSheet: View {
         .haptic(.error, trigger: upload.phase) { phase in
             if case .failed = phase { return true }
             return false
+        }
+        .sheet(isPresented: $cropping) {
+            if let picture {
+                ImageCropSheet.sevenTv(upload: upload, load: picture) { cropping = false }
+            }
         }
         .onDisappear { upload.stop() }
     }
@@ -125,6 +143,8 @@ struct SevenTvUploadSheet: View {
 private struct SevenTvUploadForm: View {
     @Bindable var upload: SevenTvUploadModel
     let sending: Bool
+    let canCrop: Bool
+    let crop: () -> Void
     let send: () -> Void
 
     private var problem: String? {
@@ -137,8 +157,10 @@ private struct SevenTvUploadForm: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             nameField
-            if upload.isTooBig {
-                SevenTvUploadNote(text: Copy.SevenTv.tooBigNote, tint: CobaltColor.errorText)
+            sizeNotes
+            if upload.fittable {
+                SevenTvUploadFitRow(upload: upload, canCrop: canCrop, crop: crop)
+                    .disabled(sending)
             }
             VStack(alignment: .leading, spacing: 4) {
                 SevenTvUploadToggle(title: Copy.SevenTv.privateToggle, note: Copy.SevenTv.privateNote, isOn: $upload.isPrivate)
@@ -161,7 +183,23 @@ private struct SevenTvUploadForm: View {
             .disabled(!upload.canUpload)
         }
         .onChange(of: upload.name) { upload.edit() }
+        .onChange(of: upload.size) { upload.edit() }
         .animation(Motion.rows, value: upload.addToSet)
+        .animation(Motion.rows, value: upload.crop)
+    }
+
+    /// Too big and not shrinkable (red), too big but shrunk by the server (calm), a shape 7TV drops (red).
+    @ViewBuilder
+    private var sizeNotes: some View {
+        if upload.isTooBig {
+            SevenTvUploadNote(text: upload.isOverBytes ? Copy.SevenTv.tooBigNote : Copy.SevenTv.tooWideNote, tint: CobaltColor.errorText)
+        } else if upload.willShrink {
+            SevenTvUploadNote(
+                text: upload.isOverBytes ? Copy.SevenTv.shrinkBytesNote : Copy.SevenTv.shrinkSideNote, tint: CobaltColor.caption)
+        }
+        if upload.needsCrop {
+            SevenTvUploadNote(text: Copy.SevenTv.needsCropNote, tint: CobaltColor.errorText)
+        }
     }
 
     private var nameField: some View {
@@ -184,6 +222,86 @@ private struct SevenTvUploadForm: View {
                 .foregroundStyle(nameLooksWrong ? CobaltColor.errorText : CobaltColor.caption)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// The fit (57.10): the size chips (the longest side; auto = the server's choice), then "crop…" or the crop set.
+private struct SevenTvUploadFitRow: View {
+    @Bindable var upload: SevenTvUploadModel
+    let canCrop: Bool
+    let crop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text(Copy.SevenTv.sizeLabel)
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(CobaltColor.caption)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(SevenTvEmoteRule.sizeChoices, id: \.self) { choice in
+                            SevenTvChip(title: Copy.SevenTv.sizeChoice(choice), selected: upload.size == choice) {
+                                upload.size = choice
+                            }
+                        }
+                    }
+                }
+                .accessibilityLabel(Text(Copy.SevenTv.sizeA11y))
+            }
+            Text(Copy.SevenTv.sizeNote)
+                .font(CobaltType.badge)
+                .foregroundStyle(CobaltColor.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            if canCrop {
+                cropRow
+            }
+        }
+    }
+
+    private var cropText: String {
+        if let px = upload.cropPixels { return Copy.SevenTv.cropLine(px.width, px.height) }
+        return Copy.SevenTv.cropSet
+    }
+
+    @ViewBuilder
+    private var cropRow: some View {
+        if upload.crop != nil {
+            HStack(spacing: 10) {
+                Image(systemName: Symbol.SevenTv.crop)
+                    .foregroundStyle(CobaltColor.caption)
+                    .accessibilityHidden(true)
+                Text(cropText)
+                    .font(CobaltType.captionSmall.monospacedDigit())
+                    .foregroundStyle(CobaltColor.text)
+                Button(Copy.SevenTv.clearCrop, systemImage: Symbol.SevenTv.clearCrop) { upload.useCrop(nil) }
+                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: Metrics.hit)
+        } else {
+            Button(Copy.SevenTv.cropAction, systemImage: Symbol.SevenTv.crop) { crop() }
+                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+        }
+    }
+}
+
+extension ImageCropSheet {
+    /// From "upload to 7tv": the file's picture and one button, "use this crop", which keeps the box for the upload (the server
+    /// crops it, 57.10). Turning, flipping and removing the background are not sent, so a crop with any of them is refused.
+    @MainActor
+    static func sevenTv(
+        upload: SevenTvUploadModel, load: @escaping @MainActor () async throws -> CGImage, close: @escaping () -> Void
+    ) -> ImageCropSheet {
+        let use = ImageCropAction(title: Copy.SevenTv.useCrop, symbol: Symbol.SevenTv.crop) { spec, picture in
+            guard spec.rotate == 0, spec.flip == .none, !spec.cutout else {
+                throw ImageCropError.other(Copy.SevenTv.cropBoxOnly)
+            }
+            upload.useCrop(spec.crop, width: picture?.width, height: picture?.height)
+        }
+        let serverCan: @MainActor (Bool) -> Bool = { _ in false }
+        return ImageCropSheet(
+            name: upload.cleanName, load: load, serverCan: serverCan, note: Copy.SevenTv.cropNote, primary: use, secondary: nil,
+            close: close)
     }
 }
 
@@ -308,6 +426,11 @@ private struct SevenTvUploadResultView: View {
                 SevenTvUploadNote(text: Copy.SevenTv.processingNote, tint: CobaltColor.caption)
             }
             placement
+            if let fitted = upload.result?.fitted {
+                SevenTvUploadNote(
+                    text: Copy.SevenTv.sentAs(width: fitted.width, height: fitted.height, frames: fitted.frames, bytes: fitted.bytes),
+                    tint: CobaltColor.caption)
+            }
             buttons
         }
         .animation(Motion.rows, value: upload.phase)

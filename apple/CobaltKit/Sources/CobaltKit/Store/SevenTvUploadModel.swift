@@ -5,6 +5,10 @@ import Observation
 /// (prefilled from the post's title), private and zero-width, an optional set to add it to, then `POST /7tv/emotes` and
 /// `GET /7tv/emotes/<id>` every `pollEvery` seconds until 7TV has processed it (`pending: false`), at most `maxPolls` times.
 ///
+/// The fit (57.10): a webp, gif, png or jpeg over 7TV's byte cap or 1000 px a side is shrunk by the server, so it is no blocker;
+/// an avif that big is. A shape outside width:height 1:32..3:1 needs a crop box (`crop`, fractions of the picture) before the
+/// button works. `size` (the longest side, nil = auto) and `crop` go with the upload; the answer's `fitted` says what was sent.
+///
 /// Phases: `editing` → `uploading` → `processing` → `done` (with `emote` once read; `timedOut` when 7TV took longer than the
 /// polling). A refused upload is `failed` and can be tried again (back to `editing` with `edit()`). A refused add to the set
 /// does not fail the upload: `result.addError` says why.
@@ -20,7 +24,16 @@ public final class SevenTvUploadModel: Identifiable {
 
     public let fileID: String
     public let bytes: Int64?
+    public let contentType: String?
+    public let fileName: String?
+    /// The picture's size in px: the library's, or the picture's once the crop sheet opened it (nil when unknown).
+    public private(set) var width: Int?
+    public private(set) var height: Int?
     public var name: String
+    /// The box to send (57.10), fractions of the picture; nil sends the whole picture.
+    public var crop: ImageCropRect?
+    /// The longest side in px (one of `SevenTvEmoteRule.sizeChoices`); nil = auto.
+    public var size: Int?
     public var isPrivate = false
     public var zeroWidth = false
     /// Put the new emote in a set too.
@@ -42,9 +55,16 @@ public final class SevenTvUploadModel: Identifiable {
     @ObservationIgnored private let store: SevenTvStore
     @ObservationIgnored private var token = 0
 
-    init(fileID: String, bytes: Int64?, title: String?, store: SevenTvStore) {
+    init(
+        fileID: String, bytes: Int64?, title: String?, contentType: String? = nil, fileName: String? = nil, width: Int? = nil,
+        height: Int? = nil, store: SevenTvStore
+    ) {
         self.fileID = fileID
         self.bytes = bytes
+        self.contentType = contentType
+        self.fileName = fileName
+        self.width = width.flatMap { $0 > 0 ? $0 : nil }
+        self.height = height.flatMap { $0 > 0 ? $0 : nil }
         self.name = SevenTvEmoteRule.suggestName(from: title)
         self.store = store
     }
@@ -54,7 +74,27 @@ public final class SevenTvUploadModel: Identifiable {
     /// The name as it will be sent (spaces around it dropped).
     public var cleanName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     public var nameIsValid: Bool { SevenTvEmoteRule.isValidName(cleanName) }
-    public var isTooBig: Bool { SevenTvEmoteRule.isTooBig(bytes) }
+
+    /// The server can crop and shrink this file (webp, gif, png, jpeg; an unknown type passes): the sheet offers crop and size.
+    public var fittable: Bool { SevenTvEmoteRule.isFittable(contentType: contentType, name: fileName) }
+    /// Over 7TV's byte cap.
+    public var isOverBytes: Bool { SevenTvEmoteRule.isTooBig(bytes) }
+    /// Over 1000 px a side.
+    public var isOverSide: Bool { SevenTvEmoteRule.isOverSide(width: width, height: height) }
+    /// Too big, and the server cannot shrink it (an avif): the upload is off.
+    public var isTooBig: Bool { !fittable && (isOverBytes || isOverSide) }
+    /// Too big for 7TV as it is, but the server shrinks it to fit.
+    public var willShrink: Bool { fittable && (isOverBytes || isOverSide) }
+    /// The crop box in px, when the picture's size is known.
+    public var cropPixels: (width: Int, height: Int)? {
+        guard crop != nil else { return nil }
+        return SevenTvEmoteRule.croppedSize(width: width, height: height, crop: crop)
+    }
+    /// The picture (or its crop box) is outside 7TV's 1:32..3:1: a crop box has to fix it first. An unknown size passes.
+    public var needsCrop: Bool {
+        guard let shape = SevenTvEmoteRule.croppedSize(width: width, height: height, crop: crop) else { return false }
+        return !SevenTvEmoteRule.shapeFits(width: Double(shape.width), height: Double(shape.height))
+    }
 
     /// The channels whose sets the account may change.
     public var channels: [SevenTvChannelInfo] { store.channels.filter { $0.can.manageSets } }
@@ -64,9 +104,10 @@ public final class SevenTvUploadModel: Identifiable {
     public var setsState: SevenTvStore.State { channelID.map { store.setsState(of: $0) } ?? .idle }
     public var pickedSet: SevenTvSetRow? { setID.flatMap { id in sets.first { $0.id == id } } }
 
-    /// Everything the button needs: a valid name, a file 7TV takes, a set when "add to a set" is on.
+    /// Everything the button needs: a valid name, a file 7TV takes (or the server can fit), a shape 7TV keeps, a set when
+    /// "add to a set" is on.
     public var canUpload: Bool {
-        guard nameIsValid, !isTooBig, store.canUpload else { return false }
+        guard nameIsValid, !isTooBig, !needsCrop, store.canUpload else { return false }
         switch phase {
         case .editing, .failed: break
         default: return false
@@ -103,6 +144,19 @@ public final class SevenTvUploadModel: Identifiable {
         setID = (list.first { $0.live } ?? list.first)?.id
     }
 
+    // MARK: the fit
+
+    /// The crop sheet's box (fractions of the picture; the whole picture or nil clears it). `width`/`height` are the picture's
+    /// size as the sheet opened it, kept when the library did not know it.
+    public func useCrop(_ rect: ImageCropRect?, width: Int? = nil, height: Int? = nil) {
+        crop = rect.map(\.clamped).flatMap { $0.isWhole ? nil : $0 }
+        if let width, let height, width > 0, height > 0 {
+            self.width = width
+            self.height = height
+        }
+        edit()
+    }
+
     // MARK: uploading
 
     /// `POST /7tv/emotes`, then the polling. Never throws: `phase` says what came of it.
@@ -111,7 +165,8 @@ public final class SevenTvUploadModel: Identifiable {
         token += 1
         let mine = token
         let draft = SevenTvUploadDraft(
-            fileID: fileID, name: cleanName, zeroWidth: zeroWidth, isPrivate: isPrivate, setID: addToSet ? setID : nil)
+            fileID: fileID, name: cleanName, zeroWidth: zeroWidth, isPrivate: isPrivate, setID: addToSet ? setID : nil,
+            crop: fittable ? crop : nil, size: fittable ? size : nil)
         phase = .uploading
         timedOut = false
         emote = nil
@@ -181,8 +236,20 @@ extension SevenTvStore {
     /// An account that can upload: linked, and 7TV has not signed it out.
     public var canUpload: Bool { isLinked && account?.status == .ok }
 
-    /// The "upload to 7tv" sheet's model for one library file.
-    public func uploader(fileID: String, bytes: Int64?, title: String?) -> SevenTvUploadModel {
-        SevenTvUploadModel(fileID: fileID, bytes: bytes, title: title, store: self)
+    /// The "upload to 7tv" sheet's model for one library file (its type, name and size decide what the fit can do).
+    public func uploader(
+        fileID: String, bytes: Int64?, title: String?, contentType: String? = nil, fileName: String? = nil, width: Int? = nil,
+        height: Int? = nil
+    ) -> SevenTvUploadModel {
+        SevenTvUploadModel(
+            fileID: fileID, bytes: bytes, title: title, contentType: contentType, fileName: fileName, width: width, height: height,
+            store: self)
+    }
+
+    /// The sheet's model for a library file as the detail page has it.
+    public func uploader(file: LibraryFile, title: String?) -> SevenTvUploadModel {
+        uploader(
+            fileID: file.id, bytes: file.bytes, title: title, contentType: file.contentType, fileName: file.name, width: file.width,
+            height: file.height)
     }
 }
