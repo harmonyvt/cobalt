@@ -1,21 +1,15 @@
 import CobaltKit
 import SwiftUI
 
-// "add from 7tv" on the set screen (APP-API-CONTRACT 57.7, mockup screen 3): section 20's emote search with its sorts (the
-// same `GET /emotes?q=&sort=&page=` the 7tv circle uses). A tile's + adds the emote under its own name; a long press (a right
-// click on the Mac) offers "add with another name…"; an emote already in the set shows ✓. A name already in the set asks
-// before it swaps. The whole set is paged in first so every ✓ is right.
+// "add from 7tv" on the set screen and the 7tv tab's search (APP-API-CONTRACT 57.7, mockup `7tv-tab/` search): section 20's
+// emote search with its sorts (the same `GET /emotes?q=&sort=&page=` the 7tv circle uses). A tile's + adds the emote under its
+// own name; a long press (a right click on the Mac) offers "add with another name…"; an emote already in the set shows ✓. A
+// name already in the set (the loaded set says so first, else 7TV's 409) opens the clash sheet: another name, rename the one
+// there, or replace it. The whole set is paged in first so every ✓ and every clash is right.
 
 struct SevenTvAddGrid: View {
     let model: AppModel
     let emoteSet: SevenTvSetModel
-
-    /// An add waiting for the owner: a name that is taken (swap?).
-    private struct PendingAdd: Identifiable {
-        let hit: EmoteHit
-        let alias: String?
-        var id: String { hit.id + "/" + (alias ?? hit.name) }
-    }
 
     @State private var query = ""
     @State private var sort: EmoteSort = .top
@@ -29,7 +23,7 @@ struct SevenTvAddGrid: View {
     @State private var token = 0
     @State private var naming: EmoteHit?
     @State private var aliasDraft = ""
-    @State private var swapping: PendingAdd?
+    @State private var clash: SevenTvNameClash?
     @State private var addedTick = 0
     @State private var failTick = 0
     @Environment(\.shell) private var shell
@@ -76,27 +70,18 @@ struct SevenTvAddGrid: View {
             }
             .scrollDismissesKeyboard(.immediately)
         }
-        .task { await emoteSet.loadEverything() }
+        .task(id: emoteSet.setID) {
+            if emoteSet.state != .loaded { await emoteSet.load() }
+            await emoteSet.loadEverything()
+        }
         .task(id: Ask(query: query, sort: sort)) { await search() }
-        .modifier(prompts)
+        .modifier(SevenTvAddPrompts(naming: $naming, aliasDraft: $aliasDraft, addNamed: { addNamed() }))
+        .sheet(item: $clash) { found in
+            SevenTvClashSheet(emoteSet: emoteSet, clash: found)
+        }
         .haptic(.selection, trigger: sort)
         .haptic(.success, trigger: addedTick)
         .haptic(.error, trigger: failTick)
-    }
-
-    private var prompts: SevenTvAddPrompts {
-        SevenTvAddPrompts(
-            naming: $naming, aliasDraft: $aliasDraft, swapping: swappingShown, swapTitle: swapTitle,
-            addNamed: { addNamed() }, confirmSwap: { confirmSwap() })
-    }
-
-    private var swapTitle: String {
-        guard let pending = swapping else { return "" }
-        return Copy.SevenTv.swapTitle(pending.alias ?? pending.hit.name)
-    }
-
-    private var swappingShown: Binding<Bool> {
-        Binding(get: { swapping != nil }, set: { if !$0 { swapping = nil } })
     }
 
     @ViewBuilder
@@ -150,28 +135,17 @@ struct SevenTvAddGrid: View {
         add(hit, alias: alias == hit.name ? nil : alias)
     }
 
-    /// A name already in the set asks first; otherwise the add goes straight to 7TV.
+    /// A name already in the set opens the clash sheet (from the loaded set without asking, or 7TV's 409); otherwise it is in.
     private func add(_ hit: EmoteHit, alias: String?) {
-        if emoteSet.emote(aliased: alias ?? hit.name) != nil {
-            swapping = PendingAdd(hit: hit, alias: alias)
-            return
-        }
-        send(hit, alias: alias, swap: false)
-    }
-
-    private func confirmSwap() {
-        guard let pending = swapping else { return }
-        swapping = nil
-        send(pending.hit, alias: pending.alias, swap: true)
-    }
-
-    private func send(_ hit: EmoteHit, alias: String?, swap: Bool) {
         let name = alias ?? hit.name
         Task {
             do {
-                try await emoteSet.add(hit, alias: alias, overrideConflicts: swap)
-                shell.showStatus(Copy.SevenTv.added(name))
-                addedTick += 1
+                if let found = try await emoteSet.addChecking(hit, alias: alias) {
+                    clash = found
+                } else {
+                    shell.showStatus(Copy.SevenTv.added(name))
+                    addedTick += 1
+                }
             } catch {
                 shell.showStatus(Copy.SevenTv.message(for: error))
                 failTick += 1
@@ -229,14 +203,11 @@ struct SevenTvAddGrid: View {
     }
 }
 
-/// The two questions of an add: the other name, and "swap?" when the name is taken.
+/// "add with another name…": the name, in an alert.
 private struct SevenTvAddPrompts: ViewModifier {
     @Binding var naming: EmoteHit?
     @Binding var aliasDraft: String
-    @Binding var swapping: Bool
-    let swapTitle: String
     let addNamed: () -> Void
-    let confirmSwap: () -> Void
 
     private var namingShown: Binding<Bool> {
         Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })
@@ -255,12 +226,6 @@ private struct SevenTvAddPrompts: ViewModifier {
                 Button(Copy.SevenTv.cancel, role: .cancel) {}
             } message: {
                 Text(Copy.SevenTv.addAsMessage(naming?.name ?? ""))
-            }
-            .confirmationDialog(swapTitle, isPresented: $swapping, titleVisibility: .visible) {
-                Button(Copy.SevenTv.swap, role: .destructive) { confirmSwap() }
-                Button(Copy.SevenTv.cancel, role: .cancel) {}
-            } message: {
-                Text(Copy.SevenTv.swapMessage)
             }
     }
 }

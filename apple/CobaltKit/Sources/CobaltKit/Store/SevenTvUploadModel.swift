@@ -180,6 +180,7 @@ public final class SevenTvUploadModel: Identifiable {
             phase = .failed(refusal)
             return
         }
+        store.noteUploaded(answer, fileID: fileID)       // the upload stands even when the sheet closed meanwhile
         guard mine == token else { return }
         result = answer
         if let added = answer.added, let channelID {
@@ -202,6 +203,7 @@ public final class SevenTvUploadModel: Identifiable {
                 let info = try await store.setClient().sevenTvEmote(id: answer.emoteID)
                 guard mine == token else { return }
                 emote = info
+                store.noteEmote(info)
                 if !info.pending {
                     phase = .done
                     return

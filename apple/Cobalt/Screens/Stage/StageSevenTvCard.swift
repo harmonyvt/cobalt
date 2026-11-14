@@ -2,7 +2,8 @@ import CobaltKit
 import Observation
 import SwiftUI
 
-// The 7TV card (APP-API-CONTRACT 57.7), under the Twitch card. Not linked: "link 7tv" opens the link sheet. Linked: the
+// The 7TV card (APP-API-CONTRACT 57.7). The studio tab now shows only a "7tv →" row (`StageSevenTvShortcut`) and the 7tv tab
+// (`SevenTvScreen`) reuses the card's parts, controller and presentations; the card itself stays for its previews. Not linked: "link 7tv" opens the link sheet. Linked: the
 // avatar and name, "expires in N days" under 7 days, unlink (asks first); channel chips (you first); the picked channel's sets,
 // the live one marked, each with open and (with `can.make_live`) make live; new set (with `can.create_sets`). 7TV signed the
 // token out: an amber line and "link again". A server without the routes hides the card. The state is `model.sevenTv`; taps
@@ -30,12 +31,24 @@ final class SevenTvController {
     private(set) var busy: Set<String> = []
     private(set) var doneTick = 0
     private(set) var failTick = 0
+    /// One model per open set, so the 7tv tab's live preview, its search and the pushed set screen edit the same grid.
+    @ObservationIgnored private var setModels: [String: SevenTvSetModel] = [:]
 
     init(model: AppModel) {
         self.model = model
     }
 
     var store: SevenTvStore { model.sevenTv }
+
+    /// The set's model, made once per set.
+    func setModel(_ setID: String, channelID: String) -> SevenTvSetModel {
+        if let made = setModels[setID], made.channelID == channelID { return made }
+        let made = store.openSet(setID, channelID: channelID)
+        setModels[setID] = made
+        return made
+    }
+
+    func setModel(for route: SevenTvSetRoute) -> SevenTvSetModel { setModel(route.setID, channelID: route.channelID) }
 
     func isBusy(_ key: String) -> Bool { busy.contains(key) }
 
@@ -130,7 +143,7 @@ struct StageSevenTvCard: View {
 
 // MARK: - what the card shows
 
-private struct SevenTvCardContent: View {
+struct SevenTvCardContent: View {
     let controller: SevenTvController
 
     @Environment(\.shell) private var shell
@@ -230,7 +243,7 @@ private struct SevenTvCardContent: View {
 }
 
 /// The avatar, the name, "linked · 3 channels you can edit" (or the expiry when it is close), and the unlink button.
-private struct SevenTvAccountRow<Trailing: View>: View {
+struct SevenTvAccountRow<Trailing: View>: View {
     let account: SevenTvUser?
     let channels: Int
     let now: Date
@@ -262,7 +275,7 @@ private struct SevenTvAccountRow<Trailing: View>: View {
 }
 
 /// One chip per channel, the account's own first.
-private struct SevenTvChannelChips: View {
+struct SevenTvChannelChips: View {
     let store: SevenTvStore
 
     var body: some View {
@@ -283,7 +296,7 @@ private struct SevenTvChannelChips: View {
 }
 
 /// The picked channel's sets, live first, and "new set".
-private struct SevenTvSetList: View {
+struct SevenTvSetList: View {
     let controller: SevenTvController
     let channel: SevenTvChannelInfo
 
@@ -323,7 +336,7 @@ private struct SevenTvSetList: View {
 }
 
 /// One set: its name (and "live"), how full it is, open and make live.
-private struct SevenTvSetLine: View {
+struct SevenTvSetLine: View {
     let controller: SevenTvController
     let channel: SevenTvChannelInfo
     let row: SevenTvSetRow
@@ -369,6 +382,58 @@ private struct SevenTvSetLine: View {
                 .monospacedDigit()
         }
         .contentShape(Rectangle())
+    }
+}
+
+// MARK: - the studio's row
+
+/// The studio tab's one line where the 7TV card was: "7tv →", which shows the 7tv tab. Hidden on a server without the routes.
+struct StageSevenTvShortcut: View {
+    let model: AppModel
+
+    private var store: SevenTvStore { model.sevenTv }
+    private var hidden: Bool { store.status == nil && store.state == .failed(.off) }
+
+    private var line: String {
+        guard let status = store.status, status.linked else { return Copy.SevenTv.shortcutNotLinked }
+        if status.needsRelink { return Copy.SevenTv.signedOut }
+        return status.account.map { "\($0.name) · \(Copy.SevenTv.shortcutBody)" } ?? Copy.SevenTv.shortcutBody
+    }
+
+    var body: some View {
+        Group {
+            if hidden {
+                Color.clear.frame(height: 0)
+            } else {
+                Button { model.selectedTab = .sevenTv } label: {
+                    HStack(spacing: 10) {
+                        SevenTvAvatar(url: store.account?.avatarURL, size: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(Copy.SevenTv.title)
+                                .font(CobaltType.bodySemibold)
+                                .foregroundStyle(CobaltColor.text)
+                            Text(line)
+                                .font(CobaltType.captionSmall)
+                                .foregroundStyle(store.status?.needsRelink == true ? CobaltColor.collection : CobaltColor.caption)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: Symbol.SevenTv.shortcut)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(CobaltColor.caption)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityHint(Copy.SevenTv.shortcutA11y)
+            }
+        }
+        .task { if store.state == .idle { await store.load() } }
     }
 }
 
@@ -492,7 +557,7 @@ private struct SevenTvPresentations: ViewModifier {
                 SevenTvLinkSheet(store: controller.store)
             }
             .navigationDestination(item: $controller.openSet) { route in
-                SevenTvSetScreen(model: controller.model, route: route)
+                SevenTvSetScreen(model: controller.model, route: route, emoteSet: controller.setModel(for: route))
             }
             .haptic(.success, trigger: controller.doneTick)
             .haptic(.error, trigger: controller.failTick)
@@ -501,7 +566,7 @@ private struct SevenTvPresentations: ViewModifier {
 
 extension View {
     /// The 7TV card's confirm, alerts, link sheet and set screen, with the haptics of `controller`.
-    fileprivate func sevenTvPresentations(_ controller: SevenTvController) -> some View {
+    func sevenTvPresentations(_ controller: SevenTvController) -> some View {
         modifier(SevenTvPresentations(controller: controller))
     }
 }

@@ -82,6 +82,12 @@ extension HTTPCobaltClient: SevenTvClient {
         return try sevenTvAnswer(SevenTvUploadResult.self, data, http)
     }
 
+    public func sevenTvUploads() async throws -> [SevenTvUploadedEmote] {
+        let req = try makeRequest("GET", SevenTvRoute.myUploads, keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        return try sevenTvAnswer(SevenTvUploadList.self, data, http).uploads
+    }
+
     public func sevenTvEmote(id: String) async throws -> SevenTvEmoteInfo {
         let req = try makeRequest("GET", SevenTvRoute.emoteInfo(id), keyed: true, timeout: 20)
         let (data, http) = try await send(req)
@@ -111,19 +117,56 @@ extension HTTPCobaltClient: SevenTvClient {
     }
 }
 
-/// The refusal body: `{status: "error", error: {code, message?}, message?}`.
+/// The refusal body: `{status: "error", error: {code, message?}, message?, conflict?: {emote_id, alias}}`. `conflict` comes
+/// with `error.seventv.name_taken`: the emote already holding the name in the set, when the server knew it. Every part is
+/// read leniently, so an odd `conflict` never loses the code.
 enum SevenTvRefusal {
     private struct Body: Decodable {
         struct Err: Decodable {
             var code: String?
             var message: String?
         }
+
+        struct Conflict: Decodable {
+            var emoteID: String?
+            var alias: String?
+
+            enum CodingKeys: String, CodingKey {
+                case alias
+                case emoteID = "emote_id"
+                case emoteIDCamel = "emoteId"
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                let snake: String? = (try? c.decodeIfPresent(String.self, forKey: .emoteID)) ?? nil
+                let camel: String? = (try? c.decodeIfPresent(String.self, forKey: .emoteIDCamel)) ?? nil
+                emoteID = snake ?? camel
+                alias = (try? c.decodeIfPresent(String.self, forKey: .alias)) ?? nil
+            }
+        }
+
         var error: Err?
         var message: String?
+        var conflict: Conflict?
+
+        enum CodingKeys: String, CodingKey { case error, message, conflict }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            error = (try? c.decodeIfPresent(Err.self, forKey: .error)) ?? nil
+            message = (try? c.decodeIfPresent(String.self, forKey: .message)) ?? nil
+            conflict = (try? c.decodeIfPresent(Conflict.self, forKey: .conflict)) ?? nil
+        }
     }
 
     static func parse(_ data: Data) -> SevenTvError? {
         guard let body = try? JSONDecoder().decode(Body.self, from: data), let code = body.error?.code else { return nil }
-        return SevenTvError(code: code, message: body.message ?? body.error?.message)
+        guard let known = SevenTvError(code: code, message: body.message ?? body.error?.message) else { return nil }
+        if case .nameTaken = known {
+            return .nameTaken(
+                conflictEmoteID: SevenTvWire.nonEmpty(body.conflict?.emoteID), alias: SevenTvWire.nonEmpty(body.conflict?.alias))
+        }
+        return known
     }
 }

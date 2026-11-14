@@ -1,9 +1,10 @@
 import Foundation
 import Observation
 
-/// One 7TV set on the set screen (APP-API-CONTRACT 57.7): its emotes 60 a page, a name filter (the server's `q`), and the
-/// edits: add (from section 20's search), rename an emote's alias, copy it to another set of the same channel, remove it,
-/// rename the set. Every edit changes the grid in place once 7TV took it, and the card's counts through `SevenTvStore`; a
+/// One 7TV set on the set screen and the 7tv tab (APP-API-CONTRACT 57.7): its emotes 60 a page, a name filter (the server's
+/// `q`), and the edits: add (from section 20's search), rename an emote's alias, copy it to another set of the same channel,
+/// remove it (one or several), rename the set. A name already in the set is a `SevenTvNameClash` (from the loaded set first,
+/// else 7TV's `409 name_taken`), resolved with `resolve(_:_:)`. Every edit changes the grid in place once 7TV took it, and the card's counts through `SevenTvStore`; a
 /// refusal throws `SevenTvError` (with 7TV's message) and changes nothing.
 @MainActor @Observable
 public final class SevenTvSetModel {
@@ -224,13 +225,154 @@ public final class SevenTvSetModel {
         }
     }
 
-    /// Copies the emote, under the alias it has here, into another set of the same channel.
-    public func copy(_ emote: SevenTvSetItem, to otherSetID: String) async throws {
-        try await write(emote.emoteID) {
-            _ = try await self.store.setClient().addSevenTvEmote(
-                setID: otherSetID, emoteID: emote.emoteID, alias: emote.renamed ? emote.alias : nil, overrideConflicts: false)
-            self.store.bump(setID: otherSetID, channelID: self.channelID, by: 1)
+    /// Copies the emote, under the alias it has here, into another set of the same channel. A name the other set already
+    /// has answers its clash (nothing changed); nil once copied.
+    @discardableResult
+    public func copy(_ emote: SevenTvSetItem, to otherSetID: String) async throws -> SevenTvNameClash? {
+        do {
+            try await write(emote.emoteID) {
+                // the alias it has here, always (`SevenTvRoute.copyBody`), so a renamed emote keeps its name
+                _ = try await self.store.setClient().addSevenTvEmote(
+                    setID: otherSetID, emoteID: emote.emoteID, alias: emote.alias, overrideConflicts: false)
+                self.store.bump(setID: otherSetID, channelID: self.channelID, by: 1)
+            }
+            return nil
+        } catch {
+            guard case .nameTaken(let conflictID, _) = SevenTvError.from(error) else { throw error }
+            return clash(adding: emote.asHit, as: emote.alias, into: otherSetID, conflictEmoteID: conflictID)
         }
+    }
+
+    /// Copies several emotes into another set, one after the other. Names the other set already has are left for their
+    /// clash sheets (`clashes`); the rest go on after a refusal.
+    public func copyMany(_ emotes: [SevenTvSetItem], to otherSetID: String) async -> SevenTvBulkResult {
+        var result = SevenTvBulkResult()
+        for emote in emotes {
+            do {
+                if let clash = try await copy(emote, to: otherSetID) {
+                    result.clashes.append(clash)
+                } else {
+                    result.done += 1
+                }
+            } catch {
+                result.failed += 1
+                result.lastError = SevenTvError.from(error)
+                if result.lastError?.needsLink == true { break }
+            }
+        }
+        return result
+    }
+
+    /// Removes several emotes from the set, one after the other; the rest go on after a refusal.
+    public func removeMany(_ emotes: [SevenTvSetItem]) async -> SevenTvBulkResult {
+        var result = SevenTvBulkResult()
+        for emote in emotes {
+            do {
+                try await remove(emote)
+                result.done += 1
+            } catch {
+                result.failed += 1
+                result.lastError = SevenTvError.from(error)
+                if result.lastError?.needsLink == true { break }
+            }
+        }
+        return result
+    }
+
+    // MARK: name clashes
+
+    /// The names in the set as far as it is loaded.
+    public var takenAliases: Set<String> { Set(all.map(\.alias)) }
+
+    /// A free name for an emote whose name is taken here (`catJam` → `catJam2`, `catJam2` → `catJam3`).
+    public func suggestedAlias(for alias: String) -> String {
+        SevenTvRule.suggestAlias(for: alias, taken: takenAliases)
+    }
+
+    /// The clash an add of `hit` under `alias` (nil: its own name) would hit in this set, from what is loaded; nil when the
+    /// name is free as far as the app knows (7TV checks again).
+    public func localClash(adding hit: EmoteHit, alias: String?) -> SevenTvNameClash? {
+        let name = alias ?? hit.name
+        guard emote(aliased: name) != nil else { return nil }
+        return clash(adding: hit, as: name, into: setID, conflictEmoteID: nil)
+    }
+
+    /// Adds `hit` under `alias` (nil: its own name), unless the name is taken: the loaded set answers the clash without
+    /// asking 7TV, and a `409 name_taken` from 7TV answers it too. Nil once added.
+    public func addChecking(_ hit: EmoteHit, alias: String?) async throws -> SevenTvNameClash? {
+        if let clash = localClash(adding: hit, alias: alias) { return clash }
+        return try await place(hit, alias: alias ?? hit.name, into: setID, overrideConflicts: false)
+    }
+
+    /// The owner's way out of a clash. Another name for the new one may clash again (that clash is answered); renaming the
+    /// one already in the set renames it first, then adds the new one under the name; replacing swaps it out. Nil once
+    /// the new one is in.
+    @discardableResult
+    public func resolve(_ clash: SevenTvNameClash, _ choice: SevenTvClashChoice) async throws -> SevenTvNameClash? {
+        switch choice {
+        case .addAs(let raw):
+            guard let alias = SevenTvRule.cleanAlias(raw) else { throw SevenTvError.rejected(nil) }
+            if clash.setID == setID, let local = localClash(adding: clash.incoming, alias: alias) { return local }
+            return try await place(clash.incoming, alias: alias, into: clash.setID, overrideConflicts: false)
+        case .renameExisting(let raw):
+            guard let alias = SevenTvRule.cleanAlias(raw), alias != clash.alias else { throw SevenTvError.rejected(nil) }
+            guard let existingID = clash.existingEmoteID else { throw SevenTvError.notFound }
+            if clash.setID == setID {
+                if let holder = emote(aliased: alias) {
+                    throw SevenTvError.nameTaken(conflictEmoteID: holder.emoteID, alias: alias)
+                }
+                let existing = clash.existing
+                    ?? all.first { $0.emoteID == existingID && $0.alias == clash.alias }
+                    ?? SevenTvSetItem(
+                        emoteID: existingID, alias: clash.alias, name: clash.alias, animated: false, previewURL: nil, fileURL: nil)
+                try await rename(existing, to: alias)
+            } else {
+                try await write(existingID) {
+                    _ = try await self.store.setClient().renameSevenTvEmote(
+                        setID: clash.setID, emoteID: existingID, alias: alias, from: clash.alias)
+                }
+            }
+            return try await place(clash.incoming, alias: clash.alias, into: clash.setID, overrideConflicts: false)
+        case .replace:
+            return try await place(clash.incoming, alias: clash.alias, into: clash.setID, overrideConflicts: true)
+        }
+    }
+
+    /// One add, into this set (the grid changes) or another of the channel (its count changes); a `name_taken` answers the
+    /// clash.
+    private func place(
+        _ hit: EmoteHit, alias: String, into target: String, overrideConflicts: Bool
+    ) async throws -> SevenTvNameClash? {
+        do {
+            if target == setID {
+                // the name always goes, so the clash sheet's name is the one the set gets
+                try await add(hit, alias: alias, overrideConflicts: overrideConflicts)
+            } else {
+                try await write(hit.id) {
+                    _ = try await self.store.setClient().addSevenTvEmote(
+                        setID: target, emoteID: hit.id, alias: alias, overrideConflicts: overrideConflicts)
+                    if !overrideConflicts { self.store.bump(setID: target, channelID: self.channelID, by: 1) }
+                }
+            }
+            return nil
+        } catch {
+            guard !overrideConflicts, case .nameTaken(let conflictID, _) = SevenTvError.from(error) else { throw error }
+            return clash(adding: hit, as: alias, into: target, conflictEmoteID: conflictID)
+        }
+    }
+
+    /// The clash of adding `hit` as `alias` into `target` (this set: what is loaded says who holds the name; another set:
+    /// only the server's `conflict` does).
+    private func clash(adding hit: EmoteHit, as alias: String, into target: String, conflictEmoteID: String?) -> SevenTvNameClash {
+        if target == setID {
+            let existing = emote(aliased: alias) ?? conflictEmoteID.flatMap { id in all.first { $0.emoteID == id } }
+            return SevenTvNameClash.make(
+                setID: setID, setName: info?.name ?? "", alias: alias, incoming: hit, existing: existing,
+                conflictEmoteID: conflictEmoteID, taken: takenAliases)
+        }
+        let name = store.sets(of: channelID).first { $0.id == target }?.name ?? ""
+        return SevenTvNameClash.make(
+            setID: target, setName: name, alias: alias, incoming: hit, existing: nil, conflictEmoteID: conflictEmoteID, taken: [])
     }
 
     /// Renames the set. The name must pass `SevenTvRule.cleanSetName`.

@@ -426,6 +426,43 @@ public enum SevenTvRule {
         return String(q.prefix(nameMax))
     }
 
+    /// The emote of `emotes` already under `alias`, exactly (7TV compares names case-sensitively): the clash an add would hit.
+    public static func clash(alias: String, in emotes: [SevenTvSetItem]) -> SevenTvSetItem? {
+        emotes.first { $0.alias == alias }
+    }
+
+    /// The next name in a run: a number at the end goes up by one, else 2 goes on (`catJam` → `catJam2`, `catJam2` →
+    /// `catJam3`). Kept to 100 characters by cutting the name, never the number.
+    public static func nextAlias(after alias: String) -> String {
+        let digits = String(alias.reversed().prefix { $0.isASCII && $0.isNumber }.reversed())
+        var stem = String(alias.dropLast(digits.count))
+        var number = 2
+        if !digits.isEmpty, digits.count <= 9, let n = Int(digits), !stem.isEmpty {
+            number = n + 1
+        } else {
+            stem = alias
+        }
+        let suffix = String(number)
+        if stem.count + suffix.count > nameMax { stem = String(stem.prefix(max(0, nameMax - suffix.count))) }
+        return stem + suffix
+    }
+
+    /// A free name for an emote whose name `alias` is taken: the next in its run (`nextAlias`) that `taken` does not hold.
+    public static func suggestAlias(for alias: String, taken: Set<String>) -> String {
+        var candidate = nextAlias(after: alias)
+        var tries = 0
+        while taken.contains(candidate), tries < 1_000 {
+            candidate = nextAlias(after: candidate)
+            tries += 1
+        }
+        return candidate
+    }
+
+    /// `base` when it is free, else the next free one in its run.
+    public static func freeAlias(_ base: String, taken: Set<String>) -> String {
+        taken.contains(base) ? suggestAlias(for: base, taken: taken) : base
+    }
+
     /// 7TV ids in paths (`[0-9A-Za-z]{20,32}`); anything else would be a 404 anyway.
     public static func isID(_ raw: String) -> Bool {
         (20...32).contains(raw.count) && raw.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
@@ -501,8 +538,11 @@ public enum SevenTvError: Error, Sendable, Equatable {
     case notFound
     /// `429 error.seventv.rate_limited`.
     case rateLimited
-    /// `400 error.seventv.rejected`: name taken, set full, bad alias; 7TV's message.
+    /// `400 error.seventv.rejected`: set full, bad alias; 7TV's message.
     case rejected(String?)
+    /// `409 error.seventv.name_taken`: the set already has an emote under that name (`POST /7tv/sets/:id/emotes` without
+    /// `override_conflicts`). `conflictEmoteID` and `alias` name the emote holding it, when the server knew (`conflict`).
+    case nameTaken(conflictEmoteID: String?, alias: String?)
     /// `502 error.seventv.unavailable`: 7TV did not answer.
     case unavailable
     /// `503 error.seventv.not_ready`: the server's migration has not run yet.
@@ -538,6 +578,7 @@ public enum SevenTvError: Error, Sendable, Equatable {
         case "error.seventv.not_found": self = .notFound
         case "error.seventv.rate_limited": self = .rateLimited
         case "error.seventv.rejected": self = .rejected(message)
+        case "error.seventv.name_taken": self = .nameTaken(conflictEmoteID: nil, alias: nil)
         case "error.seventv.unavailable": self = .unavailable
         case "error.seventv.not_ready": self = .notReady
         case "error.seventv.file_not_found": self = .fileNotFound
@@ -585,6 +626,12 @@ public enum SevenTvError: Error, Sendable, Equatable {
 
     /// The account has to be linked (again) before anything else works.
     public var needsLink: Bool { self == .notLinked || self == .relink }
+
+    /// The set already has an emote under that name.
+    public var isNameTaken: Bool {
+        if case .nameTaken = self { return true }
+        return false
+    }
 }
 
 // MARK: - wire helpers
