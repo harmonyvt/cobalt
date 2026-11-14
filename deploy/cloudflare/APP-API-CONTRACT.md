@@ -6607,6 +6607,16 @@ the platform back to `https://7tv.app/login/callback`, and the page swaps the co
   bookmarked token is the browser's own session, which unlink leaves alone).
 - No migration.
 
+### 57.13 Emotes kept on the device (addendum, 2026-11-14; owner: "Can we cache 7TV emotes? ... the ones that are in my sets or in my collections, and when I search them, it caches them first up ... in like the app, the client, to make sure it runs quickly"; app only, no route changes)
+
+- Pictures: `EmoteCache` (CobaltKit) keeps every 7TV picture the app shows in `Caches/cobalt-emotes`, 200 MB, least recently used
+  out first. The same bytes serve the still and the animation (one fetch, not two). Not the library: nothing is saved to capystore.
+- Filled ahead of a look: every page of `GET /7tv/sets/:id` and every `GET /emotes` answer the app reads queues its previews;
+  after a channel's sets load, the app pages through each of its sets once a launch (at most 20 pages a set).
+- Offline: the last 2xx answer of `GET /7tv`, `GET /7tv/channels/:id/sets` and `GET /7tv/sets/:id` is kept
+  (`Caches/cobalt-7tv-answers`, keyed by the full URL) and read back only when the request fails for lack of network, so the
+  7tv tab shows the account, sets and emotes; writes still need the network. Forgotten when `GET /7tv` answers not linked.
+
 ### 57.8 Rollout
 
 Apply `0040_seventv.sql` with the global `cf`, then deploy the API, then the apps. Before the migration the routes

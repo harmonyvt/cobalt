@@ -7,8 +7,10 @@ import Foundation
 extension HTTPCobaltClient: SevenTvClient {
     public func sevenTvStatus() async throws -> SevenTvStatus {
         let req = try makeRequest("GET", SevenTvRoute.status, keyed: true, timeout: 20)
-        let (data, http) = try await send(req)
-        return try sevenTvAnswer(SevenTvStatus.self, data, http)
+        let status = try await sevenTvRead(SevenTvStatus.self, req)
+        // no account: nothing of the old one stays on the device
+        if !status.linked { SevenTvAnswerCache.clear() }
+        return status
     }
 
     public func linkSevenTv(token: String) async throws -> SevenTvStatus {
@@ -26,15 +28,15 @@ extension HTTPCobaltClient: SevenTvClient {
 
     public func sevenTvSets(channelID: String) async throws -> SevenTvChannelSets {
         let req = try makeRequest("GET", SevenTvRoute.channelSets(channelID), keyed: true, timeout: 20)
-        let (data, http) = try await send(req)
-        return try sevenTvAnswer(SevenTvChannelSets.self, data, http)
+        return try await sevenTvRead(SevenTvChannelSets.self, req)
     }
 
     public func sevenTvSet(id: String, query: String?, page: Int) async throws -> SevenTvSetPage {
         let req = try makeRequest(
             "GET", SevenTvRoute.set(id), query: SevenTvRoute.setQuery(query: query, page: page), keyed: true, timeout: 20)
-        let (data, http) = try await send(req)
-        return try sevenTvAnswer(SevenTvSetPage.self, data, http)
+        let answer = try await sevenTvRead(SevenTvSetPage.self, req)
+        await EmoteCache.shared.prefetch(answer.emotes.compactMap(\.previewURL))
+        return answer
     }
 
     public func createSevenTvSet(ownerID: String, name: String) async throws -> SevenTvSetInfo {
@@ -100,6 +102,22 @@ extension HTTPCobaltClient: SevenTvClient {
     private struct SetWire: Decodable { var set: SevenTvSetInfo }
 
     /// A 2xx whose body decodes as `T`; a refusal as `SevenTvError`; an unreadable answer as `.invalidResponse`.
+    /// A read that is kept (`SevenTvAnswerCache`): a 2xx answer is saved, and when the network fails the last saved answer
+    /// stands in for it (57.13). Any other failure throws as before.
+    private func sevenTvRead<T: Decodable>(_ type: T.Type, _ req: URLRequest) async throws -> T {
+        do {
+            let (data, http) = try await send(req)
+            let answer = try sevenTvAnswer(type, data, http)
+            SevenTvAnswerCache.save(data, for: req.url)
+            return answer
+        } catch let e as CobaltError {
+            guard case .network = e, let saved = SevenTvAnswerCache.load(for: req.url),
+                let answer = try? CobaltJSON.decoder().decode(T.self, from: saved)
+            else { throw e }
+            return answer
+        }
+    }
+
     private func sevenTvAnswer<T: Decodable>(_ type: T.Type, _ data: Data, _ http: HTTPURLResponse) throws -> T {
         guard (200..<300).contains(http.statusCode) else { throw sevenTvError(data, status: http.statusCode) }
         guard let wire = try? CobaltJSON.decoder().decode(T.self, from: data) else {

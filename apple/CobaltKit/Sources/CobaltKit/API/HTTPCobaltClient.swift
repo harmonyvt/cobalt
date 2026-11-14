@@ -594,7 +594,10 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
 
     public func searchEmotes(query: String) async throws -> [EmoteHit] {
         let req = try makeRequest("GET", "/emotes", query: [("q", query)], keyed: true)
-        return try await sendJSON(EmoteListWire.self, req).items
+        let hits = try await sendJSON(EmoteListWire.self, req).items
+        // the whole answer onto the device, not only the tiles on screen (57.13)
+        await EmoteCache.shared.prefetch(hits.map(\.previewURL))
+        return hits
     }
 
     public func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage {
@@ -603,6 +606,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         if !q.isEmpty { params.insert(("q", q), at: 0) }
         let req = try makeRequest("GET", "/emotes", query: params, keyed: true)
         let wire = try await sendJSON(EmotePageWire.self, req)
+        await EmoteCache.shared.prefetch(wire.items.map(\.previewURL))
         return EmotePage(items: wire.items, page: wire.page ?? page, hasMore: wire.hasMore ?? false)
     }
 

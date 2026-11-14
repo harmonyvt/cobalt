@@ -143,11 +143,34 @@ public final class SevenTvStore {
             channelSets[channelID] = SevenTvChannelSets(
                 channelID: channelID, activeSetID: answer.activeSetID, sets: SevenTvChannelSets.ordered(answer.sets))
             setsState[channelID] = .loaded
+            warm(channelID: channelID)
         } catch {
             guard started == generation else { return }
             let refusal = SevenTvError.from(error)
             note(refusal)
             setsState[channelID] = .failed(refusal)
+        }
+    }
+
+    /// Sets already paged through this launch (57.13).
+    @ObservationIgnored private var warmed: Set<String> = []
+
+    /// Pages through each set of the channel once a launch, in the background, so every emote in the owner's sets is on
+    /// the device (`EmoteCache`, filled by the live client with each page it reads) and each page's answer is kept for
+    /// offline (`SevenTvAnswerCache`). Only against the live server: previews and tests never page on their own.
+    private func warm(channelID: String) {
+        guard !RunningTests.now, let client = client as? HTTPCobaltClient else { return }
+        let ids = sets(of: channelID).map(\.id).filter { !warmed.contains($0) }
+        guard !ids.isEmpty else { return }
+        warmed.formUnion(ids)
+        Task(priority: .utility) {
+            for id in ids {
+                var page = 1
+                while page <= 20, !Task.isCancelled {
+                    guard let answer = try? await client.sevenTvSet(id: id, query: nil, page: page), answer.hasMore else { break }
+                    page += 1
+                }
+            }
         }
     }
 
