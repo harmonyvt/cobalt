@@ -47,6 +47,10 @@ enum Analytics {
         #if os(iOS)
         config.sessionReplay = replay
         config.sessionReplayConfig.screenshotMode = true
+        // Frames are drawn on the GPU, not with drawHierarchy on the main thread: the first frame after coming back to
+        // the app waited for screen updates and hung behind the sync glow's Metal view (8.9). Metal views and videos
+        // show as blank boxes in the replay.
+        config.sessionReplayConfig.screenshotModeGPUCapture = true
         config.sessionReplayConfig.maskAllImages = true
         config.sessionReplayConfig.maskAllTextInputs = true
         // speeds, sizes and status codes of requests, never their bodies
