@@ -9,8 +9,9 @@ public protocol SevenTvClient: Sendable {
     func sevenTvStatus() async throws -> SevenTvStatus
     /// `POST /7tv/link {token}`: checks the token with 7TV, stores it, answers the `GET /7tv` body.
     func linkSevenTv(token: String) async throws -> SevenTvStatus
-    /// `DELETE /7tv`: forgets the token.
-    func unlinkSevenTv() async throws -> SevenTvStatus
+    /// `DELETE /7tv`: forgets the token; with `logout` (`?logout=1`, 57.12) the server also ends 7TV's own session first, best
+    /// effort. Only a login made in the app's sheet asks for it.
+    func unlinkSevenTv(logout: Bool) async throws -> SevenTvStatus
     /// `GET /7tv/channels/<id>/sets`: live first, then by name.
     func sevenTvSets(channelID: String) async throws -> SevenTvChannelSets
     /// `GET /7tv/sets/<id>?q=&page=`: 60 emotes a page; `query` filters by name in the set (nil or empty sends none).
@@ -37,6 +38,11 @@ public protocol SevenTvClient: Sendable {
     func sevenTvUploads() async throws -> [SevenTvUploadedEmote]
 }
 
+extension SevenTvClient {
+    /// `DELETE /7tv`: forgets the token and leaves 7TV's session alone.
+    public func unlinkSevenTv() async throws -> SevenTvStatus { try await unlinkSevenTv(logout: false) }
+}
+
 /// The paths and bodies of the routes, in one place so the HTTP client and the tests agree.
 enum SevenTvRoute {
     static let status = "/7tv"
@@ -45,6 +51,9 @@ enum SevenTvRoute {
     static let uploads = "/7tv/emotes"
     /// `GET /7tv/uploads`: what capystore uploaded.
     static let myUploads = "/7tv/uploads"
+
+    /// `?logout=1` of `DELETE /7tv` (57.12): none unless 7TV's session is to end too.
+    static func unlinkQuery(logout: Bool) -> [(String, String)] { logout ? [("logout", "1")] : [] }
 
     static func channelSets(_ channelID: String) -> String { "/7tv/channels/\(segment(channelID))/sets" }
     static func channelLive(_ channelID: String) -> String { "/7tv/channels/\(segment(channelID))/live" }

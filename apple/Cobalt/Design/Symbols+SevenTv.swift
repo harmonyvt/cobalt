@@ -29,6 +29,12 @@ extension Symbol {
         static let bookmark = "bookmark"
         /// "open 7tv.app".
         static let website = "safari"
+        /// The login sheet's address bar (the page is 7tv's, over https).
+        static let secure = "lock.fill"
+        /// "other ways to link".
+        static let otherWays = "ellipsis.circle"
+        /// "forget 7tv login".
+        static let forgetLogin = "person.crop.circle.badge.xmark"
         /// The filter field.
         static let filter = "line.3.horizontal.decrease"
         static let retry = "arrow.clockwise"

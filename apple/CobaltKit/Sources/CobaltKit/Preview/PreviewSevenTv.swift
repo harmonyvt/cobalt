@@ -452,8 +452,8 @@ extension PreviewClient: SevenTvClient {
         return try sevenTvState.link(token: token, now: clock.now())
     }
 
-    public func unlinkSevenTv() async throws -> SevenTvStatus {
-        try await sevenTvReady("DELETE")
+    public func unlinkSevenTv(logout: Bool) async throws -> SevenTvStatus {
+        try await sevenTvReady(logout ? "DELETE logout" : "DELETE")
         return sevenTvState.unlink()
     }
 

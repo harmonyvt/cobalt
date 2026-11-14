@@ -178,9 +178,11 @@ struct SevenTvScreen: View {
 
 // MARK: - the account
 
-/// The avatar, the name, "linked · signs out in N days", and ⋯ (link again, unlink).
+/// The avatar, the name, "linked · signs out in N days", and ⋯ (link again, forget 7tv login, unlink).
 struct SevenTvTabAccountRow: View {
     let tab: SevenTvTabController
+
+    @Environment(\.shell) private var shell
 
     private var store: SevenTvStore { tab.store }
 
@@ -201,6 +203,9 @@ struct SevenTvTabAccountRow: View {
             Spacer(minLength: 8)
             Menu {
                 Button(Copy.SevenTv.linkAgain, systemImage: Symbol.SevenTv.link) { tab.card.linkShown = true }
+                Button(Copy.SevenTv.forgetLogin, systemImage: Symbol.SevenTv.forgetLogin) {
+                    tab.card.forgetLogin(shell: shell)
+                }
                 Button(Copy.SevenTv.unlink, systemImage: Symbol.SevenTv.unlink, role: .destructive) {
                     tab.card.confirmingUnlink = true
                 }

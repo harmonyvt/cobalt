@@ -187,6 +187,35 @@ struct SevenTvRuleTests {
         #expect(SevenTvLink.clean("  \"\(fakeToken)\"\n") == fakeToken)
     }
 
+    @Test func theLoginSheetReadsTheTokenWithoutItsJsonQuotes() {
+        // `localStorage.getItem` answers a string (7tv.app may keep it JSON-quoted), NSNull or nothing
+        #expect(SevenTvLink.token(fromStorage: fakeToken) == fakeToken)
+        #expect(SevenTvLink.token(fromStorage: "\"\(fakeToken)\"") == fakeToken)
+        #expect(SevenTvLink.token(fromStorage: " \"\(fakeToken)\"\n") == fakeToken)
+        #expect(SevenTvLink.token(fromStorage: "'\(fakeToken)'") == fakeToken)
+        #expect(SevenTvLink.token(fromStorage: "\"\"") == nil && SevenTvLink.token(fromStorage: "") == nil)
+        #expect(SevenTvLink.token(fromStorage: "  ") == nil)
+        #expect(SevenTvLink.token(fromStorage: NSNull()) == nil && SevenTvLink.token(fromStorage: nil) == nil)
+        #expect(SevenTvLink.token(fromStorage: 42) == nil)
+    }
+
+    @Test func theLoginSheetKeepsOnlySevenTvAndItsSignInsInside() {
+        #expect(SevenTvLink.loginURL.absoluteString == "https://7tv.app/login")
+        for host in ["7tv.app", "api.7tv.app", "7tv.io", "id.twitch.tv", "twitch.tv", "passport.twitch.tv", "www.twitch.tv",
+                     "discord.com", "canary.discord.com", "kick.com", "id.kick.com", "7TV.APP"] {
+            #expect(SevenTvLink.loginAllows(host: host), "\(host) stays in the web view")
+        }
+        for host in ["evil7tv.app", "7tv.app.evil.com", "twitch.tv.example.org", "example.com", "x.com", "", nil] {
+            #expect(!SevenTvLink.loginAllows(host: host), "\(host ?? "nil") opens in the system browser")
+        }
+        // only 7tv.app's own localStorage is read
+        #expect(SevenTvLink.isSevenTvHost("7tv.app") && SevenTvLink.isSevenTvHost("api.7tv.app"))
+        #expect(!SevenTvLink.isSevenTvHost("7tv.io") && !SevenTvLink.isSevenTvHost("id.twitch.tv") && !SevenTvLink.isSevenTvHost("not7tv.app"))
+        #expect(!SevenTvLink.isSevenTvHost(nil))
+        #expect(SevenTvLink.storageKey == "7tv-token")
+        #expect(SevenTvLink.loginDataStoreID.uuidString == "6F3A5C1E-7B24-4D8E-9A10-5E7C2B9D4F36", "a fixed id keeps the session between launches")
+    }
+
     @Test func namesFollowTheRoutesRules() {
         #expect(SevenTvRule.cleanSetName("  christmas ") == "christmas")
         #expect(SevenTvRule.cleanSetName("   ") == nil && SevenTvRule.cleanSetName(String(repeating: "x", count: 101)) == nil)
@@ -256,6 +285,21 @@ struct SevenTvHTTPTests {
         #expect(body["token"] as? String == fakeToken && body.count == 1)
         let gone = try await c.unlinkSevenTv()
         #expect(!gone.linked)
+    }
+
+    @Test func unlinkAsksForLogoutOnlyWhenToldTo() async throws {
+        let server = try await LoopbackServer.start { req in
+            req.method == "DELETE" && req.path == "/7tv" ? .json(#"{"status":"success","linked":false,"logged_out":true}"#) : .init(status: 404)
+        }
+        defer { server.stop() }
+        let c = client(server)
+        _ = try await c.unlinkSevenTv()
+        _ = try await c.unlinkSevenTv(logout: false)
+        let gone = try await c.unlinkSevenTv(logout: true)
+        #expect(!gone.linked)
+        #expect(server.requests.map(\.method) == ["DELETE", "DELETE", "DELETE"])
+        #expect(server.requests.map(\.path) == ["/7tv", "/7tv", "/7tv"])
+        #expect(server.requests.map(\.query) == ["", "", "logout=1"])
     }
 
     @Test func aSetPageSendsTheFilterAndPage() async throws {
@@ -383,6 +427,51 @@ struct SevenTvStoreTests {
         #expect(app.sevenTv.unsaidOutcome == nil)
         try await app.sevenTv.unlink()
         #expect(!app.sevenTv.isLinked && app.sevenTv.channels.isEmpty)
+    }
+
+    @Test func aLinkFromTheSheetIsRememberedAndAnyOtherLinkForgetsIt() async throws {
+        let app = app(.stageNotConnected)
+        await app.sevenTv.load()
+        #expect(!app.sevenTv.linkedBySheet)
+        #expect(await app.sevenTv.link(token: fakeToken, viaSheet: true) == .linked("capybaraharmony"))
+        #expect(app.sevenTv.linkedBySheet, "the sheet's link sets the flag")
+        #expect(await app.sevenTv.link(token: fakeToken) == .linked("capybaraharmony"))
+        #expect(!app.sevenTv.linkedBySheet, "a pasted or bookmarked token clears it")
+        #expect(await app.sevenTv.link(token: fakeToken, viaSheet: true) == .linked("capybaraharmony"))
+        #expect(await app.sevenTv.link(token: "bad.bad.bad", viaSheet: true) == .failed(.tokenInvalid))
+        #expect(app.sevenTv.linkedBySheet, "a refused token leaves the current link and its flag alone")
+        // the flag is kept in the settings defaults (the app group's in the app), so a relaunch still knows
+        let settings = app.ctx.settings
+        #expect(settings.defaults.bool(forKey: SevenTvStore.sheetKey))
+    }
+
+    @Test func unlinkEndsTheSevenTvSessionOnlyForALoginMadeInTheSheet() async throws {
+        let app = app(.stageNotConnected)
+        let preview = try #require(app.ctx.client as? PreviewClient)
+        await app.sevenTv.load()
+
+        #expect(await app.sevenTv.link(token: fakeToken) == .linked("capybaraharmony"))
+        try await app.sevenTv.unlink()
+        #expect(!app.sevenTv.isLinked && !app.sevenTv.linkedBySheet)
+        #expect(preview.sevenTvState.calls.filter { $0.hasPrefix("DELETE") } == ["DELETE"], "a pasted token: plain DELETE /7tv")
+
+        #expect(await app.sevenTv.link(token: fakeToken, viaSheet: true) == .linked("capybaraharmony"))
+        try await app.sevenTv.unlink()
+        #expect(!app.sevenTv.isLinked && !app.sevenTv.linkedBySheet, "unlinking clears the flag")
+        #expect(preview.sevenTvState.calls.filter { $0.hasPrefix("DELETE") } == ["DELETE", "DELETE logout"], "the sheet's token: ?logout=1")
+
+        #expect(await app.sevenTv.link(token: fakeToken) == .linked("capybaraharmony"))
+        try await app.sevenTv.unlink()
+        #expect(preview.sevenTvState.calls.filter { $0.hasPrefix("DELETE") } == ["DELETE", "DELETE logout", "DELETE"], "the flag does not outlive its link")
+    }
+
+    @Test func theFlagGoesWhenTheServerSaysNothingIsLinked() async throws {
+        let app = app(.stageNotConnected)
+        await app.sevenTv.load()
+        await app.sevenTv.link(token: fakeToken, viaSheet: true)
+        #expect(app.sevenTv.linkedBySheet)
+        app.sevenTv.note(.notLinked)
+        #expect(!app.sevenTv.isLinked && !app.sevenTv.linkedBySheet)
     }
 
     @Test func theBookmarkletsLinkOpensTheStudioAndLinks() async throws {

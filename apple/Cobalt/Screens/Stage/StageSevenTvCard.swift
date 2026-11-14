@@ -69,8 +69,20 @@ final class SevenTvController {
         }
     }
 
+    /// Unlinks. A link made in the login sheet is capystore's own 7TV session: the server ends it (`?logout=1`) and the
+    /// sheet's web data store drops 7tv.app so the next link is a fresh login (57.12).
     func unlink(shell: ShellActions) {
-        run("unlink", shell: shell, success: Copy.SevenTv.unlinked) { try await self.store.unlink() }
+        let wasSheet = store.linkedBySheet
+        run("unlink", shell: shell, success: Copy.SevenTv.unlinked) {
+            try await self.store.unlink()
+            if wasSheet { await SevenTvLoginData.forgetSevenTv() }
+        }
+    }
+
+    /// "forget 7tv login": the login sheet's web view forgets everything (the 7tv, twitch, discord and kick logins it kept).
+    /// The link itself stays.
+    func forgetLogin(shell: ShellActions) {
+        run("forget", shell: shell, success: Copy.SevenTv.loginForgotten) { await SevenTvLoginData.forgetAll() }
     }
 
     func makeLive(_ row: SevenTvSetRow, channelID: String, shell: ShellActions) {
@@ -100,7 +112,8 @@ final class SevenTvController {
         store.acknowledge(outcome)
         switch outcome.result {
         case .linked(let name):
-            linkShown = false
+            // the login sheet says "linked as <name>" itself and closes a moment later; every other way closes at once
+            if !store.linkedBySheet { linkShown = false }
             shell.showStatus(Copy.SevenTv.linked(name))
             doneTick += 1
         case .failed(let error):
@@ -542,7 +555,7 @@ private struct SevenTvPresentations: ViewModifier {
                 Button(Copy.SevenTv.unlink, role: .destructive) { controller.unlink(shell: shell) }
                 Button(Copy.SevenTv.keep, role: .cancel) {}
             } message: {
-                Text(Copy.SevenTv.unlinkMessage)
+                Text(controller.store.linkedBySheet ? Copy.SevenTv.unlinkMessageSession : Copy.SevenTv.unlinkMessage)
             }
             .alert(Copy.SevenTv.newSetTitle, isPresented: newSetShown) {
                 TextField(Copy.SevenTv.setName, text: $controller.newSetName)
@@ -554,7 +567,7 @@ private struct SevenTvPresentations: ViewModifier {
                 Text(Copy.SevenTv.newSetMessage)
             }
             .sheet(isPresented: $controller.linkShown) {
-                SevenTvLinkSheet(store: controller.store)
+                SevenTvLoginSheet(store: controller.store)
             }
             .navigationDestination(item: $controller.openSet) { route in
                 SevenTvSetScreen(model: controller.model, route: route, emoteSet: controller.setModel(for: route))

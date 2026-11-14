@@ -18,6 +18,7 @@ extension Copy {
         static let unlink = "unlink"
         static let unlinkTitle = "unlink 7tv?"
         static let unlinkMessage = "capystore forgets the token. you stay logged in on 7tv.app until you log out there."
+        static let unlinkMessageSession = "capystore forgets the token and ends its own 7tv session. your twitch, discord or kick login stays."
         static let keep = "keep"
         static let unlinked = "7tv unlinked"
         static let retry = "try again"
@@ -78,6 +79,18 @@ extension Copy {
         static let linking = "linking…"
         static let footer = "capystore checks the token with 7tv, shows whose account it is, stores it encrypted, and never shows it again."
         static func linked(_ name: String) -> String { name.isEmpty ? "7tv linked" : "linked 7tv as \(name)" }
+
+        // MARK: the login sheet (57.12)
+
+        static let loginTitle = "log in with 7tv"
+        static let loginNote = "7tv logs in through twitch, discord or kick. capystore keeps its own 7tv session."
+        static let otherWays = "other ways to link"
+        static let loginLoading = "loading…"
+        static func loginLinked(_ name: String) -> String { name.isEmpty ? "linked" : "linked as \(name)" }
+        static let loginPageA11y = "7tv login page"
+        static let loginPlaceholder = "the 7tv login page shows here"
+        static let forgetLogin = "forget 7tv login"
+        static let loginForgotten = "7tv login forgotten"
 
         // MARK: a set
 

@@ -483,6 +483,46 @@ public enum SevenTvLink {
     /// 7TV's website.
     public static let website = URL(string: "https://7tv.app/")!
 
+    // MARK: the login sheet (57.12)
+
+    /// 7TV's own login page, which the app's sign-in sheet shows (Twitch, Discord or Kick).
+    public static let loginURL = URL(string: "https://7tv.app/login")!
+
+    /// The `localStorage` key 7tv.app keeps its session token under, on its own origin.
+    public static let storageKey = "7tv-token"
+
+    /// The sheet's own website data store (capystore's 7TV session, apart from Safari and from every other web view of the app).
+    /// A fixed id, so the session survives launches; the apps pass it to `WKWebsiteDataStore(forIdentifier:)`.
+    public static let loginDataStoreID = UUID(uuidString: "6F3A5C1E-7B24-4D8E-9A10-5E7C2B9D4F36")!
+
+    /// The pages the sheet keeps inside its web view: 7TV and the three sign-ins it offers, with their subdomains. Anything
+    /// else opens in the system browser.
+    public static let loginHosts = [
+        "7tv.app", "7tv.io", "id.twitch.tv", "twitch.tv", "passport.twitch.tv", "discord.com", "kick.com",
+    ]
+
+    /// True when `host` is `base` or a subdomain of it ("7tv.app", "api.7tv.app"; not "evil7tv.app").
+    public static func host(_ host: String?, isOrIsUnder base: String) -> Bool {
+        guard let host = host?.lowercased(), !host.isEmpty else { return false }
+        return host == base || host.hasSuffix("." + base)
+    }
+
+    /// True while the sheet's page is 7tv.app itself (or a subdomain): the only origin whose `localStorage` is read.
+    public static func isSevenTvHost(_ host: String?) -> Bool { Self.host(host, isOrIsUnder: "7tv.app") }
+
+    /// True when a page on `host` may load inside the sheet's web view.
+    public static func loginAllows(host: String?) -> Bool {
+        loginHosts.contains { Self.host(host, isOrIsUnder: $0) }
+    }
+
+    /// What `localStorage.getItem('7tv-token')` answered (a string, `NSNull` or nothing): the token without the JSON quotes
+    /// 7tv.app may keep around it, or nil while there is none yet. Not checked further: the link says what is wrong with it.
+    public static func token(fromStorage value: Any?) -> String? {
+        guard let raw = value as? String else { return nil }
+        let token = clean(raw)
+        return token.isEmpty ? nil : token
+    }
+
     /// True for any `cobalt-apple://7tv-link` link, with or without a token.
     public static func isLink(_ url: URL) -> Bool {
         url.scheme?.lowercased() == "cobalt-apple" && url.host(percentEncoded: false)?.lowercased() == host

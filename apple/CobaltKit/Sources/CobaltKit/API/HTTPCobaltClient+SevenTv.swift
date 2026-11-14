@@ -17,8 +17,9 @@ extension HTTPCobaltClient: SevenTvClient {
         return try sevenTvAnswer(SevenTvStatus.self, data, http)
     }
 
-    public func unlinkSevenTv() async throws -> SevenTvStatus {
-        let req = try makeRequest("DELETE", SevenTvRoute.status, keyed: true, timeout: 20)
+    public func unlinkSevenTv(logout: Bool) async throws -> SevenTvStatus {
+        // the server calls 7TV's logout first when asked, so it gets a little longer
+        let req = try makeRequest("DELETE", SevenTvRoute.status, query: SevenTvRoute.unlinkQuery(logout: logout), keyed: true, timeout: logout ? 30 : 20)
         let (data, http) = try await send(req)
         return try sevenTvAnswer(SevenTvStatus.self, data, http)
     }

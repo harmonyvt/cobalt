@@ -116,7 +116,7 @@
       },
       "delete": {
         "operationId": "seventv_http.unlink",
-        "summary": "Forget the 7TV token (DELETE /7tv).",
+        "summary": "Forget the 7TV token (DELETE /7tv); ?logout=1 also ends that session on 7TV (the app's own login sheet).",
         "tags": [
           "seventv_http"
         ],

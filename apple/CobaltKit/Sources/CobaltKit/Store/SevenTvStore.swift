@@ -51,6 +51,10 @@ public final class SevenTvStore {
     public internal(set) var uploadInfo: [String: SevenTvEmoteInfo] = [:]
     /// Uploads 7TV answered 404 for.
     public internal(set) var goneUploads: Set<String> = []
+    /// The current link came from the app's own sign-in sheet (57.12), so it is capystore's own 7TV session and unlinking
+    /// ends it (`DELETE /7tv?logout=1`). A pasted or bookmarked token is the browser's session: unlink leaves it alone.
+    /// Kept in the app group's defaults; cleared with the link.
+    public private(set) var linkedBySheet = false
 
     @ObservationIgnored private let ctx: PipelineContext
     /// Bumped by `reset()`: an answer from the old server arriving later is dropped.
@@ -59,6 +63,15 @@ public final class SevenTvStore {
 
     init(context: PipelineContext) {
         self.ctx = context
+        self.linkedBySheet = context.settings.defaults.bool(forKey: Self.sheetKey)
+    }
+
+    /// `UserDefaults` key of `linkedBySheet`.
+    static let sheetKey = "sevenTvLinkedBySheet"
+
+    private func setLinkedBySheet(_ value: Bool) {
+        linkedBySheet = value
+        ctx.settings.defaults.set(value, forKey: Self.sheetKey)
     }
 
     private var client: (any SevenTvClient)? { ctx.client as? any SevenTvClient }
@@ -146,6 +159,7 @@ public final class SevenTvStore {
 
     private func adopt(_ answer: SevenTvStatus) {
         status = answer
+        if !answer.linked, linkedBySheet { setLinkedBySheet(false) }
         let ids = Set(answer.channels.map(\.id))
         channelSets = channelSets.filter { ids.contains($0.key) }
         setsState = setsState.filter { ids.contains($0.key) }
@@ -164,6 +178,7 @@ public final class SevenTvStore {
             setsState = [:]
         case .notLinked:
             status = .notLinked
+            if linkedBySheet { setLinkedBySheet(false) }
             channelSets = [:]
             setsState = [:]
             forgetUploads()
@@ -175,8 +190,10 @@ public final class SevenTvStore {
     // MARK: linking
 
     /// `POST /7tv/link`. A token that cannot be one is refused here, without a request. Never throws: `linkOutcome` says it.
+    /// `viaSheet`: the token came from the app's own sign-in sheet (57.12); a link made that way is remembered
+    /// (`linkedBySheet`), any other (paste, bookmarklet) clears that. A refused link changes nothing about the current one.
     @discardableResult
-    public func link(token raw: String) async -> LinkOutcome.Result {
+    public func link(token raw: String, viaSheet: Bool = false) async -> LinkOutcome.Result {
         let token = SevenTvLink.clean(raw)
         guard SevenTvLink.looksLikeToken(token) else { return finishLink(.failed(.tokenInvalid)) }
         guard !linking else { return .failed(.other) }
@@ -187,6 +204,7 @@ public final class SevenTvStore {
             let answer = try await requireClient().linkSevenTv(token: token)
             guard started == generation else { return .failed(.other) }
             adopt(answer)
+            setLinkedBySheet(viaSheet && answer.linked)
             state = .loaded
             selectedChannelID = nil
             if let channel = selectedChannel {
@@ -205,11 +223,13 @@ public final class SevenTvStore {
         return result
     }
 
-    /// `DELETE /7tv`. 7TV's own session stays until it ends or the owner logs out on 7tv.app.
+    /// `DELETE /7tv`. For a link made in the sign-in sheet it is `DELETE /7tv?logout=1`, which ends capystore's own 7TV session
+    /// too; otherwise 7TV's session stays until it ends or the owner logs out on 7tv.app.
     public func unlink() async throws {
         let started = generation
-        let answer = try await requireClient().unlinkSevenTv()
+        let answer = try await requireClient().unlinkSevenTv(logout: linkedBySheet)
         guard started == generation else { return }
+        setLinkedBySheet(false)
         adopt(answer.linked ? .notLinked : answer)
         channelSets = [:]
         setsState = [:]
@@ -301,6 +321,7 @@ public final class SevenTvStore {
     func reset() {
         generation += 1
         status = nil
+        if linkedBySheet { setLinkedBySheet(false) }      // the new server's link, if any, is not known to be the sheet's
         state = .idle
         selectedChannelID = nil
         channelSets = [:]

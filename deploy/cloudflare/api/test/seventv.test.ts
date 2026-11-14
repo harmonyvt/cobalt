@@ -205,6 +205,29 @@ describe("link, status, unlink (57.4)", () => {
         expect((await json(await send(`/7tv/sets/${SET_MAIN}`))).body.error.code).toBe("error.seventv.not_linked");
     });
 
+    it("unlink with logout=1 ends the 7TV session too, and forgets the token even when that fails (57.12)", async () => {
+        await link();
+        const logouts: (string | null)[] = [];
+        let status = 204;
+        const inner = globalThis.fetch;
+        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+            if (url === "https://api.7tv.app/v4/auth/logout") {
+                logouts.push(new Headers(init.headers).get("authorization"));
+                return new Response(null, { status });
+            }
+            return inner(url, init);
+        });
+        expect((await json(await send("/7tv?logout=1", { method: "DELETE" }))).body).toEqual({ status: "success", linked: false, logged_out: true });
+        expect(logouts).toEqual([`Bearer ${TOKEN}`]);
+        await link();
+        status = 500;
+        expect((await json(await send("/7tv?logout=1", { method: "DELETE" }))).body).toEqual({ status: "success", linked: false, logged_out: false });
+        expect((await json(await send("/7tv"))).body.linked).toBe(false);
+        await link();
+        expect((await json(await send("/7tv", { method: "DELETE" }))).body).toEqual({ status: "success", linked: false });
+        expect(logouts).toHaveLength(2);
+    });
+
     it("needs a client key", async () => {
         expect((await send("/7tv", {}, "11111111-2222-4333-8444-555555555555")).status).toBe(401);
     });

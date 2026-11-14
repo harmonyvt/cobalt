@@ -356,10 +356,35 @@ export async function sevenTvLink(d: SevenTvDeps, body: { token?: unknown }): Pr
     return success({ linked: true, account: accountShape(row), channels: channelsOf(me) });
 }
 
-export async function sevenTvUnlink(d: SevenTvDeps): Promise<StudioReply> {
-    if ((await readRow(d)) === "missing") return fail(503, "error.seventv.not_ready");
+// 7TV's logout (apps/api/src/http/v4/rest/auth.rs): deletes the session the token belongs to, so it is dead for good.
+export const SEVENTV_LOGOUT = "https://api.7tv.app/v4/auth/logout";
+
+/**
+ * DELETE /7tv. With `logout` (57.12: the app linked through its own 7tv.app login sheet, so the session is capystore's
+ * alone) 7TV's session is ended too, best effort: a failure there still forgets the token here.
+ */
+export async function sevenTvUnlink(d: SevenTvDeps, opts: { logout?: boolean } = {}): Promise<StudioReply> {
+    const row = await readRow(d);
+    if (row === "missing") return fail(503, "error.seventv.not_ready");
+    let loggedOut = false;
+    if (opts.logout && row) {
+        const token = await openToken(d.secret, row.token).catch(() => null);
+        if (token) {
+            try {
+                const res = await (d.fetch ?? fetch)(SEVENTV_LOGOUT, {
+                    method: "POST",
+                    headers: { accept: "application/json", authorization: `Bearer ${token}` },
+                    signal: AbortSignal.timeout(10_000),
+                });
+                loggedOut = res.ok || res.status === 401;
+                await res.body?.cancel().catch(() => {});
+            } catch {
+                loggedOut = false;
+            }
+        }
+    }
     await d.db.prepare("DELETE FROM seventv_account WHERE id = 'main'").run();
-    return success({ linked: false });
+    return success({ linked: false, ...(opts.logout ? { logged_out: loggedOut } : {}) });
 }
 
 type RawSet = { id: string; name: string; kind: string; capacity: number | null; emotes?: { totalCount?: number } };
