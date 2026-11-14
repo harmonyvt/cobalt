@@ -475,6 +475,17 @@ public final class Settings {
         set { withMutation(keyPath: \.sendTelemetry) { defaults.set(newValue, forKey: "sendTelemetry") } }
     }
 
+    /// "record sessions" (APP-API-CONTRACT 58): PostHog session replay on iPhone and iPad, with all media masked. On by
+    /// default; only matters while `sendTelemetry` is on and the server names a PostHog project. Off keeps PostHog's
+    /// events and stops the recordings. App-group defaults.
+    public var recordSessions: Bool {
+        get {
+            access(keyPath: \.recordSessions)
+            return defaults.object(forKey: "recordSessions") as? Bool ?? true
+        }
+        set { withMutation(keyPath: \.recordSessions) { defaults.set(newValue, forKey: "recordSessions") } }
+    }
+
     /// "library sync": the on-device library and its outbox (`SyncFeature`). Off by default. Read once
     /// at launch, so a change takes effect the next time the app opens.
     public var syncEngine: Bool {

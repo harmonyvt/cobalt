@@ -205,6 +205,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// can be framed in the post it came from (a render of kind `post` in the editor's containers). False when absent: no
     /// "post frame" button, no "post" tool, no switch on save.
     public var postFrame: Bool = false
+    /// `posthog` (APP-API-CONTRACT 58): the PostHog project the app's SDK sends to (session replay on iPhone and iPad,
+    /// events everywhere). Only answered to a valid key; nil when absent, and the SDK never starts.
+    public var postHog: PostHogProject? = nil
 
     /// The link to hand out for a public file: its rich link page when the server has them, else the file's own URL.
     /// Anything that is not one of this server's public files is returned as is.
@@ -225,6 +228,16 @@ public struct Capabilities: Sendable, Codable, Equatable {
         kind: .unreachable, cobaltVersion: nil, studio: false, upload: false, library: false,
         saveProgress: false, renderProgress: false, finishesUnpolled: false,
         limits: .fork, mediaBaseURL: nil, key: .unknown, keyName: nil, livePush: false, notifyBridge: false, crop: false)
+}
+
+/// The PostHog project from `GET /capabilities` (APP-API-CONTRACT 58). The token is PostHog's write-only project token.
+public struct PostHogProject: Sendable, Codable, Equatable {
+    public var token: String
+    public var host: URL
+    public init(token: String, host: URL) {
+        self.token = token
+        self.host = host
+    }
 }
 
 public enum CobaltError: Error, Sendable, Equatable {

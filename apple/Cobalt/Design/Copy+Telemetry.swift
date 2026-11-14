@@ -11,8 +11,12 @@ extension Copy {
         static let sendNow = "send logs now"
         static let sending = "sending…"
 
-        static func footer(host: String) -> String {
-            "sent: the app version, this \(device)'s model and os, the steps capystore took (states, file sizes and types, error codes, the sites you saved from) and crash reports. never sent: your api key, what's on your clipboard, or the contents of your files. it goes only to \(host); with this off the log stays on this \(device)."
+        static let recordSessions = "record sessions, with every picture and video hidden"
+
+        static func footer(host: String, postHog: Bool = false) -> String {
+            let sent = "sent: the app version, this \(device)'s model and os, the steps capystore took (states, file sizes and types, error codes, the sites you saved from) and crash reports. never sent: your api key, what's on your clipboard, or the contents of your files."
+            guard postHog else { return sent + " it goes only to \(host); with this off the log stays on this \(device)." }
+            return sent + " it goes to \(host) and to your posthog project, which also gets the screens you open and, with recording on, a replay of them with every picture and video blacked out. with this off nothing leaves this \(device)."
         }
 
         static func waiting(events: Int, crashes: Int) -> String {

@@ -170,6 +170,8 @@ struct CobaltApp: App {
                 handleAppLink(url, model: model)
             }
             .task { await sceneStarted() }
+            // PostHog (APP-API-CONTRACT 58): starts once the server names its project, follows the two switches
+            .onChange(of: AnalyticsKey(model), initial: true) { Analytics.sync(model: model) }
             #if os(macOS)
             .frame(minWidth: 900, minHeight: 600)
             #endif
@@ -266,3 +268,15 @@ private struct StageWallpaperCommand: View {
     }
 }
 #endif
+
+/// What `Analytics.sync` depends on, so the scene calls it again exactly when one of them changes.
+private struct AnalyticsKey: Equatable {
+    let project: PostHogProject?
+    let send: Bool
+    let record: Bool
+    @MainActor init(_ model: AppModel) {
+        project = model.capabilities.postHog
+        send = model.settings.sendTelemetry
+        record = model.settings.recordSessions
+    }
+}

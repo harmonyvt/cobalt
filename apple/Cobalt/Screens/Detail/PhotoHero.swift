@@ -106,7 +106,10 @@ struct PhotoSurface: View {
         self._aspect = aspect
     }
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         // the picture is an overlay of a clear box, so it never changes the frame the hero's aspect gives (a `.fill` image
         // inside a stack would report its overflow as its size)
         Color.clear

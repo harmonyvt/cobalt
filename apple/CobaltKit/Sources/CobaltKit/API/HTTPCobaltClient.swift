@@ -64,6 +64,11 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         if let idempotencyKey {
             req.setValue(idempotencyKey, forHTTPHeaderField: SyncContract.idempotencyHeader)
         }
+        // APP-API-CONTRACT 58: this server's own requests say which app and which PostHog session sent them, so the
+        // server's events land inside the session's replay. Never sent to other hosts.
+        if url.host?.lowercased() == baseURL.host?.lowercased() {
+            for (name, value) in AnalyticsContext.headers() { req.setValue(value, forHTTPHeaderField: name) }
+        }
         return req
     }
 
@@ -248,6 +253,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
             var shareBaseUrl: String?
             var key: String?
             var keyName: String?
+            struct PostHog: Decodable { var token: String?; var host: String? }
+            var posthog: PostHog?
         }
         guard let w = try? CobaltJSON.decoder().decode(Wire.self, from: data), w.server == "cobalt-cloudflare" else {
             return nil
@@ -326,6 +333,10 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.names = (f?.names ?? false) && caps.search
         caps.ytdlp = f?.ytdlp ?? false
         caps.postFrame = f?.postFrame ?? false
+        if let ph = w.posthog, let token = ph.token?.trimmingCharacters(in: .whitespaces), !token.isEmpty,
+           let host = ph.host.flatMap(URL.init(string:)), host.scheme == "https" {
+            caps.postHog = PostHogProject(token: token, host: host)
+        }
         return caps
     }
 

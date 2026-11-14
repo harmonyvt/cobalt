@@ -209,7 +209,10 @@ struct LibraryAnimatedLayer: View {
     let url: URL
     @State private var animator = LibraryAnimator()
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Color.clear
             .overlay {
                 if let image = animator.image {

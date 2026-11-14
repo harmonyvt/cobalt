@@ -8,7 +8,10 @@ struct SkyFingerprintView: View {
     var side: CGFloat = 84
     @Environment(\.colorScheme) private var scheme
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         let theme = SkyTheme.of(scheme)
         let stars = SkyFingerprint.stars(for: vector)
         let cool = SkyRGB(SkyPalette.cool(dark: theme.dark)), warm = SkyRGB(SkyPalette.warm(dark: theme.dark))

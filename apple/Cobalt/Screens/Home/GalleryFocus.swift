@@ -65,7 +65,10 @@ struct GalleryHero: Equatable {
 struct GalleryPicture: View {
     let source: GalleryCoverSource
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         ZStack {
             if let remote = source.remote {
                 AsyncImage(url: remote) { phase in

@@ -339,7 +339,10 @@ struct DetailPlayer: View {
         withTransaction(transaction) { fullScreen = request }
     }
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Group {
             if onDisk, let url = video.fileURL {
                 if isAnimatedPicture {

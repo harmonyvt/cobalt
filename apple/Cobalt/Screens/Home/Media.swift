@@ -151,7 +151,10 @@ struct StillImage: View {
     private var generation: Int { 0 }
     #endif
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Color.clear
             .overlay {
                 if let image {
@@ -251,7 +254,10 @@ struct AnimatedImageView: View {
     var started: Binding<Bool>? = nil
     @State private var model = AnimatedImageModel()
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Color.clear
             .overlay {
                 if let image = model.image {
@@ -436,7 +442,10 @@ struct LoopingPlayerView: View {
     var span: ClosedRange<Double>?
     @State private var holder = LoopHolder()
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Group {
             if let player = holder.player { PlayerSurface(player: player) } else { Color.clear }
         }

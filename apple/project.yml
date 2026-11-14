@@ -30,6 +30,11 @@ packages:
     path: CobaltKit
   SyncGlowKit:
     path: SyncGlowKit
+  # PostHog (APP-API-CONTRACT 58): the app's only third-party package (owner's OK, 2026-11-14). The app target only;
+  # the extensions never link it. Used through Cobalt/App/Analytics.swift and Cobalt/Shared/MediaMask.swift.
+  PostHog:
+    url: https://github.com/PostHog/posthog-ios
+    from: "3.56.0"
 
 targets:
   Cobalt:
@@ -40,6 +45,7 @@ targets:
     dependencies:
       - package: CobaltKit
       - package: SyncGlowKit
+      - package: PostHog
       - sdk: Metal.framework
       - sdk: MetalKit.framework
       - target: CobaltShare

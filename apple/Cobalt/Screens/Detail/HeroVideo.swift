@@ -215,7 +215,10 @@ struct HeroVideoBox: View {
 
     private var hasBar: Bool { video.player != nil && video.phase != .failed && (video.hasFrames || transport.isPlaying) }
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         ZStack {
             Rectangle().fill(FrameGradient.fill(1))
             if !video.hasFrames, bridge == nil {

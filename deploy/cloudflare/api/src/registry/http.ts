@@ -8,6 +8,7 @@ import { SERVICE_KEY_ID } from "../library";
 import { forCall, type OpBase } from "./context";
 import { OpError, type Op, type OpContext, type OpReply, type RouteHost } from "./op";
 import type { Registry } from "./registry";
+import { capture, httpSurface, opEvent, worthSending, CLIENT_HEADER, INSTALL_HEADER, SESSION_HEADER } from "../posthog";
 
 const json = (status: number, body: unknown, allowOrigin?: string, extra: Record<string, string> = {}) =>
     new Response(JSON.stringify(body), {
@@ -44,8 +45,55 @@ export type HttpCall = {
     country?: string | null; // the original request's cf.country (section 42.2); default: read from `request`
 };
 
-// The registry's answer, or null when no op has this method and path.
+// What answerOp learned about the call, for its PostHog event (section 58).
+type Seen = { op?: Op; keyId?: string | null; caller?: OpContext["caller"] };
+
+// The registry's answer, or null when no op has this method and path. Every answered call also becomes a PostHog `op`
+// event (src/posthog.ts), sent after the response and never changing it.
 export async function handleOp(registry: Registry, base: OpBase, call: HttpCall): Promise<Response | null> {
+    const started = Date.now();
+    const seen: Seen = {};
+    const res = await answerOp(registry, base, call, seen);
+    if (res && seen.op) recordOp(base, call, seen, res, Date.now() - started);
+    return res;
+}
+
+function recordOp(base: OpBase, call: HttpCall, seen: Seen, res: Response, ms: number): void {
+    const env = base.env as { POSTHOG_PROJECT_TOKEN?: string; POSTHOG_HOST?: string };
+    if (!env.POSTHOG_PROJECT_TOKEN) return;
+    const h = call.request.headers;
+    const c = {
+        op: seen.op!.name,
+        surface: httpSurface(seen.caller ?? "open", call.request),
+        status: res.status,
+        ms,
+        host: call.host ?? "api",
+        method: call.request.method,
+        keyId: seen.keyId ?? null,
+        session: h.get(SESSION_HEADER),
+        install: h.get(INSTALL_HEADER),
+        client: h.get(CLIENT_HEADER),
+    };
+    if (!worthSending(c)) return;
+    // an error's code is in its JSON body; read from a clone, after the response has gone
+    const errorBody = res.status >= 400 && (res.headers.get("content-type") ?? "").includes("json") ? res.clone() : null;
+    const send = async () => {
+        let error: string | null = null;
+        if (errorBody) {
+            try {
+                const b = (await errorBody.json()) as { error?: { code?: unknown } } | null;
+                if (typeof b?.error?.code === "string") error = b.error.code;
+            } catch {
+                // not JSON after all
+            }
+        }
+        await capture(env, undefined, opEvent({ ...c, error }, base.now()));
+    };
+    if (base.edge.waitUntil) base.edge.waitUntil(send().catch(() => {}));
+    else void send().catch(() => {});
+}
+
+async function answerOp(registry: Registry, base: OpBase, call: HttpCall, seen: Seen): Promise<Response | null> {
     const host = call.host ?? "api";
     // The API's preflights stay with the gate (its OPTIONS rule covers every path), unless an op takes a real preflight
     // (one with Access-Control-Request-Method: the MCP upload link's, section 55); the other hosts answer their own.
@@ -53,6 +101,7 @@ export async function handleOp(registry: Registry, base: OpBase, call: HttpCall)
     const m = registry.match(call.request.method, call.url.pathname, host);
     if (!m) return null;
     const { op, params } = m;
+    seen.op = op;
     const { allowOrigin } = call;
 
     // ---- who is asking (the gate's rules, then the Worker's D1 lookup) ----
@@ -86,6 +135,8 @@ export async function handleOp(registry: Registry, base: OpBase, call: HttpCall)
         }
     }
 
+    seen.keyId = keyId;
+    seen.caller = caller;
     const ctx = forCall(base, { keyId, caller, request: call.request, url: call.url, params, country });
     const headers: Record<string, string> = op.noStore ? { "cache-control": "no-store" } : {};
     const origin = op.cors ? allowOrigin : undefined;

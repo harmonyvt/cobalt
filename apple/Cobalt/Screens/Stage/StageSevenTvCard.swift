@@ -511,7 +511,10 @@ struct SevenTvAvatar: View {
     let url: URL?
     var size: CGFloat = 36
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         ZStack {
             Circle().fill(CobaltColor.elevated)
             if let url {

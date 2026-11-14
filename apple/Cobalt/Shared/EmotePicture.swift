@@ -15,7 +15,10 @@ struct EmotePicture: View {
     /// Reduce Motion keeps every emote on its still.
     private var moves: Bool { animated && !reduceMotion }
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         ZStack {
             // The still leaves once a frame is playing. An emote's frames are transparent, so a
             // first frame left underneath shows as a second, frozen copy.
@@ -71,7 +74,10 @@ private struct EmoteMotion: View {
     var started: Binding<Bool>
     @State private var model = EmoteMotionModel()
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Color.clear
             .overlay {
                 if let image = model.image {

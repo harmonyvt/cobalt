@@ -226,7 +226,10 @@ struct LibraryPreviewCard: View {
     let row: LibraryRow
     private let width: CGFloat = 236
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         let aspect = MasonryPlan.clampAspect(row.faceAspect)
         VStack(alignment: .leading, spacing: 0) {
             FacePicture(item: row.item, maxPixel: 480, gradient: 1)

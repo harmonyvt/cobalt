@@ -7,7 +7,10 @@ import SwiftUI
 struct EditorPreviewPane: View {
     let session: EditSession
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         VStack(spacing: 12) {
             stage
             EditorTransport(session: session)

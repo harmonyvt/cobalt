@@ -58,7 +58,10 @@ struct ResultTile: View {
         return CGSize(width: (w * k).rounded(), height: (h * k).rounded())
     }
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         let frame = pipeline.frames.indices.contains(4) ? pipeline.frames[4] : nil
         ZStack(alignment: .bottomLeading) {
             RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous)

@@ -315,6 +315,8 @@ struct AppShell: View {
                 }
                 #endif
                 .modifier(MoveOverPresenter(model: model))
+                // PostHog (APP-API-CONTRACT 58): each tab the owner opens is a `$screen`, so a replay reads by tab
+                .onChange(of: model.selectedTab, initial: true) { Analytics.screen(model.selectedTab.rawValue) }
         }
     }
 
