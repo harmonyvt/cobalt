@@ -6589,6 +6589,24 @@ or the file is over 7 MiB less 64 KiB, or over 1000 px a side. Otherwise the fil
   clash sheet on add. The studio tab keeps a one-line shortcut to it.
 - Rollout: apply `0042_seventv_uploads.sql` (global `cf`), then the API, then the apps.
 
+### 57.12 Linking through 7TV's own login page inside the app (addendum, 2026-11-14; owner: "I want you to adopt 7tv authentication flow ... and look at there graphql please", then "i am ok with those downsides its a gated app so its fine")
+
+7TV has no third-party sign-in (checked against SevenTV/SevenTV 5606ada: no OAuth clients or app keys in REST or the
+v4 GraphQL schema; `userSessions.create` is staff-only). Its v4 login (`GET https://api.7tv.app/v4/auth/login?platform=
+twitch|discord|kick&return_to=`) only accepts 7TV's own origins (ours answers 403 "return_to origin mismatch"), sends
+the platform back to `https://7tv.app/login/callback`, and the page swaps the code at `POST /v4/auth/login/finish`
+(PKCE cookie, SameSite=Strict) for `{ token }`, which it keeps in `localStorage["7tv-token"]`. The token is an HS256 JWT
+(sub = user, jti = session), 30 days, never refreshed; `POST /v4/auth/logout` with the Bearer deletes the session.
+
+- Apps: "link 7tv" opens `https://7tv.app/login` in an in-app web view with its own persistent website data store
+  (capystore's own 7TV session; relinking is about one tap while Twitch remembers you). After the login the app reads
+  `localStorage["7tv-token"]` from the 7tv.app page and posts it to `POST /7tv/link` (57.4); the token never travels in
+  a URL. The app remembers that it linked this way. Paste and the bookmarklet stay (the web app has no sheet).
+- `DELETE /7tv?logout=1` also calls 7TV's logout with the stored token, best effort, then forgets it either way:
+  `{ linked: false, logged_out }`. The apps send `logout=1` only for a login made in their sheet (a pasted or
+  bookmarked token is the browser's own session, which unlink leaves alone).
+- No migration.
+
 ### 57.8 Rollout
 
 Apply `0040_seventv.sql` with the global `cf`, then deploy the API, then the apps. Before the migration the routes

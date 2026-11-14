@@ -187,8 +187,8 @@ const ROUTE_OPS = [
         name: "seventv_http.unlink",
         method: "DELETE",
         path: "/7tv",
-        summary: "Forget the 7TV token (DELETE /7tv).",
-        run: (ctx) => sevenTvUnlink(deps(ctx)),
+        summary: "Forget the 7TV token (DELETE /7tv); ?logout=1 also ends that session on 7TV (the app's own login sheet).",
+        run: (ctx) => sevenTvUnlink(deps(ctx), { logout: ctx.query.get("logout") === "1" }),
     }),
     route({
         name: "seventv_http.sets",

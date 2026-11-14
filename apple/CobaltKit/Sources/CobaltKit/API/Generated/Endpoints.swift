@@ -596,7 +596,7 @@ enum Endpoints {
         APIEndpoint(op: "seventv_http.link", method: "POST", path: "/7tv/link", auth: .key)
     }
 
-    /// `DELETE /7tv` (op `seventv_http.unlink`, auth key): Forget the 7TV token (DELETE /7tv).
+    /// `DELETE /7tv` (op `seventv_http.unlink`, auth key): Forget the 7TV token (DELETE /7tv); ?logout=1 also ends that session on 7TV (the app's own login sheet).
     static func seventvHttpUnlink() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "seventv_http.unlink", method: "DELETE", path: "/7tv", auth: .key)
     }
