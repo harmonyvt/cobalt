@@ -61,30 +61,33 @@ struct EditLiveStateTests {
 // MARK: - the manager
 
 @MainActor
-private final class FakeEditHandle: EditLiveHandle {
-    let render: String
-    var state: EditLiveContentState
+private final class FakeEditHandle: JobActivityHandle {
+    let attributes: JobLiveAttributes
+    let activityID = UUID().uuidString
+    var state: JobLiveState
     var isEnded = false
-    var updates: [EditLiveContentState] = []
-    var ended: (state: EditLiveContentState, dismissAt: Date?)?
+    var updates: [JobLiveState] = []
+    var ended: (state: JobLiveState, dismissAt: Date?)?
     let tokenStream: AsyncStream<String>
     let tokenSink: AsyncStream<String>.Continuation
 
-    init(render: String, state: EditLiveContentState) {
-        self.render = render
-        self.state = state
+    init(job: JobLiveJob) {
+        attributes = job.attributes
+        state = job.state
         (tokenStream, tokenSink) = AsyncStream.makeStream(of: String.self)
     }
 
+    var render: String { attributes.id }
+    func isFresh(at now: Date) -> Bool { !isEnded }
     func pushTokens() -> AsyncStream<String> { tokenStream }
-    func update(_ state: EditLiveContentState, staleDate: Date?) async {
+    func update(_ state: JobLiveState, staleDate: Date?) async {
         self.state = state
         updates.append(state)
     }
-    func end(_ state: EditLiveContentState, dismissAt: Date?) async {
-        self.state = state
+    func end(_ state: JobLiveState?, dismissAt: Date?) async {
+        if let state { self.state = state }
         isEnded = true
-        ended = (state, dismissAt)
+        ended = (self.state, dismissAt)
     }
 }
 
@@ -94,10 +97,12 @@ private final class FakeEditAdapter: EditLiveAdapter {
     var refuse = false
     var made: [FakeEditHandle] = []
     var pushRequested: [Bool] = []
-    var activities: [any EditLiveHandle] { made }
-    func request(_ attributes: EditLiveAttributes, state: EditLiveContentState, staleDate: Date, push: Bool) throws -> any EditLiveHandle {
+    var old: [FakeOldActivity] = []
+    var activities: [any JobActivityHandle] { made }
+    var oldActivities: [any OldLiveActivity] { old }
+    func request(_ job: JobLiveJob, staleDate: Date, push: Bool) throws -> any JobActivityHandle {
         if refuse { throw CancellationError() }
-        let h = FakeEditHandle(render: attributes.render, state: state)
+        let h = FakeEditHandle(job: job)
         made.append(h)
         pushRequested.append(push)
         return h
@@ -146,13 +151,18 @@ struct EditLiveManagerTests {
         await m.observe([render(.queued, queueAhead: 1)])
         #expect(adapter.made.count == 1)
         let h = try #require(adapter.made.first)
+        // the job island's words (CONTRACT-JOBLIVE.md 3, the server's `jobOfEdit`)
+        #expect(h.attributes.kind == "edit" && h.attributes.id == "Rq7sTu0vWx3yZa6bCd9e" && h.attributes.title == "edit · beach day")
+        #expect(h.attributes.open == "cobalt-apple://jobs")
+        #expect(h.state.phase == .waiting && h.state.headline == "waiting for its turn" && h.state.detail == "1 ahead")
         await m.observe([render(.rendering, progress: 0.4)])
         // an older copy (the queue's snapshot from before) never moves it back
         await m.observe([render(.preparing, progress: 0.05)])
-        #expect(h.updates.map(\.status) == [.rendering])
+        #expect(h.updates.map(\.headline) == ["rendering"])
+        #expect(h.updates.first?.steps == ["prepare", "render", "save"] && h.updates.first?.compact == "40%")
         await m.observe([render(.done, progress: 1)])
-        #expect(h.ended?.state.status == .done)
-        #expect(h.ended?.dismissAt == t0.addingTimeInterval(30 + 900))
+        #expect(h.ended?.state.phase == .done && h.ended?.state.headline == "video ready")
+        #expect(h.ended?.dismissAt == t0.addingTimeInterval(30 + 120), "a finished render stays 120 s (8.12)")
         // once ended it is never started again, whatever copy comes later
         await m.observe([render(.rendering, progress: 0.9)])
         #expect(adapter.made.count == 1)
@@ -211,8 +221,38 @@ struct EditLiveManagerTests {
         let fresh = EditLiveManager(adapter: adapter, environment: .production, capabilities: { caps }, client: { client }, now: { t0.addingTimeInterval(120) })
         client.served["Rq7sTu0vWx3yZa6bCd9e"] = render(.done, progress: 1)
         await fresh.foreground()
-        #expect(adapter.made[0].ended?.state.status == .done)
+        #expect(adapter.made[0].ended?.state.phase == .done)
         _ = m
+    }
+
+    @Test func oldRenderActivitiesNobodyWritesAreEndedAndOneOfARenderShownNowGivesWay() async throws {
+        let (m, adapter, _) = world()
+        let stale = FakeOldActivity(id: "OldOldOldOldOldOldOl", staleDate: t0)
+        let mine = FakeOldActivity(id: "Rq7sTu0vWx3yZa6bCd9e", staleDate: t0.addingTimeInterval(600))
+        let other = FakeOldActivity(id: "OtherOtherOtherOther", staleDate: t0.addingTimeInterval(600))
+        adapter.old = [stale, mine, other]
+        await m.foreground()
+        #expect(stale.isEnded && !mine.isEnded && !other.isEnded, "fresh ones are still written by the server")
+        await m.observe([render(.rendering, progress: 0.3)])
+        #expect(mine.isEnded && !other.isEnded, "one island per render: the old type gives way")
+        #expect(adapter.made.count == 1)
+    }
+
+    @Test func twoFeedsSeeingANewRenderWhileAnOldActivityEndsMakeOneActivity() async throws {
+        // the editor's feed and the queue's each call in from their own task; ending the old activity really suspends
+        let (m, adapter, _) = world()
+        let old = FakeOldActivity(id: "OldOldOldOldOldOldOl", staleDate: t0)
+        old.suspends = true
+        adapter.old = [old]
+        let a = Task { @MainActor in await m.observe([render(.rendering, progress: 0.3)]) }
+        let b = Task { @MainActor in await m.observe([render(.rendering, progress: 0.31)]) }
+        await a.value
+        await b.value
+        #expect(old.isEnded)
+        #expect(adapter.made.count == 1, "one activity per render")
+        // the next copy updates the one activity
+        await m.observe([render(.rendering, progress: 0.5)])
+        #expect(adapter.made.count == 1 && adapter.made[0].updates.last?.compact == "50%")
     }
 
     @Test func noEditorNoActivities() async {

@@ -60,7 +60,11 @@ export type SweepLive = {
     // looked at again then). Answers when the next retry is due (null: none pending) so
     // the sweep re-arms for it even with nothing else pending. DO-only work.
     retryEnds?(now: number): Promise<{ nextInMs: number | null }>;
+    // Ends runs that went quiet (live.ts `watchQuiet`). Answers when the next open run would go quiet; the sweep then
+    // comes back at most SWEEP_QUIET_MAX_S later, so no island outlives LIVE_QUIET_END_MS by much.
+    watchQuiet?(now: number): Promise<{ nextInMs: number | null }>;
 };
+export const SWEEP_QUIET_MAX_S = 60;
 
 // A whole round of Hark notification retries is abandoned after this long.
 export const SWEEP_NOTIFY_MS = 12_000;
@@ -91,6 +95,7 @@ export async function runSweep(
     }
     let delayS = SWEEP_DELAY_S;
     let endsInMs: number | null = null;
+    let quietInMs: number | null = null;
     if (live) {
         try {
             await raceCeiling(live.cleanup(d.now()), LIVE_PUSH_MS, "live cleanup");
@@ -102,6 +107,13 @@ export async function runSweep(
                 endsInMs = (await raceCeiling(live.retryEnds(d.now()), LIVE_PUSH_MS, "live end retries")).nextInMs;
             } catch (e) {
                 console.error("[cobalt-do] live end retries failed", String(e));
+            }
+        }
+        if (live.watchQuiet) {
+            try {
+                quietInMs = (await raceCeiling(live.watchQuiet(d.now()), LIVE_PUSH_MS, "live quiet runs")).nextInMs;
+            } catch (e) {
+                console.error("[cobalt-do] live quiet watch failed", String(e));
             }
         }
         if (pending > 0) {
@@ -133,5 +145,7 @@ export async function runSweep(
         delayS = Math.min(delayS, Math.min(SWEEP_DELAY_S, Math.max(1, Math.ceil(endsInMs / 1000))));
     }
     if (pending > 0 || endsInMs !== null) await scheduleSweepSoon(d, delayS);
+    // Nothing else pending but an island still open: come back when it would go quiet (at most a minute away).
+    else if (quietInMs !== null) await scheduleSweepSoon(d, Math.min(SWEEP_QUIET_MAX_S, Math.max(1, Math.ceil(quietInMs / 1000))));
     return pending;
 }

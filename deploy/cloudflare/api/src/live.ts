@@ -6,6 +6,7 @@
 //
 // Storage keys (all in the one `main` Durable Object, next to job:/save:/sweep:at):
 //   live:start:<key id>   {token, env, updatedAt}   one per API key (one key per device)
+//   live:jobstart:<key id> the same, for the job island (8.13); preferred for push-to-start when present
 //   live:run:<run>        the run record (RunRecord)
 //   live:sid:<sid>        run ids registered for a studio session
 //   live:health:<key id>  {badAt, reason}           the last non-token APNs failure
@@ -24,6 +25,7 @@ import { STUDIO_SID_REGEX } from "./gate";
 import { KEY_ID_HEADER } from "./headers";
 import type { SaveProgress } from "./studio";
 import type { KV } from "./webp";
+import { asJobPayload, jobOfSave } from "./job-live";
 
 // ---- constants --------------------------------------------------------------------
 
@@ -38,6 +40,10 @@ export const LIVE_COALESCE_MS = 1000;
 // this long with a fresh stale-date, so the island never says "waiting for cobalt…" while the work is fine.
 // Well inside STALE_S (120 s): a lost refresh still leaves room for the next one.
 export const LIVE_REFRESH_MS = 45_000;
+// A run whose state has not changed for this long is over, whatever it last said: an app killed mid-upload, a step
+// that never reported back. The watchdog (`watchQuiet`, from the sweep) ends it, so no island sits on an old state.
+export const LIVE_QUIET_END_MS = 10 * 60 * 1000;
+export const LIVE_LOST_CODE = "error.live.lost";
 export const LIVE_MAX_BODY_BYTES = 4096;
 // Caps (error.live.too_many_runs, 429): runs a key may hold that have not ended, runs a
 // key may hold at all (ended ones stay for LIVE_ENDED_TTL_MS), runs per studio session.
@@ -50,10 +56,20 @@ export const LIVE_START_MIN_GAP_MS = 10_000;
 // then after each further one): 3 retries over about a minute, then only a poll retries.
 export const LIVE_END_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 40_000];
 const START_WINDOW_PREFIX = "live:startat:";
+// The job island's push-to-start tokens (8.13): one per key, beside `live:start:<key id>`.
+export const JOB_START_PREFIX = "live:jobstart:";
+// Agent and MCP jobs (`startAgent`): the devices whose start tokens were refreshed most recently, at most this many.
+// One: a phone can hold start tokens under several keys (an old key and its current session), and each of them
+// starts its own activity on the same screen (seen live 2026-11-13: two islands for one save). The newest token is
+// the one the app refreshed last, so it is the phone in use.
+export const LIVE_AGENT_MAX_DEVICES = 1;
 
 export const STALE_S = 120;
 export const STALE_READY_S = 30 * 60;
-export const DISMISS_DONE_S = 900;
+// How long a finished island stays on the Lock Screen (the Dynamic Island lets go at once). Short on purpose: a card
+// that sat there for 15 minutes read as "it never ends" (2026-11-13). A result with a link to copy gets a little longer.
+export const DISMISS_DONE_S = 60;
+export const DISMISS_DONE_LINK_S = 120;
 export const DISMISS_FAILED_S = 300;
 export const EXPIRE_COUNTER_S = 60;
 export const EXPIRE_STAGE_S = 3600;
@@ -180,6 +196,8 @@ export type LiveHooks = {
     hasActiveRuns(): Promise<boolean>;
     // `POST /studio` from the instant share (`live` field): push-start an activity for the new session
     startShare?(keyId: string, sid: string, raw: unknown, awaitsMake: boolean): Promise<void>;
+    // a save or make the chat agent or an MCP client started: push-start the island on the owner's devices (8.11)
+    startAgent?(sid: string, o: { kind: "save" | "make"; job?: string | null; service: string; ref: string; title?: string | null }): Promise<void>;
 };
 
 // What the merge consumes: the events reduced to the state they describe.
@@ -358,7 +376,7 @@ export function updatePayload(state: LiveState, now: number) {
     };
 }
 
-export function startPayload(a: RunAttributes, state: LiveState, now: number) {
+export function startPayload(a: RunAttributes, state: LiveState, now: number, alertBody?: string) {
     return {
         aps: {
             timestamp: secs(now),
@@ -368,9 +386,16 @@ export function startPayload(a: RunAttributes, state: LiveState, now: number) {
             "content-state": canonical(state),
             "stale-date": staleDate(state, now),
             "input-push-token": 1,
-            alert: { title: "capystore", body: a.input === "file" ? `uploading ${a.ref}` : `fetching from ${a.service}` },
+            alert: { title: "capystore", body: alertBody ?? (a.input === "file" ? `uploading ${a.ref}` : `fetching from ${a.service}`) },
         },
     };
+}
+
+// The lock-screen alert of an agent's push-start (section 8.11); undefined keeps the default.
+export function agentAlert(r: Pick<RunRecord, "agent" | "attributes">): string | undefined {
+    if (r.agent === "save") return r.attributes.service ? `your agent is saving from ${r.attributes.service}` : "your agent is saving a link";
+    if (r.agent === "make") return r.attributes.ref ? `your agent is making something from ${r.attributes.ref}` : "your agent is making something";
+    return undefined;
 }
 
 // `end`: a finished run dismisses after 15 minutes (done) or 5 (failed) with a short
@@ -384,7 +409,7 @@ export function endPayload(a: RunAttributes, state: LiveState, now: number, imme
     if (immediate) {
         aps["dismissal-date"] = secs(now);
     } else if (state.stage === "done") {
-        aps["dismissal-date"] = secs(now) + DISMISS_DONE_S;
+        aps["dismissal-date"] = secs(now) + (state.resultURL ? DISMISS_DONE_LINK_S : DISMISS_DONE_S);
         aps.alert = {
             // no resultURL: a save the instant share started, now in the library
             title: state.resultURL === undefined && a.origin === "share" ? "saved to capystore" : "webp ready",
@@ -395,6 +420,11 @@ export function endPayload(a: RunAttributes, state: LiveState, now: number, imme
         aps.alert = { title: "capystore couldn't finish", body: "open capystore to see what happened." };
     }
     return { aps };
+}
+
+// A run's push payload: today's shape, or the job island's (8.13) for a run registered with `type: "job"`.
+export function runPayload(r: Pick<RunRecord, "type" | "attributes" | "state" | "agent">, base: { aps: Record<string, unknown> }, now: number) {
+    return r.type === "job" ? asJobPayload(base, jobOfSave(r.attributes, r.state, r.agent), now) : base;
 }
 
 // ---- records ----------------------------------------------------------------------
@@ -424,11 +454,18 @@ export type RunRecord = {
     // a client poll retries from then on).
     endTries?: number;
     endRetryAt?: number | null;
+    // When `state` last changed (the quiet watchdog); absent on runs from before it: createdAt then.
+    changedAt?: number;
+    // The device's activity is the one job island (8.13, CONTRACT-JOBLIVE): every push carries JobLiveState.
+    type?: "job";
     // Started by the server for an instant share (`startShare`): no device relays its
     // steps, so the save's "saved" ends it, unless a make follows (`awaitsMake`: the
     // render's result ends it then).
     serverOnly?: boolean;
     awaitsMake?: boolean;
+    // Started by the server for a job the chat agent or an MCP client began (`startAgent`, section 8.11): the alert
+    // that wakes the island says so.
+    agent?: "save" | "make";
 };
 // The small per-run index (`live:idx:<key id>:<run>`): everything the caps, the
 // cleanup, hasActiveRuns and the end retries need without reading run records.
@@ -461,6 +498,8 @@ export type LiveDeps = {
     now: () => number;
     // null: the APNs secrets are not configured (capability false, nothing is sent)
     apns: ApnsClient | null;
+    // a new run id for `startAgent` (tests pin it); crypto.randomUUID by default
+    uuid?: () => string;
     // arms the job sweep (index.ts: scheduleSweepSoon); called when an end push failed,
     // so the sweep retries it with nobody polling
     scheduleSweep?: () => Promise<void>;
@@ -486,6 +525,7 @@ type Registration = {
     start: boolean;
     attributes: RunAttributes;
     state: LiveState;
+    job: boolean;
 };
 
 function parseRegistration(run: string, b: Record<string, unknown>): Registration | null {
@@ -511,6 +551,7 @@ function parseRegistration(run: string, b: Record<string, unknown>): Registratio
         start: start === true,
         attributes: { run, input: a.input, service: a.service, ref: a.ref, origin: a.origin },
         state,
+        job: b.type === "job",
     };
 }
 
@@ -709,7 +750,7 @@ export class LiveService implements LiveHooks {
             event: terminal ? "end" : "update",
             priority: counter ? 5 : 10,
             expiration: secs(now) + (counter ? EXPIRE_COUNTER_S : EXPIRE_STAGE_S),
-            payload: terminal ? endPayload(r.attributes, s, now) : updatePayload(s, now),
+            payload: runPayload(r, terminal ? endPayload(r.attributes, s, now) : updatePayload(s, now), now),
         };
         const dlv = await apns.deliver(r.updateToken, r.env, push, r.run);
         await this.settleRun(r, s, dlv, terminal);
@@ -735,7 +776,9 @@ export class LiveService implements LiveHooks {
             // "saved" only ends a run nobody else will end: one the server started, with nothing made after
             if (ev.t === "saved" && (!r.serverOnly || r.awaitsMake)) return;
             const before = JSON.stringify(r);
+            const was = r.state;
             r.state = nextState(r.state, ev, this.d.now());
+            if (!sameState(was, r.state)) r.changedAt = this.d.now();
             await this.dispatch(r);
             // a poll that changes nothing writes nothing
             if (JSON.stringify(r) !== before) await this.saveRun(r);
@@ -761,6 +804,49 @@ export class LiveService implements LiveHooks {
         const idx = await this.d.storage.list<RunIndexEntry>({ prefix: IDX_PREFIX });
         for (const e of idx.values()) if (e.active) return true;
         return false;
+    }
+
+    // The quiet watchdog (sweep): a run that has not ended and whose state has not moved for LIVE_QUIET_END_MS is
+    // ended. One waiting on the owner ("ready to trim") goes quietly; any other ends as failed with LIVE_LOST_CODE.
+    // A run with no update token yet keeps the failed state, and the token's arrival pushes the end (catch-up).
+    // Returns when the next run would go quiet (null: none open), for the sweep to come back.
+    async watchQuiet(now: number = this.d.now()): Promise<{ nextInMs: number | null }> {
+        if (!this.d.apns) return { nextInMs: null };
+        let next: number | null = null;
+        for (const e of (await this.d.storage.list<RunIndexEntry>({ prefix: IDX_PREFIX })).values()) {
+            if (e.endedAt !== null) continue;
+            await this.withRun(e.run, async () => {
+                const r = await this.getRun(e.run);
+                if (!r || r.endedAt || isTerminal(r.state)) return;
+                const quietFor = now - (r.changedAt ?? r.createdAt);
+                if (quietFor < LIVE_QUIET_END_MS) {
+                    const inMs = LIVE_QUIET_END_MS - quietFor;
+                    next = next === null ? inMs : Math.min(next, inMs);
+                    return;
+                }
+                console.log(`[live] quiet run=${r.run.slice(0, 8)} stage=${r.state.stage} ended`);
+                if (r.state.stage === "ready") {
+                    if (r.updateToken && this.d.apns) {
+                        const dlv = await this.d.apns.deliver(
+                            r.updateToken,
+                            r.env,
+                            { event: "end", priority: 10, expiration: secs(now) + EXPIRE_STAGE_S, payload: runPayload(r, endPayload(r.attributes, r.state, now, true), now) },
+                            r.run,
+                        );
+                        if (dlv.kind === "quiet" || dlv.kind === "unhealthy") return; // tried again next pass
+                    }
+                    r.endedAt = now;
+                    await this.saveRun(r);
+                    return;
+                }
+                r.state = { ...r.state, stage: "failed", code: LIVE_LOST_CODE };
+                delete r.state.failure;
+                r.changedAt = now;
+                await this.dispatch(r);
+                await this.saveRun(r);
+            }).catch((x) => console.error("[live] quiet watch failed:", e.run.slice(0, 8), String(x)));
+        }
+        return { nextInMs: next };
     }
 
     // The sweep's retry of end pushes that failed after the result was collected (the
@@ -821,7 +907,10 @@ export class LiveService implements LiveHooks {
             if (left.length === 0) await this.d.storage.delete(key);
             else if (left.length !== ids.length) await this.d.storage.put(key, left);
         }
-        const starts = await this.d.storage.list<StartToken>({ prefix: "live:start:" });
+        const starts = [
+            ...(await this.d.storage.list<StartToken>({ prefix: "live:start:" })).entries(),
+            ...(await this.d.storage.list<StartToken>({ prefix: JOB_START_PREFIX })).entries(),
+        ];
         for (const [key, t] of starts) {
             if (now - t.updatedAt > LIVE_START_TOKEN_TTL_MS) await this.d.storage.delete(key);
         }
@@ -843,12 +932,15 @@ export class LiveService implements LiveHooks {
     async putStartToken(keyId: string, raw: string): Promise<LiveReply> {
         const b = parseJson(raw);
         if (!b || typeof b.token !== "string" || !TOKEN_REGEX.test(b.token) || !isEnv(b.environment)) return badRequest();
-        await this.d.storage.put(`live:start:${keyId}`, { token: b.token, env: b.environment, updatedAt: this.d.now() } satisfies StartToken);
+        // `type: "job"` (8.13): the push-to-start token of the job island, kept beside the old type's
+        const key = b.type === "job" ? `${JOB_START_PREFIX}${keyId}` : `live:start:${keyId}`;
+        await this.d.storage.put(key, { token: b.token, env: b.environment, updatedAt: this.d.now() } satisfies StartToken);
         return noContent();
     }
 
     async deleteStartToken(keyId: string): Promise<LiveReply> {
         await this.d.storage.delete(`live:start:${keyId}`);
+        await this.d.storage.delete(`${JOB_START_PREFIX}${keyId}`);
         return noContent();
     }
 
@@ -911,11 +1003,69 @@ export class LiveService implements LiveHooks {
         console.log(`[live] share start run=${run.slice(0, 8)} started=${b.started === true}${b.reason ? ` reason=${b.reason}` : ""}`);
     }
 
-    async putRun(keyId: string, run: string, raw: string): Promise<LiveReply> {
+    // Agent and MCP jobs (APP-API-CONTRACT.md section 8.11). A save (POST /studio by a `chat:` key) or a make on a saved
+    // post (render, slideshow, gallery image) that the chat agent or an MCP client started has no device following it,
+    // so nothing would ever ask for an activity. The server push-starts the same save island on the owner's devices:
+    // the key whose start token was refreshed most recently in the last 60 days (never a `chat:` key):
+    // LIVE_AGENT_MAX_DEVICES. Each device gets its own run held by its own key, so the update token the app reports
+    // for a push-started activity registers exactly as an instant share's does. The run is server-only: the save's
+    // "saved" ends a save; a make is pinned to its job, whose result ends it. Never refuses or slows the job:
+    // anything off (no start token, the 10 s start window, the run caps) just means no island.
+    async startAgent(sid: string, o: { kind: "save" | "make"; job?: string | null; service: string; ref: string; title?: string | null }): Promise<void> {
+        if (!this.d.apns || !STUDIO_SID_REGEX.test(sid)) return;
+        const now = this.d.now();
+        const starts = [
+            ...(await this.d.storage.list<StartToken>({ prefix: "live:start:" })).entries(),
+            ...(await this.d.storage.list<StartToken>({ prefix: JOB_START_PREFIX })).entries(),
+        ];
+        const devices = starts
+            .map(([k, t]) => ({ keyId: k.slice(k.startsWith(JOB_START_PREFIX) ? JOB_START_PREFIX.length : "live:start:".length), t }))
+            .filter(({ keyId, t }) => !keyId.startsWith("chat:") && now - t.updatedAt < LIVE_START_TOKEN_TTL_MS)
+            .sort((a, b) => b.t.updatedAt - a.t.updatedAt)
+            // the same token under two keys is one device, and a key with both token kinds is one device too
+            .filter((d, i, all) => all.findIndex((x) => x.t.token === d.t.token || x.keyId === d.keyId) === i)
+            .slice(0, LIVE_AGENT_MAX_DEVICES);
+        const making = o.kind === "make";
+        const state: LiveState = making
+            ? { stage: "rendering", rail: RAIL.rendering!, since: secs(now), waking: false, packing: false }
+            : { stage: "fetching", rail: RAIL.fetching!, since: secs(now), waking: false, packing: false };
+        if (o.title) state.title = o.title.slice(0, MAX_STR);
+        for (const { keyId, t } of devices) {
+            const run = this.d.uuid?.() ?? crypto.randomUUID();
+            const body = {
+                environment: t.env,
+                session: sid,
+                start: true,
+                attributes: { run, input: "link", service: o.service.slice(0, 120), ref: o.ref.slice(0, 120), origin: "share" },
+                state,
+            };
+            try {
+                // the run is created and pinned to its job before the start push goes, so an event that races it
+                // (the render's first progress) already finds it
+                const reply = await this.putRun(keyId, run, JSON.stringify(body), { trusted: true, agent: o.kind });
+                const b = reply.body as { started?: boolean; reason?: string } | null;
+                if (reply.status === 200) {
+                    await this.withRun(run, async () => {
+                        const r = await this.getRun(run);
+                        if (!r) return;
+                        r.serverOnly = true;
+                        if (making && o.job) r.job = o.job;
+                        await this.saveRun(r);
+                    });
+                }
+                console.log(`[live] agent ${o.kind} run=${run.slice(0, 8)} key=${keyId.slice(0, 6)} status=${reply.status} started=${b?.started === true}${b?.reason ? ` reason=${b.reason}` : ""}`);
+            } catch (e) {
+                console.error("[live] agent start failed", String(e));
+            }
+        }
+    }
+
+    // `trusted`: the server's own registration for a session another key made (`startAgent`); never from a route.
+    async putRun(keyId: string, run: string, raw: string, opts: { trusted?: boolean; agent?: "save" | "make" } = {}): Promise<LiveReply> {
         const b = parseJson(raw);
         const reg = b && parseRegistration(run, b);
         if (!reg) return badRequest();
-        if (reg.session) {
+        if (reg.session && !opts.trusted) {
             const owned = await this.sessionOwnedBy(reg.session, keyId);
             if (owned === "error") return err(503, "error.api.generic");
             if (!owned) return notFound();
@@ -932,12 +1082,23 @@ export class LiveService implements LiveHooks {
         return this.withRun(run, async () => {
             const now = this.d.now();
             const found = await this.getRun(run);
-            if (found && found.keyId !== keyId) return notFound();
+            if (found && found.keyId !== keyId) {
+                // An agent run (8.11) was push-started to a start token the server held under one key, but the app
+                // reports the activity's update token with the key it uses now (one phone can hold start tokens under
+                // an old key and its current session). Refusing it left the island stuck on its first state forever.
+                // The run moves to the reporting key; any other run stays its own key's.
+                if (!found.agent || keyId.startsWith("chat:")) return notFound();
+                await this.d.storage.delete(idxKey(found.keyId, run));
+                this.idxSeen.delete(run);
+                found.keyId = keyId;
+            }
 
             const previousSid = found?.sid ?? null;
             const previousToken = found?.updateToken ?? null;
             const targetSid = reg.session ?? previousSid;
             let created: RunRecord | null = null;
+            // a new run arms the sweep, whose quiet watchdog ends it if it is never heard from again
+            let armSweep = false;
 
             // Caps, checked and committed together (one at a time) before anything else is
             // written: a key may hold at most LIVE_MAX_OPEN_RUNS_PER_KEY runs that have not
@@ -973,23 +1134,35 @@ export class LiveService implements LiveHooks {
                         startedAt: null,
                         endedAt: null,
                         createdAt: now,
+                        ...(opts.agent ? { agent: opts.agent } : {}),
+                        ...(reg.job ? { type: "job" as const } : {}),
                     };
                     // visible to the next caller's count at once
                     await this.saveRun(created);
+                    armSweep = true;
                 }
                 return null;
             });
             if (rejected) return rejected;
+            if (armSweep) {
+                try {
+                    await this.d.scheduleSweep?.();
+                } catch (e) {
+                    console.error("[live] arming the sweep for a new run failed:", String(e));
+                }
+            }
 
             const r: RunRecord = (found ?? created)!;
             let replaced = false;
             if (found) {
                 r.env = reg.env;
+                if (reg.job) r.type = "job";
                 if (reg.updateToken) r.updateToken = reg.updateToken;
                 if (reg.session) r.sid = reg.session;
                 // the stored state is replaced only by a device-owned stage
                 if (DEVICE_STAGES.includes(reg.state.stage) && !sameState(r.state, reg.state) && !r.endedAt) {
                     r.state = reg.state;
+                    r.changedAt = this.d.now();
                     replaced = true;
                 }
             }
@@ -1005,7 +1178,11 @@ export class LiveService implements LiveHooks {
                     // reports settles the question).
                     reason = "start_unconfirmed";
                 } else {
-                    const start = await this.d.storage.get<StartToken>(`live:start:${keyId}`);
+                    // the job island's token when the device has one (8.13), the old type's otherwise
+                    const jobStart = await this.d.storage.get<StartToken>(`${JOB_START_PREFIX}${keyId}`);
+                    const startKey = jobStart ? `${JOB_START_PREFIX}${keyId}` : `live:start:${keyId}`;
+                    const start = jobStart ?? (await this.d.storage.get<StartToken>(startKey));
+                    if (jobStart) r.type = "job";
                     if (!start) {
                         reason = "no_start_token";
                     } else if (!(await this.reserveStart(keyId, now))) {
@@ -1018,7 +1195,7 @@ export class LiveService implements LiveHooks {
                             event: "start",
                             priority: 10,
                             expiration: secs(now) + EXPIRE_STAGE_S,
-                            payload: startPayload(r.attributes, r.state, now),
+                            payload: runPayload(r, startPayload(r.attributes, r.state, now, agentAlert(r)), now),
                         };
                         const dlv = await this.d.apns!.deliver(start.token, start.env, push, run);
                         if (dlv.kind === "sent") {
@@ -1028,11 +1205,11 @@ export class LiveService implements LiveHooks {
                             r.lastPushAt = this.d.now();
                             await this.markOk(keyId);
                             if (dlv.env !== start.env) {
-                                await this.d.storage.put(`live:start:${keyId}`, { ...start, env: dlv.env } satisfies StartToken);
+                                await this.d.storage.put(startKey, { ...start, env: dlv.env } satisfies StartToken);
                             }
                         } else if (dlv.kind === "drop") {
                             r.startAttemptedAt = null;
-                            await this.d.storage.delete(`live:start:${keyId}`);
+                            await this.d.storage.delete(startKey);
                             reason = "no_start_token";
                         } else if (dlv.kind === "unhealthy") {
                             await this.markBad(keyId, `${dlv.status} ${dlv.reason}`);
@@ -1068,6 +1245,7 @@ export class LiveService implements LiveHooks {
         await this.withRun(run, async () => {
             const r = await this.getRun(run);
             if (!r || r.endedAt) return;
+            if (!sameState(r.state, state)) r.changedAt = this.d.now();
             r.state = state;
             await this.dispatch(r);
             await this.saveRun(r);
@@ -1088,7 +1266,7 @@ export class LiveService implements LiveHooks {
                         event: "end",
                         priority: 10,
                         expiration: secs(now) + EXPIRE_STAGE_S,
-                        payload: endPayload(r.attributes, r.state, now, true),
+                        payload: runPayload(r, endPayload(r.attributes, r.state, now, true), now),
                     },
                     run,
                 );

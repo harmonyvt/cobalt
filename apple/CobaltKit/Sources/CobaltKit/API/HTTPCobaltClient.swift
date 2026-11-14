@@ -1325,24 +1325,32 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
 
     // MARK: - Live Activities (APP-API-CONTRACT section 8; all keyed)
 
+    /// `PUT /live/start-token` with `"type": "job"`: the push-to-start token of the job island
+    /// (`CobaltJobActivityAttributes`, APP-API-CONTRACT 8.13). The server keeps it beside the old type's token and uses it
+    /// for every push-to-start of this key: share sheet saves, agent jobs and chat replies. This build registers no other.
     public func registerLiveStartToken(_ token: String, environment: LiveEnvironment) async throws {
         let req = try makeRequest("PUT", "/live/start-token", keyed: true)
-        let body = Self.jsonBody(["token": token, "environment": environment.rawValue])
+        let body = Self.jsonBody(["token": token, "environment": environment.rawValue, "type": "job"])
         try await sendEmpty(req, body: body)
     }
 
     // MARK: chat reply activities (APP-API-CONTRACT 27.9)
 
-    /// `PUT /live/chat-start-token`: this device's push-to-start token for chat reply activities.
+    /// `PUT /live/chat-start-token`: this device's push-to-start token for the old chat activity type. No longer called by
+    /// the app (8.13): the job start token (`registerLiveStartToken`) wins for chat replies on a key that has both.
     public func registerChatLiveStartToken(_ token: String, environment: LiveEnvironment) async throws {
         let req = try makeRequest("PUT", "/live/chat-start-token", keyed: true)
         try await sendEmpty(req, body: Self.jsonBody(["token": token, "environment": environment.rawValue]))
     }
 
-    /// `PUT /live/chats/<thread>`: the update token of a chat activity the server push-started on this device.
-    public func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment) async throws {
+    /// `PUT /live/chats/<thread>` with `"type": "job"`: the update token of a chat reply's job activity (this phone's own,
+    /// or one the server push-started here), so the server pushes `JobLiveState` to it. `job: false` leaves the type out:
+    /// an old-type activity the server push-started (changeover release).
+    public func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment, job: Bool) async throws {
         let req = try makeRequest("PUT", "/live/chats/\(Self.encode(threadID))", keyed: true)
-        try await sendEmpty(req, body: Self.jsonBody(["token": token, "environment": environment.rawValue]))
+        var body = ["token": token, "environment": environment.rawValue]
+        if job { body["type"] = "job" }
+        try await sendEmpty(req, body: Self.jsonBody(body))
     }
 
     public func registerLiveRun(_ r: LiveRunRegistration) async throws -> LiveRunReply {

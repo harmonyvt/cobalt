@@ -1,0 +1,367 @@
+{
+ "save_downloading": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "save",
+   "title": "twitch · KindStupidClip",
+   "agent": true
+  },
+  "state": {
+   "phase": "working",
+   "steps": [
+    "download",
+    "store"
+   ],
+   "step": 0,
+   "headline": "downloading from twitch",
+   "detail": "4.2 MB of 9.1 MB",
+   "fraction": 0.462,
+   "compact": "46%",
+   "since": 1790000000
+  }
+ },
+ "save_waking": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "save",
+   "title": "twitch · KindStupidClip",
+   "agent": false
+  },
+  "state": {
+   "phase": "working",
+   "steps": [
+    "download",
+    "store"
+   ],
+   "step": 0,
+   "headline": "waking the server",
+   "since": 1790000000
+  }
+ },
+ "save_storing": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "save",
+   "title": "twitch · KindStupidClip",
+   "agent": true
+  },
+  "state": {
+   "phase": "working",
+   "steps": [
+    "download",
+    "store"
+   ],
+   "step": 1,
+   "headline": "storing in your library",
+   "detail": "8.9 MB of 8.9 MB",
+   "fraction": 1,
+   "compact": "100%",
+   "since": 1790000000
+  }
+ },
+ "save_done": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "save",
+   "title": "twitch · KindStupidClip",
+   "agent": true
+  },
+  "state": {
+   "phase": "done",
+   "steps": [
+    "download",
+    "store"
+   ],
+   "step": 2,
+   "headline": "saved",
+   "since": 1790000000,
+   "result": "1280×720 · 30 s · 8.9 MB"
+  }
+ },
+ "save_failed": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "save",
+   "title": "twitch · KindStupidClip",
+   "agent": false
+  },
+  "state": {
+   "phase": "failed",
+   "steps": [
+    "download",
+    "store"
+   ],
+   "step": 0,
+   "headline": "couldn't save",
+   "detail": "the link could not be fetched.",
+   "since": 1790000000
+  }
+ },
+ "save_lost": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "save",
+   "title": "twitch · KindStupidClip",
+   "agent": true
+  },
+  "state": {
+   "phase": "lost",
+   "steps": [
+    "download",
+    "store"
+   ],
+   "step": 0,
+   "headline": "lost track of this save",
+   "detail": "it may still finish: look in your library.",
+   "since": 1790000000
+  }
+ },
+ "upload_uploading": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "upload",
+   "title": "IMG_0412.mov",
+   "agent": false
+  },
+  "state": {
+   "phase": "working",
+   "steps": [
+    "upload",
+    "store"
+   ],
+   "step": 0,
+   "headline": "uploading",
+   "detail": "38.0 MB of 96.0 MB",
+   "fraction": 0.396,
+   "compact": "40%",
+   "since": 1790000000
+  }
+ },
+ "app_reading": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "upload",
+   "title": "IMG_0412.mov",
+   "agent": false
+  },
+  "state": {
+   "phase": "working",
+   "steps": [
+    "upload",
+    "store",
+    "read"
+   ],
+   "step": 2,
+   "headline": "reading the video",
+   "detail": "frame 40 of 300",
+   "fraction": 0.133,
+   "compact": "13%",
+   "since": 1790000000
+  }
+ },
+ "app_ready": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "upload",
+   "title": "IMG_0412.mov",
+   "agent": false
+  },
+  "state": {
+   "phase": "waiting",
+   "steps": [
+    "upload",
+    "store",
+    "read"
+   ],
+   "step": 2,
+   "headline": "ready to trim",
+   "detail": "IMG_0412.mov",
+   "since": 1790000000
+  }
+ },
+ "app_webp": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "save",
+   "title": "twitch · KindStupidClip",
+   "agent": false
+  },
+  "state": {
+   "phase": "working",
+   "steps": [
+    "download",
+    "store",
+    "make"
+   ],
+   "step": 2,
+   "headline": "making the webp",
+   "detail": "frame 42 of 150",
+   "fraction": 0.28,
+   "compact": "42/150",
+   "since": 1790000000
+  }
+ },
+ "make_working": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "make",
+   "title": "twitch · KindStupidClip",
+   "agent": true
+  },
+  "state": {
+   "phase": "working",
+   "steps": [
+    "make"
+   ],
+   "step": 0,
+   "headline": "making the webp",
+   "detail": "frame 42 of 150",
+   "fraction": 0.28,
+   "compact": "42/150",
+   "since": 1790000000
+  }
+ },
+ "make_done": {
+  "attributes": {
+   "id": "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11",
+   "kind": "make",
+   "title": "twitch · KindStupidClip",
+   "agent": true
+  },
+  "state": {
+   "phase": "done",
+   "steps": [
+    "make"
+   ],
+   "step": 1,
+   "headline": "webp ready",
+   "since": 1790000000,
+   "result": "480×854 · 10.1 s · 918 KB",
+   "link": "https://media.capybaraharmony.com/PrEvIeW001.webp"
+  }
+ },
+ "edit_queued": {
+  "attributes": {
+   "id": "R3nd3rIdR3nd3rIdR3nd",
+   "kind": "edit",
+   "title": "edit · birthday cut",
+   "agent": false
+  },
+  "state": {
+   "phase": "waiting",
+   "steps": [
+    "prepare",
+    "render",
+    "save"
+   ],
+   "step": 0,
+   "headline": "waiting for its turn",
+   "detail": "2 ahead",
+   "compact": "+2",
+   "since": 1790000000
+  }
+ },
+ "edit_rendering": {
+  "attributes": {
+   "id": "R3nd3rIdR3nd3rIdR3nd",
+   "kind": "edit",
+   "title": "edit · birthday cut",
+   "agent": false
+  },
+  "state": {
+   "phase": "working",
+   "steps": [
+    "prepare",
+    "render",
+    "save"
+   ],
+   "step": 1,
+   "headline": "rendering",
+   "detail": "63%",
+   "fraction": 0.63,
+   "compact": "63%",
+   "since": 1790000000
+  }
+ },
+ "edit_done": {
+  "attributes": {
+   "id": "R3nd3rIdR3nd3rIdR3nd",
+   "kind": "edit",
+   "title": "edit · birthday cut",
+   "agent": false
+  },
+  "state": {
+   "phase": "done",
+   "steps": [
+    "prepare",
+    "render",
+    "save"
+   ],
+   "step": 3,
+   "headline": "video ready",
+   "since": 1790000000,
+   "result": "1920×1080 · 48 s · 96.0 MB"
+  }
+ },
+ "edit_failed": {
+  "attributes": {
+   "id": "R3nd3rIdR3nd3rIdR3nd",
+   "kind": "edit",
+   "title": "edit · birthday cut",
+   "agent": false
+  },
+  "state": {
+   "phase": "failed",
+   "steps": [
+    "prepare",
+    "render",
+    "save"
+   ],
+   "step": 1,
+   "headline": "couldn't render",
+   "detail": "a clip in this edit couldn't be used.",
+   "since": 1790000000
+  }
+ },
+ "chat_tools": {
+  "attributes": {
+   "id": "thread01",
+   "kind": "chat",
+   "title": "chat · save that clip",
+   "agent": false
+  },
+  "state": {
+   "phase": "working",
+   "steps": [
+    "think",
+    "tools",
+    "write"
+   ],
+   "step": 1,
+   "headline": "using tools",
+   "detail": "3 so far · search, save, look",
+   "compact": "3",
+   "since": 1790000000
+  }
+ },
+ "chat_done": {
+  "attributes": {
+   "id": "thread01",
+   "kind": "chat",
+   "title": "chat · save that clip",
+   "agent": false
+  },
+  "state": {
+   "phase": "done",
+   "steps": [
+    "think",
+    "tools",
+    "write"
+   ],
+   "step": 3,
+   "headline": "reply ready",
+   "detail": "saved it (=^･ω･^=) it's in your library now",
+   "since": 1790000000
+  }
+ }
+}

@@ -79,7 +79,7 @@ struct DetachRig {
     }
 
     func handle(forRun run: UUID) -> FakeLiveHandle? {
-        adapter.handles.first { $0.attributes.run == run.uuidString.lowercased() }
+        adapter.handles.first { $0.attributes.id == run.uuidString.lowercased() }
     }
 
     func waitForPosts(_ n: Int) async {

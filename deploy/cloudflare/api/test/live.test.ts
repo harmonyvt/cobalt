@@ -8,7 +8,10 @@ import { ApnsClient } from "../src/apns";
 import { KEY_ID_HEADER } from "../src/headers";
 import {
     DEVICE_STAGES,
+    DISMISS_DONE_S,
     LIVE_END_RETRY_DELAYS_MS,
+    LIVE_LOST_CODE,
+    LIVE_QUIET_END_MS,
     LIVE_ENDED_TTL_MS,
     LIVE_MAX_OPEN_RUNS_PER_KEY,
     LIVE_MAX_RUNS_PER_KEY,
@@ -762,7 +765,7 @@ describe("rate limiting and coalescing", () => {
 describe("`end` pushes", () => {
     const done = { kind: "success" as const, url: "https://media.capybaraharmony.com/PrEvIeW001.webp", bytes: 4500000, width: 480, height: 854, seconds: 10.1 };
 
-    it("done: dismissal in 15 minutes, a `webp ready` alert with service · size, no sound; the run ends", async () => {
+    it("done: dismissal in 2 minutes (a link to copy), a `webp ready` alert with service · size, no sound; the run ends", async () => {
         const w = await world();
         await w.armed({ state: FIX.ready });
         await w.live.onRender(SID, "J", { kind: "accepted", title: "t", duration: 2 });
@@ -775,7 +778,7 @@ describe("`end` pushes", () => {
             timestamp: now,
             event: "end",
             "content-state": expect.objectContaining({ stage: "done", resultBytes: 4500000 }),
-            "dismissal-date": now + 900,
+            "dismissal-date": now + 120,
             alert: { title: "webp ready", body: "instagram · 4.5 MB" },
         });
         expect(Object.keys(p!.payload.aps)).toEqual(["timestamp", "event", "content-state", "dismissal-date", "alert"]);
@@ -1730,7 +1733,8 @@ describe("finding 8: a failed end is retried by the sweep, bounded, with backoff
         expect(w.apple.calls).toHaveLength(1);
         expect(w.run()).toMatchObject({ endedAt: null, endTries: 1, endRetryAt: w.clock.t + LIVE_END_RETRY_DELAYS_MS[0]! });
         expect(w.idx()!.retryAt).toBe(w.clock.t + LIVE_END_RETRY_DELAYS_MS[0]!);
-        expect(w.sweeps).toHaveLength(1);
+        // armed twice: once when the run was registered (the quiet watchdog), once for the retry
+        expect(w.sweeps).toEqual([T0, w.clock.t]);
     });
 
     it("retryEnds sends nothing before the retry is due, then sends the end and finishes the run", async () => {
@@ -1882,5 +1886,245 @@ describe("instant share (startShare: POST /studio with `live`, APP-API-CONTRACT 
         const w = await world({ configured: false });
         await w.live.startShare(KEY, SID, LIVE, false);
         expect(w.run()).toBeUndefined();
+    });
+});
+
+describe("agent and MCP jobs (startAgent, APP-API-CONTRACT 8.11)", () => {
+    const START2 = "ab".repeat(32);
+    const JOB = "J0b1d2f3h4j5l6n7p8r9";
+    // a save the chat made: its session belongs to the chat's key, not to any device
+    const agentWorld = async () => {
+        const w = await world();
+        w.db.raw
+            .prepare("INSERT INTO studio_sessions (id, key_id, link, service, status, created_at, expires_at) VALUES (?, ?, ?, ?, 'saving', ?, ?)")
+            .run("cHaTsEsSiOn00000000001", "chat:t1", "https://x.com/a/status/1", "twitter", T0, T0 + 1e9);
+        return w;
+    };
+    const CHAT_SID = "cHaTsEsSiOn00000000001";
+    const runsOf = (w: World, sid = CHAT_SID) => ((w.kv.m.get(`live:sid:${sid}`) as string[] | undefined) ?? []).map((id) => w.run(id)!);
+
+    it("push-starts one save island, on the newest start token's key, never a chat key's", async () => {
+        const w = await agentWorld();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        w.tick(1000);
+        await w.live.putStartToken(OTHER, JSON.stringify({ token: START2, environment: "production" }));
+        w.tick(1000);
+        await w.live.putStartToken("chat:t1", JSON.stringify({ token: "ee".repeat(32), environment: "sandbox" }));
+        await w.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1", title: null });
+        expect(w.apple.pushes).toHaveLength(1);
+        const p = w.apple.pushes[0]!;
+        expect(p.token).toBe(START2);
+        expect(p.payload.aps.event).toBe("start");
+        expect(p.payload.aps.alert).toEqual({ title: "capystore", body: "your agent is saving from twitter" });
+        expect(p.payload.aps["content-state"]).toMatchObject({ stage: "fetching", rail: 0 });
+        expect(p.payload.aps.attributes).toMatchObject({ input: "link", service: "twitter", ref: "1", origin: "share" });
+        const runs = runsOf(w);
+        expect(runs.map((r) => r.keyId)).toEqual([OTHER]);
+        expect(runs[0]!.serverOnly).toBe(true);
+        expect(runs[0]!.agent).toBe("save");
+        expect(runs[0]!.sid).toBe(CHAT_SID);
+    });
+
+    it("the same phone under two keys gets one island, and its token report from the other key ends it", async () => {
+        // seen live: one save, two islands; the one whose run sat under the old key never moved again
+        const w = await agentWorld();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        w.tick(1000);
+        await w.live.putStartToken(OTHER, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.startAgent(CHAT_SID, { kind: "save", service: "twitch", ref: "clip" });
+        expect(w.apple.pushes).toHaveLength(1);
+        const [r] = runsOf(w);
+        expect(r!.keyId).toBe(OTHER);
+        // the app reports the activity's token with the key it uses (here: the older one)
+        const reply = await w.live.putRun(KEY, r!.run, JSON.stringify(reg({ update_token: UPDATE, attributes: { ...ATTRS, run: r!.run, origin: "share" } })));
+        expect(reply.status).toBe(200);
+        expect(w.run(r!.run)!.keyId).toBe(KEY);
+        expect(w.idx(r!.run, KEY)).toBeDefined();
+        expect(w.idx(r!.run, OTHER)).toBeUndefined();
+        w.tick(4000);
+        await w.live.onSave(CHAT_SID, { kind: "saved", bytes: 9_000, width: 10, height: 10, seconds: 1 });
+        expect(w.apple.pushes.at(-1)!.payload.aps.event).toBe("end");
+        expect(w.run(r!.run)!.endedAt).not.toBeNull();
+    });
+
+    it("a run that is not an agent's is never claimed by another key, nor an agent's by a chat key", async () => {
+        const w = await world();
+        await w.put({ session: SID });
+        expect((await w.put({ update_token: UPDATE }, RUN, OTHER)).status).toBe(404);
+        const a = await agentWorld();
+        await a.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await a.live.startAgent(CHAT_SID, { kind: "save", service: "twitch", ref: "clip" });
+        const [r] = runsOf(a);
+        const reply = await a.live.putRun("chat:t1", r!.run, JSON.stringify(reg({ update_token: UPDATE, attributes: { ...ATTRS, run: r!.run, origin: "share" } })));
+        expect(reply.status).toBe(404);
+    });
+
+    it("the save's progress and `saved` reach the island once the app reports the token", async () => {
+        const w = await agentWorld();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
+        const [r] = runsOf(w);
+        await w.live.putRun(KEY, r!.run, JSON.stringify(reg({ update_token: UPDATE, attributes: { ...ATTRS, run: r!.run, origin: "share" } })));
+        w.apple.pushes.length = 0;
+        w.tick(4000);
+        await w.live.onSave(CHAT_SID, saving(500));
+        expect(w.apple.pushes.at(-1)!.payload.aps["content-state"]).toMatchObject({ stage: "saving" });
+        w.tick(4000);
+        await w.live.onSave(CHAT_SID, { kind: "saved", bytes: 9_000, width: 10, height: 10, seconds: 1 });
+        expect(w.apple.pushes.at(-1)!.payload.aps.event).toBe("end");
+        expect(w.apple.pushes.at(-1)!.payload.aps.alert).toMatchObject({ title: "saved to capystore" });
+        expect(w.run(r!.run)!.endedAt).not.toBeNull();
+    });
+
+    it("a make starts in `rendering`, pinned to its job, and its result ends it", async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.startAgent(SID_OTHER, { kind: "make", job: JOB, service: "instagram", ref: "a cat", title: "a cat" });
+        const p = w.apple.pushes[0]!;
+        expect(p.payload.aps.alert).toEqual({ title: "capystore", body: "your agent is making something from a cat" });
+        expect(p.payload.aps["content-state"]).toMatchObject({ stage: "rendering", rail: 3, title: "a cat" });
+        const [r] = runsOf(w, SID_OTHER);
+        expect(r!.job).toBe(JOB);
+        expect(r!.keyId).toBe(KEY); // SID_OTHER belongs to another key: trusted, never refused
+        await w.live.putRun(KEY, r!.run, JSON.stringify(reg({ update_token: UPDATE, attributes: { ...ATTRS, run: r!.run, origin: "share" } })));
+        w.apple.pushes.length = 0;
+        // another job's result on the same post leaves it alone
+        await w.live.onRender(SID_OTHER, "Xx1d2f3h4j5l6n7p8r9z", { kind: "failed", code: "error.webp.failed" });
+        expect(w.run(r!.run)!.state.stage).toBe("rendering");
+        w.tick(5000);
+        await w.live.onRender(SID_OTHER, JOB, { kind: "success", url: "https://media.capybaraharmony.com/PrEvIeW001.webp", bytes: 4500000, width: 480, height: 854, seconds: 10.1 });
+        expect(w.apple.pushes.at(-1)!.payload.aps.event).toBe("end");
+        expect(w.run(r!.run)!.endedAt).not.toBeNull();
+    });
+
+    it("one device, newest token first; stale tokens, no tokens and no APNs start nothing", async () => {
+        const w = await agentWorld();
+        await w.live.putStartToken("key-row-3", JSON.stringify({ token: "11".repeat(32), environment: "sandbox" }));
+        w.tick(1000);
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        w.tick(1000);
+        await w.live.putStartToken(OTHER, JSON.stringify({ token: START2, environment: "sandbox" }));
+        await w.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
+        expect(w.apple.pushes.map((p) => p.token)).toEqual([START2]);
+
+        const stale = await agentWorld();
+        await stale.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        stale.tick(61 * 24 * 60 * 60 * 1000);
+        await stale.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
+        expect(stale.apple.pushes).toHaveLength(0);
+
+        const none = await agentWorld();
+        await none.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
+        expect(none.apple.calls).toHaveLength(0);
+        expect(runsOf(none)).toHaveLength(0);
+
+        const off = await world({ configured: false });
+        await off.live.startAgent(CHAT_SID, { kind: "save", service: "twitter", ref: "1" });
+        expect(off.kv.m.size).toBe(0);
+    });
+});
+
+describe("quiet watchdog (watchQuiet): no island sits on an old state", () => {
+    it("a run whose state has not moved for 10 minutes ends as failed (error.live.lost)", async () => {
+        const w = await world();
+        await w.armed({ session: SID, state: FIX.uploading ?? { ...FETCHING, stage: "uploading" } });
+        expect((await w.live.watchQuiet()).nextInMs).toBe(LIVE_QUIET_END_MS);
+        w.tick(LIVE_QUIET_END_MS - 1000);
+        expect((await w.live.watchQuiet()).nextInMs).toBe(1000);
+        expect(w.apple.pushes).toHaveLength(0);
+        w.tick(1000);
+        expect(await w.live.watchQuiet()).toEqual({ nextInMs: null });
+        const p = w.apple.pushes.at(-1)!;
+        expect(p.payload.aps.event).toBe("end");
+        expect(p.payload.aps["content-state"]).toMatchObject({ stage: "failed", code: LIVE_LOST_CODE });
+        expect(w.run()!.endedAt).not.toBeNull();
+    });
+
+    it("a change resets the clock", async () => {
+        const w = await world();
+        await w.armed({ session: SID });
+        w.tick(LIVE_QUIET_END_MS - 1000);
+        await w.live.onSave(SID, saving(500));
+        w.tick(5000);
+        await w.live.watchQuiet();
+        expect(w.run()!.state.stage).toBe("saving");
+        expect(w.run()!.endedAt).toBeNull();
+    });
+
+    it("`ready` (waiting on the owner) is dismissed quietly, not failed", async () => {
+        const w = await world();
+        await w.armed({ session: SID, state: FIX.ready });
+        w.tick(LIVE_QUIET_END_MS);
+        await w.live.watchQuiet();
+        const p = w.apple.pushes.at(-1)!;
+        expect(p.payload.aps.event).toBe("end");
+        expect(p.payload.aps["dismissal-date"]).toBe(Math.floor(w.clock.t / 1000));
+        expect(p.payload.aps.alert).toBeUndefined();
+        expect(w.run()!.endedAt).not.toBeNull();
+    });
+
+    it("a run with no update token keeps the failed state; the token's arrival sends the end", async () => {
+        const w = await world();
+        await w.put({ session: SID });
+        w.tick(LIVE_QUIET_END_MS);
+        await w.live.watchQuiet();
+        expect(w.run()!.state.stage).toBe("failed");
+        expect(w.apple.pushes).toHaveLength(0);
+        await w.put({ update_token: UPDATE });
+        expect(w.apple.pushes.at(-1)!.payload.aps.event).toBe("end");
+        expect(await w.live.watchQuiet()).toEqual({ nextInMs: null });
+    });
+
+    it("a finished save without a link leaves the Lock Screen after a minute", async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.startShare(KEY, SID, { run: RUN, environment: "sandbox", service: "x", ref: "1" }, false);
+        await w.put({ update_token: UPDATE, attributes: { ...ATTRS, origin: "share" } });
+        w.tick(4000);
+        await w.live.onSave(SID, { kind: "saved", bytes: 1, width: 1, height: 1, seconds: 1 });
+        const p = w.apple.pushes.at(-1)!;
+        expect(p.payload.aps["dismissal-date"]).toBe(Math.floor(w.clock.t / 1000) + DISMISS_DONE_S);
+        expect(DISMISS_DONE_S).toBe(60);
+    });
+});
+
+describe("job island (8.13): runs registered with type job get JobLiveState", () => {
+    it("a run registered with `type: job` is pushed the job state; others keep today's", async () => {
+        const w = await world();
+        await w.put({ session: SID, update_token: UPDATE, type: "job" });
+        w.tick(4000);
+        await w.live.onSave(SID, saving(500));
+        const p = w.apple.pushes.at(-1)!;
+        expect(p.payload.aps["content-state"]).toMatchObject({ phase: "working", steps: ["download", "store"], step: 1, headline: "storing in your library" });
+        expect(typeof p.payload.aps["stale-date"]).toBe("number");
+        const old = await world();
+        await old.put({ session: SID, update_token: UPDATE });
+        old.tick(4000);
+        await old.live.onSave(SID, saving(500));
+        expect(old.apple.pushes.at(-1)!.payload.aps["content-state"]).toMatchObject({ stage: "saving" });
+    });
+
+    it("push-to-start prefers the key's job token and makes the run a job run", async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await w.live.putStartToken(KEY, JSON.stringify({ token: "ab".repeat(32), environment: "sandbox", type: "job" }));
+        await w.live.startShare(KEY, SID, { run: RUN, environment: "sandbox", service: "twitch", ref: "clip" }, false);
+        const p = w.apple.pushes[0]!;
+        expect(p.token).toBe("ab".repeat(32));
+        expect(p.payload.aps["attributes-type"]).toBe("CobaltJobActivityAttributes");
+        expect(p.payload.aps.attributes).toEqual({ id: RUN, kind: "save", title: "twitch · clip", agent: false });
+        expect(w.run()!.type).toBe("job");
+        // a device with only the old token keeps the old type
+        const o = await world();
+        await o.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox" }));
+        await o.live.startShare(KEY, SID, { run: RUN, environment: "sandbox", service: "twitch", ref: "clip" }, false);
+        expect(o.apple.pushes[0]!.payload.aps["attributes-type"]).toBe("CobaltActivityAttributes");
+    });
+
+    it("deleting the start token deletes both kinds", async () => {
+        const w = await world();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox", type: "job" }));
+        await w.live.deleteStartToken(KEY);
+        expect(w.kv.m.get(`live:jobstart:${KEY}`)).toBeUndefined();
     });
 });

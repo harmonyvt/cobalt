@@ -322,129 +322,59 @@ public struct CobaltChatActivityAttributes: ActivityAttributes, Hashable, Sendab
 
 // MARK: - the seam
 
-/// The server routes the reply activities use (APP-API-CONTRACT 27.9, `features.chat_live_push`).
+/// The server routes the reply activities use (APP-API-CONTRACT 27.9, `features.chat_live_push`). The push-to-start token is
+/// not one of them any more: the job island's (`registerLiveStartToken`, sent by `LiveActivityManager`) starts chat replies
+/// too (8.13), so `PUT /live/chat-start-token` is no longer called.
 public protocol ChatLiveClient: Sendable {
-    /// `PUT /live/chat-start-token`
-    func registerChatLiveStartToken(_ token: String, environment: LiveEnvironment) async throws
-    /// `PUT /live/chats/<thread>`
-    func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment) async throws
+    /// `PUT /live/chats/<thread>`, with `"type": "job"` for a job activity (`job: false` only for an old-type activity the
+    /// server push-started, changeover release)
+    func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment, job: Bool) async throws
 }
 
-@MainActor
-protocol ChatLiveHandle: AnyObject, Sendable {
-    var thread: String { get }
-    var source: ChatLiveSource { get }
-    var isEnded: Bool { get }
-    /// The update push token of a push-started activity, lowercase hex: the current value first, then every change.
-    func pushTokens() -> AsyncStream<String>
-    func update(_ state: ChatLiveContentState, staleDate: Date?) async
-    /// `dismissAt` nil: `.immediate`.
-    func end(_ state: ChatLiveContentState, dismissAt: Date?) async
+extension ChatLiveClient {
+    /// `PUT /live/chats/<thread>` with `"type": "job"`.
+    public func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment) async throws {
+        try await putChatLiveToken(threadID: threadID, token: token, environment: environment, job: true)
+    }
 }
 
+/// The part of ActivityKit `ChatLiveManager` uses. The real one is `ActivityKitJobAdapter.chats()` (`JobActivity.swift`):
+/// every reply's activity is a job activity (`CobaltJobActivityAttributes`, kind "chat", CONTRACT-JOBLIVE.md 5).
 @MainActor
 protocol ChatLiveAdapter: AnyObject {
     var isAvailable: Bool { get }
-    var activities: [any ChatLiveHandle] { get }
+    /// The job activities of chat replies; `attributes.id` is the thread.
+    var activities: [any JobActivityHandle] { get }
+    /// Activities of the old type (`CobaltChatActivityAttributes`) from an older build: ended, never written.
+    var oldActivities: [any OldLiveActivity] { get }
     /// `push`: the activity gets an update token, so the server can keep it current while the app is suspended.
-    func request(_ attributes: ChatLiveAttributes, state: ChatLiveContentState, staleDate: Date, push: Bool) throws -> any ChatLiveHandle
-    /// The push-to-start token for chat activities, lowercase hex: the current value first, then every change.
-    func startTokens() -> AsyncStream<String>
-    /// Activities the system created (a push-to-start from the server).
-    func newActivities() -> AsyncStream<any ChatLiveHandle>
+    func request(_ job: JobLiveJob, staleDate: Date, push: Bool) throws -> any JobActivityHandle
+    /// Chat activities the system created (a push-to-start from the server, for a reply sent from another device).
+    func newActivities() -> AsyncStream<any JobActivityHandle>
+    /// The old chat type's `activityUpdates` (changeover release, `OldLiveActivity`).
+    func newOldActivities() -> AsyncStream<any OldLiveActivity>
 }
-
-#if os(iOS) && canImport(ActivityKit)
-@MainActor
-final class ActivityKitChatHandle: ChatLiveHandle {
-    nonisolated(unsafe) let activity: Activity<CobaltChatActivityAttributes>
-    init(_ activity: Activity<CobaltChatActivityAttributes>) { self.activity = activity }
-
-    var thread: String { activity.attributes.thread }
-    var source: ChatLiveSource { activity.attributes.source }
-
-    func pushTokens() -> AsyncStream<String> {
-        let activity = activity
-        return AsyncStream { continuation in
-            let task = Task {
-                for await data in activity.pushTokenUpdates { continuation.yield(data.liveHex) }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    var isEnded: Bool {
-        switch activity.activityState {
-        case .ended, .dismissed: return true
-        default: return false
-        }
-    }
-
-    func update(_ state: ChatLiveContentState, staleDate: Date?) async {
-        await activity.update(ActivityContent(state: state, staleDate: staleDate))
-    }
-
-    func end(_ state: ChatLiveContentState, dismissAt: Date?) async {
-        await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: dismissAt.map { .after($0) } ?? .immediate)
-    }
-}
-
-@MainActor
-final class ActivityKitChatAdapter: ChatLiveAdapter {
-    init() {}
-    var isAvailable: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
-    var activities: [any ChatLiveHandle] { Activity<CobaltChatActivityAttributes>.activities.map { ActivityKitChatHandle($0) } }
-    func request(_ attributes: ChatLiveAttributes, state: ChatLiveContentState, staleDate: Date, push: Bool) throws -> any ChatLiveHandle {
-        let activity = try Activity.request(
-            attributes: CobaltChatActivityAttributes(attributes),
-            content: ActivityContent(state: state, staleDate: staleDate),
-            pushType: push ? .token : nil)
-        return ActivityKitChatHandle(activity)
-    }
-
-    func startTokens() -> AsyncStream<String> {
-        AsyncStream { continuation in
-            let task = Task {
-                if let current = Activity<CobaltChatActivityAttributes>.pushToStartToken { continuation.yield(current.liveHex) }
-                for await data in Activity<CobaltChatActivityAttributes>.pushToStartTokenUpdates { continuation.yield(data.liveHex) }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    func newActivities() -> AsyncStream<any ChatLiveHandle> {
-        AsyncStream { continuation in
-            let task = Task {
-                for await activity in Activity<CobaltChatActivityAttributes>.activityUpdates {
-                    continuation.yield(ActivityKitChatHandle(activity))
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-}
-#endif
 
 // MARK: - the manager
 
 /// One activity per reply this device sent: started when the message goes out, updated from the reply's events (text at
 /// most once a second, everything else at once), ended when the reply is done or failed. A reply sent from the chat tab
 /// that ends while the app is in front leaves nothing behind (the owner watched it); otherwise the finished activity stays
-/// on the Lock Screen for a while with the start of the reply.
+/// on the Lock Screen for a while with the start of the reply. What ActivityKit shows is the job island: the tracker's
+/// `ChatLiveContentState` turned into `JobLiveState` by `JobLive.job(chat:...)` on every write.
 @MainActor
 public final class ChatLiveManager {
-    /// No update for this long and iOS greys the activity out ("waiting for capystore…").
-    static let staleAfter: TimeInterval = 90
-    static let dismissDone: TimeInterval = 600
-    static let dismissFailed: TimeInterval = 300
+    /// No update for this long and the island goes quiet ("no news for 3 min", JOB_STALE_S).
+    static let staleAfter: TimeInterval = JobLiveTimes.staleSeconds
+    /// A finished reply stays this long (the server's CHAT_LIVE_DISMISS_DONE_S, APP-API-CONTRACT 8.12).
+    static let dismissDone: TimeInterval = JobLiveTimes.doneSeconds
+    static let dismissFailed: TimeInterval = JobLiveTimes.failedSeconds
     /// More text is pushed at most this often.
     static let textInterval: TimeInterval = 1
 
     private struct Run {
-        var handle: (any ChatLiveHandle)?
+        var handle: (any JobActivityHandle)?
+        var attributes: ChatLiveAttributes
         var tracker: ChatLiveTracker
         var source: ChatLiveSource
         var lastPush: Date
@@ -458,13 +388,11 @@ public final class ChatLiveManager {
     private let capabilities: () -> Capabilities
     private let client: () -> (any ChatLiveClient)?
     private var runs: [String: Run] = [:]
-    /// The push-to-start token as the system last gave it, and the one the server has.
-    private var startToken: String?
-    private var sentStartToken: String?
     private var watchers: [Task<Void, Never>] = []
     private var tokenTasks: [String: Task<Void, Never>] = [:]
+    /// Followers of old-type activities the server push-started (changeover release), by thread.
+    private var oldTokenTasks: [String: Task<Void, Never>] = [:]
     /// Uploads sent (tests).
-    private(set) var startTokensSent: [String] = []
     private(set) var tokensSent: [(thread: String, token: String)] = []
     /// Updates go out in order, one after the other.
     private var chain: Task<Void, Never>?
@@ -484,50 +412,59 @@ public final class ChatLiveManager {
 
     private var pushAvailable: Bool { environment != nil && capabilities().chatLivePush && client() != nil }
 
+    /// What the activity shows for a reply: the job island's words, from the local builder (the server's `jobOfChat`).
+    private static func island(_ s: ChatLiveContentState, _ a: ChatLiveAttributes) -> JobLiveJob {
+        JobLive.job(chat: s, attributes: a, open: a.openURL.absoluteString)
+    }
+
     // MARK: replies sent from another device (27.9)
 
-    /// At launch (a push-to-start can launch the app in the background for this): follows the push-to-start token and
-    /// the activities the server starts, handing each one's update token to the server.
+    /// At launch (a push-to-start can launch the app in the background for this): follows the activities the server
+    /// starts, handing each one's update token to the server. Old-type activities nobody writes any more are ended.
     func start() {
         guard watchers.isEmpty else { return }
-        let starts = adapter.startTokens()
         let created = adapter.newActivities()
-        watchers.append(Task { [weak self] in
-            for await token in starts {
-                guard let self else { return }
-                self.startToken = token
-                await self.sendStartToken()
-            }
-        })
         watchers.append(Task { [weak self] in
             for await handle in created {
                 guard let self else { return }
-                if handle.source == .other { self.watchTokens(handle) }
+                // this app's own reply activity is followed from `began`; any other one the server started here
+                if self.runs[handle.attributes.id]?.handle?.activityID == handle.activityID { continue }
+                self.watchTokens(handle)
             }
         })
         // activities the server started while the app was not running
-        for h in adapter.activities where h.source == .other && !h.isEnded { watchTokens(h) }
+        for h in adapter.activities where !h.isEnded { watchTokens(h) }
+        // Changeover release: an old-type activity the server still starts (a key with no job start token) hands over its
+        // token on the old route, so the server can write and end it. Stale ones nobody writes are ended.
+        let createdOld = adapter.newOldActivities()
+        watchers.append(Task { [weak self] in
+            for await a in createdOld {
+                guard let self else { return }
+                self.watchOldTokens(a)
+            }
+        })
+        let old = adapter.oldActivities
+        let t = now()
+        for a in old where !a.isEnded && a.isFresh(at: t) { watchOldTokens(a) }
+        enqueue { await OldLiveActivities.end(old, now: t) }
     }
 
-    /// The server or its features changed: the start token goes (again) to a server that pushes.
-    func capabilitiesChanged() async {
-        sentStartToken = nil
-        await sendStartToken()
-    }
-
-    private func sendStartToken() async {
-        guard pushAvailable, let environment, let client = client(), let token = startToken, token != sentStartToken else { return }
-        startTokensSent.append(token)
-        do {
-            try await client.registerChatLiveStartToken(token, environment: environment)
-            sentStartToken = token
-        } catch {
-            // the next token, launch or capabilities change tries again
+    private func watchOldTokens(_ a: any OldLiveActivity) {
+        let thread = a.id
+        guard oldTokenTasks[thread] == nil else { return }
+        let tokens = a.pushTokens()
+        oldTokenTasks[thread] = Task { [weak self] in
+            for await token in tokens {
+                guard let self, self.pushAvailable, let environment = self.environment, let client = self.client() else { continue }
+                self.tokensSent.append((thread, token))
+                try? await client.putChatLiveToken(threadID: thread, token: token, environment: environment, job: false)
+            }
+            if !Task.isCancelled { self?.oldTokenTasks[thread] = nil }
         }
     }
 
-    private func watchTokens(_ h: any ChatLiveHandle) {
-        let thread = h.thread
+    private func watchTokens(_ h: any JobActivityHandle) {
+        let thread = h.attributes.id
         guard tokenTasks[thread] == nil else { return }
         let tokens = h.pushTokens()
         tokenTasks[thread] = Task { [weak self] in
@@ -547,18 +484,23 @@ public final class ChatLiveManager {
     /// A message went out. An older activity of the same thread (a reply that never reported its end) ends first.
     func began(thread: String, prompt: String, source: ChatLiveSource) {
         let tracker = ChatLiveTracker(since: now())
-        var handle: (any ChatLiveHandle)?
-        let older = adapter.activities.filter { $0.thread == thread && !$0.isEnded }
-        if !older.isEmpty {
-            enqueue { for h in older { await h.end(ChatLiveContentState(status: .failed, since: tracker.state.since, code: "error.chat.interrupted"), dismissAt: nil) } }
+        let attributes = ChatLiveAttributes(thread: thread, prompt: prompt, source: source)
+        var handle: (any JobActivityHandle)?
+        let older = adapter.activities.filter { $0.attributes.id == thread && !$0.isEnded }
+        let interrupted = Self.island(ChatLiveContentState(status: .failed, since: tracker.state.since, code: "error.chat.interrupted"), attributes).state
+        let old = adapter.oldActivities
+        let t = now()
+        oldTokenTasks.removeValue(forKey: thread)?.cancel()
+        enqueue {
+            for h in older { await h.end(interrupted, dismissAt: nil) }
+            await OldLiveActivities.end(old, now: t, showing: thread)
         }
         if adapter.isAvailable {
             // refused (the app is in the background and no Live Activity intent is running): the reply simply has none
             handle = try? adapter.request(
-                ChatLiveAttributes(thread: thread, prompt: prompt, source: source), state: tracker.state,
-                staleDate: now().addingTimeInterval(Self.staleAfter), push: pushAvailable)
+                Self.island(tracker.state, attributes), staleDate: now().addingTimeInterval(Self.staleAfter), push: pushAvailable)
         }
-        runs[thread] = Run(handle: handle, tracker: tracker, source: source, lastPush: now())
+        runs[thread] = Run(handle: handle, attributes: attributes, tracker: tracker, source: source, lastPush: now())
         // With push, the server follows the same reply and writes this activity too (APP-API-CONTRACT 27.9): the app's own
         // writes stop when iOS suspends it, the server's do not, so a locked phone still sees the reply arrive.
         if let handle, pushAvailable {
@@ -605,7 +547,7 @@ public final class ChatLiveManager {
 
     private func push(_ run: Run) {
         guard let handle = run.handle else { return }
-        let state = run.tracker.state
+        let state = Self.island(run.tracker.state, run.attributes).state
         let stale = now().addingTimeInterval(Self.staleAfter)
         enqueue { await handle.update(state, staleDate: stale) }
     }
@@ -619,7 +561,8 @@ public final class ChatLiveManager {
         } else {
             dismiss = now().addingTimeInterval(state.status == .done ? Self.dismissDone : Self.dismissFailed)
         }
-        enqueue { await handle.end(state, dismissAt: dismiss) }
+        let final = Self.island(state, run.attributes).state
+        enqueue { await handle.end(final, dismissAt: dismiss) }
     }
 
     private func enqueue(_ work: @escaping @MainActor @Sendable () async -> Void) {
@@ -636,7 +579,18 @@ public final class ChatLiveManager {
     /// Another server or key: every reply activity ends now.
     func reset() {
         let open = adapter.activities.filter { !$0.isEnded }
+        let old = adapter.oldActivities.filter { !$0.isEnded }
         runs.removeAll()
-        enqueue { for h in open { await h.end(ChatLiveContentState(status: .failed, since: Date().timeIntervalSince1970, code: "error.chat.interrupted"), dismissAt: nil) } }
+        for t in oldTokenTasks.values { t.cancel() }
+        oldTokenTasks.removeAll()
+        let interrupted = ChatLiveContentState(status: .failed, since: Date().timeIntervalSince1970, code: "error.chat.interrupted")
+        enqueue {
+            for h in open {
+                // the reply's words only depend on its state; the attributes are the activity's own
+                let state = Self.island(interrupted, ChatLiveAttributes(thread: h.attributes.id, prompt: "", source: .other)).state
+                await h.end(state, dismissAt: nil)
+            }
+            for a in old { await a.endNow() }
+        }
     }
 }

@@ -1142,6 +1142,64 @@ says "saved to capystore" (the widget's headline for an `origin: "share"` done w
 `saved` (the device or the render ends those, as before). The app's adopted-activity path (the woken app reports the
 push-started activity's update token) is what lets the server send the updates and the end.
 
+### 8.11 Agent and MCP jobs (addendum, 2026-11-12)
+
+A save or a make that the chat agent or an MCP client starts has no device following it, so before this nothing ever
+asked for an activity and none appeared, app open or closed. The server now push-starts the same save island
+(`CobaltActivityAttributes`, `origin: "share"`, no app change) and keeps it current from the studio's own events.
+
+- **Which jobs.** A save: `POST /studio` by a `chat:<thread>` key (`library.save`, `ytdlp.save`, MCP `save_link`; cobalt or
+  yt-dlp). A make on a saved post: `POST /studio/<sid>/render`, `/slideshow` and `/gallery-image` from the chat's make ops
+  (`registry/ops/make.ts` `startStudio`), marked by the internal header `x-cobalt-agent-live: 1`, which the Worker strips from
+  every client request (`headers.ts`). Only once the make is accepted (202 with a job). Editor renders (`edits.render`) and
+  uploads are not covered: their island type cannot be push-started by the app yet.
+- **Which device.** `LiveService.startAgent`: the one key whose start token was refreshed most recently within 60 days,
+  never a `chat:` key (`LIVE_AGENT_MAX_DEVICES` = 1; the same token under two keys counts once). One phone can hold start
+  tokens under several keys (an old key and its current session), and starting one per key put two islands on one screen
+  (2026-11-13). The run is held by that key; the session's owner check of 8.2 is skipped for this server-made
+  registration only. The app reports the update token as for any push-started activity, with whatever key it uses now:
+  an agent run moves to the reporting key (any key but a `chat:` one) instead of answering 404, which had left the
+  island stuck on its first state.
+- **State.** A save starts in `fetching` and ends on the save's `saved` (server-only run) or `failed`. A make starts in
+  `rendering` (rail 3, the post's title), pinned to its job: another job on the same post never moves it; its result ends it
+  ("webp ready" or the failure alert).
+- **Alert.** `capystore` / `your agent is saving from <service>` or `your agent is making something from <title>`.
+- **Never refuses the job.** No start token, the 10 s start window per key (a second agent job within 10 s gets no island on
+  that device), the run caps or an APNs error only mean no island; logged as `[live] agent save|make run=... started=...`.
+
+### 8.12 Islands end on time (addendum, 2026-11-13)
+
+A finished island that sat on the Lock Screen for 15 minutes read as "it never ends", and a run nobody reported on
+kept its last state for good. Server-only change; the app is unchanged.
+
+- **Dismissal.** Done: 60 s (`DISMISS_DONE_S`), 120 s when the result has a link to copy (`DISMISS_DONE_LINK_S`); editor
+  renders 120 s (`EDIT_LIVE_DISMISS_DONE_S`); chat replies 60 s (`CHAT_LIVE_DISMISS_DONE_S`). Failed stays 300 s. The Dynamic
+  Island lets go at the end push either way.
+- **Quiet watchdog.** `LiveService.watchQuiet`, from the sweep: a save/webp run that has not ended and whose state has not
+  changed for `LIVE_QUIET_END_MS` (10 min; `changedAt` on the run, `createdAt` before the first change) is ended. A run on
+  `ready` (waiting on the owner's trim) ends with an immediate dismissal and no alert; any other ends as `failed` with
+  `code: "error.live.lost"`. A run with no update token yet keeps the failed state and its token's arrival pushes the end.
+  A new run arms the sweep; with nothing else pending the sweep comes back when the next open run would go quiet, at most
+  `SWEEP_QUIET_MAX_S` (60 s) later. Edit and chat islands keep their own staleness rules (27.9, 32).
+
+### 8.13 The job island (addendum, 2026-11-13; apple/CONTRACT-JOBLIVE.md)
+
+One ActivityKit type, `CobaltJobActivityAttributes` with `JobLiveState`, for saves, uploads, makes, editor renders and
+chat replies. The server writes every word (`src/job-live.ts`: `jobOfSave`, `jobOfEdit`, `jobOfChat`); the three modules
+keep their run stores and push rules and re-dress their payloads with `asJobPayload` for a job run. Additive: an app
+that never says `type: "job"` gets exactly today's payloads.
+
+- **Start tokens.** `PUT /live/start-token` with `"type": "job"` stores `live:jobstart:<key id>` beside the old token
+  (`DELETE` removes both; the 60-day cleanup covers both). Push-to-start (instant share, agent jobs 8.11, chat replies)
+  uses a key's job token when it has one, and the run (chat target) is a job run from then on.
+- **Registrations.** `type: "job"` on `PUT /live/runs/<run>`, `PUT /live/edits/<rid>` and `PUT /live/chats/<thread>` (and a
+  chat token parked before its reply began) marks the run, render or chat target as a job run.
+- **Payload.** A job run's pushes carry `content-state` = `JobLiveState` (canonical key order, caps: headline 60, detail 90,
+  compact 7); a start names `attributes-type` "CobaltJobActivityAttributes" and `attributes` {id, kind, title, agent};
+  every non-end push sets `stale-date` = now + 180 s (`JOB_STALE_S`: the widget's "no news"). Event, priority, alerts and
+  dismissal stay each module's (8.12 timings).
+- **Parity.** `test/fixtures/job-live-states.json` (built by `test/job-live-cases.ts`) is what the app decodes.
+
 ## 9. Hark notification bridge (addendum, pinned 2026-10-04)
 
 **Off since 2026-10-23** (the owner doesn't want Hark pushes): the var `HARK_NOTIFY` is `"0"`, so
@@ -2831,7 +2889,11 @@ through APNs, with the same APNs secrets as section 8 (`src/chat-live.ts`).
 - `features.chat_live_push`: `chat` and APNs configured.
 - `PUT /live/chat-start-token` `{"token": "<hex>", "environment": "sandbox"|"production"}` (keyed; `DELETE` forgets it): the
   device's push-to-start token for chat activities. `200 {"pushing": true}`; `{"pushing": false}` without APNs.
+  *2026-11-13 (8.13): the app no longer calls it.* The server starts a chat reply with the key's job push-to-start token
+  (`PUT /live/start-token` with `type: "job"`), which wins when a key has both. The route stays for older builds.
 - `PUT /live/chats/<thread>` (keyed, same body): the update token of an activity the server push-started on this device.
+  The app now sends `"type": "job"` with it (8.13), so the activity is a job island (`CobaltJobActivityAttributes`) and
+  gets `JobLiveState` pushes; without `type` it is the old chat activity.
 - The chat route hands the reply's state to the `main` Durable Object (`POST /live/chats/<thread>/state`, internal key,
   never public): at its start, at once on a status change (a tool call starts or ends, files shown, done, failed), and
   more text at most every 3 s. On a new reply the DO push-starts the activity (`attributes.source: "other"`, alert
@@ -5599,7 +5661,8 @@ meaning), and a vector per stretch of speech. Section numbers 45 and 46 (and mig
 - `from` / `to` (seconds) keep the lines that overlap them. A bad number or no key: `400 error.library.bad_request`; an
   unknown post: `404 error.library.not_found`.
 - Chat AI and MCP: `cobalt.library.transcript(id, { from, to })` (MCP `library_transcript`, tier free): the same body
-  without `status`, and without `words` for the model. The chat's instructions mention it and `said`.
+  without `status`, and without `words` for the model; each line also carries `timecode`, its `start` as `"m:ss"`
+  (`"h:mm:ss"` past an hour, rounded down) so an answer can cite the moment. The chat's instructions mention it and `said`.
 - `GET /capabilities` `features.transcripts`: exactly `about_sound`.
 
 ### 47.4 Moments

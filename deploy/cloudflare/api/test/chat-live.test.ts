@@ -319,3 +319,32 @@ describe("the gate", () => {
         expect(req("GET", `/live/chats/${THREAD}`)).toMatchObject({ action: "reject", status: 404 });
     });
 });
+
+describe("job island (8.13)", () => {
+    const st = (over: Partial<ChatLiveState>): ChatLiveState => ({ status: "thinking", since: T0 / 1000, steps: 0, failedSteps: 0, shown: 0, ...over });
+    it("a device with a job start token is push-started the job island and kept on it", async () => {
+        const w = doWorld();
+        await w.storage.put(`live:jobstart:${PHONE}`, { token: START, env: "production", updatedAt: T0 });
+        await w.state(MAC, st({}));
+        const start = w.apple.pushes[0]!;
+        expect(start.payload.aps).toMatchObject({
+            event: "start",
+            "attributes-type": "CobaltJobActivityAttributes",
+            attributes: { id: THREAD, kind: "chat", title: "chat · find my cats", agent: false },
+            "content-state": { phase: "working", steps: ["think", "tools", "write"], step: 0, headline: "thinking" },
+        });
+        await w.route("PUT", `/live/chats/${THREAD}`, { token: UPDATE, environment: "production" }, w.keyed(PHONE));
+        w.tick(1000);
+        await w.state(MAC, st({ status: "done", steps: 1, reply: "three cats" }));
+        expect(w.apple.pushes.at(-1)!.payload.aps).toMatchObject({ event: "end", "content-state": { phase: "done", headline: "reply ready", detail: "three cats" } });
+    });
+
+    it("the same job start token under two keys is one phone: one card", async () => {
+        const w = doWorld();
+        await w.storage.put(`live:jobstart:${PHONE}`, { token: START, env: "production", updatedAt: T0 });
+        await w.storage.put(`live:jobstart:old-key`, { token: START, env: "production", updatedAt: T0 });
+        expect(await (await w.state(MAC, { status: "thinking", since: T0 / 1000, steps: 0, failedSteps: 0, shown: 0 })).json()).toEqual({ status: "success", targets: 1 });
+        expect(w.apple.pushes).toHaveLength(1);
+    });
+});
+

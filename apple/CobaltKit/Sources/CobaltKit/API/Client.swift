@@ -71,7 +71,7 @@ public protocol CobaltClient: Sendable {
     /// that `MediaTitle.clean` already accepted.
     func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult
     // Live Activities (APP-API-CONTRACT section 8; keyed; the server never wakes its container for these)
-    func registerLiveStartToken(_ token: String, environment: LiveEnvironment) async throws   // PUT /live/start-token
+    func registerLiveStartToken(_ token: String, environment: LiveEnvironment) async throws   // PUT /live/start-token (type: job)
     func registerLiveRun(_ r: LiveRunRegistration) async throws -> LiveRunReply                // PUT /live/runs/<run>
     func relayLiveState(run: UUID, _ state: LiveContentState) async throws                     // POST /live/runs/<run>/state
     func endLiveRun(_ run: UUID) async throws                                                  // DELETE /live/runs/<run>

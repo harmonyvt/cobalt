@@ -109,7 +109,7 @@ describe("coalescing and payloads", () => {
         expect(p.priority).toBe(10);
         expect((p.payload as any).aps).toMatchObject({
             event: "end",
-            "dismissal-date": T0 / 1000 + 900,
+            "dismissal-date": T0 / 1000 + 120,
             alert: { title: "video ready", body: "beach day" },
             "content-state": done,
         });
@@ -299,3 +299,15 @@ describe("the routes", () => {
         expect(await w.storage.get(`live:edit:${rid}`)).toBeUndefined();
     });
 });
+
+describe("job island (8.13)", () => {
+    it("a token registered with `type: job` gets JobLiveState pushes", async () => {
+        const w = await liveWorldReady();
+        const rid = w.queueRender({ title: "beach day" });
+        expect((await w.route("PUT", `/live/edits/${rid}`, { token: TOKEN, env: "production", type: "job" })).status).toBe(200);
+        expect(w.apple.pushes[0]!.payload.aps["content-state"]).toMatchObject({ phase: "waiting", steps: ["prepare", "render", "save"], headline: "waiting for its turn" });
+        await w.run(w.core);
+        expect(w.apple.pushes.at(-1)!.payload.aps).toMatchObject({ event: "end", "content-state": { phase: "done", headline: "video ready", step: 3 } });
+    });
+});
+
