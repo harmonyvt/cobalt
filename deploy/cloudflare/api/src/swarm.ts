@@ -17,6 +17,7 @@ import type { OpBase } from "./registry/context";
 import { OpError, type AiFlags, type Op } from "./registry/op";
 import { Registry } from "./registry/registry";
 import { argsToInput, toolTypesFor } from "./registry/typescript";
+import { capture, swarmEvent, type SwarmStage } from "./posthog";
 
 // ---- limits ---------------------------------------------------------------------------------------------------------
 
@@ -747,6 +748,7 @@ export function swarmToolbox(base: OpBase, o: ToolboxOpts): ChatTools {
         jobs: null,
         allow: (op) => allowed.has(op.name),
         preapproved: (op, input) => writes.has(op.name) && allowed.has(op.name) && scopeProblem(o.spec.scope, input) === null,
+        swarm: o.swarm,
     });
     const tools: ChatTools = {};
     for (const [name, fn] of Object.entries(box.tools)) {
@@ -1003,6 +1005,35 @@ export async function refreshClashes(db: D1Database, registry: Registry, swarm: 
 
 // ---- the runner -------------------------------------------------------------------------------------------------------
 
+// A step of a swarm's life to PostHog (section 59.10). Fire and forget: never changes what the swarm does.
+export function trackSwarm(base: Pick<OpBase, "env" | "edge" | "now">, stage: SwarmStage, swarm: string, detail: Record<string, unknown> = {}): void {
+    try {
+        void capture(base.env as { POSTHOG_PROJECT_TOKEN?: string; POSTHOG_HOST?: string }, base.edge.waitUntil, [swarmEvent(stage, swarm, base.now(), { model: CHAT_MODEL_DEFAULT, ...detail })]);
+    } catch {
+        // never
+    }
+}
+
+async function trackTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, idx: number, status: string, error: string | null, changes: number | null): Promise<void> {
+    const t = await d.base.db
+        .prepare("SELECT attempts, in_tokens, out_tokens, usd, started_at, ended_at FROM swarm_tasks WHERE swarm = ?1 AND idx = ?2")
+        .bind(row.id, idx)
+        .first<Pick<TaskRow, "attempts" | "in_tokens" | "out_tokens" | "usd" | "started_at" | "ended_at">>()
+        .catch(() => null);
+    trackSwarm(d.base, "task_ended", row.id, {
+        mode: spec.mode,
+        task: idx,
+        status,
+        error_code: error ?? undefined,
+        attempts: t?.attempts,
+        in_tokens: t?.in_tokens,
+        out_tokens: t?.out_tokens,
+        usd: t?.usd,
+        ms: t?.started_at && t?.ended_at ? t.ended_at - t.started_at : undefined,
+        changes: changes ?? undefined,
+    });
+}
+
 export type SwarmRunDeps = {
     base: OpBase;
     model: ChatModel | null;
@@ -1179,6 +1210,7 @@ async function runTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, idx: number, 
     }
     if (end.kind === "halted") {
         await db.prepare("UPDATE swarm_tasks SET status = 'skipped', error = ?3, state = NULL, ended_at = ?4 WHERE swarm = ?1 AND idx = ?2").bind(row.id, idx, end.error, now).run();
+        await trackTask(d, row, spec, idx, "skipped", end.error, null);
         return;
     }
     if (end.kind === "failed") {
@@ -1187,6 +1219,7 @@ async function runTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, idx: number, 
             .prepare("UPDATE swarm_tasks SET status = ?3, error = ?4, state = NULL, ended_at = ?5 WHERE swarm = ?1 AND idx = ?2")
             .bind(row.id, idx, again ? "queued" : "failed", end.error, again ? null : now)
             .run();
+        await trackTask(d, row, spec, idx, again ? "retrying" : "failed", end.error, null);
         return;
     }
     const stmts = [
@@ -1196,6 +1229,7 @@ async function runTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, idx: number, 
         ...insertChanges(db, row.id, idx, end.changes),
     ];
     await db.batch(stmts);
+    await trackTask(d, row, spec, idx, "done", null, spec.mode === "propose" ? end.changes.length : null);
 }
 
 export const INSERT_CHUNK = 100;
@@ -1309,6 +1343,19 @@ async function finishTasks(d: SwarmRunDeps, row: SwarmRow, spec: Spec, halt: str
         apply = (await changeCounts(db, row.id)).total > 0 ? "ready" : "none";
     }
     await setSwarm(db, row.id, { status, error, reduce_result: reduce, finished_at: now, stop_requested: 0, apply_status: apply }, now);
+    const fin = await swarmRow(db, row.id).catch(() => null);
+    trackSwarm(d.base, "finished", row.id, {
+        mode: spec.mode,
+        status,
+        error_code: error ?? undefined,
+        tasks: c.done + c.failed + c.skipped,
+        done: c.done,
+        failed: c.failed,
+        spent_usd: fin?.spent_usd,
+        cap_usd: fin?.cap_usd,
+        changes: spec.mode === "propose" ? (await changeCounts(db, row.id).catch(() => null))?.total : undefined,
+        ms: fin?.approved_at ? now - fin.approved_at : undefined,
+    });
 }
 
 // The tasks' part of one alarm: launch up to `concurrency` at once until the time budget, a stop or a cap.
@@ -1386,6 +1433,7 @@ async function tickApply(d: SwarmRunDeps, row: SwarmRow, spec: Spec, started: nu
     }
     const counts = await changeCounts(db, row.id);
     await setSwarm(db, row.id, { apply_status: counts.failed > 0 ? "failed" : "applied" }, d.base.now());
+    trackSwarm(d.base, "applied", row.id, { mode: spec.mode, kept: counts.kept, done: counts.done, failed: counts.failed, writes: spec.writes });
     return { again: null };
 }
 

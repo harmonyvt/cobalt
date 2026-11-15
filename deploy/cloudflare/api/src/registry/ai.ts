@@ -49,8 +49,9 @@ function recordAiOp(op: Op, ctx: OpContext, status: number, error: string | null
     const env = ctx.env as { POSTHOG_PROJECT_TOKEN?: string; POSTHOG_HOST?: string };
     if (!env.POSTHOG_PROJECT_TOKEN) return;
     const chat = ctx.chat;
-    const surface = chat?.agent ? "agent" : chat?.mcp ? "mcp" : "chat";
-    void capture(env, ctx.edge.waitUntil, opEvent({ op: op.name, surface, status, ms, error, keyId: ctx.keyId, thread: chat?.threadId ?? null }, ctx.now()));
+    const surface = chat?.swarm ? "swarm" : chat?.agent ? "agent" : chat?.mcp ? "mcp" : "chat";
+    const thread = chat?.swarm ? `swarm:${chat.swarm}` : (chat?.threadId ?? null);
+    void capture(env, ctx.edge.waitUntil, opEvent({ op: op.name, surface, status, ms, error, keyId: ctx.keyId, thread }, ctx.now()));
 }
 
 async function runOpInner(op: Op, ctx: OpContext, input: unknown, seen: (status: number) => void): Promise<unknown> {
@@ -105,6 +106,8 @@ export type ChatToolboxOpts = {
     // a swarm task's run (section 59): an `ask` op this returns true for runs at once, without a confirm card (the
     // swarm's approval already covered it: an op in its `writes`, inside its `scope`)
     preapproved?: (op: Op, input: unknown) => boolean;
+    // a swarm task's run (section 59): the swarm's id, for its PostHog surface
+    swarm?: string;
 };
 
 export type ChatToolbox = {
@@ -135,7 +138,7 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
         // a sub-agent acts as its parent's chat key: the same daily caps and the same studio sessions (section 43.7)
         keyId: chatKeyId(o.agent?.parent ?? o.threadId),
         caller: "chat",
-        chat: { threadId: o.threadId, collect: o.collect, tools: o.legacy, ...(watchJob ? { watchJob } : {}), ...(o.agent ? { agent: o.agent } : {}) },
+        chat: { threadId: o.threadId, collect: o.collect, tools: o.legacy, ...(watchJob ? { watchJob } : {}), ...(o.agent ? { agent: o.agent } : {}), ...(o.swarm ? { swarm: o.swarm } : {}) },
     });
     const tools: ChatTools = {};
     for (const op of registry.toolsFor("chat", o.flags)) {

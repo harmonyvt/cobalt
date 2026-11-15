@@ -5,6 +5,7 @@
 import * as z from "zod";
 import { mintCollectionId } from "../../share-collections";
 import {
+    trackSwarm,
     PLAN_TTL_MS,
     PLANS_ALL,
     PLANS_PER_KEY,
@@ -209,6 +210,20 @@ export const swarmPlanOp = defineOp({
         const estimate = estimateUsd(spec, batches, systemChars(ctx, spec, batches.length, items.length));
         const hash = await specHash(spec, batches, 1);
         await d1(insertPlan(ctx.db, { id, keyId, spec, batches, items: items.length, hash, estimate, now }));
+        trackSwarm(ctx, "planned", id, {
+            surface: ctx.chat?.mcp ? "mcp" : ctx.chat ? "chat" : "tool",
+            mode: spec.mode,
+            items: items.length,
+            tasks: batches.length,
+            batch_size: spec.batch_size,
+            concurrency: spec.concurrency,
+            est_low_usd: estimate.low,
+            est_high_usd: estimate.high,
+            cap_usd: spec.cap_usd,
+            tools: spec.tools,
+            writes: spec.writes,
+            source: spec.source?.call,
+        });
         return ok(await shape(ctx, id));
     },
 });
@@ -319,6 +334,7 @@ export const swarmStopOp = defineOp({
         else if (row.apply_status === "applying") await setSwarm(ctx.db, row.id, { stop_requested: 1 }, now);
         else return ok(await shapeOf(ctx.db, ctx.registry, row, webOrigin(ctx)));
         if (row.status !== "awaiting_approval" && ctx.env.SWARMS) await port(ctx).wake(row.id).catch((e) => console.error("[swarm] wake failed", String(e)));
+        trackSwarm(ctx, "stop_asked", row.id, { mode: row.mode, was: row.status, applying: row.apply_status === "applying" });
         return ok(await shape(ctx, row.id));
     },
 });
@@ -363,6 +379,7 @@ export const swarmRetryOp = defineOp({
                 )
                 .bind(row.id, round, hash, estimate.low, estimate.high, now + PLAN_TTL_MS, now),
         ]);
+        trackSwarm(ctx, "retry_planned", row.id, { mode: row.mode, round, est_low_usd: estimate.low, est_high_usd: estimate.high });
         return ok(await shape(ctx, row.id));
     },
 });
@@ -415,6 +432,7 @@ export const swarmApproveOp = defineOp({
             await setSwarm(ctx.db, row.id, { status: "awaiting_approval", approved_at: null, approved_by: null, expires_at: now + PLAN_TTL_MS }, now);
             throw new OpError(503, "error.swarm.off", "swarm: the runner did not start; try again");
         }
+        trackSwarm(ctx, "approved", row.id, { mode: row.mode, by: ctx.caller === "service" ? "web" : "app", wait_ms: now - row.created_at, cap_usd: row.cap_usd });
         return ok(await shape(ctx, row.id));
     },
 });
@@ -435,6 +453,7 @@ export const swarmDeclineOp = defineOp({
         if (row.status !== "awaiting_approval") throw notAwaiting(`it is ${row.status.replace("_", " ")}`);
         const now = ctx.now();
         await setSwarm(ctx.db, row.id, { status: "declined", finished_at: now, expires_at: null }, now);
+        trackSwarm(ctx, "declined", row.id, { mode: row.mode, by: ctx.caller === "service" ? "web" : "app" });
         return ok(await shape(ctx, row.id));
     },
 });
@@ -551,6 +570,7 @@ export const swarmApplyOp = defineOp({
             await setSwarm(ctx.db, row.id, { apply_status: "ready" }, now);
             throw new OpError(503, "error.swarm.off", "swarm: the runner did not start; try again");
         }
+        trackSwarm(ctx, "apply_started", row.id, { mode: row.mode, to_apply: kept?.n ?? 0, by: ctx.caller === "service" ? "web" : "app" });
         return ok(await shape(ctx, row.id));
     },
 });

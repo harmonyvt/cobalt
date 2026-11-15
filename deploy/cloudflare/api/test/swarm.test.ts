@@ -2,7 +2,7 @@
 // session only), the Swarm Durable Object's alarm running the tasks (SwarmRunnerCore for real on a Map, swarmTick with a
 // scripted model and the real sandbox source), the review, and the deterministic apply. The real SQL runs on node:sqlite.
 // The 7TV calls are stand-in ops under the real names, so the rules (allowlists, scope, ledger, throttle) run for real.
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 import { ALL_MIGRATIONS_SQL, createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
 import type { ChatModel, CodeRunner, ModelTurn } from "../src/chat";
@@ -1007,5 +1007,51 @@ describe("review fixes", () => {
         expect((await waitJob(forCall(base(), { keyId: "sess-1", caller: "key" }), `swarm:${first.swarm}`, 0)).status).toBe("queued");
         expect((await waitJob(forCall(base(), { keyId: null, caller: "service" } as any), `swarm:${first.swarm}`, 0)).status).toBe("queued");
         await expect(waitJob(forCall(base(), { keyId: "someone-else", caller: "key" }), `swarm:${first.swarm}`, 0)).rejects.toThrow(/not one of your swarms/);
+    });
+});
+
+describe("PostHog (59.10)", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("sends one `swarm` event per step, numbers and codes only, and a task's calls as surface swarm", async () => {
+        const sent: { event: string; properties: Record<string, any> }[] = [];
+        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+            if (String(url).includes("posthog")) sent.push(...JSON.parse(String(init.body)).batch);
+            return new Response("{}");
+        });
+        (env as any).POSTHOG_PROJECT_TOKEN = "phc_test";
+        const s = await plan(SPEC());
+        scripts.set("1", [() => code("tu_1", `return await cobalt.seventv.emote("${emoteId(0)}");`), () => say(JSON.stringify({ changes: [rename(0, "Cat")] }))]);
+        scripts.set("2", [() => say(JSON.stringify({ changes: [rename(2, "Bird")] }))]);
+        expect((await approve(s.swarm, s.spec_hash)).status).toBe(200);
+        await drain(s.swarm);
+        await json(req(`/swarms/${s.swarm}/apply`, "POST", SERVICE, { spec_hash: s.spec_hash }));
+        await drain(s.swarm);
+        await new Promise((r) => setTimeout(r, 0));
+
+        const swarm = sent.filter((e) => e.event === "swarm");
+        expect(swarm.map((e) => e.properties.stage)).toEqual(["planned", "approved", "task_ended", "task_ended", "finished", "apply_started", "applied"]);
+        for (const e of swarm) expect(e.properties).toMatchObject({ swarm: s.swarm, thread: `swarm:${s.swarm}`, model: "claude-haiku-5-5" });
+        expect(swarm[0]!.properties).toMatchObject({ mode: "propose", items: 4, tasks: 2, cap_usd: 1, tools: ["seventv.emote"], writes: ["seventv.rename"] });
+        expect(swarm[1]!.properties).toMatchObject({ by: "web" });
+        const ended = swarm
+            .filter((e) => e.properties.stage === "task_ended")
+            .sort((a, b) => Number(a.properties.task) - Number(b.properties.task));
+        expect(ended.map((e) => [e.properties.status, e.properties.changes, e.properties.in_tokens])).toEqual([
+            ["done", 1, 20_000],
+            ["done", 1, 10_000],
+        ]);
+        expect(ended[0]!.properties.usd).toBeGreaterThan(0);
+        expect(swarm[4]!.properties).toMatchObject({ status: "done", done: 2, failed: 0, changes: 2 });
+        expect(swarm[6]!.properties).toMatchObject({ done: 2, failed: 0 });
+        // never the program's words, the items or the answers
+        const text = JSON.stringify(swarm);
+        expect(text).not.toContain("Suggest a clean name");
+        expect(text).not.toContain("emote_0");
+        expect(text).not.toContain("Cat");
+        // the task's own calls and the apply's writes are `op` events from the swarm
+        const ops = sent.filter((e) => e.event === "op" && e.properties.surface === "swarm");
+        expect(ops.map((e) => e.properties.op)).toEqual(["seventv.emote", "seventv.rename", "seventv.rename"]);
+        expect(ops[0]!.properties.thread).toBe(`swarm:${s.swarm}`);
     });
 });

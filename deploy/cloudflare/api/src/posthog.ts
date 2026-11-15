@@ -86,7 +86,7 @@ export function capture(
 
 // ---- op events ----------------------------------------------------------------------------------
 
-export type OpSurface = "app" | "web" | "tool" | "service" | "chat" | "mcp" | "agent" | "public";
+export type OpSurface = "app" | "web" | "tool" | "service" | "chat" | "mcp" | "agent" | "swarm" | "public";
 
 export type OpCall = {
     op: string;
@@ -207,4 +207,29 @@ export function cronEvent(job: string, ts: number, ms: number, ok: boolean, deta
     const flat: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(detail)) if (["string", "number", "boolean"].includes(typeof v)) flat[k] = v;
     return makeEvent("cron_run", ts, { ...flat, job, ms: Math.round(ms), ok });
+}
+
+// ---- swarms (section 59.10) -----------------------------------------------------------------------------------------
+
+export type SwarmStage =
+    | "planned"
+    | "approved"
+    | "declined"
+    | "stop_asked"
+    | "retry_planned"
+    | "task_ended"
+    | "finished"
+    | "apply_started"
+    | "applied";
+
+// One step of a swarm's life as a `swarm` event. Only numbers, booleans and short strings (ids, modes, op names, error
+// codes): never a prompt, an item, a proposal or a task's answer.
+export function swarmEvent(stage: SwarmStage, swarm: string, ts: number, detail: Record<string, unknown> = {}): PostHogEvent {
+    const flat: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(detail)) {
+        if (typeof v === "number" || typeof v === "boolean") flat[k] = v;
+        else if (typeof v === "string") flat[k] = v.slice(0, 200);
+        else if (Array.isArray(v) && v.every((x) => typeof x === "string")) flat[k] = v.slice(0, 30);
+    }
+    return makeEvent("swarm", ts, { ...flat, stage, swarm, thread: `swarm:${swarm}` });
 }

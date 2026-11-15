@@ -6662,10 +6662,11 @@ Sent after the answer through `background()`, 3 s timeout, never changing a resp
 
 | event | from | properties |
 |---|---|---|
-| `op` | `handleOp` (every route, every host) and `runOp` (chat, MCP, sub-agents, confirmed cards) | `op`, `surface` (app, web, tool, service, chat, mcp, agent, public), `status`, `ms`, `ok`, `error_code`, `route_host`, `method`, `key_id`, `thread`, `client`, `install`, `$session_id` |
+| `op` | `handleOp` (every route, every host) and `runOp` (chat, MCP, sub-agents, confirmed cards) | `op`, `surface` (app, web, tool, service, chat, mcp, agent, swarm, public), `status`, `ms`, `ok`, `error_code`, `route_host`, `method`, `key_id`, `thread`, `client`, `install`, `$session_id` |
 | `$exception` | an `op` that answered 5xx or threw | the `op` properties + `$exception_list` (`OpFailed`, "<op> answered <status> <code>") |
 | `app_log` | `POST /telemetry`: warn and error lines only | `level`, `cat`, `msg`, `data_<key>`, `platform`, `app_version`, `app_build`, `os_version`, `device`, `process`, `install` |
 | `$exception` | `POST /telemetry` crashes | `crash_kind`, `$exception_list` (kind, summary), `$exception_level` fatal for `crash` |
+| `swarm` | each swarm step (59.10) | `swarm`, `stage`, `thread`, `model`, counts, costs and timings only |
 | `cron_run` | each scheduled trigger | `job` (every-15-min, daily), `cron`, `ms`, `ok` |
 
 Public hosts (share, stage, studio pages) send only their 5xx; `/telemetry` itself is never an `op` event. Never sent:
@@ -6929,3 +6930,20 @@ D1 migration 0043 (five tables), then one API deploy: a new Durable Object class
 sqlite) and the vars `SWARM_MAX_USD` ("10") and `SWARM_DAILY_USD` ("5") in `cloudflare.config.ts`. No secret. Then the
 web deploy for the approve and review page (`/swarms`, `/swarms/<id>`, behind Access; its JSON goes through the `API`
 service binding with `x-cobalt-service`). The route snapshot gains `/swarms*` rows only.
+
+### 59.10 PostHog
+
+Every step of a swarm sends one `swarm` event (58.2) through `background()`, `thread = swarm:<id>`, `model` the Haiku id.
+`stage` and its extra properties:
+
+| stage | when | properties |
+|---|---|---|
+| `planned` | `swarm.plan` | `surface` (mcp, chat, tool), `mode`, `items`, `tasks`, `batch_size`, `concurrency`, `est_low_usd`, `est_high_usd`, `cap_usd`, `tools`, `writes`, `source` |
+| `approved` / `declined` | the page or the app | `by` (web, app), `wait_ms`, `cap_usd` |
+| `stop_asked`, `retry_planned` | `swarm.stop`, `swarm.retry` | `mode`; stop: `was`, `applying`; retry: `round`, `est_low_usd`, `est_high_usd` |
+| `task_ended` | each task done, failed, retrying or skipped | `task`, `status`, `attempts`, `in_tokens`, `out_tokens`, `usd`, `ms`, `changes`, `error_code` |
+| `finished` | the run ends | `status`, `error_code`, `tasks`, `done`, `failed`, `spent_usd`, `cap_usd`, `changes`, `ms` |
+| `apply_started` / `applied` | propose mode | `to_apply`; then `kept`, `done`, `failed`, `writes` |
+
+Each tool call a task makes is an ordinary `op` event with `surface = swarm` and the same `thread`, so one swarm reads as
+one timeline. Never sent: prompts, items, model answers, proposed values, tool inputs.
