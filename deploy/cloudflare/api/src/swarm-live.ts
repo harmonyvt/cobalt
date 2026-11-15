@@ -273,7 +273,7 @@ export class SwarmLiveService {
         // the run form (PUT /live/runs/swarm:<id>) names it update_token, as a save's run does
         if (b && b.token === undefined && b.update_token !== undefined) b.token = b.update_token;
         if (typeof b?.token !== "string" || !TOKEN_REGEX.test(b.token) || (env !== "sandbox" && env !== "production")) return bad();
-        if (keyId.startsWith("chat:")) return notFound();
+        if (!(await this.mayHold(keyId, id))) return notFound();
         if (!this.d.apns) return { status: 200, body: { status: "success", pushing: false, reason: "not_configured" } };
         return this.withSwarm(id, async () => {
             const now = this.d.now();
@@ -301,7 +301,20 @@ export class SwarmLiveService {
         });
     }
 
-    async deleteToken(id: string): Promise<Reply> {
+    // Who may hold a swarm's island token: a device session (Harmony's own app), or the key that planned the swarm. Never
+    // a chat thread, and never another client key.
+    private async mayHold(keyId: string, id: string): Promise<boolean> {
+        if (keyId.startsWith("chat:")) return false;
+        const r = await this.d.db
+            .prepare("SELECT (SELECT kind FROM api_keys WHERE id = ?1 AND revoked_at IS NULL) AS kind, (SELECT key_id FROM swarms WHERE id = ?2) AS planner")
+            .bind(keyId, id)
+            .first<{ kind: string | null; planner: string | null }>()
+            .catch(() => null);
+        return r?.kind === "session" || (r?.planner !== null && r?.planner !== undefined && r.planner === keyId);
+    }
+
+    async deleteToken(keyId: string, id: string): Promise<Reply> {
+        if (!(await this.mayHold(keyId, id))) return notFound();
         await this.d.storage.delete(this.key(id));
         return { status: 200, body: { status: "success" } };
     }
@@ -430,6 +443,6 @@ export async function handleSwarmLiveRoute(service: SwarmLiveService, request: R
         if (new TextEncoder().encode(text).length > SWARM_LIVE_MAX_BODY) return toResponse(bad());
         return toResponse(await service.putToken(keyId, id!, text));
     }
-    if (m === "DELETE") return toResponse(await service.deleteToken(id!));
+    if (m === "DELETE") return toResponse(await service.deleteToken(keyId, id!));
     return new Response(null, { status: 404 });
 }

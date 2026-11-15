@@ -7019,10 +7019,11 @@ person or a model sees them (`agent`); storage keeps `idx` from 0.
 | `cobalt.swarm.ask(text)` | stores an `up` `ask`; the agent's turn ends after this `run_code` | `{ asked: true, note: "your turn ends now; the answer comes as your next message" }` |
 | `cobalt.swarm.tell(text)` | stores an `up` `tell` (a report, no answer needed) | `{ sent: true }` |
 
-At most 3 asks and 20 messages an agent; more is an error the model sees. After the turn with an ask, the runner parks
+At most 3 asks and 20 messages an agent in one attempt (a retried attempt or retry round starts its count again); more
+is an error the model sees. After the turn with an ask, the runner parks
 the task (`waiting`, `asked_at`, the conversation kept in `state`). A parked task wakes when a `down` message for it (or
-for every agent) that it was not given yet arrives (the runner keeps the highest message id each conversation saw, so a
-message stored in the same millisecond as the question still counts), or after **10 minutes** (`SWARM_ASK_WAIT_MS`,
+for every agent) stored after its question arrives (the runner keeps the question's message id; a note that went out
+while the question was being asked is given to it but does not count as the answer), or after **10 minutes** (`SWARM_ASK_WAIT_MS`,
 milliseconds, a Worker var): its next turn starts with `[answer from <owner name>]: <text>` (a `sender: "owner"`
 message), `[message from Harmony]: <text>` (`sender: "you"`), several in order, or `[no answer in <m> minutes: go on with
 your best guess and say so in your answer]`. Waiting does not count as a model turn. Broadcasts (`task` NULL) reach a
@@ -7045,7 +7046,9 @@ message's text.
 | `swarm.agent` (`swarm_agent`) | `GET /swarms/<id>/agents/<n>` | key_or_service | free | `SwarmAgent` |
 
 "Caller's swarms" is the same rule as 59.6 (the planning key; the chat thread; a device session or the service see
-every swarm). A `send` to an agent with open asks is `kind: "reply"` and marks them answered; otherwise `note`. A message from a device session or the service is `sender: "you"` and is shown to the model as `[message
+every swarm). A `send` to an agent with open asks, or to `"all"` while any agent has an open ask, is `kind: "reply"` and marks
+those asks answered; otherwise `note`. A new attempt of an agent is given the notes (to it and to all) but not the replies
+to an earlier attempt's questions. A message from a device session or the service is `sender: "you"` and is shown to the model as `[message
 from Harmony]`; from the planning key it is `owner` (`[answer from <client name>]`). `send` on a swarm that is not
 `running`/`stopping` is 409 `error.swarm.not_running`.
 
@@ -7060,7 +7063,7 @@ SwarmAgent = { swarm, agent, status, items: unknown[], attempts, in_tokens, out_
 name, "chat" or "mcp"), and each `tasks.cells[]` gains `step` (the last step text or null) and the status `waiting`;
 `tasks` gains `waiting`. The job `activity` (59.5) ends ", 1 question waiting" (", <n> questions waiting") while asks are
 open, and the job (`swarm:<id>` in `jobs.wait` / `job_status`) gains `asks: [{ id, agent, text }]` (at most 10, the
-open ones). The chat's `jobs.onDone` hook also wakes the thread for a new `ask`, like `agents` mail (43): the note reads
+open ones); while any is open, `jobs.wait` on the swarm returns at once instead of waiting out its seconds. The chat's `jobs.onDone` hook also wakes the thread for a new `ask`, like `agents` mail (43): the note reads
 `[New message (cobalt.swarm):\n- agent <n> of swarm <id> asks: <text>\nAnswer with cobalt.swarm.send(swarm_id, agent,
 text) ...]`, the ask is marked read, and the swarm stays watched.
 
@@ -7070,15 +7073,18 @@ Step texts (the runner writes them): "started", "read <op>" (each read call, the
 
 ### 61.4 Apply from one tap
 
-`POST /swarms/<id>/apply` takes `skip_clashes: true` (optional): before applying, every kept, not yet done change with
-a `clash` is unticked (`keep = 0`). The Live Activity's apply button sends it; the count it shows is the kept changes
-without clashes.
+`POST /swarms/<id>/apply` takes `skip_clashes: true` (optional): every kept, not yet done change with a `clash` is
+unticked (`keep = 0`) in the same transaction that starts the apply, after every check, so a refused apply (409, 429,
+503, already applying) unticks nothing (a runner that fails to start puts them back). It also takes `count` (optional):
+how many changes the caller expects to apply; a different number is 409 `error.swarm.count_mismatch`. The Live
+Activity's apply button sends both; the count it shows is the kept changes without clashes.
 
 ### 61.5 The `swarm` Live Activity (job kind, 8.13 + apple/CONTRACT-JOBLIVE.md)
 
 Push-started on the newest of the owner's devices (the `live:jobstart` tokens, as agent saves, 8.11; never a chat key)
 when a plan is stored or retried, run id `swarm:<id>`. The app registers the started activity's update token at
-**`PUT /live/swarms/<id>`** `{ token, environment }` (keyed, any non-chat key; `DELETE` when the app ended it): the same
+**`PUT /live/swarms/<id>`** `{ token, environment }` (keyed: a device session, or the key that planned the swarm; any other key, and every chat
+key, gets 404; `DELETE` when the app ended it, same rule): the same
 route is also `PUT`/`DELETE /live/runs/swarm:<id>` (the run id the app gives the island; `update_token` is accepted for
 `token` there, and the run store's `/state` relay answers 404 for it). The first token gets a catch-up push of the current state. The
 main Durable Object keeps one record per swarm (`src/swarm-live.ts`); every swarm op and the runner tell it the swarm
@@ -7228,6 +7234,14 @@ counts no model turns and costs no money; the estimate is unchanged. The approve
   is a SQLite-class Durable Object export in `cloudflare.config.ts`; that config has no migration tags, so none was added.
   The gate keeps its pace only in memory and never fails a call (unreachable within 2 s: the call goes ahead; waits are
   capped at 30 s). A swarm calling 7TV (tools, writes or the prefetch call) defaults to concurrency 3.
+- **Fixes after review**: the gate never reserves a slot more than 30 s ahead: past that it answers `{ wait: 30000,
+  retry: true }` and the caller asks again (at most 4 times, then goes ahead), so a burst cannot push the pace minutes
+  out. A `emotes.find`/`findMany` answer with GraphQL errors, or a search alias that came back null, is answered but
+  never cached; an answer with no emotes is cached 10 minutes, not 24 h. The board keeps at most 4 refs a row before
+  resolving and resolves a page in batches of 200, so every row keeps its pictures, and it reads only the task columns
+  it needs (never the conversation). `look`'s picture fetch follows no redirects (`redirect: "manual"`; a 3xx is no
+  picture) and reads the body in chunks under the same 10 s clock and the 10 MB cap. A prefetch lookup that failed
+  (`{ error }`) is looked up again on the agent's next attempt, and a failed `findMany` batch counts as a tool error.
 - **Prefetch (62.6)**: an item that is not an object is attached as `{ value, <as> }`. A template that is a whole string
   (`"{{item.id}}"`) keeps the value's type; inside text it is spliced as text. Only `{{item}}` and up to four dot steps are
   allowed; `args` are at most 4 KB. The step "prefetched <n> of <m>" is written after each lookup or batch of 20, so a long

@@ -472,6 +472,8 @@ async function waitSwarm(ctx: OpContext, id: string, deadline: number): Promise<
         const asks = cells.some((c) => c.status === "waiting") ? await openAsks(ctx.db, id) : [];
         const state = swarmJobState(row, cells, asks) as Job;
         if (state.status !== "queued" && state.status !== "running") return state;
+        // an agent is waiting on a question: the caller hears it now (it is the one who can answer), not at the deadline
+        if (asks.length > 0) return state;
         if (remaining(ctx, deadline) <= 0) return state;
         await ctx.edge.sleep(Math.min(2000, Math.max(0, deadline - ctx.now())));
     }

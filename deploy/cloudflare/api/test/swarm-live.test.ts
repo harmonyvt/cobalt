@@ -26,6 +26,10 @@ beforeAll(async () => {
 let db: FakeD1;
 beforeEach(() => {
     db = createFakeD1();
+    // device sessions (Harmony's apps) may hold an island token; "key-other" is a client key that did not plan the swarm
+    for (const [id, kind] of [["key-phone", "session"], ["key-mac", "session"], ["k", "session"], ["key-other", "key"]] as const) {
+        db.raw.prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at, kind) VALUES (?, ?, ?, 'x', 0, ?)").run(id, id, `hash-${id}`, kind);
+    }
     db.raw.prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)").run("key-claude", "claude code", "h1", "abcd1234", 1);
 });
 
@@ -227,6 +231,11 @@ describe("the routes", () => {
         expect((await w.route("PUT", `/live/swarms/${ID}`, { token: "nothex", environment: "production" }, w.keyed("k"))).status).toBe(400);
         expect((await w.route("PUT", `/live/swarms/${ID}`, { token: UPDATE, environment: "staging" }, w.keyed("k"))).status).toBe(400);
         expect((await w.route("PUT", `/live/swarms/${ID}`, { token: UPDATE, environment: "production" }, w.keyed("chat:thread01"))).status).toBe(404);
+        // another client key may not take (or drop) the island; the key that planned the swarm may
+        expect((await w.route("PUT", `/live/swarms/${ID}`, { token: UPDATE, environment: "production" }, w.keyed("key-other"))).status).toBe(404);
+        expect((await w.route("DELETE", `/live/swarms/${ID}`, undefined, w.keyed("key-other"))).status).toBe(404);
+        expect((await w.route("PUT", `/live/swarms/${ID}`, { token: UPDATE, environment: "production" }, w.keyed("key-claude"))).status).toBe(200);
+        expect((await w.route("DELETE", `/live/swarms/${ID}`, undefined, w.keyed("key-claude"))).status).toBe(200);
         expect((await w.route("PUT", `/live/swarms/NoSuchSwarm00000`, { token: UPDATE, environment: "production" }, w.keyed("k"))).status).toBe(404);
         expect((await w.route("GET", `/live/swarms/${ID}`, undefined, w.keyed("k"))).status).toBe(404);
         expect((await w.route("PUT", `/live/swarms/bad`, { token: UPDATE, environment: "production" }, w.keyed("k"))).status).toBe(404);

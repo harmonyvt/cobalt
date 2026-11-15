@@ -1,16 +1,17 @@
 // The 7TV gate (APP-API-CONTRACT.md section 62.5): the pacing rules, the Durable Object's routes, and a port that never
 // fails a call (no binding, an unreachable or broken object: the call goes ahead).
 import { describe, expect, it } from "vitest";
-import { GATE_SLOW_MS, GATE_WAIT_MAX_MS, GateCore, gateOf, handleGateRoute, retryAfterSeconds } from "../src/seventv-gate";
+import { GATE_ROUNDS_MAX, GATE_SLOW_MS, GATE_WAIT_MAX_MS, GateCore, gateOf, handleGateRoute, retryAfterSeconds } from "../src/seventv-gate";
 
 describe("GateCore", () => {
     it("hands out reads 200 ms apart and writes 1 s apart, each kind on its own", () => {
         let now = 1000;
         const g = new GateCore(() => now);
-        expect([g.slot("read"), g.slot("read"), g.slot("read")]).toEqual([0, 200, 400]);
-        expect([g.slot("write"), g.slot("write")]).toEqual([0, 1000]);
+        const w = (k: "read" | "write") => g.slot(k).wait;
+        expect([w("read"), w("read"), w("read")]).toEqual([0, 200, 400]);
+        expect([w("write"), w("write")]).toEqual([0, 1000]);
         now += 5000;
-        expect(g.slot("read")).toBe(0);
+        expect(g.slot("read")).toEqual({ wait: 0 });
     });
 
     it("half speed for a minute after a 429, and never a wait past the cap", () => {
@@ -18,12 +19,23 @@ describe("GateCore", () => {
         const g = new GateCore(() => now);
         g.slow();
         expect(g.slowed()).toBe(true);
-        expect([g.slot("read"), g.slot("read")]).toEqual([0, 400]);
+        expect([g.slot("read").wait, g.slot("read").wait]).toEqual([0, 400]);
         now = GATE_SLOW_MS + 10_000;
         expect(g.slowed()).toBe(false);
-        expect([g.slot("read"), g.slot("read")]).toEqual([0, 200]);
-        for (let i = 0; i < 200; i++) g.slot("write");
-        expect(g.slot("write")).toBe(GATE_WAIT_MAX_MS);
+        expect([g.slot("read").wait, g.slot("read").wait]).toEqual([0, 200]);
+    });
+
+    it("a burst never reserves past the longest wait: the overflow is told to come back, and the pace holds", () => {
+        let now = 0;
+        const g = new GateCore(() => now);
+        const out = Array.from({ length: 200 }, () => g.slot("write"));
+        // 31 slots fit in 30 s (0, 1 s, ... 30 s); the rest wait the most and ask again
+        expect(out.filter((x) => !x.retry).map((x) => x.wait)).toEqual(Array.from({ length: 31 }, (_, i) => i * 1000));
+        expect(out.filter((x) => x.retry)).toHaveLength(169);
+        expect(out.at(-1)).toEqual({ wait: GATE_WAIT_MAX_MS, retry: true });
+        // 30 s later the queue is not minutes ahead: the next slot is 1 s out, not 170 s
+        now = GATE_WAIT_MAX_MS;
+        expect(g.slot("write")).toEqual({ wait: 1000 });
     });
 });
 
@@ -64,6 +76,15 @@ describe("the gate's routes and port", () => {
         await port.slot("read");
         expect(slept).toEqual([200, 400]);
         expect(names.every((n) => n === "gate")).toBe(true);
+        // told to come back: asks again, at most GATE_ROUNDS_MAX times, then goes ahead
+        slept.length = 0;
+        let asked = 0;
+        const full = { idFromName: (n: string) => n, get: () => ({ fetch: async () => (asked++, Response.json({ wait: GATE_WAIT_MAX_MS, retry: true })) }) };
+        await gateOf({ SEVENTV_GATE: full }, async (ms) => void slept.push(ms))!.slot("read");
+        expect(asked).toBe(GATE_ROUNDS_MAX);
+        expect(slept).toEqual(Array(GATE_ROUNDS_MAX).fill(GATE_WAIT_MAX_MS));
+        slept.length = 0;
+        slept.push(200, 400);
         broken = true;
         await expect(port.slot("write")).resolves.toBeUndefined();
         await expect(port.slow()).resolves.toBeUndefined();

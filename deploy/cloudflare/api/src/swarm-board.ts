@@ -2,7 +2,7 @@
 // and a group, every agent's outcome and score, computed from what is stored (D1 and one resolveMedia batch for the page),
 // never by a model. The program may map its answer's fields (output.board); without it the board guesses.
 // Free of Cloudflare imports: the tests run it under node.
-import { isMedia, parseMediaRef, resolveMedia, type MediaBases, type MediaRef } from "./media-refs";
+import { isMedia, MEDIA_REFS_MAX, parseMediaRef, resolveMedia, type MediaAnswer, type MediaBases, type MediaRef } from "./media-refs";
 import type { BoardMap, ChangeRow, Spec, TaskRow, TaskStats } from "./swarm";
 
 export const BOARD_LIMIT_MAX = 200;
@@ -246,8 +246,8 @@ export type BoardAgent = { agent: number; status: string; outcome: Outcome; erro
 export type Outcome = { status: string; items: number; answered: number; tool_calls: number; tool_errors: number; asks: number; turns: number; usd: number; ms: number | null; score: number | null };
 
 // One agent's outcome (section 62.3). A running agent has no score yet.
-export function outcomeOf(t: Pick<TaskRow, "status" | "items" | "usd" | "started_at" | "ended_at"> & { stats?: string | null }, stats: TaskStats, answered: number, asks: number): Outcome {
-    const items = parse<unknown[]>(t.items, []).length;
+export function outcomeOf(t: Pick<TaskRow, "status" | "items" | "usd" | "started_at" | "ended_at"> & { stats?: string | null; n_items?: number }, stats: TaskStats, answered: number, asks: number): Outcome {
+    const items = typeof t.n_items === "number" ? t.n_items : parse<unknown[]>(t.items, []).length;
     const ended = t.status === "done" || t.status === "failed" || t.status === "skipped";
     return {
         status: t.status,
@@ -278,9 +278,11 @@ export async function boardPage(db: D1Database, rows: RawRow[], query: BoardQuer
     });
     const offset = Math.max(0, query.offset ?? 0);
     const limit = Math.min(BOARD_LIMIT_MAX, Math.max(1, query.limit ?? BOARD_LIMIT_DEFAULT));
-    const page = list.slice(offset, offset + limit);
+    // each row keeps at most BOARD_MEDIA_MAX refs, and the page resolves in chunks, so no row loses its pictures to a cap
+    const page = list.slice(offset, offset + limit).map((r) => ({ ...r, refs: r.refs.slice(0, BOARD_MEDIA_MAX) }));
     const refs = [...new Set(page.flatMap((r) => r.refs))];
-    const answers = refs.length > 0 ? await resolveMedia(db, refs, bases) : [];
+    const answers: MediaAnswer[] = [];
+    for (let i = 0; i < refs.length; i += MEDIA_REFS_MAX) answers.push(...(await resolveMedia(db, refs.slice(i, i + MEDIA_REFS_MAX), bases)));
     const byRef = new Map(answers.filter(isMedia).map((a) => [a.ref, a]));
     return {
         total: list.length,

@@ -281,12 +281,14 @@ describe("POST /emotes", () => {
 
 class MemoryCache implements EmoteCache {
     store = new Map<string, string>();
+    ttl = new Map<string, string | null>();
     async match(key: Request) {
         const v = this.store.get(key.url);
         return v === undefined ? undefined : new Response(v);
     }
     async put(key: Request, res: Response) {
         this.store.set(key.url, await res.text());
+        this.ttl.set(key.url, res.headers.get("cache-control"));
     }
 }
 
@@ -336,6 +338,28 @@ describe("fewer 7TV requests (62.5)", () => {
         expect((await findManyEmotes(dc, [" "], undefined, fetchImpl)).status).toBe(400);
         expect((await findManyEmotes(dc, ["a"], "nope", fetchImpl)).status).toBe(400);
         expect(sent).toHaveLength(1);
+    });
+
+    it("a partial answer (GraphQL errors, a null alias) is answered but not cached; an empty one is kept 10 minutes", async () => {
+        const { d } = world();
+        const cache = new MemoryCache();
+        const dc = { ...d, emoteCache: cache };
+        // one search with errors beside its data
+        const partial = (async () => jsonRes({ data: { emotes: { search: { pageCount: 1, items: [] } } }, errors: [{ message: "timeout" }] })) as unknown as typeof fetch;
+        expect((await searchEmotes(dc, new URLSearchParams("q=cat"), partial)).status).toBe(200);
+        expect(cache.store.size).toBe(0);
+        // findMany: s0 answered, s1 null with an error -> nothing cached (the whole answer is partial)
+        const many = (async () => jsonRes({ data: { s0: { search: { pageCount: 1, items: [emote()] } }, s1: null }, errors: [{ message: "s1 failed", path: ["s1"] }] })) as unknown as typeof fetch;
+        const r = await findManyEmotes(dc, ["cat", "dog"], undefined, many);
+        expect((r.body as { results: { q: string; emotes: unknown[] }[] }).results.map((x) => [x.q, x.emotes.length])).toEqual([
+            ["cat", 1],
+            ["dog", 0],
+        ]);
+        expect(cache.store.size).toBe(0);
+        // a clean answer with no emotes: cached briefly; with emotes: a day
+        const empty = (async () => jsonRes({ data: { s0: { search: { pageCount: 0, items: [] } }, s1: { search: { pageCount: 1, items: [emote()] } } } })) as unknown as typeof fetch;
+        await findManyEmotes(dc, ["nothing", "cat"], undefined, empty);
+        expect(Object.fromEntries([...cache.ttl].map(([k, v]) => [new URL(k).searchParams.get("q"), v]))).toEqual({ nothing: "public, max-age=600", cat: "public, max-age=86400" });
     });
 
     it("a 429 answers error.emote.rate_limited with 7TV's Retry-After, and slows the gate", async () => {

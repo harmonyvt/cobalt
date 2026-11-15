@@ -946,7 +946,7 @@ export async function wakeWaiting(db: D1Database, swarm: string, now: number, wa
               WHERE swarm = ?1 AND status = 'waiting'
                 AND (COALESCE(asked_at, 0) <= ?2 - ?3
                      OR EXISTS (SELECT 1 FROM swarm_messages m WHERE m.swarm = ?1 AND m.dir = 'down' AND (m.task IS NULL OR m.task = swarm_tasks.idx)
-                                 AND m.id > COALESCE(json_extract(swarm_tasks.state, '$.seen'), 0)))`,
+                                 AND m.id > COALESCE(json_extract(swarm_tasks.state, '$.ask'), json_extract(swarm_tasks.state, '$.seen'), 0)))`,
         )
         .bind(swarm, now, waitMs)
         .run();
@@ -960,11 +960,14 @@ export async function nextAskTimeout(db: D1Database, swarm: string, now: number,
     return Math.max(0, r.at + waitMs - now);
 }
 
-// The down messages a task has not been given yet (after id `seen`), oldest first.
-export async function downFor(db: D1Database, swarm: string, idx: number, seen: number): Promise<MessageRow[]> {
+// The down messages a task has not been given yet (after id `seen`), oldest first. A reply to this agent from before its
+// attempt began (`from`) answered an earlier attempt's question and is left out; notes (to it or to all) always reach it.
+export async function downFor(db: D1Database, swarm: string, idx: number, seen: number, from = 0): Promise<MessageRow[]> {
     const { results } = await db
-        .prepare("SELECT * FROM swarm_messages WHERE swarm = ?1 AND dir = 'down' AND (task IS NULL OR task = ?2) AND id > ?3 ORDER BY id LIMIT 50")
-        .bind(swarm, idx, seen)
+        .prepare(
+            "SELECT * FROM swarm_messages WHERE swarm = ?1 AND dir = 'down' AND (task IS NULL OR task = ?2) AND id > ?3 AND NOT (kind = 'reply' AND task IS NOT NULL AND id <= ?4) ORDER BY id LIMIT 50",
+        )
+        .bind(swarm, idx, seen, from)
         .all<MessageRow>();
     return results;
 }
@@ -1251,8 +1254,20 @@ export function trimAnswer(v: unknown): unknown {
 }
 
 // An item with its lookup: an object gains the key; anything else becomes { value, <as> }.
-const attach = (item: unknown, as: string, answer: unknown) => (item && typeof item === "object" && !Array.isArray(item) ? { ...(item as Record<string, unknown>), [as]: answer } : { value: item, [as]: answer });
-const hasLookup = (item: unknown, as: string) => !!item && typeof item === "object" && !Array.isArray(item) && as in (item as Record<string, unknown>);
+const attach = (item: unknown, as: string, answer: unknown) => {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+        const o = item as Record<string, unknown>;
+        // a wrapped plain item keeps one wrapper
+        if (Object.keys(o).length === 2 && "value" in o && as in o) return { value: o.value, [as]: answer };
+        return { ...o, [as]: answer };
+    }
+    return { value: item, [as]: answer };
+};
+// Looked up already: the item holds an answer under `as`. A failed lookup ({ error } alone) is not one, so the next
+// attempt or retry round looks it up again.
+const failedLookup = (v: unknown) => !!v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 1 && "error" in (v as Record<string, unknown>);
+const hasLookup = (item: unknown, as: string) =>
+    !!item && typeof item === "object" && !Array.isArray(item) && as in (item as Record<string, unknown>) && !failedLookup((item as Record<string, unknown>)[as]);
 
 // Looks up every item of one task's batch (the ones not looked up yet), in order, saving as it goes; false when the tick ran
 // out of time first (the rest is done at the next claim). emotes.find lookups of a batch go out as emotes.findMany.
@@ -1289,7 +1304,9 @@ export async function prefetchTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, t
             return false;
         }
         const chunk = todo.slice(k, k + (many ? PREFETCH_BATCH : 1));
-        const inputs = chunk.map(({ it }) => fillPrefetchArgs(pf.args, it) as Record<string, unknown>);
+        // a plain item that was wrapped by an earlier failed lookup ({ value, <as> }) is looked up as itself again
+        const source = (it: unknown) => (it && typeof it === "object" && !Array.isArray(it) && Object.keys(it).length === 2 && "value" in it && pf.as in it ? (it as { value: unknown }).value : it);
+        const inputs = chunk.map(({ it }) => fillPrefetchArgs(pf.args, source(it)) as Record<string, unknown>);
         // emotes.find with only a query (and a shared sort): one emotes.findMany for the chunk
         const batchable =
             many && chunk.length > 1 && inputs.every((x) => typeof x.query === "string" && x.query.trim() && Object.keys(x).every((key) => key === "query" || key === "sort") && x.sort === inputs[0]!.sort);
@@ -1301,6 +1318,7 @@ export async function prefetchTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, t
                     items[i] = attach(items[i], pf.as, trimAnswer(r ? { sort: out.sort, page: 1, items: r.emotes, ...(r.cached ? { cached: true } : {}) } : { error: "no answer" }));
                 });
             } catch (e) {
+                stats.tool_errors++;
                 chunk.forEach(({ i }) => (items[i] = attach(items[i], pf.as, errorOf(e))));
             }
             stats.tool_calls++;
@@ -1565,8 +1583,10 @@ export type SwarmRunDeps = {
 export type SwarmTickOutcome = { again: number | null };
 
 // `seen`: the highest down message (section 61) this conversation was given; `asked`: its last run asked a question that
-// has not been answered yet (the next turn starts with the answer or the timeout line)
-type TaskState = { messages: any[]; turns: number; repaired: boolean; seen?: number; asked?: boolean };
+// has not been answered yet (the next turn starts with the answer or the timeout line); `ask`: that question's message
+// id (only a down message after it answers it); `from`: the highest message id when this attempt began (messages and
+// limits are this attempt's own: an earlier attempt's or retry round's history is never replayed)
+type TaskState = { messages: any[]; turns: number; repaired: boolean; seen?: number; asked?: boolean; ask?: number; from?: number };
 
 // Adds text to the conversation's last user message (the API wants user and assistant turns in turn).
 function appendUser(messages: any[], text: string): void {
@@ -1646,12 +1666,13 @@ type TaskCtx = { limiter: Limiter; deadline: number; planner: string; waitMs: nu
 
 // cobalt.swarm.ask / tell for one agent (section 61.2): stored as `up` messages, at most ASKS_PER_AGENT asks and
 // MESSAGES_PER_AGENT messages an agent. An ask ends the agent's turn after the run_code it is in (`onAsk`).
-function swarmMailTools(d: SwarmRunDeps, swarm: string, idx: number, steps: StepLog, onAsk: (at: number) => void): ChatTools {
+function swarmMailTools(d: SwarmRunDeps, swarm: string, idx: number, steps: StepLog, from: number, onAsk: (at: number, id: number) => void): ChatTools {
     const db = d.base.db;
+    // this attempt's messages only (after `from`)
     const used = async () => {
         const r = await db
-            .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN kind = 'ask' THEN 1 ELSE 0 END), 0) AS asks FROM swarm_messages WHERE swarm = ?1 AND task = ?2 AND dir = 'up'")
-            .bind(swarm, idx)
+            .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN kind = 'ask' THEN 1 ELSE 0 END), 0) AS asks FROM swarm_messages WHERE swarm = ?1 AND task = ?2 AND dir = 'up' AND id > ?3")
+            .bind(swarm, idx, from)
             .first<{ n: number; asks: number }>();
         return { n: r?.n ?? 0, asks: r?.asks ?? 0 };
     };
@@ -1662,9 +1683,9 @@ function swarmMailTools(d: SwarmRunDeps, swarm: string, idx: number, steps: Step
             if (u.asks >= ASKS_PER_AGENT) throw new Error(`cobalt.swarm.ask: you asked ${ASKS_PER_AGENT} questions already, the most an agent may: go on with your best guess and say so in your answer`);
             if (u.n >= MESSAGES_PER_AGENT) throw new Error(`cobalt.swarm.ask: you sent ${MESSAGES_PER_AGENT} messages already, the most an agent may`);
             const now = d.base.now();
-            await insertMessage(db, { swarm, task: idx, dir: "up", kind: "ask", sender: "agent", text: t, now });
+            const id = await insertMessage(db, { swarm, task: idx, dir: "up", kind: "ask", sender: "agent", text: t, now });
             steps.add("asked a question");
-            onAsk(now);
+            onAsk(now, id);
             trackSwarm(d.base, "asked", swarm, { task: idx, agent: idx + 1, asks: u.asks + 1, messages: u.n + 1, chars: t.length });
             return { asked: true, note: "your turn ends now; the answer comes as your next message" };
         },
@@ -1728,11 +1749,15 @@ async function attemptTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, task: Tas
     const writes = spec.mode === "propose" ? proposalDoc(base, spec.writes) : "";
     const system = taskSystem(spec, { index: task.idx + 1, total, items: row.item_count, reads, writes, now: base.now() });
     const saved = parse<TaskState | null>(task.state, null);
-    const state: TaskState = saved ?? {
-        messages: [{ role: "user", content: fillPrompt(spec.prompt, { items, index: task.idx + 1, total, name: spec.name }) }],
-        turns: 0,
-        repaired: false,
-    };
+    let state: TaskState;
+    if (saved) state = saved;
+    else {
+        // a new attempt is not given the answers to an earlier attempt's questions (notes still reach it), and its message
+        // limits count from here
+        const top = await db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM swarm_messages WHERE swarm = ?1").bind(row.id).first<{ id: number }>();
+        const from = top?.id ?? 0;
+        state = { messages: [{ role: "user", content: fillPrompt(spec.prompt, { items, index: task.idx + 1, total, name: spec.name }) }], turns: 0, repaired: false, from };
+    }
     if (!saved) steps.add("started");
     const save = async () => {
         await db
@@ -1753,20 +1778,21 @@ async function attemptTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, task: Tas
         if (halt) return { kind: "halted", error: halt };
         // messages from the owner (section 61.2): the answer to its question, a note to it or to every agent; a question
         // nobody answered in time goes on with the timeout line
-        const down = await downFor(db, row.id, task.idx, state.seen ?? 0);
+        const down = await downFor(db, row.id, task.idx, state.seen ?? 0, state.from ?? 0);
+        // only a message sent after the question answers it (a note that went out while it was being asked does not)
+        const answered = down.some((m) => m.id > (state.ask ?? 0));
         if (down.length > 0) {
             appendUser(state.messages, downLines(down, tc.planner));
             state.seen = down[down.length - 1]!.id;
-            if (state.asked) {
-                steps.add("answer arrived");
-            }
-            state.asked = false;
-        } else if (state.asked) {
+        }
+        if (state.asked && answered) steps.add("answer arrived");
+        else if (state.asked) {
             appendUser(state.messages, noAnswerLine(tc.waitMs));
             steps.add("no answer, going on");
             trackSwarm(base, "ask_timeout", row.id, { task: task.idx, agent: task.idx + 1 });
-            state.asked = false;
         }
+        state.asked = false;
+        delete state.ask;
         let res: ModelTurn;
         try {
             res = await modelTurn(d, { system, tools: [RUN_CODE_TOOL], messages: state.messages });
@@ -1782,6 +1808,7 @@ async function attemptTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, task: Tas
         if (res.stop_reason === "tool_use" && uses.length > 0) {
             const results: any[] = [];
             let askedAt: number | null = null;
+            let askId: number | null = null;
             for (const u of uses) {
                 if (u.name !== "run_code" || typeof u.input?.code !== "string" || !d.runner) {
                     results.push({ type: "tool_result", tool_use_id: u.id, is_error: true, content: "Only run_code exists, with { code: string }." });
@@ -1803,7 +1830,10 @@ async function attemptTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, task: Tas
                         : {};
                 const tools: ChatTools = {
                     ...withSteps(base, program, writeSet, steps, stats),
-                    ...swarmMailTools(d, row.id, task.idx, steps, (at) => (askedAt ??= at)),
+                    ...swarmMailTools(d, row.id, task.idx, steps, state.from ?? 0, (at, id) => {
+                        askedAt ??= at;
+                        askId ??= id;
+                    }),
                 };
                 const out = await d.runner(u.input.code, tools);
                 const logs = out.logs.slice(0, LOGS_MAX).map((l) => clip(l, 500));
@@ -1826,6 +1856,7 @@ async function attemptTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, task: Tas
             if (askedAt !== null) {
                 // the turn ends on a question: parked, holding no slot, until the answer comes (or the wait runs out)
                 state.asked = true;
+                if (askId !== null) state.ask = askId;
                 await save();
                 return { kind: "waiting", askedAt };
             }

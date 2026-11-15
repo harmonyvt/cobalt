@@ -1121,6 +1121,10 @@ describe("agents that talk to their owner (61)", () => {
         const ctx = forCall(base(), { keyId: "key-1", caller: "key" });
         const job = await waitJob(ctx, `swarm:${s.swarm}`, 0);
         expect(job).toMatchObject({ status: "running", activity: expect.stringMatching(/, 1 question waiting$/), asks: [{ agent: 1, text: "Which set should Cat go in?" }] });
+        // a long wait comes back at once while a question is open (the caller is the one who can answer)
+        const before = clock;
+        expect(await waitJob(ctx, `swarm:${s.swarm}`, 60)).toMatchObject({ status: "running", asks: [{ agent: 1 }] });
+        expect(clock).toBe(before);
         // the inbox: once, then read
         const inbox = (await json(req("/swarms/inbox", "GET", KEY))).body.messages;
         expect(inbox.map((m: any) => [m.agent, m.dir, m.kind, m.sender, m.text, m.answered])).toEqual([
@@ -1232,13 +1236,92 @@ describe("agents that talk to their owner (61)", () => {
         expect(row(s.swarm)).toMatchObject({ status: "stopped" });
     });
 
+    it("only a message after the question answers it: a note sent while it was asked does not wake it; to all answers open asks", async () => {
+        (env as any).SWARM_ASK_WAIT_MS = "60000";
+        const s = await plan(SPEC({ concurrency: 1, items: SET_EMOTES.slice(0, 2).map((e) => ({ emote_id: e.id, name: e.name })) }));
+        await approve(s.swarm, s.spec_hash);
+        const lastText = (x: Seen) => x.messages.at(-1).content.at(-1).text;
+        scripts.set("1", [
+            () => {
+                // a note to everyone lands while this turn runs, before the ask is stored
+                db.raw.prepare("INSERT INTO swarm_messages (swarm, task, dir, kind, sender, text, created_at) VALUES (?, NULL, 'down', 'note', 'you', 'early note', ?)").run(s.swarm, clock);
+                return code("tu_1", `return await cobalt.swarm.ask("Which one?");`);
+            },
+            (x) => {
+                expect(lastText(x)).toBe("[no answer in 1 minutes: go on with your best guess and say so in your answer]");
+                expect(JSON.stringify(x.messages.at(-1).content)).toContain("[message from Harmony]: early note");
+                return code("tu_2", `return await cobalt.swarm.ask("Second question?");`);
+            },
+            (x) => {
+                expect(lastText(x)).toBe("[message from Harmony]: everyone: the second");
+                return say(JSON.stringify({ changes: [] }));
+            },
+        ]);
+        await tick(s.swarm);
+        expect(tasks(s.swarm)[0].status).toBe("waiting");
+        // the early note is newer than what the agent had seen, but older than its question: it stays parked
+        await tick(s.swarm);
+        expect(tasks(s.swarm)[0].status).toBe("waiting");
+        clock += 60_000;
+        await tick(s.swarm);
+        expect(tasks(s.swarm)[0].status).toBe("waiting");
+        expect(await send(s.swarm, "all", "everyone: the second", SESS)).toMatchObject({ status: 200, body: { woke: true } });
+        // stored as a reply (it answered an open question), and the question is answered
+        expect(msgs().at(-1)).toMatchObject({ task: null, kind: "reply" });
+        expect(msgs().filter((m) => m.kind === "ask").map((m) => m.answered_at !== null)).toEqual([true, true]);
+        await tick(s.swarm);
+        expect(tasks(s.swarm)[0].status).toBe("done");
+        const steps = JSON.parse(tasks(s.swarm)[0].steps).map((x: any) => x.text);
+        expect(steps.filter((t: string) => t === "no answer, going on" || t === "answer arrived")).toEqual(["no answer, going on", "answer arrived"]);
+    });
+
+    it("a new attempt is not given an earlier attempt's answer, still gets the notes, and its ask limit starts again", async () => {
+        const s = await plan(SPEC({ concurrency: 1, retry: { attempts: 2 }, items: SET_EMOTES.slice(0, 2).map((e) => ({ emote_id: e.id, name: e.name })) }));
+        await approve(s.swarm, s.spec_hash);
+        expect(await send(s.swarm, 1, "standing note", SESS)).toMatchObject({ status: 200 });
+        const asks = Array.from({ length: 3 }, (_, i) => `await cobalt.swarm.ask("q${i}");`);
+        let second: Seen | null = null;
+        scripts.set("1", [
+            () => code("tu_1", asks[0]!),
+            () => code("tu_2", asks[1]!),
+            () => code("tu_3", asks[2]!),
+            () => say("not json"),
+            () => say("still not json"),
+            // attempt 2: its first turn, then a fourth question overall (the first of this attempt)
+            (x) => ((second = x), code("tu_4", `return await cobalt.swarm.ask("again?");`)),
+            (x) => (expect(lastResult(x).result).toEqual({ asked: true, note: "your turn ends now; the answer comes as your next message" }), say(JSON.stringify({ changes: [] }))),
+        ]);
+        for (let i = 0; i < 3; i++) {
+            await tick(s.swarm);
+            expect(tasks(s.swarm)[0].status).toBe("waiting");
+            expect(await send(s.swarm, 1, `answer ${i}`, SESS)).toMatchObject({ body: { woke: true } });
+        }
+        await drain(s.swarm, 3);
+        expect(tasks(s.swarm)[0].status).toBe("waiting");
+        const prompt = JSON.stringify(second!.messages);
+        expect(prompt).toContain("standing note");
+        expect(prompt).not.toMatch(/answer [012]/);
+        expect(await send(s.swarm, 1, "answer 3", SESS)).toMatchObject({ body: { woke: true } });
+        await drain(s.swarm);
+        expect(tasks(s.swarm)[0].status).toBe("done");
+    });
+
     it("apply with skip_clashes unticks the kept changes that clash first", async () => {
         const s = await plan(SPEC());
         scripts.set("1", [() => say(JSON.stringify({ changes: [rename(0, "Cat"), rename(1, "cat")] }))]);
         scripts.set("2", [() => say(JSON.stringify({ changes: [rename(2, "Bird")] }))]);
         await approve(s.swarm, s.spec_hash);
         await drain(s.swarm);
-        const r = await json(req(`/swarms/${s.swarm}/apply`, "POST", SESS, { spec_hash: s.spec_hash, skip_clashes: true }));
+        const keeps = async () => (await json(req(`/swarms/${s.swarm}/changes`, "GET", KEY))).body.changes.map((c: any) => c.keep);
+        // a refused apply unticks nothing: the island's count is stale, or another apply is on
+        const stale = await json(req(`/swarms/${s.swarm}/apply`, "POST", SESS, { spec_hash: s.spec_hash, skip_clashes: true, count: 3 }));
+        expect(stale).toMatchObject({ status: 409, body: { error: { code: "error.swarm.count_mismatch" } } });
+        expect(await keeps()).toEqual([true, true, true]);
+        db.raw.prepare("UPDATE swarms SET apply_status = 'applying' WHERE id = ?").run(s.swarm);
+        expect((await json(req(`/swarms/${s.swarm}/apply`, "POST", SESS, { spec_hash: s.spec_hash, skip_clashes: true, count: 1 }))).status).toBe(409);
+        expect(await keeps()).toEqual([true, true, true]);
+        db.raw.prepare("UPDATE swarms SET apply_status = 'ready' WHERE id = ?").run(s.swarm);
+        const r = await json(req(`/swarms/${s.swarm}/apply`, "POST", SESS, { spec_hash: s.spec_hash, skip_clashes: true, count: 1 }));
         expect(r.body.apply).toMatchObject({ status: "applying", total: 1 });
         await drain(s.swarm);
         expect(renames.map((x) => x.alias)).toEqual(["Bird"]);
@@ -1430,6 +1513,40 @@ describe("results board platform (62)", () => {
         ]);
         expect(JSON.parse(t.items)[0]).toEqual({ ...items[0], emote: { id: emoteId(0), name: "emote of 000" } });
         expect(row(s.swarm).spent_usd).toBeCloseTo(0.0015, 6);
+    });
+
+    it("prefetch: a failed lookup is looked up again on the next attempt, and counts as a tool error", async () => {
+        const items = SET_EMOTES.slice(0, 2).map((e) => ({ emote_id: e.id, name: e.name }));
+        const s = await plan(READ({ items, batch: { size: 2 }, tools: [], retry: { attempts: 2 }, prefetch: { call: "seventv.emote", args: { emote_id: "{{item.emote_id}}" }, as: "emote" } }));
+        const prompts: string[] = [];
+        scripts.set("1", [
+            (x) => (prompts.push(x.messages[0].content as string), say("not json")),
+            // 7TV answers again from here on
+            () => ((failing = false), say("still not json")),
+            (x) => (prompts.push(x.messages[0].content as string), say("[]")),
+        ]);
+        let failing = true;
+        await approve(s.swarm, s.spec_hash);
+        const fake = REG.op("seventv.emote")!;
+        const handler = fake.handler!;
+        (fake as any).handler = async (ctx: any, input: any) => {
+            if (failing && input.emote_id === emoteId(1)) throw new OpError(429, "error.seventv.rate_limited");
+            return handler(ctx, input);
+        };
+        try {
+            await drain(s.swarm);
+        } finally {
+            (fake as any).handler = handler;
+        }
+        expect(prompts).toHaveLength(2);
+        expect(prompts[0]).toMatch(/"emote":\{"error":/);
+        expect(prompts[1]).not.toMatch(/"error"/);
+        expect(prompts[1]).toContain(`"emote":{"id":"${emoteId(1)}"`);
+        const t = tasks(s.swarm)[0];
+        expect(t.status).toBe("done");
+        expect(JSON.parse(t.items)[1].emote).toMatchObject({ id: emoteId(1) });
+        // first attempt: 2 lookups, 1 still failing; second attempt: 1 lookup again
+        expect(JSON.parse(t.stats)).toMatchObject({ tool_calls: 3, tool_errors: 1 });
     });
 });
 

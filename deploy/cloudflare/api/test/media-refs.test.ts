@@ -2,7 +2,7 @@
 // previews (capystore refs through the section 60 resolver, real SQL; 7TV emotes as their CDN picture; URLs as given).
 import { describe, expect, it } from "vitest";
 import { EMOTE_ID, MEDIA_HOSTS_DEFAULT, mediaHostsOf, mediaPosts, parseMediaRef, resolveMedia } from "../src/media-refs";
-import { lookMediaBlocks, lookMediaImages } from "../src/look-pictures";
+import { lookMediaBlocks, lookMediaImages, MEDIA_FETCH_MAX_BYTES, readCapped } from "../src/look-pictures";
 import { MEDIA, SHARE, world } from "./stage-world";
 
 const ULID = "01HZX5Q8M3Y9K2B7C4D6E8F0GA";
@@ -83,5 +83,35 @@ describe("look({ media })", () => {
             { type: "image", source: { type: "base64", media_type: "image/webp", data: "AQID" } },
         ]);
         expect(lookMediaBlocks("x", undefined)).toEqual([{ type: "text", text: "x could not be looked at." }]);
+    });
+});
+
+describe("look's picture fetch", () => {
+    it("never follows a redirect, and drops a body past the cap even without a content-length: the model gets the URL instead", async () => {
+        const w = await world();
+        const inits: RequestInit[] = [];
+        const big = () =>
+            new ReadableStream<Uint8Array>({
+                pull(c) {
+                    c.enqueue(new Uint8Array(1024 * 1024));
+                },
+            });
+        const fetchImpl = (async (url: string, init: RequestInit) => {
+            inits.push(init);
+            if (url.endsWith("/moved.png")) return new Response(null, { status: 302, headers: { location: "https://169.254.169.254/x.png" } });
+            return new Response(big(), { headers: { "content-type": "image/png" } });
+        }) as unknown as typeof fetch;
+        const hosts = mediaHostsOf({ MEDIA_HOSTS: "i.example.com" }, BASES);
+        const refs = ["https://i.example.com/moved.png", "https://i.example.com/huge.png"];
+        const out = await lookMediaImages({ db: w.env.DB, mediaBaseUrl: MEDIA, shareBaseUrl: SHARE, hosts, images: null, fetch: fetchImpl }, refs);
+        expect(inits.every((i) => i.redirect === "manual")).toBe(true);
+        for (const r of refs) expect(out.get(r)!.images).toEqual([{ label: `Picture of image ${r}:`, url: r }]);
+    });
+
+    it("readCapped: the whole body under the cap, null past it or past the deadline", async () => {
+        const body = (chunks: number[]) => new Response(new Blob(chunks.map((n) => new Uint8Array(n)))).body!;
+        expect((await readCapped(body([3, 4]), 10, Date.now() + 1000))!.byteLength).toBe(7);
+        expect(await readCapped(body([MEDIA_FETCH_MAX_BYTES]), MEDIA_FETCH_MAX_BYTES - 1, Date.now() + 1000)).toBeNull();
+        expect(await readCapped(body([3]), 10, Date.now() - 1)).toBeNull();
     });
 });

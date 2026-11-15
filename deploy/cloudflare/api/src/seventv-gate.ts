@@ -12,18 +12,24 @@ export const GATE_GAP_MS: Record<GateKind, number> = { read: 200, write: 1000 };
 export const GATE_SLOW_MS = 60_000;
 export const GATE_WAIT_MAX_MS = 30_000;
 export const GATE_CALL_MS = 2000;
+// A caller told to come back (the queue is full) asks again at most this many times, then goes ahead.
+export const GATE_ROUNDS_MAX = 4;
+export type GateSlot = { wait: number; retry?: true };
 
 export class GateCore {
     private next: Record<GateKind, number> = { read: 0, write: 0 };
     private slowUntil = 0;
     constructor(private now: () => number) {}
-    // How long the caller waits before its call: the slots go out one gap apart (two gaps while slowed).
-    slot(kind: GateKind): number {
+    // How long the caller waits before its call: the slots go out one gap apart (two gaps while slowed). A slot is never
+    // reserved more than GATE_WAIT_MAX_MS ahead: past that the caller is told to wait the most and ask again (retry), so
+    // a burst cannot push the queue minutes into the future.
+    slot(kind: GateKind): GateSlot {
         const now = this.now();
         const gap = GATE_GAP_MS[kind] * (now < this.slowUntil ? 2 : 1);
         const at = Math.max(now, this.next[kind]);
+        if (at - now > GATE_WAIT_MAX_MS) return { wait: GATE_WAIT_MAX_MS, retry: true };
         this.next[kind] = at + gap;
-        return Math.min(GATE_WAIT_MAX_MS, at - now);
+        return { wait: at - now };
     }
     slow(): void {
         this.slowUntil = this.now() + GATE_SLOW_MS;
@@ -40,7 +46,7 @@ export async function handleGateRoute(core: GateCore, request: Request): Promise
     if (url.pathname === "/slot") {
         const kind = url.searchParams.get("kind");
         if (kind !== "read" && kind !== "write") return new Response(null, { status: 400 });
-        return Response.json({ wait: core.slot(kind) });
+        return Response.json(core.slot(kind));
     }
     if (url.pathname === "/slow") {
         core.slow();
@@ -70,9 +76,13 @@ export function gateOf(env: { SEVENTV_GATE?: unknown }, sleep: (ms: number) => P
     };
     const port: SevenTvGate = {
         async slot(kind) {
-            const res = await ask(`/slot?kind=${kind}`);
-            const wait = res && res.ok ? Number(((await res.json().catch(() => ({}))) as { wait?: unknown }).wait) : 0;
-            if (Number.isFinite(wait) && wait > 0) await sleep(Math.min(GATE_WAIT_MAX_MS, wait));
+            for (let round = 0; round < GATE_ROUNDS_MAX; round++) {
+                const res = await ask(`/slot?kind=${kind}`);
+                const b = res && res.ok ? ((await res.json().catch(() => ({}))) as { wait?: unknown; retry?: unknown }) : {};
+                const wait = Number(b.wait);
+                if (Number.isFinite(wait) && wait > 0) await sleep(Math.min(GATE_WAIT_MAX_MS, wait));
+                if (b.retry !== true) return;
+            }
         },
         async slow() {
             const res = await ask("/slow");

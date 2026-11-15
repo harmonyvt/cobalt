@@ -182,22 +182,61 @@ export const MEDIA_FETCH_MAX_BYTES = 10 * 1024 * 1024;
 // animated one becomes its first frame through Images. null when it cannot be fetched or prepared.
 async function fetchPicture(d: MediaLookDeps, url: string, label: string): Promise<LookImage | null> {
     const f = d.fetch ?? fetch;
+    const deadline = Date.now() + MEDIA_FETCH_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((r) => (timer = setTimeout(() => r(null), MEDIA_FETCH_MS)));
     try {
-        const res = await Promise.race([f(url, { headers: { accept: "image/*" } }), new Promise<null>((r) => setTimeout(() => r(null), MEDIA_FETCH_MS))]);
+        // no redirects: only the allowlisted URL itself is fetched (a 3xx is no picture)
+        const res = await Promise.race([f(url, { headers: { accept: "image/*" }, redirect: "manual" }), timeout]);
         if (!res) return null;
         const type = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
         const declared = Number(res.headers.get("content-length") ?? 0);
-        if (!res.ok || !type.startsWith("image/") || declared > MEDIA_FETCH_MAX_BYTES) {
+        if (!res.ok || res.status !== 200 || (res.url && res.url !== url) || !type.startsWith("image/") || declared > MEDIA_FETCH_MAX_BYTES || !res.body) {
             await res.body?.cancel().catch(() => {});
             return null;
         }
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        if (bytes.length > MEDIA_FETCH_MAX_BYTES) return null;
+        // the body is read in chunks under the same clock, and dropped past the byte cap
+        const bytes = await Promise.race([readCapped(res.body, MEDIA_FETCH_MAX_BYTES, deadline), timeout]);
+        if (!bytes) return null;
         const p = await prepare(d, bytes, type, { grid: false, box: null });
         return p ? { label, data: toBase64(p.data), mediaType: p.mediaType } : null;
     } catch {
         return null;
+    } finally {
+        clearTimeout(timer);
     }
+}
+
+// A body read to its end, or null when it is longer than `max` bytes or the deadline passes (the stream is cancelled).
+export async function readCapped(body: ReadableStream<Uint8Array>, max: number, deadline: number): Promise<Uint8Array | null> {
+    const reader = body.getReader();
+    const parts: Uint8Array[] = [];
+    let n = 0;
+    try {
+        for (;;) {
+            if (Date.now() > deadline) {
+                await reader.cancel().catch(() => {});
+                return null;
+            }
+            const { done, value } = await reader.read();
+            if (done) break;
+            n += value.byteLength;
+            if (n > max) {
+                await reader.cancel().catch(() => {});
+                return null;
+            }
+            parts.push(value);
+        }
+    } finally {
+        reader.releaseLock();
+    }
+    const out = new Uint8Array(n);
+    let at = 0;
+    for (const p of parts) {
+        out.set(p, at);
+        at += p.byteLength;
+    }
+    return out;
 }
 
 /** What look({ media }) shows for each ref: a capystore post's picture (the frame path, private ones too), an emote's or

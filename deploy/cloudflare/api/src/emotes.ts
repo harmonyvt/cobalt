@@ -142,6 +142,10 @@ class GqlFailure extends Error {
     }
 }
 
+// The last answer's GraphQL errors, for the callers that cache (a partial answer is never kept): gql() answers data only.
+const partialAnswers = new WeakSet<object>();
+const isPartial = (data: unknown) => typeof data === "object" && data !== null && partialAnswers.has(data);
+
 async function gql(fetchImpl: typeof fetch, query: string, variables: Record<string, unknown>, gate?: SevenTvGate | null, now: () => number = Date.now): Promise<unknown> {
     await gate?.slot("read");
     let res: Response;
@@ -164,6 +168,7 @@ async function gql(fetchImpl: typeof fetch, query: string, variables: Record<str
     if (!body.data || (Array.isArray(body.errors) && body.errors.length > 0 && body.data == null)) {
         throw new GqlFailure(502, null);
     }
+    if (Array.isArray(body.errors) && body.errors.length > 0 && typeof body.data === "object" && body.data !== null) partialAnswers.add(body.data);
     return body.data;
 }
 
@@ -214,6 +219,8 @@ type FoundPage = { items: FoundEmote[]; has_more: boolean };
 // The Workers Cache API's shape (caches.default), or a fake in the tests.
 export type EmoteCache = { match(key: Request): Promise<Response | undefined>; put(key: Request, res: Response): Promise<void> };
 export const EMOTE_CACHE_S = 24 * 60 * 60;
+// an answer with no emotes is kept only briefly: a new upload by that name shows up soon
+export const EMOTE_CACHE_EMPTY_S = 10 * 60;
 export const FIND_MANY_MAX = 20;
 
 const cacheOf = (d: Pick<AppDeps, "emoteCache">): EmoteCache | null => {
@@ -240,7 +247,8 @@ async function remember(d: Pick<AppDeps, "emoteCache">, query: string, sort: Emo
     const c = cacheOf(d);
     if (!c) return;
     try {
-        await c.put(cacheKey(query, sort, page), new Response(JSON.stringify(found), { headers: { "content-type": "application/json", "cache-control": `public, max-age=${EMOTE_CACHE_S}` } }));
+        const ttl = found.items.length > 0 ? EMOTE_CACHE_S : EMOTE_CACHE_EMPTY_S;
+        await c.put(cacheKey(query, sort, page), new Response(JSON.stringify(found), { headers: { "content-type": "application/json", "cache-control": `public, max-age=${ttl}` } }));
     } catch {
         // a cache that cannot keep it: the next search asks 7TV again
     }
@@ -291,11 +299,14 @@ export async function searchEmotes(
     const hit = found !== null;
     if (!found) {
         try {
-            found = foundOf(foundIn(await gql(fetchImpl, sort === "global" ? GLOBAL : SEARCH, searchVars(query, sort, page), d.sevenTvGate, d.now), sort), sort, page);
+            const data = await gql(fetchImpl, sort === "global" ? GLOBAL : SEARCH, searchVars(query, sort, page), d.sevenTvGate, d.now);
+            const raw = foundIn(data, sort);
+            found = foundOf(raw, sort, page);
+            // a partial answer (GraphQL errors) or a missing search is answered but never cached
+            if (raw && !isPartial(data)) await remember(d, query, sort, page, found);
         } catch (e) {
             return failed(e);
         }
-        await remember(d, query, sort, page, found);
     }
     let items;
     try {
@@ -340,9 +351,11 @@ export async function findManyEmotes(d: AppDeps, queries: string[], sortRaw: str
         }
         for (const [i, x] of missing.entries()) {
             const one = (data as Record<string, unknown>)?.[`s${i}`];
-            const page = foundOf(foundIn(sort === "global" ? { emoteSets: one } : { emotes: one }, sort), sort, 1);
+            const raw = one ? foundIn(sort === "global" ? { emoteSets: one } : { emotes: one }, sort) : undefined;
+            const page = foundOf(raw, sort, 1);
             found.set(x, { page, cached: false });
-            await remember(d, x, sort, 1, page);
+            // an alias that came back null (its search failed) or any GraphQL error: not cached
+            if (raw && !isPartial(data)) await remember(d, x, sort, 1, page);
         }
     }
     try {

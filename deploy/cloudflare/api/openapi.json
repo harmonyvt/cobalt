@@ -9656,6 +9656,12 @@
                   "skip_clashes": {
                     "description": "untick every kept change with a clash first (the Live Activity's apply)",
                     "type": "boolean"
+                  },
+                  "count": {
+                    "description": "how many changes the caller expects to apply (the island's count); 409 when it is not that many",
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100000
                   }
                 },
                 "required": [

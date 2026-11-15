@@ -610,7 +610,10 @@ export const swarmApplyOp = defineOp({
     cors: true,
     noStore: true,
     badRequest: BAD,
-    input: HashInput.extend({ skip_clashes: z.boolean().optional().describe("untick every kept change with a clash first (the Live Activity's apply)") }),
+    input: HashInput.extend({
+        skip_clashes: z.boolean().optional().describe("untick every kept change with a clash first (the Live Activity's apply)"),
+        count: z.number().int().min(0).max(100_000).optional().describe("how many changes the caller expects to apply (the island's count); 409 when it is not that many"),
+    }),
     output: SwarmSchema,
     ai: { tier: "hidden", summary: "Harmony applies the kept changes of a propose-mode swarm (no model: each through its op)." },
     handler: async (ctx, input) => {
@@ -618,30 +621,43 @@ export const swarmApplyOp = defineOp({
         reviewable(row);
         if (input.spec_hash !== row.spec_hash) throw new OpError(409, "error.swarm.hash_mismatch", "swarm: the swarm changed since this page loaded");
         if (!swarmsOn(ctx.env)) throw new OpError(503, "error.swarm.off", "swarms cannot run on this server");
-        if (input.skip_clashes) {
-            // section 61.4: the one-tap apply leaves out what looks like a duplicate
-            const r = await ctx.db.prepare("UPDATE swarm_changes SET keep = 0 WHERE swarm = ?1 AND keep = 1 AND status <> 'done' AND clash IS NOT NULL").bind(row.id).run();
-            if ((r.meta?.changes ?? 0) > 0) await refresh(ctx.db, ctx.registry, row.id, specOf(row));
-        }
-        const kept = await ctx.db.prepare("SELECT COUNT(*) AS n FROM swarm_changes WHERE swarm = ?1 AND keep = 1 AND status <> 'done'").bind(row.id).first<{ n: number }>();
-        if ((kept?.n ?? 0) === 0) throw notAwaiting("no kept change is left to apply");
+        // every check first; nothing is unticked unless the apply starts (section 61.4)
+        const open = await ctx.db
+            .prepare("SELECT n, clash IS NOT NULL AS clash FROM swarm_changes WHERE swarm = ?1 AND keep = 1 AND status <> 'done'")
+            .bind(row.id)
+            .all<{ n: number; clash: number }>();
+        const clashing = input.skip_clashes ? open.results.filter((c) => c.clash).map((c) => c.n) : [];
+        const toApply = open.results.length - clashing.length;
+        if (input.count !== undefined && input.count !== toApply)
+            throw new OpError(409, "error.swarm.count_mismatch", `swarm: ${toApply} changes would be applied, not ${input.count}; look again`);
+        if (toApply === 0) throw notAwaiting("no kept change is left to apply");
         const running = await runningCounts(ctx.db, row.key_id);
         if (running.all >= RUNNING_ALL) throw new OpError(429, "error.swarm.busy", "swarm: other swarms are running; apply when one ends");
         const now = ctx.now();
-        const r = await ctx.db
-            .prepare("UPDATE swarms SET apply_status = 'applying', stop_requested = 0, updated_at = ?2 WHERE id = ?1 AND apply_status IN ('ready', 'failed', 'none', 'applied')")
-            .bind(row.id, now)
-            .run();
-        if ((r.meta?.changes ?? 0) === 0) throw notAwaiting("it is being applied already");
-        await ctx.db.prepare("UPDATE swarm_changes SET status = 'proposed', error = NULL WHERE swarm = ?1 AND keep = 1 AND status = 'failed'").bind(row.id).run();
+        // the transition and the untick in one batch: the untick only happens when this call started the apply
+        const started = "(SELECT apply_status = 'applying' AND updated_at = ?2 FROM swarms WHERE id = ?1)";
+        const [r] = await ctx.db.batch([
+            ctx.db
+                .prepare("UPDATE swarms SET apply_status = 'applying', stop_requested = 0, updated_at = ?2 WHERE id = ?1 AND apply_status IN ('ready', 'failed', 'none', 'applied')")
+                .bind(row.id, now),
+            ctx.db.prepare(`UPDATE swarm_changes SET keep = 0 WHERE swarm = ?1 AND n IN (SELECT value FROM json_each(?3)) AND ${started}`).bind(row.id, now, JSON.stringify(clashing)),
+            ctx.db.prepare(`UPDATE swarm_changes SET status = 'proposed', error = NULL WHERE swarm = ?1 AND keep = 1 AND status = 'failed' AND ${started}`).bind(row.id, now),
+        ]);
+        if ((r?.meta?.changes ?? 0) === 0) throw notAwaiting("it is being applied already");
+        if (clashing.length > 0) await refresh(ctx.db, ctx.registry, row.id, specOf(row));
         try {
             await port(ctx).wake(row.id);
         } catch (e) {
             console.error("[swarm] wake failed", String(e));
-            await setSwarm(ctx.db, row.id, { apply_status: "ready" }, now);
+            // the apply did not start: put back what it unticked
+            await ctx.db.batch([
+                ctx.db.prepare("UPDATE swarms SET apply_status = 'ready', updated_at = ?2 WHERE id = ?1").bind(row.id, now),
+                ctx.db.prepare("UPDATE swarm_changes SET keep = 1 WHERE swarm = ?1 AND n IN (SELECT value FROM json_each(?2))").bind(row.id, JSON.stringify(clashing)),
+            ]);
+            if (clashing.length > 0) await refresh(ctx.db, ctx.registry, row.id, specOf(row));
             throw new OpError(503, "error.swarm.off", "swarm: the runner did not start; try again");
         }
-        trackSwarm(ctx, "apply_started", row.id, { mode: row.mode, to_apply: kept?.n ?? 0, by: ctx.caller === "service" ? "web" : "app", skip_clashes: input.skip_clashes === true });
+        trackSwarm(ctx, "apply_started", row.id, { mode: row.mode, to_apply: toApply, by: ctx.caller === "service" ? "web" : "app", skip_clashes: input.skip_clashes === true });
         await swarmLive(ctx).push(row.id);
         return ok(await shape(ctx, row.id));
     },
@@ -725,7 +741,7 @@ export const swarmSendOp = defineOp({
             .bind(row.id, task)
             .first<{ n: number }>();
         const answers = (open?.n ?? 0) > 0;
-        await insertMessage(ctx.db, { swarm: row.id, task, dir: "down", kind: task !== null && answers ? "reply" : "note", sender, text: input.text, now });
+        await insertMessage(ctx.db, { swarm: row.id, task, dir: "down", kind: answers ? "reply" : "note", sender, text: input.text, now });
         await ctx.db.batch([
             ctx.db
                 .prepare("UPDATE swarm_messages SET answered_at = ?3 WHERE swarm = ?1 AND dir = 'up' AND kind = 'ask' AND answered_at IS NULL AND (?2 IS NULL OR task = ?2)")
@@ -855,6 +871,8 @@ export const BoardRowSchema = z
     })
     .meta({ id: "BoardRow" });
 
+type BoardTask = Pick<TaskRow, "idx" | "status" | "error" | "result" | "usd" | "started_at" | "ended_at" | "items"> & { stats: string | null; n_items: number };
+
 export const swarmBoardOp = defineOp({
     name: "swarm.board",
     route: { method: "GET", path: "/swarms/:id/board", params: Params },
@@ -892,7 +910,16 @@ export const swarmBoardOp = defineOp({
         const row = await mustSee(ctx, input.id);
         const spec = specOf(row);
         const [{ results: tasks }, changes, asks, swarm] = await Promise.all([
-            ctx.db.prepare("SELECT * FROM swarm_tasks WHERE swarm = ?1 ORDER BY idx").bind(row.id).all<TaskRow>(),
+            // only what the board reads: never the message history (state), and the items (which prefetch enlarges) only where a
+            // row names them or the answered count was not kept
+            ctx.db
+                .prepare(
+                    `SELECT idx, status, error, result, usd, started_at, ended_at, stats, json_array_length(items) AS n_items,
+                            CASE WHEN status IN ('failed', 'skipped') OR json_extract(stats, '$.answered') IS NULL THEN items ELSE '[]' END AS items
+                       FROM swarm_tasks WHERE swarm = ?1 ORDER BY idx`,
+                )
+                .bind(row.id)
+                .all<BoardTask>(),
             row.mode === "propose" ? ctx.db.prepare("SELECT * FROM swarm_changes WHERE swarm = ?1 ORDER BY task, n").bind(row.id).all<ChangeRow>() : Promise.resolve({ results: [] as ChangeRow[] }),
             asksByTask(ctx.db, row.id),
             shapeOf(ctx.db, ctx.registry, row, webOrigin(ctx)),
