@@ -26,9 +26,18 @@ extension AppModel {
     }
 
     /// What the device holds, without the hidden posts' copies: the lists of "on this device" read this and not `store.media`.
+    /// Memoized on its inputs (8.18): the save tab reads this in its body at every update, and filtering every media
+    /// against every hidden post (a set of session ids built per media) cost 0.4 to 0.9 s a frame there in 8.17 (120).
+    /// Unchanged inputs compare in O(1) (same array storage), so a read that changes nothing costs nothing.
     public var visibleStoredMedia: [StoredMedia] {
-        guard !hiddenIndex.isEmpty || !library.hiddenPosts.isEmpty else { return store.media }
-        return store.media.filter { !isHidden($0) }
+        let media = store.media, hiddenPosts = library.hiddenPosts, index = hiddenIndex
+        guard !index.isEmpty || !hiddenPosts.isEmpty else { return media }
+        if let memo = visibleMediaMemo, memo.media == media, memo.hiddenPosts == hiddenPosts, memo.index == index {
+            return memo.visible
+        }
+        let visible = media.filter { !isHidden($0) }
+        visibleMediaMemo = VisibleMediaMemo(media: media, hiddenPosts: hiddenPosts, index: index, visible: visible)
+        return visible
     }
 
     /// The device's copies of hidden posts: listed in the hidden album only.
@@ -36,4 +45,12 @@ extension AppModel {
         guard !hiddenIndex.isEmpty || !library.hiddenPosts.isEmpty else { return [] }
         return store.media.filter { isHidden($0) }
     }
+}
+
+/// `AppModel.visibleStoredMedia`'s last answer and what it was worked out from.
+struct VisibleMediaMemo {
+    var media: [StoredMedia]
+    var hiddenPosts: [LibraryPost]
+    var index: HiddenIndex
+    var visible: [StoredMedia]
 }

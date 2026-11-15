@@ -54,8 +54,7 @@ public enum EngineClock {
 
     /// Hands what was tallied so far to `flush` now (the app going to the background), however long it has been.
     public static func drain() {
-        let now = DispatchTime.now().uptimeNanoseconds
-        let values = tallies.withLock { $0.drain(now: now) }
+        let values = tallies.withLock { $0.drain(now: DispatchTime.now().uptimeNanoseconds) }
         if let values { flush?(values) }
     }
 
@@ -70,10 +69,12 @@ public enum EngineClock {
     private static let flushSlot = Mutex<(@Sendable ([String: TelemetryValue]) -> Void)?>(nil)
 
     static func record(_ name: StaticString, nanos: UInt64, main: Bool) {
-        let now = DispatchTime.now().uptimeNanoseconds
         let due = tallies.withLock { window -> [String: TelemetryValue]? in
             window.add(name, ms: Double(nanos) / 1_000_000, main: main)
-            return now &- window.startedAt >= windowNanos ? window.drain(now: now) : nil
+            // read the clock under the lock: a `now` read before it can be older than a window another thread just
+            // started, and the wrapped difference sent a window at once with window_s 18446744074 (8.17 (120))
+            let now = DispatchTime.now().uptimeNanoseconds
+            return window.isDue(now: now, after: windowNanos) ? window.drain(now: now) : nil
         }
         // outside the lock: the app's closure may take its own locks or allocate
         if let due { flush?(due) }
@@ -123,11 +124,16 @@ struct EngineTallies: Sendable {
         byAddress[key] = tally
     }
 
+    /// Whether the window has run `windowNanos` by `now`; a `now` older than the window's start is not due.
+    func isDue(now: UInt64, after windowNanos: UInt64) -> Bool {
+        now > startedAt && now - startedAt >= windowNanos
+    }
+
     /// The window as flat values, and a fresh window from `now`. `nil` when nothing ran (no empty events).
     mutating func drain(now: UInt64) -> [String: TelemetryValue]? {
         defer {
             byAddress.removeAll(keepingCapacity: true)
-            startedAt = now
+            startedAt = max(startedAt, now)
         }
         guard !byAddress.isEmpty else { return nil }
         // the same text at two addresses (two modules) is one name
@@ -147,7 +153,7 @@ struct EngineTallies: Sendable {
             }
         }
         var values: [String: TelemetryValue] = [
-            "window_s": .int(Int((Double(now &- startedAt) / 1_000_000_000).rounded())),
+            "window_s": .int(Int((Double(now > startedAt ? now - startedAt : 0) / 1_000_000_000).rounded())),
             "ops": .int(merged.count),
         ]
         for (name, t) in merged {

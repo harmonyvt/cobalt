@@ -50,8 +50,24 @@ enum LibraryRowsBuilder {
     /// detached task is the thread it runs on.
     static func buildOffMain(_ inputs: LibraryRowsInputs, against previous: LibraryRowsSnapshot) -> (LibraryRowsSnapshot, Bool) {
         MainThreadGuard.assertOffMain()
-        let built = EngineClock.measure("library.rows") { build(inputs) }
+        let built = EngineClock.measure("library.rows") { interned(build(inputs), against: previous) }
         return (built, built != previous)
+    }
+
+    /// `built` with every row that equals the previous snapshot's row of the same id replaced by that previous row, so
+    /// an unchanged row shares its storage (title, files, renditions) with the one on screen. The views that hold
+    /// `[LibraryRow]` are compared by SwiftUI on the main thread at every update: a shared row compares in O(1) (array
+    /// and string storage identity) instead of field by field through every file and rendition, which cost a 5.5 s
+    /// frame on opening a video in 8.17 (120). The deep compare runs here, off the main thread, once per build.
+    static func interned(_ built: LibraryRowsSnapshot, against previous: LibraryRowsSnapshot) -> LibraryRowsSnapshot {
+        guard !previous.rows.isEmpty, !built.rows.isEmpty else { return built }
+        if built.rows == previous.rows { return LibraryRowsSnapshot(rows: previous.rows, kindCounts: built.kindCounts) }
+        let old = Dictionary(previous.rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let rows = built.rows.map { row in
+            if let kept = old[row.id], kept == row { return kept }
+            return row
+        }
+        return LibraryRowsSnapshot(rows: rows, kindCounts: built.kindCounts)
     }
 
     private static func rows(_ inputs: LibraryRowsInputs, join: LibraryMediaJoin) -> [LibraryRow] {

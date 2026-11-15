@@ -45,6 +45,19 @@ struct EngineClockTests {
         #expect(values["window_s"] == .int(30))
     }
 
+    // 8.17 (120) sent a window at once with window_s 18446744074: a clock read older than the window's start wrapped.
+    @Test func aClockReadOlderThanTheWindowIsNotDue() throws {
+        var t = EngineTallies(startedAt: 100 * second)
+        #expect(!t.isDue(now: 50 * second, after: 60 * second))
+        #expect(!t.isDue(now: 159 * second, after: 60 * second))
+        #expect(t.isDue(now: 160 * second, after: 60 * second))
+        t.add("a.op", ms: 1, main: false)
+        let drained = t.drain(now: 50 * second)
+        let values = try #require(drained)
+        #expect(values["window_s"] == .int(0))
+        #expect(t.startedAt == 100 * second)                            // the window never moves back
+    }
+
     @Test func namesPastTheCapFoldIntoOther() throws {
         var t = EngineTallies(startedAt: 0)
         // distinct literals are distinct addresses; the cap counts addresses

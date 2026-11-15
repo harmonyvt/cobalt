@@ -114,6 +114,38 @@ struct LibraryRowsBuilderTests {
         #expect(built.rows == referenceRows(app))
         #expect(built.rows.first { $0.id == first.id }?.item.localTitle == "my own name")
     }
+
+    // 8.18: a 5.5 s frame on opening a video (8.17 (120)) was SwiftUI comparing a fresh build's rows field by field.
+    @Test func anUnchangedBuildKeepsThePreviousRowsStorage() {
+        let app = AppModel.makePreview(.renditions, timeScale: 1, clock: SystemClock())
+        let previous = LibraryRowsBuilder.build(app.libraryRowsInputs)
+        let interned = LibraryRowsBuilder.interned(LibraryRowsBuilder.build(app.libraryRowsInputs), against: previous)
+        #expect(interned == previous)
+        let same = interned.rows.withUnsafeBufferPointer { a in previous.rows.withUnsafeBufferPointer { b in a.baseAddress == b.baseAddress } }
+        #expect(same)
+    }
+
+    @Test func aChangedRowIsTakenAndTheOthersAreKept() throws {
+        let app = AppModel.makePreview(.renditions, timeScale: 1, clock: SystemClock())
+        let previous = LibraryRowsBuilder.build(app.libraryRowsInputs)
+        let first = try #require(previous.rows.first)
+        app.library.localTitles[first.item.id] = "my own name"
+        let built = LibraryRowsBuilder.build(app.libraryRowsInputs)
+        let interned = LibraryRowsBuilder.interned(built, against: previous)
+        #expect(interned == built)
+        #expect(interned.rows.first { $0.id == first.id }?.item.localTitle == "my own name")
+    }
+
+    @Test func warmingStartsTheEngineOffTheMainThread() async throws {
+        let app = offMainApp()
+        app.warmLibraryRows()
+        #expect(app.libraryRowsEngine.started)
+        try await waitForPublishes(app, atLeast: 1)
+        #expect(app.libraryRows == LibraryRowsBuilder.build(app.libraryRowsInputs).rows)
+        let generation = app.libraryRowsEngine.generation
+        app.warmLibraryRows()                                          // a second call starts nothing
+        #expect(app.libraryRowsEngine.generation == generation)
+    }
 }
 
 @MainActor

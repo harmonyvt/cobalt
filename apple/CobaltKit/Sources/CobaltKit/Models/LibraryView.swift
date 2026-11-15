@@ -295,6 +295,17 @@ extension AppModel {
         return libraryRowsSnapshot
     }
 
+    /// Starts the rows engine before anything shows the library (8.18): the first build runs off the main thread, so the
+    /// library's first read finds a finished snapshot instead of building one on the main thread (0.77 s in 8.17 (120)
+    /// on a hot phone). Later changes are watched as usual. Does nothing in previews and tests (they build inline) or
+    /// once the engine has started. Called at launch before the library loads: each load that follows is built off the
+    /// main thread as it lands.
+    public func warmLibraryRows() {
+        guard !libraryRowsInline, !libraryRowsEngine.started else { return }
+        libraryRowsEngine.started = true
+        scheduleLibraryRows(watchLibraryRowInputs())
+    }
+
     /// Reads the inputs under observation and arms a one-shot watch on them; returns what it read.
     @discardableResult
     private func watchLibraryRowInputs() -> LibraryRowsInputs {

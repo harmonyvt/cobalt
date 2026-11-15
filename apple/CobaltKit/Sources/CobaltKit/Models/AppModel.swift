@@ -175,6 +175,8 @@ public final class AppModel {
     var libraryRowsSnapshot = LibraryRowsSnapshot.empty
     /// The rows engine's bookkeeping: what was built, the build in flight, its generation.
     @ObservationIgnored var libraryRowsEngine = LibraryRowsEngine()
+    /// `visibleStoredMedia`'s memo (not observed: the inputs it reads are).
+    @ObservationIgnored var visibleMediaMemo: VisibleMediaMemo?
     /// Live Activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
     @ObservationIgnored var liveManager: LiveActivityManager?
     /// The editor's render activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).

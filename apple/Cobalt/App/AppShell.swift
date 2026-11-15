@@ -196,6 +196,7 @@ struct AppShell: View {
                 #else
                 FrameMonitor.install()
                 #endif
+                model.warmLibraryRows()                      // the library's rows are built off the main thread from the start
                 await model.foreground()
             }
             .onChange(of: scenePhase) { _, phase in
@@ -465,7 +466,7 @@ struct AppShell: View {
 
     private func makeActions() -> ShellActions {
         ShellActions(
-            paste: { handle(Pasteboard.contents(), via: .circle, dropped: false) },
+            paste: { Task { handle(await Pasteboard.contentsOffMain(), via: .circle, dropped: false) } },
             chooseFile: { showImporter = true },
             choosePhotos: { showPhotos = true },
             trimNewWebp: { post in
@@ -534,7 +535,7 @@ struct AppShell: View {
         #if os(iOS)
         VStack {
             if #unavailable(iOS 27.0) {
-                Button(Copy.pasteA11y, systemImage: Symbol.paste) { handle(Pasteboard.contents(), via: .paste, dropped: false) }
+                Button(Copy.pasteA11y, systemImage: Symbol.paste) { Task { handle(await Pasteboard.contentsOffMain(), via: .paste, dropped: false) } }
                     .keyboardShortcut("v", modifiers: .command)
             }
             Button(Copy.trimNewWebp, systemImage: Symbol.trim) { trimSelected(model) }.keyboardShortcut("t", modifiers: .command)
