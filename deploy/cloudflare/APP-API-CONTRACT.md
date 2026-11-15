@@ -7077,3 +7077,55 @@ Money reads as cents under $1 ("21¢") and dollars above. Dismissal as 8.12 (don
 expired end at once. The approve and apply buttons are App Intents that ask for Face ID / Touch ID first and call
 `/approve` (`spec_hash`) and `/apply` (`spec_hash`, `skip_clashes: true`) with the device's session; stop and decline call
 `/stop` and `/decline`; check and open open the app.
+
+## 62. Swarm results board, pictures for agents, and steadier 7TV reads (addendum, 2026-11-15; owner, after the first live swarm "nyaphelia Christmas variants" (419 emotes, 21 agents, read mode): "they need like a combined place to put their results, like a board ... along with how well they did, the result, the outcome", "I don't know what emote they're actually showing. They're just showing me a name", "the MCP tools should be the same for the swarm agents ... they should be able to see the images ... the picture of the emote through the 7TV CDN. And also our capystore videos, images". No migration beyond 0044.)
+
+What went wrong in that run: 7TV answered "rate limited" to about a third of the searches and the agents passed the
+error on as "search failed"; one agent crashed and its 20 emotes vanished from the results; every match was made by name,
+because no agent could look at an emote's picture; and the results were names only.
+
+### 62.1 Agents can see pictures
+
+`look` (33) also takes `emote` (a 7TV emote id) or `url` (an image on `cdn.7tv.app` or `media.capybaraharmony.com`, or a
+`7tv.app/emotes/<id>` link): it fetches the 2x webp (the first frame of an animated one) and shows it to the model the
+same way it shows a post's picture, with `{ id, name?, animated?, preview_url }` as text. Same for the chat, the MCP
+(`look` tool) and swarm agents (`look` is already a swarm read call). `emotes.find`, `seventv.set` and `seventv.emote`
+answers keep their `preview_url`, and the swarm cheat sheet tells agents to put `preview_url` (or the emote id) next to
+every emote they name in an answer.
+
+### 62.2 Steadier 7TV reads in a swarm
+
+A 7TV read that answers `rate_limited`, `busy` or a 5xx inside a swarm is tried again after 2, 8 and 30 s before the
+agent sees an error, and the swarm's 7TV limiter widens its gap (×2, up to 2 s, back to 200 ms after a minute without
+one). The step log says "7tv busy, waited <s> s". Waiting counts toward the task's time, not its turns.
+
+### 62.3 Every agent's outcome, kept
+
+`SwarmResult` (59.5) gains `items` (the agent's batch, always, even when it failed or was skipped) and `outcome`:
+`{ status, items, tool_calls, tool_errors, asks, turns, usd, ms }` (`tool_errors` counts calls that ended in an error
+after the retries of 62.2). A task that crashes keeps its items and gets `error` = the reason.
+
+### 62.4 The board
+
+`swarm.board` (MCP tool `swarm_board`, an app tool with a widget) and `GET /swarms/<id>/board?q&agent&status&offset&limit`
+(limit ≤ 200, key_or_service):
+
+```ts
+{ swarm: Swarm, total, offset,
+  agents: { agent, status, outcome, error }[],                 // every agent, for the strip
+  rows: { agent, n, title, fields: Record<string, string | number | boolean | null>, images: string[], links: string[] }[] }
+```
+
+Rows: when an agent's answer is an array (or an object holding one array under `results`, `matches`, `items`, `rows` or
+`emotes`), one row per entry; otherwise one row per agent. `title` is the first of `name`, `title`, `alias`, `emote`,
+`original` that is text; `fields` are the entry's other plain values (at most 12, nested values as short JSON);
+`images` are the entry's picture URLs: any value on `cdn.7tv.app` or `media.capybaraharmony.com` that ends in an image
+type, a `7tv.app/emotes/<id>` link (made into `https://cdn.7tv.app/emote/<id>/2x.webp`), and a 26-character 7TV id in a
+field whose name contains `emote` or ends in `_id` when the swarm used 7TV (same CDN form); at most 4 a row. `links` are
+other http(s) values. `q` matches any text of a row (case-insensitive); `agent` and `status` filter by agent. Read only;
+nothing is fetched from 7TV to build it.
+
+Where it shows: the MCP widget (a grid of picture cards with the title and fields, the agent strip with each agent's
+outcome as a coloured cell, a search box, more on scroll), the web page `/swarms/<id>` (a "results" section under the
+batches, same layout), and the apps (`apple/CONTRACT-SWARMS.md` 6). A failed agent shows as a row "agent 12 failed: <reason>"
+with its items listed, so nothing goes missing.
