@@ -369,8 +369,9 @@ public protocol CobaltClient: Sendable {
     func retrySwarm(id: String) async throws -> Swarm
     /// `POST /swarms/<id>/changes` `{changes: [{n, keep?, after?}]}` (1...500): the swarm and the changes named.
     func decideSwarm(id: String, changes: [SwarmDecision]) async throws -> SwarmDecided
-    /// `POST /swarms/<id>/apply` `{spec_hash, skip_clashes?}`.
-    func applySwarm(id: String, hash: String, skipClashes: Bool) async throws -> Swarm
+    /// `POST /swarms/<id>/apply` `{spec_hash, skip_clashes?, count?}`. `count` is how many changes the caller expects to apply
+    /// (the number its button shows); a different number is `409 error.swarm.count_mismatch`. nil is not sent.
+    func applySwarm(id: String, hash: String, skipClashes: Bool, count: Int?) async throws -> Swarm
     /// `POST /swarms/<id>/messages` `{to, text}`.
     func sendSwarm(id: String, to: SwarmRecipient, text: String) async throws -> SwarmSent
     /// `GET /swarms/<id>/board?q&agent&status&group&sort&offset&limit` (62.4; limit at most 200): one page of the results
@@ -556,7 +557,7 @@ extension CobaltClient {
     public func stopSwarm(id: String) async throws -> Swarm { throw PipelineFailure.unsupported }
     public func retrySwarm(id: String) async throws -> Swarm { throw PipelineFailure.unsupported }
     public func decideSwarm(id: String, changes: [SwarmDecision]) async throws -> SwarmDecided { throw PipelineFailure.unsupported }
-    public func applySwarm(id: String, hash: String, skipClashes: Bool) async throws -> Swarm { throw PipelineFailure.unsupported }
+    public func applySwarm(id: String, hash: String, skipClashes: Bool, count: Int?) async throws -> Swarm { throw PipelineFailure.unsupported }
     public func sendSwarm(id: String, to: SwarmRecipient, text: String) async throws -> SwarmSent { throw PipelineFailure.unsupported }
     public func swarmBoard(
         id: String, query: String?, agent: Int?, status: String?, group: String?, sort: BoardSort, offset: Int, limit: Int

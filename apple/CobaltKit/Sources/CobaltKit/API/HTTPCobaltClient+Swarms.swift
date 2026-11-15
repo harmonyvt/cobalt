@@ -71,11 +71,18 @@ extension HTTPCobaltClient {
         return try swarmAnswer(SwarmDecided.self, data, http)
     }
 
-    /// `POST /swarms/<id>/apply` `{spec_hash, skip_clashes?}` (keyed). `skip_clashes` is sent only when true.
-    public func applySwarm(id: String, hash: String, skipClashes: Bool) async throws -> Swarm {
+    /// `POST /swarms/<id>/apply` `{spec_hash, skip_clashes?, count?}` (keyed). `skip_clashes` is sent only when true, `count`
+    /// only when given.
+    public func applySwarm(id: String, hash: String, skipClashes: Bool, count: Int?) async throws -> Swarm {
+        try await swarmPost(id, "apply", body: Self.applyBody(hash: hash, skipClashes: skipClashes, count: count))
+    }
+
+    /// The apply request's JSON object (split out so a test can read exactly what is sent).
+    static func applyBody(hash: String, skipClashes: Bool, count: Int?) -> [String: Any] {
         var body: [String: Any] = ["spec_hash": hash]
         if skipClashes { body["skip_clashes"] = true }
-        return try await swarmPost(id, "apply", body: body)
+        if let count { body["count"] = max(0, count) }
+        return body
     }
 
     /// `POST /swarms/<id>/messages` `{to, text}` (keyed): `to` is an agent number or "all".

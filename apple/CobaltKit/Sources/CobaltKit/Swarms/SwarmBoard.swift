@@ -57,7 +57,7 @@ public struct MediaRef: Codable, Hashable, Sendable {
 }
 
 /// How one agent did (62.3 `outcome`). `score` is 0...1: answered / items × (1 − tool_errors / max(tool_calls, 1)); 0 for a
-/// failed agent.
+/// failed agent, null while it has not ended.
 public struct SwarmOutcome: Codable, Hashable, Sendable {
     public var status: SwarmCell.Status
     public var items: Int
@@ -69,12 +69,14 @@ public struct SwarmOutcome: Codable, Hashable, Sendable {
     public var asks: Int
     public var turns: Int
     public var usd: Double
-    public var ms: Int
-    public var score: Double
+    /// How long it ran; null from the server until it has both started and ended.
+    public var ms: Int?
+    /// 0...1; null from the server while the agent has not ended (a parked or running agent has none yet, which is not 0).
+    public var score: Double?
 
     public init(
         status: SwarmCell.Status = .done, items: Int = 0, answered: Int = 0, toolCalls: Int = 0, toolErrors: Int = 0, asks: Int = 0,
-        turns: Int = 0, usd: Double = 0, ms: Int = 0, score: Double = 0
+        turns: Int = 0, usd: Double = 0, ms: Int? = nil, score: Double? = nil
     ) {
         self.status = status
         self.items = items
@@ -102,8 +104,8 @@ public struct SwarmOutcome: Codable, Hashable, Sendable {
         asks = c.swarmValue(.asks, 0)
         turns = c.swarmValue(.turns, 0)
         usd = c.swarmValue(.usd, 0)
-        ms = c.swarmValue(.ms, 0)
-        score = c.swarmValue(.score, 0)
+        ms = c.swarmOptional(.ms)
+        score = c.swarmOptional(.score)
     }
 }
 

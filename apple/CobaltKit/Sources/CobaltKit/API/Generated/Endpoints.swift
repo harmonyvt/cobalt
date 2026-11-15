@@ -1460,7 +1460,7 @@ struct WireSwarmBoardResponseAgentsItem: Decodable, Sendable {
     var error: String?
 }
 
-struct MediaRef: Decodable, Sendable {
+struct WireMediaRef: Decodable, Sendable {
     var ref: String
     var kind: String
     var previewUrl: String?
@@ -1469,7 +1469,7 @@ struct MediaRef: Decodable, Sendable {
     var animated: Bool?
 }
 
-struct BoardRow: Decodable, Sendable {
+struct WireBoardRow: Decodable, Sendable {
     var agent: Double
     /// the row's number within its agent, from 1
     var n: Double
@@ -1477,7 +1477,7 @@ struct BoardRow: Decodable, Sendable {
     var score: Double?
     var group: String?
     /// resolved, at most 4
-    var media: [MediaRef]
+    var media: [WireMediaRef]
     var links: [String]
 }
 
@@ -1488,7 +1488,7 @@ struct WireSwarmBoardResponse: Decodable, Sendable {
     var groups: [WireSwarmBoardResponseGroupsItem]
     /// every agent, for the strip
     var agents: [WireSwarmBoardResponseAgentsItem]
-    var rows: [BoardRow]
+    var rows: [WireBoardRow]
 }
 
 struct ShareCollectionsListResponse: Decodable, Sendable {

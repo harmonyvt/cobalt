@@ -284,6 +284,39 @@ struct SwarmGateTests {
         rig.store.hide()
     }
 
+    @Test func applySendsTheNumberTheButtonShows() async throws {
+        let rig = SwarmRig(.review)
+        await rig.showStory()
+        #expect(rig.store.applyCount == 338)
+        try await rig.store.apply(skipClashes: true)
+        #expect(rig.calls.last { $0.contains("POST apply") } == "POST apply \(SwarmRig.story) count=338 skip")
+        rig.store.hide()
+    }
+
+    @Test func aCountThatMovedOnReloadsAndTellsTheOwner() async throws {
+        let rig = SwarmRig(.review)
+        await rig.showStory()
+        #expect(rig.store.applyCount == 338)
+        let changesReads = rig.calls(containing: "GET changes")
+        // changed behind the screen's back (another device unticks one): the server would now apply 337
+        _ = try await rig.client.decideSwarm(id: SwarmRig.story, changes: [SwarmDecision(n: 1, keep: false)])
+        await #expect(throws: SwarmError.countMismatch) { try await rig.store.apply(skipClashes: true) }
+        #expect(rig.calls.contains { $0.contains("POST apply") && $0.contains("count=338") }, "the shown number was sent")
+        #expect(rig.client.swarmState.swarms.first { $0.id == SwarmRig.story }?.apply.status == .ready, "nothing started")
+        // the swarm and every change were read again: the button shows the new number
+        #expect(rig.calls(containing: "GET changes") > changesReads)
+        #expect(rig.store.applyCount == 337)
+        #expect(rig.store.changes.first { $0.n == 1 }?.keep == false)
+        // the error reaches the screen's controller (its problem line) in words
+        #expect(SwarmError.countMismatch.words == "the number of changes moved on: look again")
+        #expect(SwarmError.from(CobaltError.api(code: "error.swarm.count_mismatch", httpStatus: 409)) == .countMismatch)
+        // and now the same tap goes through with the new number
+        try await rig.store.apply(skipClashes: true)
+        #expect(rig.calls.last { $0.contains("POST apply") } == "POST apply \(SwarmRig.story) count=337 skip")
+        #expect(rig.store.shown?.apply.status == .applying)
+        rig.store.hide()
+    }
+
     @Test func applyAsksTheOwnerFirstAndSendsNothingOnNo() async throws {
         let rig = SwarmRig(.review)
         await rig.showStory()
@@ -354,6 +387,20 @@ struct SwarmGateTests {
         #expect(rig.calls.contains { $0.contains("POST apply") && $0.hasSuffix("skip") })
     }
 
+    @Test func theRunnerSendsTheCountItWasGiven() async throws {
+        let rig = SwarmRig(.review)
+        let hash = try #require(rig.client.swarmState.swarms.first { $0.id == SwarmRig.story }?.specHash)
+        // a number that is not what the server would apply: refused, nothing starts
+        await #expect(throws: SwarmError.countMismatch) {
+            try await SwarmActionRunner.run(.apply, swarm: SwarmRig.story, hash: hash, count: 342, client: rig.client)
+        }
+        #expect(rig.calls.contains { $0.contains("POST apply") && $0.contains("count=342") })
+        #expect(rig.client.swarmState.swarms.first { $0.id == SwarmRig.story }?.apply.status == .ready)
+        let applying = try await SwarmActionRunner.run(.apply, swarm: SwarmRig.story, hash: hash, count: 338, client: rig.client)
+        #expect(applying.apply.status == .applying && applying.apply.total == 338)
+        #expect(rig.calls.last { $0.contains("POST apply") }?.contains("count=338 skip") == true)
+    }
+
     @Test func aNoPasscodeDeviceHasNothingToProve() {
         // `LocalOwnerCheck` is a value type with no state: a fresh context per call
         let a = LocalOwnerCheck()
@@ -361,7 +408,7 @@ struct SwarmGateTests {
     }
 
     @Test func everyRefusalHasWordsAndAWireCode() {
-        for code in ["not_found", "not_awaiting", "hash_mismatch", "expired", "owner_only", "busy", "daily_cap", "over_cap", "not_running", "not_ready", "off", "bad_spec"] {
+        for code in ["not_found", "not_awaiting", "hash_mismatch", "expired", "owner_only", "busy", "daily_cap", "over_cap", "count_mismatch", "not_running", "not_ready", "off", "bad_spec"] {
             let e = SwarmError(code: "error.swarm.\(code)")
             #expect(e != nil && !(e?.words.isEmpty ?? true), "\(code)")
         }
@@ -701,153 +748,30 @@ struct SwarmAgentTests {
 private let T = 1_790_000_000.0
 private let now = Date(timeIntervalSince1970: T)
 
-private func cells(_ letters: String) -> [SwarmCell] {
-    letters.enumerated().map { SwarmCell(idx: $0.offset, status: SwarmCell.Status(letter: $0.element) ?? .queued) }
+/// The swarm cases of the server's fixture (deploy/cloudflare/api/test/fixtures/job-live-states.json; the one fixture both sides
+/// pin), decoded, by name.
+private func serverStates() throws -> [String: JobLiveState] {
+    var out: [String: JobLiveState] = [:]
+    for c in try fixtureCases() where c.name.hasPrefix("swarm_") { out[c.name] = try decodeState(c.state) }
+    return out
 }
 
-private func tasks(_ letters: String, waiting: Int = 0) -> Swarm.Tasks {
-    let c = cells(letters)
-    func n(_ s: SwarmCell.Status) -> Int { c.filter { $0.status == s }.count }
-    return Swarm.Tasks(total: c.count, queued: n(.queued), running: n(.running), done: n(.done), failed: n(.failed), waiting: waiting, cells: c)
-}
-
-/// The swarms of the fixture's cases (apple/CobaltKit/Tests/CobaltKitTests/Fixtures/job-live-swarm-states.json), by name.
-private func liveSwarm(_ name: String) -> Swarm {
-    var s = Swarm(
-        id: "PrEvIeWswarm0001", name: "rename 1,000 emotes", mode: .propose, status: .done, specHash: "PrEvIeWhash0001",
-        tasks: tasks(String(repeating: "d", count: 20)), capUSD: 1, spentUSD: 0.44, createdAt: now.addingTimeInterval(-600),
-        approvedAt: now.addingTimeInterval(-192), finishedAt: now.addingTimeInterval(-180), planner: "claude code")
-    switch name {
-    case "swarm_awaiting":
-        s.status = .awaitingApproval
-        s.tasks = tasks(String(repeating: "q", count: 20))
-        s.estimateUSD = .init(low: 0.3, high: 0.5)
-        s.expiresAt = now.addingTimeInterval(52 * 60)
-        s.approvedAt = nil
-        s.finishedAt = nil
-        s.spentUSD = 0
-    case "swarm_running_asking":
-        s.status = .running
-        s.tasks = tasks("ddwdddfdddddrrrddqqq", waiting: 1)
-        s.spentUSD = 0.21
-        s.finishedAt = nil
-    case "swarm_running_changes":
-        s.status = .running
-        s.tasks = tasks("dddddddfdddddrrrqqqq")
-        s.changes = .init(total: 214, kept: 214)
-        s.spentUSD = 0.21
-        s.finishedAt = nil
-    case "swarm_ready":
-        s.changes = .init(total: 342, kept: 342)
-        s.apply = .init(status: .ready, total: 342)
-        s.clashCount = 4
-    case "swarm_applying":
-        s.changes = .init(total: 342, kept: 338, done: 120)
-        s.apply = .init(status: .applying, done: 120, total: 338)
-    case "swarm_applied":
-        s.changes = .init(total: 342, kept: 338, done: 336, failed: 2)
-        s.apply = .init(status: .failed, done: 336, failed: 2, total: 338)
-    case "swarm_done_read":
-        s.mode = .read
-        s.reduce = "tagged 971 clips; 29 had no clear game."
-    case "swarm_declined":
-        s.status = .declined
-        s.tasks = tasks(String(repeating: "q", count: 20))
-        s.finishedAt = now.addingTimeInterval(-300)
-        s.approvedAt = nil
-        s.spentUSD = 0
-    case "swarm_stopped_cap":
-        s.status = .stopped
-        s.error = "error.swarm.over_cap"
-        s.tasks = tasks("dddddddd" + String(repeating: "s", count: 12))
-        s.spentUSD = 1
-        s.finishedAt = now.addingTimeInterval(-100)
-    case "swarm_expired":
-        s.status = .expired
-        s.tasks = tasks(String(repeating: "q", count: 20))
-        s.finishedAt = now.addingTimeInterval(-60)
-        s.approvedAt = nil
-        s.spentUSD = 0
-    default:
-        break
-    }
-    return s
-}
-
-private let swarmCaseNames = [
-    "swarm_awaiting", "swarm_running_asking", "swarm_running_changes", "swarm_ready", "swarm_applying", "swarm_applied", "swarm_done_read",
-    "swarm_declined", "swarm_stopped_cap", "swarm_expired",
-]
-
-/// The app's own fixture of swarm states: the server's `job-live-states.json` gets the same shapes from its builders (that
-/// fixture is made on the server's branch), this one pins what the app reads and writes.
-private func swarmFixtureText() throws -> String {
-    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/job-live-swarm-states.json")
-    return try String(contentsOf: url, encoding: .utf8)
-}
-
-/// Whitespace outside strings removed, like `JSON.stringify` without an indent.
-private func compactJSON(_ json: String) -> String {
-    var out = String.UnicodeScalarView()
-    var inString = false
-    var escaped = false
-    for u in json.unicodeScalars {
-        if inString {
-            out.append(u)
-            if escaped { escaped = false } else if u == "\\" { escaped = true } else if u == "\"" { inString = false }
-        } else if u == "\"" {
-            inString = true
-            out.append(u)
-        } else if u != " " && u != "\n" && u != "\r" && u != "\t" {
-            out.append(u)
-        }
-    }
-    return String(out)
-}
-
-/// The text of `state` and `attributes` of each case, in file order.
-private func swarmFixtureCases() throws -> [(name: String, attributes: String, state: String)] {
-    let text = compactJSON(try swarmFixtureText())
-    let data = try #require(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
-    // key order is the file's: find each case name's position in the text
-    let names = data.keys.sorted { (text.range(of: "\"\($0)\":")?.lowerBound ?? text.endIndex) < (text.range(of: "\"\($1)\":")?.lowerBound ?? text.endIndex) }
-    return try names.map { name in
-        let start = try #require(text.range(of: "\"\(name)\":{\"attributes\":"))
-        let rest = text[start.upperBound...]
-        let stateMark = try #require(rest.range(of: ",\"state\":"))
-        let attributes = String(rest[..<stateMark.lowerBound])
-        var depth = 0
-        var end = stateMark.upperBound
-        var inString = false
-        var escaped = false
-        scan: for i in rest[stateMark.upperBound...].indices {
-            let c = rest[i]
-            if inString {
-                if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == "\"" { inString = false }
-                continue
-            }
-            switch c {
-            case "\"": inString = true
-            case "{", "[": depth += 1
-            case "}", "]":
-                depth -= 1
-                if depth == 0 { end = rest.index(after: i); break scan }
-            default: break
-            }
-        }
-        return (name, attributes, String(rest[stateMark.upperBound..<end]))
-    }
+/// What the local builder makes for a server case, from the `Swarm` answer that stands for it.
+private func built(_ name: String) -> JobLiveState {
+    let c = serverSwarmCase(name)
+    return JobLiveState(swarm: swarmAnswer(for: c.input), now: Date(timeIntervalSince1970: c.nowMs / 1000))
 }
 
 struct SwarmLiveTests {
     @Test func theFixtureHasEveryCase() throws {
-        #expect(try swarmFixtureCases().map(\.name) == swarmCaseNames)
+        #expect(try fixtureCases().map(\.name).filter { $0.hasPrefix("swarm_") } == serverSwarmCaseNames)
+        #expect(try serverStates().count == 11)
     }
 
     @Test func everyCaseRoundTripsByteForByte() throws {
-        for c in try swarmFixtureCases() {
-            let state = try JSONDecoder().decode(JobLiveState.self, from: Data(c.state.utf8))
-            let attributes = try JSONDecoder().decode(JobLiveAttributes.self, from: Data(c.attributes.utf8))
+        for c in try fixtureCases() where c.name.hasPrefix("swarm_") {
+            let state = try decodeState(c.state)
+            let attributes = try decodeAttributes(c.attributes)
             #expect(Array(state.canonicalJSON().utf8) == Array(c.state.utf8), "state of \(c.name)")
             #expect(Array(attributes.canonicalJSON().utf8) == Array(c.attributes.utf8), "attributes of \(c.name)")
             #expect(attributes.kind == "swarm" && attributes.agent && attributes.open?.hasPrefix("cobalt-apple://swarm/") == true)
@@ -860,62 +784,103 @@ struct SwarmLiveTests {
     }
 
     @Test func theLocalBuilderMakesTheFixturesStates() throws {
-        for c in try swarmFixtureCases() {
-            let want = try JSONDecoder().decode(JobLiveState.self, from: Data(c.state.utf8))
-            let got = JobLiveState(swarm: liveSwarm(c.name), now: now)
-            #expect(got.canonicalJSON() == c.state, "\(c.name): \(got.canonicalJSON())")
-            #expect(got == want, "\(c.name)")
+        let want = try serverStates()
+        for c in serverSwarmCases {
+            let got = built(c.name)
+            #expect(got == want[c.name], "\(c.name): \(got.canonicalJSON())")
+            #expect(got.canonicalJSON() == (try fixtureCase(c.name)).state, "\(c.name)")
         }
     }
 
-    @Test func buttonsPerState() {
-        func actions(_ name: String) -> [SwarmLiveAction] { JobLiveState(swarm: liveSwarm(name), now: now).swarmActions }
-        #expect(actions("swarm_awaiting") == [.approve, .decline])
-        #expect(actions("swarm_running_asking") == [.stop])
-        #expect(actions("swarm_running_changes") == [.stop])
-        #expect(actions("swarm_ready") == [.check, .apply])
-        #expect(actions("swarm_applying") == [])
-        #expect(actions("swarm_applied") == [.open])
-        #expect(actions("swarm_done_read") == [.open])
-        #expect(actions("swarm_declined") == [.open])
-        #expect(actions("swarm_stopped_cap") == [.open])
-        #expect(actions("swarm_expired") == [.open])
+    @Test func buttonsPerState() throws {
+        let want: [(String, [SwarmLiveAction])] = [
+            ("swarm_awaiting", [.approve, .decline]), ("swarm_running", [.stop]), ("swarm_running_read", [.stop]),
+            ("swarm_stopping", []), ("swarm_ready", [.check, .apply]), ("swarm_applying", []), ("swarm_applied", [.open]),
+            ("swarm_done_read", [.open]), ("swarm_capped", [.open]), ("swarm_declined", [.open]), ("swarm_expired", [.open]),
+        ]
+        let fixture = try serverStates()
+        for (name, actions) in want {
+            #expect(built(name).swarmActions == actions, "\(name)")
+            #expect(try #require(fixture[name]).swarmActions == actions, "the server's \(name)")
+        }
     }
 
-    @Test func theApplyCountIsKeptMinusClashesAndTheHashIsTheSpecs() {
-        let ready = JobLiveState(swarm: liveSwarm("swarm_ready"), now: now)
-        #expect(ready.count == 338 && ready.hash == "PrEvIeWhash0001")
-        #expect(ready.headline == "342 changes ready" && ready.detail == "4 look like duplicates and are left out · 44¢")
+    @Test func theApplyCountIsOpenMinusClashesAndTheHashIsTheSpecs() {
+        let ready = built("swarm_ready")
+        #expect(ready.count == 4 && ready.hash == "a1b2c3d4e5f60718")
+        #expect(ready.headline == "6 changes ready" && ready.detail == "2 look like duplicates and are left out · 21¢")
         #expect(ready.phase == .waiting && ready.step == 2)
-        let awaiting = JobLiveState(swarm: liveSwarm("swarm_awaiting"), now: now)
-        #expect(awaiting.hash == "PrEvIeWhash0001" && awaiting.count == nil && awaiting.phase == .waiting && awaiting.step == 0)
-        #expect(JobLiveState(swarm: liveSwarm("swarm_running_asking"), now: now).hash == nil, "only the buttons that send a hash carry one")
-        var noClash = liveSwarm("swarm_ready")
+        let awaiting = built("swarm_awaiting")
+        #expect(awaiting.hash == "a1b2c3d4e5f60718" && awaiting.count == nil && awaiting.phase == .waiting && awaiting.step == 0)
+        #expect(built("swarm_running").hash == nil, "only the buttons that send a hash carry one")
+        var noClash = swarmAnswer(for: serverSwarmCase("swarm_ready").input)
         noClash.clashCount = 0
-        let plain = JobLiveState(swarm: noClash, now: now)
-        #expect(plain.count == 342 && plain.detail == "44¢")
+        let plain = JobLiveState(swarm: noClash, now: now.addingTimeInterval(700))
+        #expect(plain.count == 6 && plain.detail == "21¢ spent")
+        // every change is a clash: only "check first" is left
+        var allClash = noClash
+        allClash.clashCount = 6
+        #expect(JobLiveState(swarm: allClash, now: now.addingTimeInterval(700)).actions == ["check"])
+        #expect(JobLiveState(swarm: allClash, now: now.addingTimeInterval(700)).count == 0)
     }
 
     @Test func phasesStepsAndWords() {
-        func s(_ name: String) -> JobLiveState { JobLiveState(swarm: liveSwarm(name), now: now) }
-        #expect(s("swarm_running_asking").phase == .working && s("swarm_running_asking").step == 1)
-        #expect(s("swarm_running_asking").headline == "12 of 20 agents done")
-        #expect(s("swarm_running_asking").detail == "1 agent is asking claude code a question")
-        #expect(s("swarm_running_changes").detail == "214 changes · 21¢")
-        #expect(s("swarm_applying").phase == .working && s("swarm_applying").step == 3 && s("swarm_applying").headline == "applying changes")
-        #expect(s("swarm_applying").detail == "120 of 338" && s("swarm_applying").fraction == 0.355)
-        #expect(s("swarm_applied").phase == .done && s("swarm_applied").step == 4 && s("swarm_applied").headline == "applied 336 changes")
-        #expect(s("swarm_done_read").steps == ["approve", "run"] && s("swarm_done_read").step == 2 && s("swarm_done_read").headline == "done")
-        #expect(s("swarm_declined").phase == .failed && s("swarm_declined").headline == "declined")
-        #expect(s("swarm_stopped_cap").headline == "stopped at its cap" && s("swarm_stopped_cap").phase == .failed)
-        #expect(s("swarm_expired").headline == "expired" && s("swarm_expired").isTerminal)
-        for name in swarmCaseNames { #expect(JobLiveState(swarm: liveSwarm(name), now: now).headline.count <= 60, "\(name)") }
+        #expect(built("swarm_running").phase == .working && built("swarm_running").step == 1)
+        #expect(built("swarm_running").headline == "2 of 5 agents done")
+        #expect(built("swarm_running").detail == "1 agent is asking claude code a question")
+        #expect(built("swarm_running").fraction == 0.4 && built("swarm_running").compact == "2/5")
+        #expect(built("swarm_running_read").detail == "$1.40 spent")
+        #expect(built("swarm_awaiting").detail == "from claude code · about 12¢–40¢ · expires in 40 min")
+        #expect(built("swarm_stopping").headline == "stopping" && built("swarm_stopping").detail == "2 of 5 agents done · 21¢")
+        #expect(built("swarm_applying").phase == .working && built("swarm_applying").step == 3 && built("swarm_applying").headline == "applying changes")
+        #expect(built("swarm_applying").detail == "3 of 6" && built("swarm_applying").fraction == 0.5)
+        #expect(built("swarm_applied").phase == .done && built("swarm_applied").step == 4 && built("swarm_applied").headline == "applied 6 changes")
+        #expect(built("swarm_done_read").steps == ["approve", "run"] && built("swarm_done_read").step == 2 && built("swarm_done_read").headline == "done")
+        #expect(built("swarm_done_read").detail == "12 of 40 emotes look seasonal; the rest are fine")
+        #expect(built("swarm_declined").phase == .failed && built("swarm_declined").headline == "declined")
+        #expect(built("swarm_capped").headline == "stopped at its cap" && built("swarm_capped").detail == "it reached its $2.00 cap.")
+        #expect(built("swarm_expired").headline == "expired" && built("swarm_expired").isTerminal)
+        for name in serverSwarmCaseNames { #expect(built(name).headline.count <= 60, "\(name)") }
+    }
+
+    /// More inputs than the fixture has, each with the state the server's `jobOfSwarm` wrote for it (ServerSwarmExtraCases.swift is
+    /// generated by running it): singular and plural, money, ended counts, every failure reason, the cuts.
+    @Test func theWordingRulesAreTheServers() throws {
+        #expect(serverSwarmExtraCases.count >= 30)
+        for c in serverSwarmExtraCases {
+            let port = JobLiveState(swarm: c.input, nowMs: c.nowMs)
+            #expect(port.canonicalJSON() == c.state, "\(c.name) (port)")
+            #expect(JobLiveAttributes(swarm: c.input.id, name: c.input.name).canonicalJSON() == c.attributes, "\(c.name) attributes")
+            if c.viaSwarm {
+                let local = JobLiveState(swarm: swarmAnswer(for: c.input), now: Date(timeIntervalSince1970: c.nowMs / 1000))
+                #expect(local.canonicalJSON() == c.state, "\(c.name) (from the Swarm answer)")
+            }
+        }
+    }
+
+    @Test func theAttributesCutTheTitleAtFortyCharacters() {
+        let a = JobLiveAttributes(swarm: "Sw4rmIdSw4rmId01", name: String(repeating: "x", count: 60))
+        #expect(a.title.count == 40 && a.title.hasPrefix("swarm · xxxx") && a.title.hasSuffix("…"))
+        #expect(a.id == "swarm:Sw4rmIdSw4rmId01" && a.kind == "swarm" && a.agent && a.open == "cobalt-apple://swarm/Sw4rmIdSw4rmId01")
+        #expect(JobLiveAttributes(swarm: "i", name: "short").title == "swarm · short")
+    }
+
+    @Test func aPlanPastItsHourIsExpiredBeforeTheSweepSaysSo() {
+        let s = serverSwarmCase("swarm_expired")
+        let answer = swarmAnswer(for: s.input)
+        #expect(answer.status == .awaitingApproval, "the server still says awaiting_approval")
+        let update = SwarmActivityUpdate(swarm: answer, now: Date(timeIntervalSince1970: s.nowMs / 1000))
+        #expect(update.state.headline == "expired" && update.ending == .immediately)
+        // a minute earlier it is a plan to approve, and stays
+        let early = SwarmActivityUpdate(swarm: answer, now: Date(timeIntervalSince1970: s.nowMs / 1000 - 60))
+        #expect(early.state.actions == ["approve", "decline"] && early.ending == .none)
     }
 
     @Test func cellsAreLettersAndComeBackAsStatuses() {
-        let s = JobLiveState(swarm: liveSwarm("swarm_running_asking"), now: now)
-        #expect(s.cells == "ddwdddfdddddrrrddqqq")
-        #expect(s.swarmCells.count == 20 && s.swarmCells[2] == .waiting && s.swarmCells[6] == .failed && s.swarmCells[12] == .running)
+        let s = built("swarm_running")
+        #expect(s.cells == "ddrwq")
+        #expect(s.swarmCells.count == 5 && s.swarmCells[3] == .waiting && s.swarmCells[2] == .running && s.swarmCells[0] == .done)
+        #expect(built("swarm_ready").swarmCells[4] == .failed)
         #expect(Set(SwarmCell.Status.allCases.map(\.letter)) == Set("qrwdfs"))
         for status in SwarmCell.Status.allCases { #expect(SwarmCell.Status(letter: status.letter) == status) }
         #expect(SwarmCell.Status(letter: "z") == nil)
@@ -923,8 +888,8 @@ struct SwarmLiveTests {
         odd.cells = "dz"
         #expect(odd.swarmCells == [.done, .queued], "an unknown letter keeps its square")
         // at most 200 letters
-        var long = liveSwarm("swarm_running_asking")
-        long.tasks = tasks(String(repeating: "d", count: 250))
+        var long = swarmAnswer(for: serverSwarmCase("swarm_running").input)
+        long.tasks = Swarm.Tasks(total: 250, cells: (0..<250).map { SwarmCell(idx: $0, status: .done) })
         #expect(JobLiveState(swarm: long, now: now).cells?.count == 200)
     }
 

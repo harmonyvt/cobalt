@@ -33,9 +33,9 @@ struct SwarmIntentError: Error, CustomLocalizedStringResourceConvertible {
     }
 }
 
-private func runSwarmAction(_ action: SwarmLiveAction, swarm: String, hash: String?) async throws {
+private func runSwarmAction(_ action: SwarmLiveAction, swarm: String, hash: String?, count: Int? = nil) async throws {
     do {
-        try await SwarmIntentHost.run(action, swarm: swarm, hash: hash)
+        try await SwarmIntentHost.run(action, swarm: swarm, hash: hash, count: count)
     } catch {
         throw SwarmIntentError(error)
     }
@@ -63,7 +63,8 @@ struct ApproveSwarmIntent: LiveActivityIntent {
     }
 }
 
-/// "apply" on the Lock Screen card: applies the kept changes, leaving out the ones that look like duplicates.
+/// "apply" on the Lock Screen card: applies the kept changes, leaving out the ones that look like duplicates. `count` is the
+/// number the button shows: if the server would apply another number it refuses (`count_mismatch`) and the island is redrawn.
 struct ApplySwarmIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Apply swarm changes"
     static let description = IntentDescription("Applies the changes a swarm found, leaving out duplicates.")
@@ -72,15 +73,17 @@ struct ApplySwarmIntent: LiveActivityIntent {
 
     @Parameter(title: "Swarm") var swarm: String
     @Parameter(title: "Plan") var hash: String
+    @Parameter(title: "Changes") var count: Int?
 
     init() {}
-    init(swarm: String, hash: String) {
+    init(swarm: String, hash: String, count: Int?) {
         self.swarm = swarm
         self.hash = hash
+        self.count = count
     }
 
     func perform() async throws -> some IntentResult {
-        try await runSwarmAction(.apply, swarm: swarm, hash: hash)
+        try await runSwarmAction(.apply, swarm: swarm, hash: hash, count: count)
         return .result()
     }
 }

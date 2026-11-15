@@ -88,6 +88,8 @@ public enum SwarmError: Error, Sendable, Equatable {
     case dailyCap
     /// `409 error.swarm.over_cap`.
     case overCap
+    /// `409 error.swarm.count_mismatch`: the apply would change a different number of changes than the button showed.
+    case countMismatch
     /// `409 error.swarm.not_running`: a message to a swarm that is not running.
     case notRunning
     /// `409 error.swarm.not_ready`/`503 error.swarm.not_ready`: nothing to apply yet, or the server is not migrated.
@@ -111,6 +113,7 @@ public enum SwarmError: Error, Sendable, Equatable {
         case "error.swarm.busy": self = .busy
         case "error.swarm.daily_cap": self = .dailyCap
         case "error.swarm.over_cap": self = .overCap
+        case "error.swarm.count_mismatch": self = .countMismatch
         case "error.swarm.not_running": self = .notRunning
         case "error.swarm.not_ready": self = .notReady
         case "error.swarm.off": self = .off
@@ -154,6 +157,7 @@ public enum SwarmError: Error, Sendable, Equatable {
         case .busy: return "another swarm is running: wait for it"
         case .dailyCap: return "today's swarm budget is spent"
         case .overCap: return "it already spent its cap"
+        case .countMismatch: return "the number of changes moved on: look again"
         case .notRunning: return "it is not running"
         case .notReady: return "nothing to apply yet"
         case .off: return "swarms are off on this server"

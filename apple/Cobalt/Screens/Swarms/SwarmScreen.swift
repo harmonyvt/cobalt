@@ -285,11 +285,11 @@ struct SwarmScreen: View {
                     ButtonRow {
                         Button(Copy.Swarms.checkFirst) { step = .check }
                             .buttonStyle(.cobaltSecondary())
-                        Button(Copy.Swarms.apply(applyCount(swarm))) {
+                        Button(Copy.Swarms.apply(store.applyCount)) {
                             Task { await controller.run { try await store.apply(skipClashes: true) } }
                         }
                         .buttonStyle(.cobaltPrimary())
-                        .disabled(applyCount(swarm) == 0)
+                        .disabled(store.applyCount == 0)
                     }
                     .disabled(controller.busy)
                     Text(Copy.Swarms.confirmHint).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.caption)
@@ -312,9 +312,4 @@ struct SwarmScreen: View {
         }
     }
 
-    /// What "apply" will do: the kept changes with no clash once they are read, else what the server counted.
-    private func applyCount(_ swarm: Swarm) -> Int {
-        guard !store.changes.isEmpty else { return swarm.applyCount }
-        return store.changes.filter { $0.keep && $0.clash == nil && $0.status == .proposed }.count
-    }
 }

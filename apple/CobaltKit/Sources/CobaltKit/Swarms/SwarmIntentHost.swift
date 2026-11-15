@@ -45,14 +45,13 @@ public struct SwarmActivityUpdate: Hashable, Sendable {
     /// The update for a swarm as the server has it now: the 61.5 state (`JobLiveState(swarm:now:)`), ended when the swarm has.
     public init(swarm: Swarm, now: Date) {
         state = JobLiveState(swarm: swarm, now: now)
-        switch swarm.status {
-        case .declined, .expired:
+        // `swarmEndsAtOnce` and `swarmPushPayload` (src/swarm-live.ts): nobody approved it, declined or expired (also a plan whose
+        // hour passed but the sweep has not marked); else a finished state stays 60 s, a failed one 300 s; the rest goes on.
+        if SwarmLiveInput(swarm: swarm).isExpired(now: (now.timeIntervalSince1970 * 1000).rounded()) || swarm.status == .declined {
             ending = .immediately
-        case .failed, .stopped:
-            ending = .after(seconds: JobLiveTimes.failedSeconds)
-        case .done where state.phase == .done:
+        } else if state.isTerminal {
             ending = .after(seconds: JobLiveTimes.dismissal(of: state))
-        default:
+        } else {
             ending = .none
         }
     }
@@ -62,6 +61,7 @@ public enum SwarmIntentHost {
     private final class Box: @unchecked Sendable {
         let lock = NSLock()
         var client: (@Sendable () async -> (any CobaltClient)?)?
+        var sink: (@Sendable (SwarmActivityUpdate, String) async -> Void)?
     }
     private static let box = Box()
 
@@ -75,25 +75,56 @@ public enum SwarmIntentHost {
         box.lock.withLock { box.client }
     }
 
-    /// Runs one button: approve, apply, decline or stop (`SwarmActionRunner`), then puts the answer on the swarm's activity
+    /// Where the answer goes instead of the swarm's Live Activity: for tests, which have no activity to look at. nil (the
+    /// default) writes to the activity (`SwarmLiveActivities.show`).
+    static func setActivitySink(_ sink: (@Sendable (SwarmActivityUpdate, String) async -> Void)?) {
+        box.lock.withLock { box.sink = sink }
+    }
+
+    /// The kept changes not done yet that clash (what the island leaves out); nil when the list could not be read.
+    private static func openClashes(_ id: String, client: any CobaltClient) async -> Int? {
+        var count = 0
+        var offset = 0
+        for _ in 0..<10 {
+            guard let page = try? await client.swarmChanges(id: id, offset: offset, limit: 200) else { return nil }
+            count += page.changes.filter { $0.keep && $0.clash != nil && $0.status != .done }.count
+            offset += max(1, page.changes.count)
+            if page.changes.isEmpty || offset >= page.total { break }
+        }
+        return count
+    }
+
+    private static func show(_ update: SwarmActivityUpdate, swarm id: String) async {
+        if let sink = box.lock.withLock({ box.sink }) { await sink(update, id) } else { await SwarmLiveActivities.show(update, swarm: id) }
+    }
+
+    /// Runs one button: approve, apply (with the `count` the island shows), decline or stop (`SwarmActionRunner`), then puts the answer on the swarm's activity
     /// without waiting for the server's push. Throws a `SwarmError` (the server's refusal, in `words`) or
     /// `SwarmIntentHostError`. `check` and `open` are links and throw `SwarmError.notACall`.
     @discardableResult
     public static func run(
-        _ action: SwarmLiveAction, swarm id: String, hash: String?, now: @Sendable () -> Date = { Date() }
+        _ action: SwarmLiveAction, swarm id: String, hash: String?, count: Int? = nil, now: @Sendable () -> Date = { Date() }
     ) async throws -> Swarm {
         guard let provider = provider(), let client = await provider() else { throw SwarmIntentHostError.noSession }
         do {
-            let swarm = try await SwarmActionRunner.run(action, swarm: id, hash: hash, client: client)
-            await SwarmLiveActivities.show(SwarmActivityUpdate(swarm: swarm, now: now()), swarm: id)
+            let swarm = try await SwarmActionRunner.run(action, swarm: id, hash: hash, count: count, client: client)
+            await show(SwarmActivityUpdate(swarm: swarm, now: now()), swarm: id)
             return swarm
         } catch {
             let failure = SwarmError.from(error)
-            // The plan moved on without this phone (answered elsewhere, changed, expired): show what is true now.
+            // The plan moved on without this phone (answered elsewhere, changed, expired, a different number of changes to
+            // apply): show what is true now.
             switch failure {
             case .notAwaiting, .hashMismatch, .expired, .notReady:
                 if let current = try? await client.swarm(id: id) {
-                    await SwarmLiveActivities.show(SwarmActivityUpdate(swarm: current, now: now()), swarm: id)
+                    await show(SwarmActivityUpdate(swarm: current, now: now()), swarm: id)
+                }
+            case .countMismatch:
+                // the island's number is the kept changes without clashes, and the swarm answer does not carry the clashes:
+                // count them from the change list, or the next tap would send the same wrong number again
+                if var current = try? await client.swarm(id: id) {
+                    if let clashes = await openClashes(id, client: client) { current.clashCount = clashes }
+                    await show(SwarmActivityUpdate(swarm: current, now: now()), swarm: id)
                 }
             default:
                 break

@@ -87,13 +87,13 @@ private func members(of object: String) -> [(key: String, raw: String)] {
     return result
 }
 
-private struct FixtureCase {
+struct FixtureCase {
     let name: String
     let attributes: String     // compact JSON, in the server's key order
     let state: String
 }
 
-private func fixtureCases() throws -> [FixtureCase] {
+func fixtureCases() throws -> [FixtureCase] {
     try members(of: compact(fixtureText())).map { name, raw in
         let parts = members(of: raw)
         return FixtureCase(
@@ -103,20 +103,21 @@ private func fixtureCases() throws -> [FixtureCase] {
     }
 }
 
-private func fixtureCase(_ name: String) throws -> FixtureCase {
+func fixtureCase(_ name: String) throws -> FixtureCase {
     try #require(try fixtureCases().first { $0.name == name }, "no fixture case named \(name)")
 }
 
-private func decodeState(_ json: String) throws -> JobLiveState { try JSONDecoder().decode(JobLiveState.self, from: Data(json.utf8)) }
-private func decodeAttributes(_ json: String) throws -> JobLiveAttributes { try JSONDecoder().decode(JobLiveAttributes.self, from: Data(json.utf8)) }
+func decodeState(_ json: String) throws -> JobLiveState { try JSONDecoder().decode(JobLiveState.self, from: Data(json.utf8)) }
+func decodeAttributes(_ json: String) throws -> JobLiveAttributes { try JSONDecoder().decode(JobLiveAttributes.self, from: Data(json.utf8)) }
 
 // MARK: - the parity pin
 
 struct JobLiveFixtureTests {
     @Test func theFixtureIsThere() throws {
         let cases = try fixtureCases()
-        #expect(cases.count == 18)
+        #expect(cases.count == 18 + serverSwarmCaseNames.count)
         #expect(cases.map(\.name).contains("save_downloading") && cases.map(\.name).contains("chat_done"))
+        #expect(cases.map(\.name).filter { $0.hasPrefix("swarm_") } == serverSwarmCaseNames)
     }
 
     /// "Byte for byte": every case's attributes and state object, decoded and written again by `canonicalJSON()`, is the same
@@ -313,13 +314,35 @@ struct JobLiveBuilderParityTests {
         try expectParity("chat_done", JobLive.job(chat: chat(.done, steps: 3, reply: "saved it (=^･ω･^=) it's in your library now"), attributes: a))
     }
 
+    /// The swarm cases (APP-API-CONTRACT 61.5). Two builds of each: the port of the server's `jobOfSwarm` fed the server's own
+    /// inputs (job-live-cases.ts, copied in ServerSwarmCases.swift), and the app's `JobLiveState(swarm:now:)` fed the `Swarm`
+    /// answer that stands for those inputs. Both must be the fixture byte for byte, attributes too.
+    @Test func swarms() throws {
+        for c in serverSwarmCases {
+            let fixture = try fixtureCase(c.name)
+            // attributes: swarm:<id>, "swarm · <name>", agent, open
+            #expect(JobLiveAttributes(swarm: c.input.id, name: c.input.name).canonicalJSON() == fixture.attributes, "attributes of \(c.name)")
+            let port = JobLiveState(swarm: c.input, nowMs: c.nowMs)
+            #expect(port.canonicalJSON() == fixture.state, "state of \(c.name) from the server's inputs")
+            #expect(port == (try decodeState(fixture.state)), "\(c.name)")
+            // the Swarm the server answers for the same swarm: the app's builder
+            let model = swarmAnswer(for: c.input)
+            let local = JobLiveState(swarm: model, now: Date(timeIntervalSince1970: c.nowMs / 1000))
+            #expect(local.canonicalJSON() == fixture.state, "state of \(c.name) from the Swarm answer")
+            // and the mapping from the answer back to the input is the identity (changes only exist in propose mode)
+            var want = c.input
+            if want.mode != .propose { want.changes = .init() }
+            #expect(SwarmLiveInput(swarm: model) == want, "input of \(c.name)")
+        }
+    }
+
     /// Every fixture case is covered by one of the tests above (so adding a case to the server fails here until it is pinned).
     @Test func noFixtureCaseIsLeftUnpinned() throws {
-        let pinned: Set<String> = [
+        let pinned: Set<String> = Set(serverSwarmCaseNames).union([
             "save_downloading", "save_waking", "save_storing", "save_done", "save_failed", "save_lost",
             "upload_uploading", "app_reading", "app_ready", "app_webp", "make_working", "make_done",
             "edit_queued", "edit_rendering", "edit_done", "edit_failed", "chat_tools", "chat_done",
-        ]
+        ])
         #expect(Set(try fixtureCases().map(\.name)) == pinned)
     }
 }

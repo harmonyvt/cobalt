@@ -17,11 +17,8 @@ struct SwarmCheckScreen: View {
     private var swarm: Swarm? { store.shown }
     private var open: Bool { swarm?.apply.status == .ready }
 
-    /// What "apply" will do: kept, no clash, not done yet.
-    private var applyCount: Int {
-        guard !store.changes.isEmpty else { return swarm?.applyCount ?? 0 }
-        return store.changes.filter { $0.keep && $0.clash == nil && $0.status == .proposed }.count
-    }
+    /// What "apply" will do and send (`SwarmStore.applyCount`: the one number both screens and the call use).
+    private var applyCount: Int { store.applyCount }
 
     var body: some View {
         VStack(spacing: 0) {

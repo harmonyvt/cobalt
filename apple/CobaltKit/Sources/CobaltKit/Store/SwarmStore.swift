@@ -424,13 +424,25 @@ public final class SwarmStore {
         try await send { try await $0.retrySwarm(id: swarm.id) }
     }
 
+    /// What "apply n" says and sends: the kept changes not done yet, without the clashes (the number the server counts for
+    /// `skip_clashes`). Read from the change list once it is in, else from what the server counted (`Swarm.applyCount`). Both
+    /// swarm screens show this one number.
+    public var applyCount: Int {
+        guard let swarm = shown else { return 0 }
+        guard changesFor == swarm.id, !changes.isEmpty, changes.count >= changesTotal else { return swarm.applyCount }
+        return changes.filter { $0.keep && $0.clash == nil && $0.status != .done }.count
+    }
+
     /// Applies the kept changes (the clashes left out when `skipClashes`). Asks the owner first (`SwarmError.notConfirmed`:
-    /// nothing is sent). The poll goes to 3 s as it starts applying.
+    /// nothing is sent). With `skipClashes` it sends `applyCount`, the number the button showed: if the server would apply
+    /// another number it answers `SwarmError.countMismatch`, and the swarm and its changes are read again so the button shows
+    /// the new number. The poll goes to 3 s as it starts applying.
     public func apply(skipClashes: Bool) async throws {
         guard let swarm = shown else { throw SwarmError.notShown }
-        let count = skipClashes ? swarm.applyCount : swarm.apply.total
+        let shownCount = applyCount
+        let count = skipClashes ? shownCount : swarm.apply.total
         guard await ownerCheck.confirm(reason: "apply \(count) changes to \(swarm.name)") else { throw SwarmError.notConfirmed }
-        try await send { try await $0.applySwarm(id: swarm.id, hash: swarm.specHash, skipClashes: skipClashes) }
+        try await send { try await $0.applySwarm(id: swarm.id, hash: swarm.specHash, skipClashes: skipClashes, count: skipClashes ? shownCount : nil) }
         if changesFor == swarm.id { await loadChanges() }
     }
 
@@ -446,6 +458,12 @@ public final class SwarmStore {
             case .hashMismatch, .notAwaiting, .expired, .notFound, .notReady:
                 // the plan is not what the screen showed: read it again so the screen says what is true now
                 if let id = shown?.id { await refreshShown(id, token: showToken) }
+            case .countMismatch:
+                // the list moved on (an edit elsewhere, a clash found): read the swarm and every change again so "apply n" is true
+                if let id = shown?.id {
+                    await refreshShown(id, token: showToken)
+                    await loadChanges()
+                }
             default: break
             }
             throw mapped

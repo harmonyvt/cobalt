@@ -592,7 +592,7 @@ final class PreviewSwarmState: Sendable {
             startedAt: cell.status == .queued ? nil : at(0),
             endedAt: cell.status == .done || cell.status == .failed ? at(Double(30 + n)) : nil,
             error: cell.error, steps: steps, messages: thread, changes: own)
-        if let outcome { agent.usd = outcome.usd; agent.endedAt = agent.startedAt.map { $0.addingTimeInterval(Double(outcome.ms) / 1000) } }
+        if let outcome { agent.usd = outcome.usd; agent.endedAt = agent.startedAt.map { $0.addingTimeInterval(Double(outcome.ms ?? 0) / 1000) } }
         return agent
     }
 
@@ -654,7 +654,7 @@ final class PreviewSwarmState: Sendable {
     private static func outcome(of r: Record, cell c: SwarmCell) -> SwarmOutcome? {
         guard c.status == .done || c.status == .failed else { return nil }
         let items = max(1, r.swarm.batchSize)
-        if c.status == .failed { return SwarmOutcome(status: .failed, items: items, turns: 6, ms: 41_000) }
+        if c.status == .failed { return SwarmOutcome(status: .failed, items: items, turns: 6, ms: 41_000, score: 0) }
         return SwarmOutcome(status: .done, items: items, answered: items, toolCalls: 12, toolErrors: 0, turns: 3, usd: 0.011, ms: 30_000 + c.agent * 1_000, score: 1)
     }
 
@@ -764,13 +764,16 @@ final class PreviewSwarmState: Sendable {
         }
     }
 
-    func apply(_ id: String, hash: String, skipClashes: Bool, now: Date) throws -> Swarm {
+    /// `count` is checked like the server does: the kept changes not done yet, without the clashes when `skipClashes`.
+    func apply(_ id: String, hash: String, skipClashes: Bool, count: Int? = nil, now: Date) throws -> Swarm {
         try update(id, now: now) { r in
             guard r.swarm.mode == .propose, r.swarm.status == .done else { throw SwarmError.notReady }
             guard r.swarm.specHash == hash else { throw SwarmError.hashMismatch }
             guard [.ready, .applied, .failed].contains(r.swarm.apply.status), r.changes.contains(where: { $0.keep && $0.status != .done }) else {
                 throw SwarmError.notReady
             }
+            let open = r.changes.filter { $0.keep && $0.status != .done }
+            if let count, count != (skipClashes ? open.filter { $0.clash == nil }.count : open.count) { throw SwarmError.countMismatch }
             Self.beginApply(&r, skipClashes: skipClashes, now: now)
             return r.swarm
         }
@@ -852,9 +855,9 @@ extension PreviewClient {
         return try swarmState.decide(id, changes, now: clock.now())
     }
 
-    public func applySwarm(id: String, hash: String, skipClashes: Bool) async throws -> Swarm {
-        swarmState.record("POST apply \(id)" + (skipClashes ? " skip" : ""))
-        return try swarmState.apply(id, hash: hash, skipClashes: skipClashes, now: clock.now())
+    public func applySwarm(id: String, hash: String, skipClashes: Bool, count: Int?) async throws -> Swarm {
+        swarmState.record("POST apply \(id)" + (count.map { " count=\($0)" } ?? "") + (skipClashes ? " skip" : ""))
+        return try swarmState.apply(id, hash: hash, skipClashes: skipClashes, count: count, now: clock.now())
     }
 
     public func sendSwarm(id: String, to: SwarmRecipient, text: String) async throws -> SwarmSent {

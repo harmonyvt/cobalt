@@ -103,9 +103,9 @@ public enum SwarmWords {
     public static func outcome(_ o: SwarmOutcome) -> String {
         var parts = ["\(o.items) \(o.items == 1 ? "item" : "items")", "\(o.answered) answered"]
         if o.toolErrors > 0 { parts.append("\(o.toolErrors) \(o.toolErrors == 1 ? "lookup" : "lookups") failed") }
-        parts.append(elapsed(Double(o.ms) / 1000))
+        if let ms = o.ms { parts.append(elapsed(Double(ms) / 1000)) }
         parts.append(money(o.usd))
-        parts.append("score \(score(o.score))")
+        if let value = o.score { parts.append("score \(score(value))") }
         return parts.joined(separator: " · ")
     }
 

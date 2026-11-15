@@ -168,7 +168,7 @@ struct SwarmActionRow: View {
         case .apply:
             let title = facts.state.count.map { "apply \($0)" } ?? action.title
             if let hash = facts.state.hash {
-                Button(intent: ApplySwarmIntent(swarm: id, hash: hash)) { SwarmButtonLabel(title: title, kind: .primary) }
+                Button(intent: ApplySwarmIntent(swarm: id, hash: hash, count: facts.state.count)) { SwarmButtonLabel(title: title, kind: .primary) }
                     .buttonStyle(.plain)
             } else {
                 Link(destination: facts.swarmURL) { SwarmButtonLabel(title: title, kind: .primary) }

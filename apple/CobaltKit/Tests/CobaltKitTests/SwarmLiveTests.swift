@@ -4,7 +4,7 @@ import Testing
 
 // Wave 2B: the swarm Live Activity's buttons and strip, the intents' seam (`SwarmIntentHost`), deep links, the Mac
 // notification's words, and the manager adopting a push-started swarm. (The server's fixture states themselves are pinned by
-// `SwarmLiveTests` in SwarmTests.swift.)
+// `SwarmLiveTests` in SwarmTests.swift and `JobLiveBuilderParityTests`.)
 
 private let T = 1_790_000_000.0
 private let at = Date(timeIntervalSince1970: T)
@@ -24,15 +24,10 @@ private func make(
     return s
 }
 
+/// The swarm cases of the server's one fixture (deploy/cloudflare/api/test/fixtures/job-live-states.json), by name.
 private func fixtureStates() throws -> [String: JobLiveState] {
-    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/job-live-swarm-states.json")
-    let root = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
     var out: [String: JobLiveState] = [:]
-    for (name, value) in root {
-        let object = try #require(value as? [String: Any])
-        let state = try #require(object["state"])
-        out[name] = try JSONDecoder().decode(JobLiveState.self, from: JSONSerialization.data(withJSONObject: state))
-    }
+    for c in try fixtureCases() where c.name.hasPrefix("swarm_") { out[c.name] = try decodeState(c.state) }
     return out
 }
 
@@ -44,14 +39,15 @@ struct SwarmLiveButtonTests {
         func state(_ name: String) throws -> JobLiveState { try #require(states[name], "\(name)") }
         let want: [(String, [SwarmLiveAction], Bool)] = [
             ("swarm_awaiting", [.approve, .decline], true),
-            ("swarm_running_asking", [.stop], false),
-            ("swarm_running_changes", [.stop], false),
+            ("swarm_running", [.stop], false),
+            ("swarm_running_read", [.stop], false),
+            ("swarm_stopping", [], false),
             ("swarm_ready", [.check, .apply], true),
             ("swarm_applying", [], false),
             ("swarm_applied", [.open], false),
             ("swarm_done_read", [.open], false),
+            ("swarm_capped", [.open], false),
             ("swarm_declined", [.open], false),
-            ("swarm_stopped_cap", [.open], false),
             ("swarm_expired", [.open], false),
         ]
         for (name, actions, waits) in want {
@@ -60,9 +56,9 @@ struct SwarmLiveButtonTests {
             #expect(s.swarmWaitsForYou == waits, "\(name)")
         }
         // approve and apply carry what they send; stop and decline need nothing
-        #expect(try state("swarm_awaiting").hash == "PrEvIeWhash0001")
-        #expect(try state("swarm_ready").hash == "PrEvIeWhash0001" && state("swarm_ready").count == 338)
-        #expect(try state("swarm_running_asking").hash == nil)
+        #expect(try state("swarm_awaiting").hash == "a1b2c3d4e5f60718")
+        #expect(try state("swarm_ready").hash == "a1b2c3d4e5f60718" && state("swarm_ready").count == 4)
+        #expect(try state("swarm_running").hash == nil)
     }
 
     @Test func anUnknownButtonIsSkippedAndEveryOtherKindOfJobHasNone() throws {
@@ -222,6 +218,46 @@ struct SwarmIntentHostTests {
         #expect(SwarmError.notAwaiting.words == "it was answered already")
     }
 
+    @Test func aCountMismatchRefreshesTheIslandAndThrowsThePlainError() async throws {
+        let client = PreviewClient(scenario: .happy, timeScale: 1, clock: VirtualClock(), swarms: .review)
+        SwarmIntentHost.setClient { client }
+        let seen = SeenUpdates()
+        SwarmIntentHost.setActivitySink { update, id in seen.add(update, id) }
+        defer { SwarmIntentHost.setClient(nil); SwarmIntentHost.setActivitySink(nil) }
+        let hash = try await client.swarm(id: PreviewSwarmIDs.story).specHash
+
+        // what the island showed: 338 (342 kept, 4 clash); another device then unticks one, so the server would apply 337
+        _ = try await client.decideSwarm(id: PreviewSwarmIDs.story, changes: [SwarmDecision(n: 1, keep: false)])
+        do {
+            try await SwarmIntentHost.run(.apply, swarm: PreviewSwarmIDs.story, hash: hash, count: 338)
+            Issue.record("the apply should have been refused")
+        } catch {
+            #expect(error as? SwarmError == .countMismatch)
+            #expect((error as? SwarmError)?.words == "the number of changes moved on: look again")
+        }
+        #expect(client.swarmState.calls.contains { $0.contains("POST apply") && $0.contains("count=338") })
+        // nothing started, and the island was redrawn with the number that is true now (the clashes left out)
+        #expect(try await client.swarm(id: PreviewSwarmIDs.story).apply.status == .ready)
+        let updates = seen.all
+        #expect(updates.count == 1 && updates[0].1 == PreviewSwarmIDs.story)
+        #expect(updates[0].0.state.count == 337 && updates[0].0.state.hash == hash)
+
+        // the same tap with the fresh number goes through
+        let applying = try await SwarmIntentHost.run(.apply, swarm: PreviewSwarmIDs.story, hash: hash, count: 337)
+        #expect(applying.apply.status == .applying)
+    }
+
+    @Test func applyWithoutACountSendsNone() async throws {
+        let client = PreviewClient(scenario: .happy, timeScale: 1, clock: VirtualClock(), swarms: .review)
+        SwarmIntentHost.setClient { client }
+        SwarmIntentHost.setActivitySink { _, _ in }
+        defer { SwarmIntentHost.setClient(nil); SwarmIntentHost.setActivitySink(nil) }
+        let hash = try await client.swarm(id: PreviewSwarmIDs.story).specHash
+        _ = try await SwarmIntentHost.run(.apply, swarm: PreviewSwarmIDs.story, hash: hash)
+        let call = try #require(client.swarmState.calls.last { $0.contains("POST apply") })
+        #expect(!call.contains("count="))
+    }
+
     @Test func theHooksClientIsTheModelsOwnSessionClient() async throws {
         let rig = SwarmRig(.awaiting)
         rig.app.installSwarmIntentHost()
@@ -350,5 +386,51 @@ struct SwarmAdoptionTests {
         #expect(LiveRunRegistration(
             run: UUID(), environment: .sandbox, updateToken: nil, session: nil, start: false, attributes: attributes,
             state: LiveContentState(stage: .fetching, rail: 0, since: T)).runName == nil)
+    }
+}
+
+/// What the intent host put on the island, in order.
+private final class SeenUpdates: @unchecked Sendable {
+    private let lock = NSLock()
+    private var list: [(SwarmActivityUpdate, String)] = []
+    func add(_ update: SwarmActivityUpdate, _ id: String) { lock.withLock { list.append((update, id)) } }
+    var all: [(SwarmActivityUpdate, String)] { lock.withLock { list } }
+}
+
+// MARK: - the apply request's body
+
+struct SwarmApplyRequestTests {
+    private func client(_ server: LoopbackServer) -> HTTPCobaltClient {
+        HTTPCobaltClient(baseURL: server.base, apiKey: { "7c1f2a60-4b0e-4d2f-9a53-3f1d8e9b6a21" })
+    }
+
+    private func body(_ request: LoopbackServer.Request) throws -> [String: Any] {
+        try #require(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
+    }
+
+    @Test func countIsInTheBodyOnlyWhenGiven() async throws {
+        let server = try await LoopbackServer.start { _ in .json(#"{"swarm":"s1","apply":{"status":"applying","total":338}}"#) }
+        defer { server.stop() }
+        let c = client(server)
+        _ = try await c.applySwarm(id: "s1", hash: "h", skipClashes: true, count: 338)
+        _ = try await c.applySwarm(id: "s1", hash: "h", skipClashes: true, count: nil)
+        _ = try await c.applySwarm(id: "s1", hash: "h", skipClashes: false, count: 0)
+        _ = try await c.applySwarm(id: "s1", hash: "h", skipClashes: false, count: nil)
+        let sent = try server.requests.map(body)
+        #expect(server.requests.allSatisfy { $0.method == "POST" && $0.path == "/swarms/s1/apply" })
+        #expect(sent[0]["spec_hash"] as? String == "h" && sent[0]["skip_clashes"] as? Bool == true && sent[0]["count"] as? Int == 338)
+        #expect(sent[1]["count"] == nil && sent[1]["skip_clashes"] as? Bool == true)
+        #expect(sent[2]["count"] as? Int == 0 && sent[2]["skip_clashes"] == nil, "zero is a number: it is sent")
+        #expect(sent[3].keys.sorted() == ["spec_hash"])
+    }
+
+    @Test func aMismatchIsThePlainErrorNotAGenericOne() async throws {
+        let server = try await LoopbackServer.start { _ in
+            .json(#"{"status":"error","error":{"code":"error.swarm.count_mismatch"}}"#, status: 409)
+        }
+        defer { server.stop() }
+        await #expect(throws: SwarmError.countMismatch) {
+            try await client(server).applySwarm(id: "s1", hash: "h", skipClashes: true, count: 5)
+        }
     }
 }

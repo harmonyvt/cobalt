@@ -668,7 +668,7 @@ enum JobPreview {
             ])
     }
 
-    // swarm (APP-API-CONTRACT 61.5; the values of `job-live-swarm-states.json`)
+    // swarm (APP-API-CONTRACT 61.5; preview values; the server fixture job-live-states.json has the real swarm_* cases)
     static let swarm = attributes(
         "swarm", "swarm · rename 1,000 emotes", agent: true, open: "cobalt-apple://swarm/PrEvIeWswarm0001")
 
