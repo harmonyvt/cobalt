@@ -7179,6 +7179,12 @@ same layout), and the apps (`apple/CONTRACT-SWARMS.md` 6). Large sets page 100 a
   per query not in the cache; answers `{ results: { q, emotes, cached }[] }`. The swarm cheat sheet points agents at it
   first when they have several names to look up.
 - Retries as 62.2, honouring a `Retry-After` header when 7TV sends one.
+- **One pace for everyone**: every 7TV API call (chat, MCP, swarms, the studio) asks one shared gate first, a small
+  Durable Object `SevenTvGate` (`idFromName("gate")`, bound `SEVENTV_GATE`) that hands out slots at 5 reads a second and
+  1 write a second, and slows to half for a minute after a 429. Image downloads from `cdn.7tv.app` don't go through it.
+- A swarm whose tools include 7TV calls starts at most 3 agents at once unless the program asks for more.
+- Tip in the swarm cheat sheet and the MCP instructions: when the items are a set's emotes, use `source: { call:
+  "seventv.set" }` (one read gives every name, id and picture) instead of searching for each.
 
 ### 62.6 Prefetch: the runner looks things up before the agents start
 
