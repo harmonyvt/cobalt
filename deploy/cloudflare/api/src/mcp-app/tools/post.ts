@@ -6,7 +6,9 @@ import { timecode } from "../../transcripts";
 import type { AppTool } from "../types";
 import { arr, clock, cut, num, plural, readPosts, rec, signThumbs, str, summaryOf } from "./common";
 
-const Input = z.object({ id: z.string().min(1).max(2048) });
+const Input = z.object({
+    id: z.string().min(1).max(2048).describe("a post id, a file id, or any capystore link: media.../<name>.<ext>, share.../<name>, share.../g/<id>, share.../p/<key>, a file name, or the page it was saved from"),
+});
 
 // a gallery saved from a picker holds at most 20 items; every file is listed
 const FILES_MAX = 100;
@@ -14,7 +16,13 @@ const EXCERPT_CHARS = 280;
 // the first lines of speech: the start of the clip is what an excerpt is for
 const EXCERPT_SECONDS = 45;
 
-export const hiddenPost = (id: string) => new OpError(409, "error.library.hidden", `post ${id} is hidden (library_status unhides it)`);
+// the exact call that unhides it, so an agent asked to unhide a link does it in one step
+export const hiddenPost = (id: string, title?: string | null) =>
+    new OpError(
+        409,
+        "error.library.hidden",
+        `post ${id}${title ? ` “${title.slice(0, 80)}”` : ""} is hidden (library_status unhides it: ids ["${id}"], status "off" turns it back on with no link)`,
+    );
 export const notFound = (id: string) => new OpError(404, "error.library.not_found", `no post with id ${id}`);
 
 // "id · role · name · type · public url / share page / private link", one file per line
@@ -35,7 +43,8 @@ const fileLine = (f: z.infer<typeof PostOut>["post"]["file_list"][number]) =>
 export const showPost: AppTool<z.infer<typeof Input>> = {
     name: "show_post",
     title: "Show a post",
-    description: "Open one post from the capystore library: its title, caption, files, share link and the start of what is said in it.",
+    description:
+        "Open one post from the capystore library: its title, caption, files, share link and the start of what is said in it. Takes a post or file id, or any capystore link or file name (hidden and private posts are found too; a hidden one answers with the call that unhides it).",
     input: Input,
     output: PostOut,
     readOnly: true,
@@ -44,7 +53,7 @@ export const showPost: AppTool<z.infer<typeof Input>> = {
     async run(ctx, input) {
         const post = rec(await ctx.call("library.post", { id: input.id }));
         // a hidden post answers with hidden: true; it is not shown here
-        if (post.hidden === true) throw hiddenPost(input.id);
+        if (post.hidden === true) throw hiddenPost(str(post.id) ?? input.id, str(post.title));
         const id = str(post.id) ?? input.id;
         const isVideo = post.kind === "video";
         const [read, transcript] = await Promise.all([

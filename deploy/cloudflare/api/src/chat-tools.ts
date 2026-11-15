@@ -317,7 +317,9 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
         },
         async post(id: unknown) {
             if (typeof id !== "string") throw new Error("post(id) needs a post id string");
-            const p = (await everything()).find((x) => x.record.id === id);
+            const posts = await everything();
+            // a post id, or one of its files' ids
+            const p = posts.find((x) => x.record.id === id) ?? posts.find((x) => x.rows.some((f) => f.id === id));
             if (!p) throw new Error(`no post with id ${id}`);
             const share = d.shareBaseUrl ? withSlash(d.shareBaseUrl) : null;
             // section 36: a file's own private link, its page and its direct file (share.../p/<key>/1.<ext>)

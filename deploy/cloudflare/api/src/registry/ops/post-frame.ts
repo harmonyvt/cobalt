@@ -210,6 +210,7 @@ export const makePostFrameOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary:

@@ -6,6 +6,7 @@
 //    library.hidden (free), hidden.rules.list / .preview (free), .add (asks with apply), .update / .delete (ask).
 import * as z from "zod";
 import { loadPosts } from "../../chat-tools";
+import { POST_KEY_SQL } from "../../post-key";
 import {
     addRule,
     CHAT_STATUS_IDS_MAX,
@@ -193,7 +194,7 @@ export const libraryStatusOp = defineOp({
     runs: "worker",
     cors: false,
     input: z.object({
-        ids: ChatIds.describe(`post ids (or file ids from post()), 1 to ${CHAT_STATUS_IDS_MAX}`),
+        ids: ChatIds.describe(`post ids, file ids, or capystore links / file names (media.../<name>.webp, share.../g/<id>...), hidden posts included; 1 to ${CHAT_STATUS_IDS_MAX}`),
         status: StatusEnum.describe(
             "hidden: out of the library and never shareable (every link stops working); off: no link; public: public links; private: each file's own private link (share.../p/<key>)",
         ),
@@ -204,10 +205,11 @@ export const libraryStatusOp = defineOp({
         failed: Failed,
     }),
     ai: {
+        refs: { ids: "posts" },
         tier: "ask",
         only: true,
         summary:
-            "Give posts one status: hidden (out of the library, never shareable), off, public or private. hidden and off just run; public, private, and\nanything that unhides a hidden post ask Harmony first. Hidden posts are left out of library.list/search; library.hidden lists them.",
+            "Give posts one status: hidden (out of the library, never shareable), off (unhides a hidden post, no link), public or private. hidden and off\njust run; public, private, and anything that unhides a hidden post ask Harmony first. Takes links and file names as they are, hidden posts too\n(hidden posts are left out of library.list/search; library.hidden lists them).",
         params: ["ids", "status"],
         asks: async (input, ctx) =>
             input.status === "public" || input.status === "private" || (input.status === "off" && (await hiddenTargets(ctx.db, input.ids)).length > 0),
@@ -230,6 +232,11 @@ export const libraryStatusOp = defineOp({
             await setStatus(hiddenDeps(ctx), input.ids, input.status, "chat"),
             MESSAGES,
         );
+        // nothing changed: an error the model cannot read as "done" (every id failed)
+        if (body.posts.length === 0) {
+            const why = body.failed.map((f) => `${f.id}: ${f.error === "error.library.not_found" ? "no such post or file (search_library or show_post take links and file names too)" : f.error}`);
+            throw new OpError(404, body.failed[0]?.error ?? "error.library.not_found", `nothing changed. ${why.join("; ") || "no posts"}`);
+        }
         return ok({
             status: input.status,
             posts: body.posts.map((p) => ({
@@ -248,6 +255,7 @@ const HiddenPost = z.intersection(
         hidden_by: z.enum(["you", "rule", "chat"]),
         hidden_rule: z.string().nullable().describe("the rule that hid it"),
         hidden_at: z.string().describe("ISO date it was hidden"),
+        names: z.array(z.string()).describe("its files' public names (what a media.../<name> link ends with), kept while it is hidden"),
     }),
 );
 
@@ -264,7 +272,7 @@ export const libraryHiddenOp = defineOp({
     ai: {
         tier: "free",
         only: true,
-        summary: "The hidden posts, most recently hidden first (they are left out of everything else). library.status(ids, \"off\") unhides.",
+        summary: "The hidden posts, most recently hidden first, with their files' public names. To unhide a link you were given, call library.status(link, \"off\") directly.",
         options: true,
     },
     handler: async (ctx, input) => {
@@ -272,10 +280,24 @@ export const libraryHiddenOp = defineOp({
         const start = input.cursor ? rows.findIndex((r) => r.post_key === input.cursor) + 1 : 0;
         const limit = input.limit ?? 50;
         const page = rows.slice(start, start + limit);
-        const posts = new Map((await loadPosts(ctx, page.map((r) => r.post_key))).map((p) => [p.record.id, p.record]));
+        const keys = page.map((r) => r.post_key);
+        const [loaded, named] = await Promise.all([
+            loadPosts(ctx, keys),
+            ctx.db
+                .prepare(
+                    `SELECT pk AS post_key, CASE WHEN bucket = 'media' THEN r2_key ELSE public_key END AS name
+                       FROM (SELECT m.bucket, m.r2_key, m.public_key, m.created_at, ${POST_KEY_SQL} AS pk FROM media_items m WHERE m.deleted_at IS NULL)
+                      WHERE pk IN (SELECT value FROM json_each(?1)) ORDER BY created_at`,
+                )
+                .bind(JSON.stringify(keys))
+                .all<{ post_key: string; name: string | null }>(),
+        ]);
+        const posts = new Map(loaded.map((p) => [p.record.id, p.record]));
+        const names = new Map<string, string[]>();
+        for (const n of named.results) if (n.name) (names.get(n.post_key) ?? names.set(n.post_key, []).get(n.post_key)!).push(n.name);
         const out = page.flatMap((r) => {
             const rec = posts.get(r.post_key);
-            return rec ? [{ ...rec, hidden_by: r.by, hidden_rule: r.rule_id, hidden_at: new Date(r.at).toISOString() }] : [];
+            return rec ? [{ ...rec, hidden_by: r.by, hidden_rule: r.rule_id, hidden_at: new Date(r.at).toISOString(), names: names.get(r.post_key) ?? [] }] : [];
         });
         const more = start + limit < rows.length;
         return ok({ posts: out, next: more && page.length > 0 ? page[page.length - 1]!.post_key : null });

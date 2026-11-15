@@ -78,14 +78,16 @@ Inputs (zod, all objects):
 Since the migration (section 6.3) each tool also takes every option of the older tool it replaced; all added fields are
 optional and the defaults stay widget-sized.
 
-- `search_library { query?: string 1..200, kind?, since?, until? (ISO date or ms), source? (a host), within?, match?:
+- `search_library { query?: string 1..200 (a link up to 2048), kind?, since?, until? (ISO date or ms), source? (a host), within?, match?:
   "meaning"|"text", limit?: 1..1000 = 12 }`: with no `query` it lists newest first (`mode: "list"`, `query: ""`);
   `mode` is `"meaning"`, `"text"` or `"list"`. `within` (a collection, a link or a list of posts) is meaning search only:
   it errors rather than being ignored while meaning search is off or failing. `match: "text"` forces the title/name/link/
   caption substring match. At most 500 rows by meaning, 1000 by list. Items carry `score`, `why`, `said`, `source_link`
   and `caption` (null when the search did not give them). Each `said` entry has `at`/`end` (seconds) and `timecode`
-  (`at` as `"m:ss"`).
-- `show_post { id: string }`: every file with `id`, `role`, `name`, `url`, `share_url`, `private_url`, `private_file_url`
+  (`at` as `"m:ss"`). A `query` that is one link, file name (`vFhaasY6GA.webp`) or id (APP-API-CONTRACT.md section 60)
+  answers that post directly, private ones included (`mode: "text"`, no meaning search); a hidden one is left out of
+  `items` and named in the text with the `library_status` call that unhides it. A ref that names nothing is searched as words.
+- `show_post { id: string }` (any ref of APP-API-CONTRACT.md section 60; a hidden post's error names its id and the unhide call): every file with `id`, `role`, `name`, `url`, `share_url`, `private_url`, `private_file_url`
   (what `library.post` gave the caller; a hidden post is an error and gives no URL), plus the post's `preview_expires_at`.
   For a file that is not public its signed links are in `_meta["capystore/preview"]` under the file's `id` (section 9).
   A video also has `transcript_excerpt` (the first 45 s of speech as plain text, 280 characters, for the widget) and
