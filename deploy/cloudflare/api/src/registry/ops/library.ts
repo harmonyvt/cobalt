@@ -175,6 +175,7 @@ export const libraryPostOp = defineOp({
         }),
     ),
     ai: {
+        refs: { id: "post" },
         tier: "free",
         only: true,
         summary: "One post with its files (public url and share_url when public; private_url and private_file_url, its direct file, when it has its own private link).",
@@ -200,6 +201,7 @@ export const lookOp = defineOp({
     }),
     output: z.number(),
     ai: {
+        refs: { ids: "posts" },
         tier: "free",
         only: true,
         summary: "You get to SEE these posts' pictures (poster or image, private ones too) after this code returns. Max 4 per reply. Returns how many are queued.",
@@ -218,6 +220,7 @@ export const showOp = defineOp({
     input: z.object({ ids: Ids }),
     output: z.array(z.string()),
     ai: {
+        refs: { ids: "posts" },
         tier: "free",
         only: true,
         summary: "Show these posts to Harmony as thumbnails under your reply (max 12 per reply). Returns the ids accepted.",
@@ -238,6 +241,7 @@ export const collageOp = defineOp({
     }),
     output: z.number(),
     ai: {
+        refs: { ids: "posts" },
         tier: "free",
         only: true,
         summary:
@@ -356,6 +360,7 @@ export const libraryAboutOp = defineOp({
     input: z.object({ key: z.string().min(1).max(2048).describe("the post id") }),
     output: AboutBody,
     ai: {
+        refs: { key: "post" },
         tier: "free",
         summary: "What a post is about: its description, tags and sound tags, what is said in it, the words its vector reads closest to, its nearest posts.",
         params: ["key"],
@@ -387,6 +392,7 @@ export const libraryAboutSetOp = defineOp({
     }),
     output: AboutBody,
     ai: {
+        refs: { key: "post" },
         tier: "ask",
         summary: "Replace a post's tags with Harmony's own (null goes back to the written ones). Only when Harmony asks.",
         params: ["key", "tags"],
@@ -454,6 +460,7 @@ export const libraryTranscriptOp = defineOp({
     output: TranscriptBody,
     http: (ctx) => ({ key: ctx.query.get("key") ?? "", from: seconds(ctx.query.get("from")), to: seconds(ctx.query.get("to")) }),
     ai: {
+        refs: { key: "post" },
         tier: "free",
         summary:
             "What is said in a video, line by line with times (start/end in seconds, timecode: the start as m:ss to cite; from/to: only that part). state says why there are no lines.",

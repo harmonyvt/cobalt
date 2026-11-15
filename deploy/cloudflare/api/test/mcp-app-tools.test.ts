@@ -407,7 +407,7 @@ describe("show_post", () => {
         await expect(run("show_post", { id: "NoSuchPost" })).rejects.toThrow(/no post with id/);
         const h = file({ name: "h.mp4" });
         hide(h.id);
-        await expect(run("show_post", { id: h.id })).rejects.toThrow(/is hidden \(library_status unhides it\)/);
+        await expect(run("show_post", { id: h.id })).rejects.toThrow(/is hidden \(library_status unhides it: ids \["\S+"\], status "off"/);
         expect(tool("show_post").input.safeParse({}).success).toBe(false);
     });
 
@@ -1091,6 +1091,38 @@ describe("job_status", () => {
 // ---- the options of the retired tools ---------------------------------------------------------------------------------------
 // MCP-APP-CONTRACT.md section 6.3: the app tools take over every option the tools they replace had, and forward it.
 
+describe("search_library: a link, file name or id finds its post directly (section 60)", () => {
+    it("a media link, a share page and a bare name find the post, private ones too; meaning search is not asked", async () => {
+        const pub = file({ name: "cat.mp4" });
+        title(pub.id, "A cat falls off a shelf");
+        offered = new Set(["library.search", "library.list", "library.post"]);
+        answers["library.search"] = () => {
+            throw new Error("meaning search must not run for a link");
+        };
+        for (const q of [pub.url!, `${SHARE}${pub.name}`, pub.name]) {
+            const r = await run("search_library", { query: q });
+            expect(r.out.items.map((i: any) => i.id), q).toEqual([pub.id]);
+            expect(r.text).toContain(`is file ${pub.id} of 1 post`);
+        }
+    });
+
+    it("a hidden post's link answers with its id and the exact call that unhides it", async () => {
+        const v = file({ content_type: "image/webp", name: "vFhaasY6GA.webp" });
+        hide(v.id);
+        const r = await run("search_library", { query: v.url! });
+        expect(r.out.items).toEqual([]);
+        expect(r.text).toContain(`${v.id} · HIDDEN: library_status with ids ["${v.id}"] and status "off" unhides it`);
+    });
+
+    it("an ordinary word is still searched as words; a link that names nothing falls back to the search", async () => {
+        file({ name: "kitties.mp4" });
+        const words = await run("search_library", { query: "kitties", match: "text" });
+        expect(words.text).not.toContain("is file");
+        const none = await run("search_library", { query: `${MEDIA}Nothing123.webp`, match: "text" });
+        expect(none.out.items).toEqual([]);
+    });
+});
+
 describe("search_library: what library.search and library.list could do", () => {
     const row = (id: string, o: Record<string, unknown> = {}) => ({ id, title: id, saved_at: "2025-10-09T00:00:00.000Z", source: "tiktok.com", link: `https://tiktok.com/${id}`, kind: "video", files: 1, duration: 9.6, public: true, caption: "roasted", ...o });
 
@@ -1190,7 +1222,7 @@ describe("show_post: everything library.post gave", () => {
     it("a hidden post gives no urls at all", async () => {
         const v = file({ name: "h.mp4" });
         hide(v.id);
-        await expect(run("show_post", { id: v.id })).rejects.toThrow(/post \S+ is hidden \(library_status unhides it\)/);
+        await expect(run("show_post", { id: v.id })).rejects.toThrow(/post \S+ .*is hidden \(library_status unhides it: /);
     });
 });
 

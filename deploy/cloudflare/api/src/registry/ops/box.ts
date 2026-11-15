@@ -224,6 +224,7 @@ export const boxPullOp = defineOp({
     }),
     output: z.object({ files: z.array(PulledSchema) }),
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: `Copy a library post's files (or one file) into the box's /workspace, to edit with ffmpeg/ffprobe there and put the result back with box.save. Private files too: the box can't send a request body over 64 KB, so they leave it only through box.save. Up to ${PULL_MAX_BYTES / 1_000_000_000} GB a call.`,

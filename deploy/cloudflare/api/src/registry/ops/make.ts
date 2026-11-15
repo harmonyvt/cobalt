@@ -512,6 +512,7 @@ export const makeWebpOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: "An animated webp (silent, loops) of 0.5 to 10 s of a video or gif, optionally cropped. Returns a job: hand it to jobs.onDone.",
@@ -543,6 +544,7 @@ export const makeStillOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: "An animated webp of one photo (looks still), so Discord lets people favourite it. Returns a job.",
@@ -605,6 +607,7 @@ export const makeSlideshowOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "post" },
         tier: "free",
         only: true,
         summary: "A slideshow of a gallery's items (2 to 20). Only for galleries saved in the last 7 days. Returns a job.",
@@ -643,6 +646,7 @@ export const makeGalleryImageOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "post" },
         tier: "free",
         only: true,
         summary: "One jpeg of a gallery's photos (2 to 20) side by side or in a grid. Only for galleries saved in the last 7 days. Returns a job.",
@@ -821,6 +825,7 @@ export const makeTrimOp = defineOp({
     input: z.object({ id: Id, start: z.number().min(0).describe("seconds"), end: z.number().gt(0).describe("seconds"), ...ClipOpts }),
     output: OneClipJob,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: "A new mp4 of part of a video (made by the editor). Returns a job and the edit project's id.",
@@ -844,6 +849,7 @@ export const makeCropOp = defineOp({
     }),
     output: OneClipJob,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: "A new mp4 of a video cropped to part of the picture (and trimmed if start/end are given), one fixed box for the whole clip. Look at its frames with a grid and check the box with look({ box }) first; never guess the centre. Returns a job and the edit project's id. Pictures: make.cropImage.",

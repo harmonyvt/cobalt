@@ -14,6 +14,7 @@ import { chatKeyId, runOp } from "./registry/ai";
 import { forCall } from "./registry/context";
 import { OpError, type AiFlags, type Op, type OpContext } from "./registry/op";
 import type { Registry } from "./registry/registry";
+import { withRefs } from "./registry/refs";
 import { argsToInput } from "./registry/typescript";
 import { agentsOn } from "./chat-agents";
 import { workbenchOn } from "./workbench-rules";
@@ -151,6 +152,7 @@ export function mcpToolList(registry: Registry, flags: AiFlags): McpTool[] {
 export const INSTRUCTIONS = [
     "capystore is Harmony's media library: videos, images and galleries saved from links or uploaded, with public share links.",
     "Posts are found with search_library (meaning search; with no query it lists the library newest first) and opened with show_post; use the post `id` they return.",
+    "Wherever a tool asks for a post or file id you may pass a capystore link or file name as it is: media.../<name>.<ext>, share.../<name>, share.../g/<id>, share.../p/<key>, a bare name like vFhaasY6GA.webp, or the page it was saved from. Hidden and private posts are found too, so to unhide or change a link the user pasted, call library_status (or the tool) with that link directly. A tool that changed nothing answers an error, never a bare success.",
     "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with save_link. Upload a local file with upload_files, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
     "Make ops (make_*, edits_render, chat_video, convert_to_webp) answer a job: check on it with job_status. Share links: create_share_link; collections and sets group them.",
     "Cropping (make_cropImage for pictures, make_crop for videos): never guess the position or assume the centre. Look at the source with grid: true (a video: frames: true, or make_frames for frames at chosen seconds), read the box off the labelled grid, check it with look's box option before making it, and look at the result after. A moving subject needs a box that covers it in every frame, or several clips with their own crops. Plain crop by default: cutout only for a subject on a plain background, never for banners, bars or text. Then edits_addOverlay to use it in a video.",
@@ -216,7 +218,7 @@ export function mcpInput(op: Op, args: unknown): z.ZodSafeParseResult<unknown> {
 // Run a chat op for an app tool: the same context, argument mapping, checks and runner as a tool call. Throws OpError.
 export async function runChatOp(op: Op, caller: McpCaller, args: unknown): Promise<unknown> {
     const ctx = await threadContext(caller);
-    const parsed = mcpInput(op, args);
+    const parsed = mcpInput(op, await withRefs(op, ctx, args));
     if (!parsed.success) throw new OpError(400, "error.api.bad_request", issuesText(mcpToolName(op.callName), parsed.error));
     return runOp(op, ctx, parsed.data);
 }
@@ -238,7 +240,14 @@ export function structuredOf(value: unknown): Json | undefined {
 // `follow` may build a widget's structuredContent (and the signed preview links for its `_meta`) from the op's answer (src/mcp-app/follow.ts); the text stays the op's.
 export async function callTool(op: Op, caller: McpCaller, args: Json, follow?: (value: unknown, input: unknown) => Promise<{ structured: Json; meta?: Json } | null>): Promise<ToolResult> {
     const ctx = await threadContext(caller);
-    const parsed = mcpInput(op, args);
+    let resolved: unknown;
+    try {
+        // links and file names in the fields that name posts become their posts' ids first (section 60)
+        resolved = await withRefs(op, ctx, args);
+    } catch (e) {
+        return textResult(errorText(mcpToolName(op.callName), e), true);
+    }
+    const parsed = mcpInput(op, resolved);
     if (!parsed.success) return textResult(issuesText(mcpToolName(op.callName), parsed.error), true);
     try {
         if (op.callName === "look") {

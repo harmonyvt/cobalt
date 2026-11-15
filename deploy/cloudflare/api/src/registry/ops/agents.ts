@@ -117,6 +117,7 @@ export const agentsSpawnOp = defineOp({
     }),
     output: AgentSchema,
     ai: {
+        refs: { posts: "posts" },
         tier: "free",
         only: true,
         summary: `Start a sub-agent (a helper chat AI with the same tools) on one task; it works in the background. At most ${AGENTS_RUNNING_MAX} at once. Hand its job to jobs.onDone to get its report when it finishes.`,
