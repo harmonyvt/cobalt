@@ -31,6 +31,7 @@ enum Copy {
         case .library: return "library"
         case .links: return Links.title
         case .chat: return Chat.title
+        case .swarms: return Swarms.title
         case .stage: return Stage.title
         case .sevenTv: return SevenTv.title
         case .names: return Names.tabTitle
