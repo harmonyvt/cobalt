@@ -104,6 +104,18 @@ const swarm: Follow = {
     },
 };
 
+// swarm.board answers the board (section 62.4); the view keeps the filters it was asked with, for its next calls.
+const board: Follow = {
+    view: "board",
+    async build(_ctx, input, result) {
+        const r = rec(result);
+        const i = rec(input);
+        if (!Array.isArray(r.rows) || !rec(r.swarm).swarm) return null;
+        const pick = (k: string) => (i[k] === undefined ? {} : { [k]: i[k] });
+        return { ...r, view: "board", ...pick("q"), ...pick("agent"), ...pick("group"), ...pick("sort"), ...pick("status") };
+    },
+};
+
 const idsOf = (i: Json) => (typeof i.ids === "string" ? [i.ids] : strings(i.ids));
 
 // by chat call name
@@ -124,4 +136,5 @@ export const FOLLOWS: Record<string, Follow> = {
     "box.save": boxSave,
     "swarm.plan": swarm,
     "swarm.get": swarm,
+    "swarm.board": board,
 };

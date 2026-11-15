@@ -243,7 +243,8 @@ describe("resources", () => {
         const c = read.contents[0] as any;
         expect(c.mimeType).toBe("text/html;profile=mcp-app");
         expect(c.text).toBe("<html>search</html>");
-        expect(c._meta.ui.csp).toEqual({ resourceDomains: ["https://media.capybaraharmony.com", "https://share.capybaraharmony.com", API], connectDomains: [API] });
+        // the media allowlist too (section 62.1: the board shows 7TV emotes)
+        expect(c._meta.ui.csp).toEqual({ resourceDomains: ["https://media.capybaraharmony.com", "https://share.capybaraharmony.com", "https://cdn.7tv.app", API], connectDomains: [API] });
         expect(c._meta.ui.domain).toBeUndefined();
         expect((await client.listResourceTemplates()).resourceTemplates).toEqual([]);
         await expect(client.readResource({ uri: "ui://capystore/nope.html" })).rejects.toThrow();
@@ -330,7 +331,7 @@ describe("the JSON-RPC edges kept from the first core (through the Worker)", () 
         for (const t of tools.slice(0, 10)) expect(t.outputSchema, t.name).toMatchObject({ type: "object" });
         const res = (await (await post({ jsonrpc: "2.0", id: 2, method: "resources/list" })).json()) as any;
         expect(res.result.resources.map((r: any) => r.uri)).toEqual(VIEWS.map((v) => `ui://capystore/${v}.html`));
-        expect(res.result.resources).toHaveLength(10);
+        expect(res.result.resources).toHaveLength(11);
         expect(res.result.resources.every((r: any) => r.mimeType === "text/html;profile=mcp-app")).toBe(true);
     });
 

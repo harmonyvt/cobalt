@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { JOB_ATTRIBUTES_TYPE, JOB_STALE_S, asJobPayload, canonicalJob, isJobTerminal, jobOfSave } from "../src/job-live";
+import { JOB_ATTRIBUTES_TYPE, JOB_STALE_S, asJobPayload, canonicalJob, isJobTerminal, jobOfSave, moneyText, swarmEndsAtOnce } from "../src/job-live";
 import { jobCases } from "./job-live-cases";
 
 const FIX = JSON.parse(readFileSync(new URL("./fixtures/job-live-states.json", import.meta.url), "utf8"));
@@ -61,5 +61,23 @@ describe("job island states (CONTRACT-JOBLIVE 3)", () => {
         expect(p.aps["stale-date"]).toBe(5 + 1800);
         const q = asJobPayload({ aps: { event: "update", "stale-date": 5 + 120 } }, job, 5000);
         expect(q.aps["stale-date"]).toBe(5 + JOB_STALE_S);
+    });
+
+    it("the swarm island (APP-API-CONTRACT 61.5): its buttons, its grid, money in cents under a dollar", () => {
+        const c = jobCases();
+        expect(c.swarm_awaiting!.attributes).toEqual({ id: "swarm:Sw4rmIdSw4rmId01", kind: "swarm", title: "swarm · clean emote names", agent: true, open: "cobalt-apple://swarm/Sw4rmIdSw4rmId01" });
+        expect(c.swarm_awaiting!.state).toMatchObject({ phase: "waiting", step: 0, actions: ["approve", "decline"], hash: "a1b2c3d4e5f60718", detail: "from claude code · about 12¢–40¢ · expires in 40 min" });
+        expect(c.swarm_running!.state).toMatchObject({ cells: "ddrwq", actions: ["stop"], detail: "1 agent is asking claude code a question" });
+        expect(c.swarm_running_read!.state.steps).toEqual(["approve", "run"]);
+        expect(c.swarm_stopping!.state.actions).toBeUndefined();
+        expect(c.swarm_ready!.state).toMatchObject({ phase: "waiting", step: 2, actions: ["check", "apply"], count: 4 });
+        expect(c.swarm_applied!.state).toMatchObject({ phase: "done", step: 4, actions: ["open"] });
+        expect(c.swarm_capped!.state).toMatchObject({ phase: "failed", headline: "stopped at its cap" });
+        expect(c.swarm_expired!.state).toMatchObject({ phase: "failed", headline: "expired" });
+        for (const k of ["swarm_applied", "swarm_done_read", "swarm_capped", "swarm_declined", "swarm_expired"]) expect(isJobTerminal(c[k]!.state), k).toBe(true);
+        for (const k of ["swarm_awaiting", "swarm_running", "swarm_ready", "swarm_applying"]) expect(isJobTerminal(c[k]!.state), k).toBe(false);
+        expect([0, 0.004, 0.21, 0.999, 1, 12.5].map(moneyText)).toEqual(["0¢", "<1¢", "21¢", "$1.00", "$1.00", "$12.50"]);
+        expect(swarmEndsAtOnce({ status: "awaiting_approval", expires_at: 10 }, 10)).toBe(true);
+        expect(swarmEndsAtOnce({ status: "running", expires_at: 10 }, 99)).toBe(false);
     });
 });

@@ -136,6 +136,10 @@ export type AppDeps = {
     purge?: PurgeFn;
     // https://<share host>/ of the rich link pages (section 22); absent = not configured.
     shareBaseUrl?: string;
+    // Section 62.5: the shared pace of every 7TV API call, and the 24 h cache of emote searches (default: the Workers
+    // Cache API when there is one).
+    sevenTvGate?: import("./seventv-gate").SevenTvGate | null;
+    emoteCache?: import("./emotes").EmoteCache | null;
     // The request's waitUntil, for work that must not hold the answer (src/background.ts). Absent in tests and in the
     // Durable Objects: the work is then awaited.
     waitUntil?: (p: Promise<unknown>) => void;

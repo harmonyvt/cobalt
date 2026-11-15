@@ -1,6 +1,7 @@
 // The per-request deps the Worker's routes share, wired to the request's bindings: the app's routes (AppDeps), the search
 // Space client and the share host. Used by worker.ts (the old route chain) and the op registry (src/registry/), so both
 // build them the same way. Free of Cloudflare imports (tests run it under node).
+import { gateOf } from "./seventv-gate";
 import type { AppDeps } from "./app-routes";
 import { spaceClient, type EmbedClient } from "./embed";
 import { KEY_ID_HEADER } from "./headers";
@@ -65,6 +66,7 @@ export function appDeps(env: WorkerEnv, container: ContainerStub, edge: EdgeDeps
         waitUntil: edge.waitUntil,
         keyCache,
         purge: purgeFrom(env),
+        sevenTvGate: gateOf(env),
         fixedLength: edge.fixedLength ?? ((n) => new FixedLengthStream(n)),
         // Queues the missing posters in the Durable Object (records only; it answers at once).
         kickPosters: async (limit) =>

@@ -195,6 +195,8 @@ public struct PreviewClient: CobaltClient {
     let chatShareState = PreviewChatShareState()
     /// The stage the "server" holds (`PreviewStage.swift`).
     let stageState = PreviewStageState()
+    /// The swarms the "server" holds (`PreviewSwarms.swift`; `-previewSwarm <state>` picks the story's starting state).
+    let swarmState = PreviewSwarmState()
     /// The editor's projects and renders the "server" holds (`Editor/PreviewEditor.swift`).
     let editorState = PreviewEditorState()
     /// How agents reach the MCP on the "server" (`PreviewMcp.swift`).
@@ -218,7 +220,8 @@ public struct PreviewClient: CobaltClient {
 
     init(
         scenario: PreviewScenario, timeScale: Double, clock: any PipelineClock, visibility: VisibilityPreviewMode = .off,
-        line: LinePreviewMode = .off, queue: QueuePreviewState = .off, search: PreviewSearchMode = .off
+        line: LinePreviewMode = .off, queue: QueuePreviewState = .off, search: PreviewSearchMode = .off,
+        swarms: PreviewSwarmStart? = nil
     ) {
         self.scenario = scenario
         // the sky map's scenario is a server whose search has embedded every post
@@ -245,6 +248,7 @@ public struct PreviewClient: CobaltClient {
         if scenario.hasStage {
             stageState.seed(scenario, now: now)
         }
+        swarmState.seed(swarms ?? PreviewSwarmStart.launch ?? .awaiting, now: now)
         if scenario.hasAccounts {
             accountState.seed(scenario, now: now)
         }

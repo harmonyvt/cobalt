@@ -7,6 +7,7 @@
 //   GET  /api/swarms/<id>                         one swarm
 //   GET  /api/swarms/<id>/changes?offset&limit    proposed changes (limit <= 200)
 //   GET  /api/swarms/<id>/results?offset&limit    task results (limit <= 100)
+//   GET  /api/swarms/<id>/board?q&agent&status&group&sort&offset&limit   the results board (section 62.4, limit <= 200)
 //   POST /api/swarms/<id>/approve|apply           { spec_hash }
 //   POST /api/swarms/<id>/decline|stop            no body
 //   POST /api/swarms/<id>/changes                 { changes: [{ n, keep?, after? }] }  (<= 500)
@@ -47,13 +48,14 @@ type Route =
     | { name: "get"; id: string }
     | { name: "changes"; id: string }
     | { name: "results"; id: string }
+    | { name: "board"; id: string }
     | { name: "action"; id: string; action: "approve" | "decline" | "stop" | "apply" };
 
 const ID = "[A-Za-z0-9]{16}";
 export function matchRoute(pathname: string): Route | null {
     if (pathname === "/swarms" || new RegExp(`^/swarms/${ID}$`).test(pathname)) return { name: "page" };
     if (pathname === "/api/swarms") return { name: "list" };
-    const m = new RegExp(`^/api/swarms/(${ID})(?:/(changes|results|approve|decline|stop|apply))?$`).exec(pathname);
+    const m = new RegExp(`^/api/swarms/(${ID})(?:/(changes|results|board|approve|decline|stop|apply))?$`).exec(pathname);
     if (!m) return null;
     const id = m[1]!;
     switch (m[2]) {
@@ -63,6 +65,8 @@ export function matchRoute(pathname: string): Route | null {
             return { name: "changes", id };
         case "results":
             return { name: "results", id };
+        case "board":
+            return { name: "board", id };
         default:
             return { name: "action", id, action: m[2] as "approve" | "decline" | "stop" | "apply" };
     }
@@ -159,6 +163,36 @@ export async function handleSwarms(request: Request, env: Env, deps?: Partial<De
                 body = clean;
                 path = `/swarms/${route.id}/changes`;
             }
+            break;
+        }
+        case "board": {
+            // known params only, each checked (section 62.4)
+            const p = url.searchParams;
+            const q = new URLSearchParams();
+            const offset = digits(p.get("offset"), 1_000_000, 7);
+            const limit = digits(p.get("limit"), 200, 3);
+            const agent = digits(p.get("agent"), 5000, 4);
+            if (offset === "bad" || limit === "bad" || limit === "0" || agent === "bad" || agent === "0") return err(400, BAD);
+            if (offset !== null) q.set("offset", offset);
+            if (limit !== null) q.set("limit", limit);
+            if (agent !== null) q.set("agent", agent);
+            for (const [k, max] of [["q", 200], ["group", 200]] as const) {
+                const v = p.get(k);
+                if (v === null || v === "") continue;
+                if (v.length > max) return err(400, BAD);
+                q.set(k, v);
+            }
+            const status = p.get("status");
+            if (status) {
+                if (!["queued", "running", "waiting", "done", "failed", "skipped"].includes(status)) return err(400, BAD);
+                q.set("status", status);
+            }
+            const sort = p.get("sort");
+            if (sort) {
+                if (!["agent", "score", "title"].includes(sort)) return err(400, BAD);
+                q.set("sort", sort);
+            }
+            path = `/swarms/${route.id}/board${q.size ? `?${q}` : ""}`;
             break;
         }
         case "action": {

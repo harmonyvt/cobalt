@@ -110,6 +110,20 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 .res summary{cursor:pointer;min-height:44px;display:flex;align-items:center;color:var(--tv)}
 .res .err{color:var(--err);overflow-wrap:anywhere}
 .reduce{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
+.bst{display:flex;gap:3px;flex-wrap:wrap;padding:12px 18px 0}
+.ba{width:22px;height:22px;border-radius:5px;border:0;padding:0;background:var(--el);cursor:pointer}
+.ba.good{background:var(--ok)}.ba.mid{background:var(--amber)}.ba.low{background:color-mix(in srgb,var(--err) 50%,var(--el))}.ba.bad{background:var(--err)}
+.ba[aria-pressed=true]{outline:2px solid var(--text);outline-offset:1px}
+.btools{padding:0 18px}
+.bgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;padding:12px 18px 18px}
+.bc{border:1px solid var(--border);border-radius:10px;padding:8px;background:var(--bg);min-width:0}
+.bc .pics{display:flex;gap:4px;height:96px;align-items:center;justify-content:center;background:var(--el);border-radius:8px;margin-bottom:6px;overflow:hidden}
+.bc .pics img{max-height:96px;max-width:100%;object-fit:contain}
+.bc b{display:block;overflow-wrap:anywhere;font-size:14px}
+.bc .sc{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.bc .sc.good{color:var(--ok)}.bc .sc.mid{color:var(--amber)}.bc .sc.low{color:var(--err)}
+.bc small{display:block;color:var(--cap);font-size:12px;overflow-wrap:anywhere}
+.bc details summary{cursor:pointer;color:var(--tv);font-size:13px;min-height:32px;display:flex;align-items:center}
 .list a.item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:12px 18px;border-top:1px solid var(--border);color:var(--text);text-decoration:none;min-height:44px}
 .list a.item:first-child{border-top:0}
 .list a.item:hover{background:var(--el)}
@@ -168,7 +182,7 @@ async function api(path,method,body){
 const norm=b=>b&&typeof b.swarm==="object"&&b.swarm?b.swarm:b;
 const path=location.pathname.split("/").filter(Boolean);
 const id=path[1]||null;
-const S={sw:null,changes:[],loaded:false,results:null,pending:new Map(),filt:"all",batch:null,q:"",key:"",saveErr:null,timer:null,poll:null,busy:false,cd:null};
+const S={sw:null,changes:[],loaded:false,results:null,bq:{},pending:new Map(),filt:"all",batch:null,q:"",key:"",saveErr:null,timer:null,poll:null,busy:false,cd:null};
 const OPS_LABEL=o=>o;
 
 /* ---------- list page ---------- */
@@ -242,6 +256,7 @@ function viewAwaiting(){
    <dt>Read tools</dt><dd>${tags(s.tools)}</dd>
    <dt>Writes</dt><dd>${tags(s.writes)}</dd>
    <dt>Scope</dt><dd>${scopeText(s.scope)}</dd>
+   ${s.spec_preview&&s.spec_preview.prefetch?`<dt>Prefetch</dt><dd>Looks up each item with ${esc(s.spec_preview.prefetch.call)} first (no model, no cost)</dd>`:""}
    ${extra.join("")}
    <dt>Concurrency</dt><dd>${s.concurrency} at a time</dd>
    <dt>Estimate</dt><dd>${usd(s.estimate_usd.low)} to ${usd(s.estimate_usd.high)}, hard cap ${usd(s.cap_usd)}</dd>
@@ -265,12 +280,21 @@ function viewSummary(){
   const s=sw();
   return `<section class="card">${cellsHtml(false)}${s.reduce?`<div class="pad" style="padding-top:0"><h2>Summary</h2><p class="reduce">${esc(s.reduce)}</p></div>`:""}</section>${failNote()}`;
 }
+// the results board (APP-API-CONTRACT.md section 62.4): the agents by score, search, groups, a card per row
+const pct=v=>typeof v==="number"?Math.round(v*100)+"%":"–";
+const tone=v=>typeof v!=="number"?"":v>=.75?"good":v>=.4?"mid":"low";
 function viewResults(){
   const r=S.results;
   if(!r)return `<div class="card pad">Loading results…</div>`;
-  if(!r.list.length)return `<div class="card empty">No results.</div>`;
-  const pretty=v=>{try{return JSON.stringify(v,null,2)}catch(e){return String(v)}};
-  return `<section class="card rows"><div class="grp"><span>Results</span><span>${r.total} total</span></div>${r.list.map(x=>`<div class="res"><b>Task ${x.task+1}</b><span class="stt ${x.status==="done"?"ok":x.status==="failed"?"err":"run"}" style="text-align:left">${esc(x.status)}</span><div>${x.error?`<div class="err">${esc(x.error)}</div>`:""}${x.result!=null?`<details><summary>Result</summary><pre>${esc(pretty(x.result))}</pre></details>`:""}</div></div>`).join("")}</section>${r.list.length<r.total?`<button class="go ghost more" id="moreres">Load more</button>`:""}`;
+  const q=S.bq;
+  const strip=r.agents.map(a=>{const o=a.outcome||{};const t=`Agent ${a.agent}: ${a.status}, score ${pct(o.score)}, ${o.answered} of ${o.items} answered${a.error?", "+a.error:""}`;return `<button class="ba ${a.status==="failed"?"bad":tone(o.score)}" data-ba="${a.agent}" aria-pressed="${q.agent===a.agent}" title="${esc(t)}" aria-label="${esc(t)}"></button>`}).join("");
+  const sorts=[["agent","By agent"],["score","Best first"],["title","A to Z"]].map(([v,t])=>`<button class="chip" data-bs="${v}" aria-pressed="${(q.sort||"agent")===v}">${t}</button>`).join("");
+  const groups=r.groups.length?`<button class="chip" data-bg="" aria-pressed="${q.group===undefined}">All</button>`+r.groups.map(g=>`<button class="chip" data-bg="${esc(g.value)}" aria-pressed="${q.group===g.value}">${esc(g.value)}<i>${g.count}</i></button>`).join(""):"";
+  const card=x=>{const pics=(x.media||[]).filter(m=>m.preview_url&&/^https:\/\//.test(m.preview_url)).slice(0,4);const f=Object.entries(x.fields||{});
+    return `<div class="bc"><div class="pics">${pics.length?pics.map(m=>`<img src="${esc(m.preview_url)}" alt="${esc(m.title||m.ref)}" loading="lazy">`).join(""):`<span class="sub">no picture</span>`}</div><b>${esc(x.title)}</b>${typeof x.score==="number"?`<span class="sc ${tone(x.score)}">${pct(x.score)}</span> `:""}<small>Agent ${x.agent}${x.group?" · "+esc(x.group):""}</small>${f.slice(0,3).map(([k,v])=>`<small>${esc(k)}: ${esc(String(v))}</small>`).join("")}${f.length>3||x.links.length||pics.length?`<details><summary>All of it</summary>${f.map(([k,v])=>`<small>${esc(k)}: ${esc(String(v))}</small>`).join("")}${(x.media||[]).map(m=>m.open_url?`<small><a href="${esc(m.open_url)}" target="_blank" rel="noopener">${esc(m.ref)}</a></small>`:"").join("")}${x.links.map(l=>`<small><a href="${esc(l)}" target="_blank" rel="noopener">${esc(l)}</a></small>`).join("")}</details>`:""}</div>`};
+  return `<section class="card rows"><div class="grp"><span>Results${typeof r.score==="number"?` · score ${pct(r.score)}`:""}</span><span>${r.total} total</span></div><div class="bst">${strip}</div>
+  <div class="btools"><div class="tools"><input type="search" id="bq" placeholder="Search results" aria-label="Search results" value="${esc(q.q||"")}">${sorts}</div>${groups?`<div class="tools" style="margin-top:0">${groups}</div>`:""}</div>
+  ${r.list.length?`<div class="bgrid">${r.list.map(card).join("")}</div>`:`<div class="empty">Nothing matches.</div>`}</section>${r.list.length<r.total?`<button class="go ghost more" id="moreres">Load more</button>`:""}`;
 }
 function viewReview(){
   const s=sw();
@@ -362,11 +386,14 @@ async function loadChanges(){
 }
 async function loadResults(more){
   const off=more&&S.results?S.results.list.length:0;
-  const r=await api(`/api/swarms/${id}/results?offset=${off}&limit=100`);
+  const p=new URLSearchParams({offset:String(off),limit:"100"});
+  for(const [k,v] of Object.entries(S.bq))if(v!==undefined&&v!=="")p.set(k,String(v));
+  const r=await api(`/api/swarms/${id}/board?${p}`);
   if(!r.ok)return;
-  const l=r.body.results||[];
-  S.results={list:(more&&S.results?S.results.list:[]).concat(l),total:r.body.total??l.length};
+  const b=r.body,l=b.rows||[];
+  S.results={list:(more&&S.results?S.results.list:[]).concat(l),total:b.total??l.length,agents:b.agents||[],groups:b.groups||[],score:b.swarm&&b.swarm.score};
 }
+async function boardBy(patch){Object.assign(S.bq,patch);await loadResults(false);$("body").innerHTML=bodyFor()}
 function queue(n,patch){
   const p=S.pending.get(n)||{n};Object.assign(p,patch);S.pending.set(n,p);S.saveErr=null;
   clearTimeout(S.timer);S.timer=setTimeout(flush,600);drawBar();
@@ -402,7 +429,7 @@ function bodyFor(){
     case"awaiting_approval":return viewAwaiting();
     case"running":case"stopping":return viewRunning();
     case"done":return s.mode==="propose"&&s.changes&&s.changes.total>0?viewReview():viewSummary()+viewResults();
-    case"failed":case"stopped":return viewMessage()+viewSummary()+(S.results&&S.results.list.length?viewResults():"");
+    case"failed":case"stopped":return viewMessage()+viewSummary()+(S.results&&S.results.agents.length?viewResults():"");
     default:return viewMessage();
   }
 }
@@ -457,6 +484,9 @@ document.addEventListener("click",async e=>{
   else if(t.id==="none"){shown().forEach(c=>{if(c.keep){c.keep=false;queue(c.n,{keep:false})}});drawRows()}
   else if(t.id==="showmore"){S.limit+=RENDER_CAP;drawRows()}
   else if(t.id==="moreres"){await loadResults(true);$("body").innerHTML=bodyFor()}
+  else if(t.dataset.ba){const a=+t.dataset.ba;await boardBy({agent:S.bq.agent===a?undefined:a})}
+  else if(t.dataset.bs){await boardBy({sort:t.dataset.bs})}
+  else if(t.dataset.bg!==undefined){await boardBy({group:t.dataset.bg===""?undefined:t.dataset.bg})}
   else if(t.id==="approve")act("approve",{spec_hash:sw().spec_hash},"amsg");
   else if(t.id==="decline")act("decline",undefined,"amsg");
   else if(t.id==="stop")act("stop");
@@ -472,7 +502,7 @@ document.addEventListener("input",e=>{
   if(t.dataset&&t.dataset.n!==undefined){const c=S.changes.find(x=>x.n===+t.dataset.n);c.after=t.value;queue(c.n,{after:t.value})}
 });
 document.addEventListener("change",e=>{if(e.target.id==="bsel"){S.batch=e.target.value===""?null:+e.target.value;drawRows()}});
-document.addEventListener("keydown",e=>{if(e.key==="Escape")$("sheet").classList.remove("show")});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")$("sheet").classList.remove("show");if(e.key==="Enter"&&e.target.id==="bq")boardBy({q:e.target.value.trim()||undefined})});
 document.addEventListener("error",e=>{ // a picture that does not load: neutral tile with the first letter
   const t=e.target;if(t&&t.tagName==="IMG"&&t.classList.contains("emo")){const d=document.createElement("div");d.className="emo";d.setAttribute("aria-hidden","true");const row=t.closest("[data-r]");const c=row&&S.changes.find(x=>x.n===+row.dataset.r);d.textContent=((c&&(c.before||c.target||c.op))||"?").trim().charAt(0).toUpperCase();t.replaceWith(d)}
 },true);

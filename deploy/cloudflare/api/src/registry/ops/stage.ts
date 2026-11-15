@@ -4,7 +4,7 @@
 // Twitch connect stay owner-only (no AI call).
 import * as z from "zod";
 import { stageDepsFrom } from "../../deps";
-import { EMOTE_SORT_KEYS, saveEmote, searchEmotes, type EmoteSort } from "../../emotes";
+import { EMOTE_SORT_KEYS, FIND_MANY_MAX, findManyEmotes, saveEmote, searchEmotes, type EmoteSort } from "../../emotes";
 import { stageKeyed, type StageDeps, type StageOp } from "../../stage";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
@@ -354,7 +354,20 @@ const EMOTE_MESSAGES: Record<string, string> = {
     "error.emote.unavailable": "7TV did not answer: try again later",
     "error.emote.not_found": "no 7TV emote with that id",
     "error.emote.too_big": "that emote's file is too big to save",
+    "error.emote.rate_limited": "7TV is rate limiting: wait a little and try again",
 };
+
+const EmoteHitShape = z.object({
+    id: z.string().describe("the 7TV emote id (for save)"),
+    name: z.string(),
+    animated: z.boolean(),
+    preview_url: z.string(),
+    file_url: z.string().describe("the largest webp on 7TV's CDN"),
+    width: z.number(),
+    height: z.number(),
+    library_id: z.string().nullable().describe("already saved: its library file id"),
+    library_url: z.string().nullable(),
+});
 
 export const emotesSearchOp = defineOp({
     name: "emotes.find",
@@ -377,19 +390,8 @@ export const emotesSearchOp = defineOp({
         sort: z.string(),
         page: z.number(),
         has_more: z.boolean(),
-        items: z.array(
-            z.object({
-                id: z.string().describe("the 7TV emote id (for save)"),
-                name: z.string(),
-                animated: z.boolean(),
-                preview_url: z.string(),
-                file_url: z.string().describe("the largest webp on 7TV's CDN"),
-                width: z.number(),
-                height: z.number(),
-                library_id: z.string().nullable().describe("already saved: its library file id"),
-                library_url: z.string().nullable(),
-            }),
-        ),
+        items: z.array(EmoteHitShape),
+        cached: z.literal(true).optional().describe("answered from the 24 h cache (section 62.5)"),
     }),
     ai: {
         tier: "free",
@@ -405,6 +407,30 @@ export const emotesSearchOp = defineOp({
         const r = await searchEmotes(ctx.app(), q);
         return ok(unwrap<{ items: unknown[]; sort: string; page: number; has_more: boolean }>(r, EMOTE_MESSAGES));
     },
+});
+
+// Section 62.5: several names in one 7TV request (the cache first), first page only.
+export const emotesFindManyOp = defineOp({
+    name: "emotes.findMany",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({
+        queries: z.array(z.string().trim().min(1).max(64)).min(1).max(FIND_MANY_MAX).describe(`emote names to look for, 1 to ${FIND_MANY_MAX}`),
+        sort: z.enum(EMOTE_SORT_KEYS as [EmoteSort, ...EmoteSort[]]).optional().describe("as emotes.find, default top"),
+    }),
+    output: z.object({
+        sort: z.string(),
+        results: z.array(z.object({ q: z.string(), emotes: z.array(EmoteHitShape).describe("the first page (24)"), cached: z.boolean() })),
+    }),
+    ai: {
+        tier: "free",
+        only: true,
+        summary: `Look up several 7TV emote names at once (1 to ${FIND_MANY_MAX}): one request to 7TV instead of one each. Answers each name's first page.`,
+        params: ["queries"],
+        options: true,
+    },
+    handler: async (ctx, input) => ok(unwrap(await findManyEmotes(ctx.app(), input.queries, input.sort), EMOTE_MESSAGES)),
 });
 
 export const emotesSaveOp = defineOp({
@@ -428,5 +454,6 @@ export const STAGE_OPS = [
     stageItemsOp,
     stageActionOp,
     emotesSearchOp,
+    emotesFindManyOp,
     emotesSaveOp,
 ];

@@ -436,8 +436,9 @@ describe("cobalt.agents rules", () => {
 
     it("off without the binding, or with a cap of 0: no agents in the API", async () => {
         const flags = { search: false, agents: true };
-        expect(toolTypes(false, REGISTRY, false, flags)).toContain("agents: {");
-        expect(toolTypes(false, REGISTRY, false, {})).not.toContain("agents: {");
+        // the namespace line (a swarm board's answer also has an "agents" field, deeper in)
+        expect(toolTypes(false, REGISTRY, false, flags)).toMatch(/^  agents: \{$/m);
+        expect(toolTypes(false, REGISTRY, false, {})).not.toMatch(/^  agents: \{$/m);
         expect(systemPrompt(0, false, toolTypes(false, REGISTRY, false, {}))).not.toContain("Sub-agents:");
         env.CHAT_DAILY_AGENTS = "0";
         expect(chatDepsFrom(base())!.agents).toBeNull();

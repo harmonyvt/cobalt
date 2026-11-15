@@ -7,6 +7,7 @@ import { handleWebpRoute, isWebpRoute, WebpService, type WebpDeps } from "./webp
 import { ApnsClient, apnsConfigFrom, fetchTransport, helperTransport } from "./apns";
 import { handleLiveRoute, isLiveRoute, LiveService } from "./live";
 import { EditLiveService, handleEditLiveRoute, isEditLiveRoute } from "./edit-live";
+import { SwarmLiveService, handleSwarmLiveRoute, isSwarmLiveRoute } from "./swarm-live";
 import { ChatLiveService, handleChatLiveRoute, isChatLiveRoute } from "./chat-live";
 import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from "./notify";
 import { handleStudioRoute, isStudioRoute, parseSaveEngineMode, StudioService, type YtDlpDeps } from "./studio";
@@ -54,6 +55,7 @@ export { ChatJobs } from "./chat-jobs-do";
 export { ChatAgent } from "./chat-agents-do";
 // Agent swarms (APP-API-CONTRACT.md section 59): one object per swarm runs its tasks in its alarm.
 export { Swarm } from "./swarm-do";
+export { SevenTvGate } from "./seventv-gate-do";
 export { ContainerProxy } from "@cloudflare/containers";
 
 export interface Env extends WorkerEnv {
@@ -114,6 +116,7 @@ export class CobaltContainer extends Container<Env> {
     private studio: StudioService;
     private live: LiveService;
     private editLive: EditLiveService;
+    private swarmLive: SwarmLiveService;
     private chatLive: ChatLiveService;
     private notify: NotifyService;
 
@@ -229,6 +232,8 @@ export class CobaltContainer extends Container<Env> {
         });
         // editor renders (section 32): the app's token, pushes from the EditRenderer's ticks
         this.editLive = new EditLiveService({ storage: this.ctx.storage, db: env.DB, now: webpDeps.now, apns });
+        // swarms (section 61.5): the approve island on the owner's newest device, pushed from the swarm ops and runner
+        this.swarmLive = new SwarmLiveService({ storage: this.ctx.storage, db: env.DB, now: webpDeps.now, apns, scheduleSweep: () => this.scheduleSweepSoon() });
         // chat replies shown on the owner's other devices (section 27.9): the start tokens, pushes from the chat route
         this.chatLive = new ChatLiveService({ storage: this.ctx.storage, now: webpDeps.now, apns, scheduleSweep: () => this.scheduleSweepSoon() });
 
@@ -339,10 +344,17 @@ export class CobaltContainer extends Container<Env> {
     private sweepLive(): SweepLive {
         const live = this.live;
         const chat = this.chatLive;
+        const swarm = this.swarmLive;
         return {
             hasActiveRuns: () => live.hasActiveRuns(),
             cleanup: (now) => live.cleanup(now),
-            watchQuiet: (now) => live.watchQuiet(now),
+            // the swarm islands' expiries and keep-alives ride on the quiet pass (at most a minute apart)
+            watchQuiet: async (now) => {
+                const runs = await live.watchQuiet(now);
+                const swarms = await swarm.watch(now).catch((e) => (console.error("[cobalt-do] swarm live watch failed", String(e)), { nextInMs: null }));
+                const times = [runs.nextInMs, swarms.nextInMs].filter((ms): ms is number => ms !== null);
+                return { nextInMs: times.length > 0 ? Math.min(...times) : null };
+            },
             retryEnds: async (now) => {
                 // Both run in the same sweep pass.
                 const runs = await live.retryEnds(now);
@@ -407,6 +419,9 @@ export class CobaltContainer extends Container<Env> {
         // never through super.fetch. The key id header is the Worker's word.
         if (isEditLiveRoute(new URL(request.url).pathname)) {
             return handleEditLiveRoute(this.editLive, request, this.env.COBALT_API_KEY);
+        }
+        if (isSwarmLiveRoute(new URL(request.url).pathname)) {
+            return handleSwarmLiveRoute(this.swarmLive, request, this.env.COBALT_API_KEY);
         }
         if (isChatLiveRoute(new URL(request.url).pathname)) {
             return handleChatLiveRoute(this.chatLive, request, this.env.COBALT_API_KEY);

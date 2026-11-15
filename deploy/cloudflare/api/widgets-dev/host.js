@@ -69,6 +69,7 @@ const FIX = {
     "swarm.read": { tool: "swarm_get", args: { id: "swm-8Kp2xQ" }, out: F.swarmRead },
     "swarm.failed": { tool: "swarm_get", args: { id: "swm-8Kp2xQ" }, out: F.swarmFailed },
     "swarm.stopped": { tool: "swarm_get", args: { id: "swm-8Kp2xQ" }, out: F.swarmStopped },
+    "board.results": { tool: "swarm_board", args: { id: "swm-8Kp2xQ" }, out: () => F.boardOut() },
     // never answers: the skeleton
     "skeleton.search": { tool: "search_library", args: { query: "pink" }, out: null, view: "search" },
     "skeleton.webp": { tool: "convert_to_webp", args: { id: "x" }, out: null, view: "webp" },
@@ -100,6 +101,7 @@ function handleCall(p) {
             return d ? ok(d) : bad("no post with that id");
         }
         case "swarm_get": return ok(F.swarmRunning());
+        case "swarm_board": return ok(F.boardOut(a));
         case "search_library": return ok(F.searchOut(a.query, 6));
         case "list_share_links": return ok({ ...F.linksOut(), links: F.LINKS.slice(0, 2), total: 2 });
         case "show_edit": return ok(a.id === "edit-priv" ? F.editPrivate() : F.editOut(F.EDIT));

@@ -310,6 +310,12 @@ export default defineConfig({
 				worker: "cobalt-api",
 				exportName: "Swarm",
 			}),
+			// One pace for every 7TV API call (src/seventv-gate.ts, APP-API-CONTRACT.md section 62.5): one object, "gate",
+			// 5 reads and 1 write a second, half for a minute after a 429. Without it nothing waits. No secret, no migration.
+			SEVENTV_GATE: bindings.durableObject({
+				worker: "cobalt-api",
+				exportName: "SevenTvGate",
+			}),
 		},
 		exports: {
 			CobaltContainer: exports.durableObject({
@@ -333,6 +339,7 @@ export default defineConfig({
 			ChatJobs: exports.durableObject({ storage: "sqlite" }),
 			ChatAgent: exports.durableObject({ storage: "sqlite" }),
 			Swarm: exports.durableObject({ storage: "sqlite" }),
+			SevenTvGate: exports.durableObject({ storage: "sqlite" }),
 		},
 	},
 	containers: [cobaltContainer, editContainer, workbenchContainer, ytdlpContainer],

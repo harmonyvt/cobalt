@@ -2,7 +2,7 @@
 // returns the live catJAM image list captured 2026-10-14.
 import { describe, expect, it } from "vitest";
 import { libraryPostDelete, type AppDeps } from "../src/app-routes";
-import { pickWebp, previewWebp, saveEmote, searchEmotes, type EmoteImage } from "../src/emotes";
+import { findManyEmotes, pickWebp, previewWebp, saveEmote, searchEmotes, type EmoteCache, type EmoteImage } from "../src/emotes";
 import type { GateRequest } from "../src/gate";
 import { dispatch as decide } from "./dispatch";
 import { REGISTRY } from "../src/registry/index";
@@ -274,5 +274,102 @@ describe("POST /emotes", () => {
             throw new Error("down");
         });
         expect(down).toMatchObject({ status: 502, body: { error: { code: "error.emote.unavailable" } } });
+    });
+});
+
+// ---- fewer 7TV requests (section 62.5): the 24 h cache, the batch, Retry-After, the gate -------------------------------
+
+class MemoryCache implements EmoteCache {
+    store = new Map<string, string>();
+    ttl = new Map<string, string | null>();
+    async match(key: Request) {
+        const v = this.store.get(key.url);
+        return v === undefined ? undefined : new Response(v);
+    }
+    async put(key: Request, res: Response) {
+        this.store.set(key.url, await res.text());
+        this.ttl.set(key.url, res.headers.get("cache-control"));
+    }
+}
+
+describe("fewer 7TV requests (62.5)", () => {
+    const searchBody = (n = 1) => ({ data: { emotes: { search: { pageCount: 1, items: Array.from({ length: n }, () => emote()) } } } });
+
+    it("a search is kept for a day: the second asks nobody and says cached", async () => {
+        const { d } = world();
+        const cache = new MemoryCache();
+        let calls = 0;
+        const fetchImpl = (async () => (calls++, jsonRes(searchBody()))) as unknown as typeof fetch;
+        const dc = { ...d, emoteCache: cache };
+        const a = await searchEmotes(dc, new URLSearchParams("q=Cat"), fetchImpl);
+        const b = await searchEmotes(dc, new URLSearchParams("q=  cat "), fetchImpl);
+        expect(calls).toBe(1);
+        expect(a.body).not.toHaveProperty("cached");
+        expect(b.body).toMatchObject({ cached: true, items: [{ id: CAT, library_id: null }] });
+        expect([...cache.store.keys()]).toEqual(["https://emote-cache.internal/find?q=cat&sort=top&page=1"]);
+    });
+
+    it("findMany: the names not in the cache go out as one aliased request, in the asked order", async () => {
+        const { d } = world();
+        const cache = new MemoryCache();
+        const dc = { ...d, emoteCache: cache };
+        await searchEmotes(dc, new URLSearchParams("q=cat"), (async () => jsonRes(searchBody())) as unknown as typeof fetch);
+        const sent: { query: string; variables: Record<string, unknown> }[] = [];
+        const fetchImpl = (async (_u: string, init: RequestInit) => {
+            sent.push(JSON.parse(String(init.body)));
+            return jsonRes({ data: { s0: { search: { pageCount: 1, items: [emote({ defaultName: "dog" })] } }, s1: { search: { pageCount: 1, items: [] } } } });
+        }) as unknown as typeof fetch;
+        const r = await findManyEmotes(dc, ["dog", "cat", "nothing", "Dog"], undefined, fetchImpl);
+        expect(r.status).toBe(200);
+        expect(sent).toHaveLength(1);
+        expect(sent[0]!.query).toMatch(/s0: emotes \{ search\(query: \$q0/);
+        expect(sent[0]!.query).toMatch(/s1: emotes \{ search\(query: \$q1/);
+        expect(sent[0]!.variables).toMatchObject({ q0: "dog", q1: "nothing" });
+        const body = r.body as { sort: string; results: { q: string; cached: boolean; emotes: { name: string }[] }[] };
+        expect(body.sort).toBe("top");
+        expect(body.results.map((x) => [x.q, x.cached, x.emotes.length])).toEqual([
+            ["dog", false, 1],
+            ["cat", true, 1],
+            ["nothing", false, 0],
+            ["Dog", false, 1],
+        ]);
+        // over 20 names, or an empty one, is refused before any request
+        expect((await findManyEmotes(dc, Array.from({ length: 21 }, (_, i) => `n${i}`), undefined, fetchImpl)).status).toBe(400);
+        expect((await findManyEmotes(dc, [" "], undefined, fetchImpl)).status).toBe(400);
+        expect((await findManyEmotes(dc, ["a"], "nope", fetchImpl)).status).toBe(400);
+        expect(sent).toHaveLength(1);
+    });
+
+    it("a partial answer (GraphQL errors, a null alias) is answered but not cached; an empty one is kept 10 minutes", async () => {
+        const { d } = world();
+        const cache = new MemoryCache();
+        const dc = { ...d, emoteCache: cache };
+        // one search with errors beside its data
+        const partial = (async () => jsonRes({ data: { emotes: { search: { pageCount: 1, items: [] } } }, errors: [{ message: "timeout" }] })) as unknown as typeof fetch;
+        expect((await searchEmotes(dc, new URLSearchParams("q=cat"), partial)).status).toBe(200);
+        expect(cache.store.size).toBe(0);
+        // findMany: s0 answered, s1 null with an error -> nothing cached (the whole answer is partial)
+        const many = (async () => jsonRes({ data: { s0: { search: { pageCount: 1, items: [emote()] } }, s1: null }, errors: [{ message: "s1 failed", path: ["s1"] }] })) as unknown as typeof fetch;
+        const r = await findManyEmotes(dc, ["cat", "dog"], undefined, many);
+        expect((r.body as { results: { q: string; emotes: unknown[] }[] }).results.map((x) => [x.q, x.emotes.length])).toEqual([
+            ["cat", 1],
+            ["dog", 0],
+        ]);
+        expect(cache.store.size).toBe(0);
+        // a clean answer with no emotes: cached briefly; with emotes: a day
+        const empty = (async () => jsonRes({ data: { s0: { search: { pageCount: 0, items: [] } }, s1: { search: { pageCount: 1, items: [emote()] } } } })) as unknown as typeof fetch;
+        await findManyEmotes(dc, ["nothing", "cat"], undefined, empty);
+        expect(Object.fromEntries([...cache.ttl].map(([k, v]) => [new URL(k).searchParams.get("q"), v]))).toEqual({ nothing: "public, max-age=600", cat: "public, max-age=86400" });
+    });
+
+    it("a 429 answers error.emote.rate_limited with 7TV's Retry-After, and slows the gate", async () => {
+        const { d } = world();
+        const gateCalls: string[] = [];
+        const gate = { slot: async (k: string) => void gateCalls.push(`slot:${k}`), slow: async () => void gateCalls.push("slow") };
+        const res429 = (h: string | null) => (async () => ({ ...jsonRes({}, 429), headers: new Headers(h ? { "retry-after": h } : {}) })) as unknown as typeof fetch;
+        const dg = { ...d, sevenTvGate: gate };
+        expect(await searchEmotes(dg, new URLSearchParams("q=cat"), res429("12"))).toEqual({ status: 429, body: { status: "error", error: { code: "error.emote.rate_limited", retry_after: 12 } } });
+        expect(await findManyEmotes(dg, ["cat"], undefined, res429(null))).toEqual({ status: 429, body: { status: "error", error: { code: "error.emote.rate_limited" } } });
+        expect(gateCalls).toEqual(["slot:read", "slow", "slot:read", "slow"]);
     });
 });

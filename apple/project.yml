@@ -21,7 +21,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: "8.11"
+    MARKETING_VERSION: "8.19"
     CURRENT_PROJECT_VERSION: "26"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
@@ -184,6 +184,9 @@ targets:
     sources:
       - path: CobaltWidgets
       - path: Cobalt/Design
+      # The swarm buttons (Approve/Apply/Decline/Stop): `Button(intent:)` needs the types here, and the system runs them in
+      # the app's process, so the app target (which has all of `Cobalt`) compiles the same file.
+      - path: Cobalt/Intents/SwarmLiveIntents.swift
       # Plex Mono: registered through UIAppFonts below; the views fall back to the system
       # monospaced font when the files are missing.
       - path: Cobalt/Resources/Fonts

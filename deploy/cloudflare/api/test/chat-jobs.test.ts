@@ -149,3 +149,31 @@ describe("the routes and the Worker's port", () => {
         await expect(port.watch("bad", { job: "edit:c", message_id: null, note: null })).rejects.toThrow("error.chat.bad_request");
     });
 });
+
+describe("a swarm agent's question (APP-API-CONTRACT 61.3)", () => {
+    it("continues the thread with each new question once, and keeps watching the swarm", async () => {
+        const job = "swarm:AbCdEfGh12345678";
+        const ask = (id: number, agent: number) => ({ id, agent, text: `question ${id}` });
+        states.set(job, [
+            { job, status: "running" },
+            { job, status: "running", asks: [ask(4, 2)] },
+            { job, status: "running", asks: [ask(4, 2)] },
+            { job, status: "running", asks: [ask(4, 2), ask(9, 3)] },
+            { job, status: "done", result: "2 of 2 tasks done" },
+        ]);
+        expect(await add(job)).toBeNull();
+        await core.tick();
+        expect(resumed).toHaveLength(0);
+        await core.tick();
+        expect(resumed).toHaveLength(1);
+        expect(resumed[0]!.ended[0]!.result).toMatchObject({ status: "message", asks: [ask(4, 2)] });
+        await core.tick();
+        expect(resumed).toHaveLength(1); // the same question is not handed over twice
+        await core.tick();
+        expect(resumed[1]!.ended[0]!.result.asks).toEqual([ask(9, 3)]);
+        expect(await core.list()).toHaveLength(1);
+        await core.tick();
+        expect(resumed[2]!.ended[0]!.result.status).toBe("done");
+        expect(await core.list()).toHaveLength(0);
+    });
+});

@@ -191,7 +191,14 @@ export const lookOp = defineOp({
     runs: "worker",
     cors: false,
     input: z.object({
-        ids: Ids,
+        ids: Ids.optional().describe("posts to look at; may be left out when media is given"),
+        media: z
+            .string()
+            .trim()
+            .min(1)
+            .max(2048)
+            .optional()
+            .describe("one media ref to look at: a capystore link or id, a 7TV emote id or link, or an https image URL on the allowlist"),
         grid: z.boolean().optional().describe("draw lines every 0.1 of the width and height, to read off a crop box for make.cropImage"),
         frames: z.boolean().optional().describe("a video: also up to 3 frames spread across it, not only its poster"),
         box: z
@@ -204,12 +211,27 @@ export const lookOp = defineOp({
         refs: { ids: "posts" },
         tier: "free",
         only: true,
-        summary: "You get to SEE these posts' pictures (poster or image, private ones too) after this code returns. Max 4 per reply. Returns how many are queued.",
+        summary:
+            "You get to SEE these posts' pictures (poster or image, private ones too) after this code returns; or any media with look({ media }) (a 7TV emote id or link, a capystore link, an allowed https image URL). Max 4 per reply. Returns how many are queued.",
         params: ["ids"],
         options: true,
+        // look(ids, opts), or look({ media }) / look({ ids, ... }) with one object
+        args: ([ids, opts]) =>
+            ids && typeof ids === "object" && !Array.isArray(ids)
+                ? ids
+                : { ...(ids !== undefined && ids !== null ? { ids } : {}), ...(opts && typeof opts === "object" && !Array.isArray(opts) ? opts : {}) },
     },
-    handler: async (ctx, input) =>
-        ok(await tools(ctx).look!(input.ids, { ...(input.grid ? { grid: true } : {}), ...(input.frames ? { frames: true } : {}), ...(input.box ? { box: input.box } : {}) })),
+    handler: async (ctx, input) => {
+        if ((input.ids ?? []).length === 0 && !input.media) throw new OpError(400, "error.look.nothing", "look: give post ids or media");
+        return ok(
+            await tools(ctx).look!(input.ids ?? [], {
+                ...(input.grid ? { grid: true } : {}),
+                ...(input.frames ? { frames: true } : {}),
+                ...(input.box ? { box: input.box } : {}),
+                ...(input.media ? { media: input.media } : {}),
+            }),
+        );
+    },
 });
 
 export const showOp = defineOp({

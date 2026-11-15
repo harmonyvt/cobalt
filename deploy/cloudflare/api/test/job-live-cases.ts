@@ -1,6 +1,6 @@
 // The cases of test/fixtures/job-live-states.json: one job per kind and phase, built by the server's builders.
 // The app's JobLiveState decodes every one (CobaltKit JobLiveTests), the parity pin of CONTRACT-JOBLIVE.
-import { jobOfChat, jobOfEdit, jobOfSave, type Job } from "../src/job-live";
+import { jobOfChat, jobOfEdit, jobOfSave, jobOfSwarm, type Job, type SwarmLiveInput } from "../src/job-live";
 import type { RunAttributes } from "../src/live";
 
 const RUN = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
@@ -8,6 +8,30 @@ const T = 1790000000;
 const link: RunAttributes = { run: RUN, input: "link", service: "twitch", ref: "KindStupidClip", origin: "share" };
 const file: RunAttributes = { run: RUN, input: "file", service: "file", ref: "IMG_0412.mov", origin: "app" };
 const base = { rail: 0, since: T, waking: false, packing: false };
+const MS = T * 1000;
+const noChanges = { total: 0, kept: 0, open: 0, clashes: 0, done: 0, failed: 0 };
+const swarm: SwarmLiveInput = {
+    id: "Sw4rmIdSw4rmId01",
+    name: "clean emote names",
+    mode: "propose",
+    status: "running",
+    apply_status: "none",
+    spec_hash: "a1b2c3d4e5f60718",
+    planner: "claude code",
+    est_low: 0.12,
+    est_high: 0.4,
+    spent_usd: 0.21,
+    cap_usd: 2,
+    error: null,
+    reduce: null,
+    created_at: MS,
+    approved_at: MS + 60_000,
+    finished_at: null,
+    expires_at: MS + 3_600_000,
+    cells: "ddrwq",
+    changes: { ...noChanges, total: 7 },
+};
+const ended = { finished_at: MS + 600_000, cells: "ddddf" };
 
 export function jobCases(): Record<string, Job> {
     return {
@@ -29,5 +53,16 @@ export function jobCases(): Record<string, Job> {
         edit_failed: jobOfEdit("R3nd3rIdR3nd3rIdR3nd", { status: "failed", since: T, title: "birthday cut", code: "error.edit.missing_clip" }),
         chat_tools: jobOfChat("thread01", "save that clip", { status: "working", since: T, steps: 3, failedSteps: 0, tool: "search, save, look", shown: 0 }),
         chat_done: jobOfChat("thread01", "save that clip", { status: "done", since: T, steps: 3, failedSteps: 0, reply: "saved it (=^･ω･^=) it's in your library now", shown: 1 }),
+        swarm_awaiting: jobOfSwarm({ ...swarm, status: "awaiting_approval", approved_at: null, spent_usd: 0, cells: "qqqqq", changes: noChanges }, MS + 20 * 60_000),
+        swarm_running: jobOfSwarm(swarm, MS + 120_000),
+        swarm_running_read: jobOfSwarm({ ...swarm, mode: "read", cells: "ddrrq", spent_usd: 1.4 }, MS + 120_000),
+        swarm_stopping: jobOfSwarm({ ...swarm, status: "stopping", cells: "ddrss" }, MS + 120_000),
+        swarm_ready: jobOfSwarm({ ...swarm, ...ended, status: "done", apply_status: "ready", changes: { total: 7, kept: 6, open: 6, clashes: 2, done: 0, failed: 0 } }, MS + 700_000),
+        swarm_applying: jobOfSwarm({ ...swarm, ...ended, status: "done", apply_status: "applying", changes: { total: 7, kept: 6, open: 3, clashes: 0, done: 3, failed: 0 } }, MS + 700_000),
+        swarm_applied: jobOfSwarm({ ...swarm, ...ended, status: "done", apply_status: "applied", changes: { total: 7, kept: 6, open: 0, clashes: 0, done: 6, failed: 0 } }, MS + 700_000),
+        swarm_done_read: jobOfSwarm({ ...swarm, ...ended, mode: "read", status: "done", reduce: "12 of 40 emotes  look\nseasonal; the rest are fine" }, MS + 700_000),
+        swarm_capped: jobOfSwarm({ ...swarm, ...ended, mode: "read", status: "failed", error: "error.swarm.over_cap", spent_usd: 2.01 }, MS + 700_000),
+        swarm_declined: jobOfSwarm({ ...swarm, status: "declined", approved_at: null, finished_at: MS + 30_000, cells: "sssss" }, MS + 30_000),
+        swarm_expired: jobOfSwarm({ ...swarm, status: "awaiting_approval", approved_at: null, cells: "qqqqq" }, MS + 3_600_000),
     };
 }

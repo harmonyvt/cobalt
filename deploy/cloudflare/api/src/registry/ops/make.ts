@@ -275,6 +275,10 @@ export const JobSchema = z
         post_ids: z.array(z.string()).optional().describe("agent jobs that ended: the posts it showed"),
         // a swarm's job, swarm:<id> (section 59)
         swarm: z.string().optional().describe("swarm jobs: the swarm's id (its result is a summary; swarm.results has the rest)"),
+        asks: z
+            .array(z.object({ id: z.number(), agent: z.number(), text: z.string() }))
+            .optional()
+            .describe("swarm jobs while running: questions from its agents waiting for an answer (answer with swarm.send)"),
     })
     .meta({ id: "Job" });
 type Job = z.infer<typeof JobSchema>;
@@ -460,12 +464,16 @@ async function waitSwarm(ctx: OpContext, id: string, deadline: number): Promise<
         const k = await ctx.db.prepare("SELECT kind FROM api_keys WHERE id = ?1").bind(ctx.keyId).first<{ kind: string }>();
         all = k?.kind === "session";
     }
-    const { cellsOf, isMissingTable: isMissingSwarmTable, swarmJobState, swarmRow } = await import("../../swarm");
+    const { cellsOf, isMissingTable: isMissingSwarmTable, openAsks, swarmJobState, swarmRow } = await import("../../swarm");
     for (;;) {
         const row = await swarmRow(ctx.db, id).catch((e) => (isMissingSwarmTable(e) ? null : Promise.reject(e)));
         if (!row || (!all && row.key_id !== owner)) throw stop("jobs.wait", `swarm:${id} is not one of your swarms`);
-        const state = swarmJobState(row, await cellsOf(ctx.db, id)) as Job;
+        const cells = await cellsOf(ctx.db, id);
+        const asks = cells.some((c) => c.status === "waiting") ? await openAsks(ctx.db, id) : [];
+        const state = swarmJobState(row, cells, asks) as Job;
         if (state.status !== "queued" && state.status !== "running") return state;
+        // an agent is waiting on a question: the caller hears it now (it is the one who can answer), not at the deadline
+        if (asks.length > 0) return state;
         if (remaining(ctx, deadline) <= 0) return state;
         await ctx.edge.sleep(Math.min(2000, Math.max(0, deadline - ctx.now())));
     }

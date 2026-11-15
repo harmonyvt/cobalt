@@ -336,13 +336,15 @@ describe("MCP calls to ops that have an ai.args mapping", () => {
         "library.search": { query: "cat", limit: 5 },
         "library.about": { key: "Ab3dE6gH9jK2mN5p" },
         collage: { ids: ["Ab3dE6gH9jK2mN5p"], title: "t", query: "cat" },
+        // section 62.1: look({ media }) as one object
+        look: { media: "https://cdn.7tv.app/emote/01HZX5Q8M3Y9K2B7C4D6E8F0GA/2x.webp" },
     };
 
     it("every op with ai.args takes its own input object as it is (MCP-offered or not)", () => {
         const withMapping = REGISTRY.ops.filter((o) => o.ai.args).map((o) => o.callName).sort();
         expect(withMapping).toEqual(Object.keys(SAMPLES).sort());
         const offered = mcpOps(REGISTRY, { search: true, box: true, mcp: true, agents: true, ytdlp: true }).filter((o) => o.ai.args).map((o) => o.callName).sort();
-        expect(offered).toEqual(["library.about", "library.search"]);
+        expect(offered).toEqual(["library.about", "library.search", "look"]);
         for (const op of REGISTRY.ops.filter((o) => o.ai.args)) {
             const sample = SAMPLES[op.callName];
             expect(op.input.safeParse(sample).success, op.callName).toBe(true);
