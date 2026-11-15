@@ -137,7 +137,7 @@ extension OfflineStore {
         if keep {
             // a store nobody promotes from has no kept files (`canKeep`): keeping is a no-op there, and nothing is downloaded
             guard canKeep else { return [] }
-            guard (try? await write({ records in
+            guard (try? await write({ (records: inout [Record]) -> Void in
                 for i in records.indices where wanted.contains(records[i].id) { records[i].keep = true }
             })) != nil else { return [] }
             if visibleRoot != nil { await promote(only: wanted) }

@@ -74,9 +74,16 @@ struct OfflineStoreEngineTests {
     @Test func forcedAdoptRepublishesUnchangedRecords() async throws {
         let store = try makeStore()
         try await add(store, session: "S1")
+        // What `swapRoot` relies on: unchanged records, but `videos` derived from them is stale (there, every kept file's
+        // URL moved with the root). Observation only notifies when a value really changes (an equal assignment is
+        // silent), so stand the staleness in directly: an unforced adopt keeps it, a forced one re-derives and republishes.
+        store.videos = []
+        store.adopt(store.records)
+        #expect(store.videos.isEmpty, "unchanged records alone re-derive nothing")
         let fired = watch(store)
-        store.adopt(store.records, force: true)                            // what `swapRoot` does when the root moves
+        store.adopt(store.records, force: true)
         #expect(fired.fired)
+        #expect(store.videos.count == 1)
     }
 
     @Test func writesInARowBothLandInOrder() async throws {
@@ -97,7 +104,8 @@ struct OfflineStoreEngineTests {
         for i in 0..<8 { ids.append(try await add(store, session: "M\(i)").mediaID) }
         await withTaskGroup(of: Void.self) { group in
             for (i, id) in ids.enumerated() {
-                group.addTask { @MainActor in await store.setTitle("t\(i)", media: id) }
+                let title = "t\(i)"
+                group.addTask { await store.setTitle(title, media: id) }
             }
         }
         let onDisk = OfflineStore.readRecords(root: store.root)

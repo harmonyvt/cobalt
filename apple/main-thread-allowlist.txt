@@ -29,8 +29,6 @@ Cobalt/Screens/Detail/GalleryActions.swift: if let url = r.local?.fileURL, url.i
 Cobalt/Screens/Detail/GalleryPager.swift: if let poster = r.local?.posterURL, fm.fileExists(atPath: poster.path) { # 8.17 baseline, move off main
 Cobalt/Screens/Detail/GalleryPager.swift: let fm = FileManager.default # 8.17 baseline, move off main
 Cobalt/Screens/Detail/GalleryPager.swift: } else if let file = r.local?.fileURL, r.isStillPicture, fm.fileExists(atPath: file.path) { # 8.17 baseline, move off main
-Cobalt/Screens/Detail/PhotoHero.swift: if let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { # 8.17 baseline, move off main
-Cobalt/Screens/Detail/PhotoHero.swift: } else if let url = r.local?.posterURL.flatMap({ FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }) ?? r.posterURL { # 8.17 baseline, move off main
 Cobalt/Screens/Detail/RenditionHero.swift: onDisk = FileManager.default.fileExists(atPath: url.path) # 8.17 baseline, move off main
 Cobalt/Screens/Home/FocusView.swift: guard FileManager.default.fileExists(atPath: path) else { return false } # 8.17 baseline, move off main
 Cobalt/Screens/Home/GalleryPreviewHooks.swift: guard let file = video.fileURL, let size = (try? fm.attributesOfItem(atPath: file.path)[.size]) as? Int, size > 0 else { continue } # 8.17 baseline, move off main
