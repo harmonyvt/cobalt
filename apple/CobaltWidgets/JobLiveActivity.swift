@@ -302,9 +302,15 @@ struct JobClock: View {
                 mark("questionmark", ink.red)
             } else {
                 // A timer `Text` claims whatever width the row offers, which squeezed the title. Size the slot from a
-                // same-width template instead ("0:00", or "0:00:00" once the job is past an hour) and draw the live timer
-                // over it, trailing: the title only gives way when the row is really full.
-                Text(Date.now.timeIntervalSince(facts.since) >= 3600 ? "0:00:00" : "0:00")
+                // same-width template instead ("00:00", or "0:00:00" once the job is near an hour: the system ticks the
+                // timer by itself, so the slot is picked when the activity is drawn) and draw the live timer over it,
+                // trailing: the title only gives way when the row is really full.
+                //
+                // No `.fixedSize()` on the timer: in a Live Activity that blanked everything laid out after the clock
+                // (the rest of the Dynamic Island's bottom region, and the card's lines under its top row): the island
+                // kept the room and drew nothing in it. Found by bisecting in the simulator; with or without `.hidden()`
+                // on the template, `.fixedSize()` on the timer alone reproduces it.
+                Text(Date.now.timeIntervalSince(facts.since) >= 1800 ? "0:00:00" : "00:00")
                     .font(liveFont(size))
                     .monospacedDigit()
                     .hidden()
@@ -313,8 +319,8 @@ struct JobClock: View {
                             .font(liveFont(size))
                             .monospacedDigit()
                             .foregroundStyle(ink.secondary)
+                            .multilineTextAlignment(.trailing)
                             .lineLimit(1)
-                            .fixedSize()
                     }
             }
         }
