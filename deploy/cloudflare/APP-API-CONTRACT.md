@@ -6986,3 +6986,94 @@ posts. Marked: `library.post`, `library.title`, `library.about`, `library.about.
 - `show_post` on a hidden post: `post <id> “<title>” is hidden (library_status unhides it: ids ["<id>"], status "off" …)`.
 - `search_library` with a ref as its query: MCP-APP-CONTRACT.md section 4.
 - The MCP instructions say any link may be passed where an id is asked for, and that a tool that changed nothing errors.
+
+## 61. Swarms in the apps, approve from the Live Activity, and agents that talk to their owner (addendum, 2026-11-15; owner: "view, approve, decline etc swarm including individual swarm agent in the iOS Mac app and live activity", then "I want to approve via live activity and also this whole ui is not simple and intuitive", then "the swarm can like communicate back with the owner agent and they can send msg back and forth I want the mcp to support this", then "Implement please". Design: https://claude.ai/artifact/Gxp8UZKkWNnzgFitioW26B (v2). Numbering: 60 is links as ids; migration 0044)
+
+Builds on 59. The apps get one screen per swarm (`apple/CONTRACT-SWARMS.md`); the server adds messages between a
+swarm's agents and the agent that planned it, a short step log per agent, one agent's detail, and a `swarm` kind on the
+job Live Activity (8.13) whose buttons approve, decline, stop and apply. Agents are numbered from **1** everywhere a
+person or a model sees them (`agent`); storage keeps `idx` from 0.
+
+### 61.1 Storage (migration 0044)
+
+- `swarm_messages`: `id` INTEGER PRIMARY KEY AUTOINCREMENT, `swarm`, `task` (idx, NULL = to every agent), `dir`
+  (`up` = an agent to its owner, `down` = to agents), `kind` (`ask` | `tell` | `reply` | `note`), `sender` (`agent` |
+  `owner` | `you`), `text` (1..2000), `created_at`, `read_at` (owner's inbox; NULL = unread), `answered_at` (an `ask`).
+  Index (`swarm`, `id`).
+- `swarm_tasks` gains `steps` TEXT (JSON array of the last 20 `{ at, text }`, text ≤ 80 chars) and `asked_at` INTEGER
+  (set while the agent waits for an answer).
+- Task status gains `waiting` (an agent parked on a question). It holds no concurrency slot and spends nothing.
+
+### 61.2 Inside an agent (`cobalt.swarm.*`, swarm agents only)
+
+| call | does | answers |
+| --- | --- | --- |
+| `cobalt.swarm.ask(text)` | stores an `up` `ask`; the agent's turn ends after this `run_code` | `{ asked: true, note: "your turn ends now; the answer comes as your next message" }` |
+| `cobalt.swarm.tell(text)` | stores an `up` `tell` (a report, no answer needed) | `{ sent: true }` |
+
+At most 3 asks and 20 messages an agent; more is an error the model sees. After the turn with an ask, the runner parks
+the task (`waiting`, `asked_at`, the conversation kept in `state`). A parked task wakes when a `down` message for it (or
+for every agent) arrives after `asked_at`, or after **10 minutes** (`SWARM_ASK_WAIT_MS`): its next turn starts with
+`[answer from <owner name>]: <text>` (several in order) or `[no answer in 10 minutes: go on with your best guess and
+say so in your answer]`. Waiting does not count as a model turn. Broadcasts (`task` NULL) reach a running agent at the
+start of its next turn and a queued one under its prompt. Messages never change the program: tools, writes, scope,
+cap and prompt stay what was approved.
+
+### 61.3 Owner calls
+
+| call (MCP tool) | route | auth | tier | answers |
+| --- | --- | --- | --- | --- |
+| `swarm.inbox` (`swarm_inbox`) | `GET /swarms/inbox` | key | free | `{ messages: SwarmMessage[] }`: unread `up` messages of the caller's swarms, oldest first, at most 100, now marked read |
+| `swarm.send` (`swarm_send`) | `POST /swarms/<id>/messages` `{ to: <agent> \| "all", text }` | key_or_service | free | `{ sent, to, woke }` (`woke`: an agent waiting on a question was woken) |
+| `swarm.messages` (`swarm_messages`) | `GET /swarms/<id>/messages?agent&after` | key_or_service | free | `{ messages: SwarmMessage[] }`, oldest first, at most 200 (does not mark read) |
+| `swarm.agent` (`swarm_agent`) | `GET /swarms/<id>/agents/<n>` | key_or_service | free | `SwarmAgent` |
+
+"Caller's swarms" is the same rule as 59.6 (the planning key; the chat thread; a device session or the service see
+every swarm). A message from a device session or the service is `sender: "you"` and is shown to the model as `[message
+from Harmony]`; from the planning key it is `owner` (`[answer from <client name>]`). `send` on a swarm that is not
+`running`/`stopping` is 409 `error.swarm.not_running`.
+
+```ts
+SwarmMessage = { id, swarm, agent: number | null, dir: "up" | "down", kind: "ask" | "tell" | "reply" | "note",
+  sender: "agent" | "owner" | "you", text, at, answered: boolean }
+SwarmAgent = { swarm, agent, status, items: unknown[], attempts, in_tokens, out_tokens, usd, started_at, ended_at,
+  error, result, steps: { at, text }[], messages: SwarmMessage[], changes: SwarmChange[] /* propose mode */ }
+```
+
+`Swarm` (59.5) gains `messages: { total, waiting }` (`waiting` = open asks), `planner` (a short name: the client key's
+name, "chat" or "mcp"), and each `tasks.cells[]` gains `step` (the last step text or null) and the status `waiting`;
+`tasks` gains `waiting`. The job `activity` (59.5) says "1 question waiting" while one is. The chat's `jobs.onDone`
+hook also fires `[New message (cobalt.swarm)]` for an `ask`, like `agents` mail (43).
+
+Step texts (the runner writes them): "started", "read <op>" (each read call, the op name), "proposed <n> changes",
+"wrote <op>" (act mode), "asked a question", "answer arrived" / "no answer, going on", "told the owner", "retrying",
+"done", "failed: <code>".
+
+### 61.4 Apply from one tap
+
+`POST /swarms/<id>/apply` takes `skip_clashes: true` (optional): before applying, every kept, not yet done change with
+a `clash` is unticked (`keep = 0`). The Live Activity's apply button sends it; the count it shows is the kept changes
+without clashes.
+
+### 61.5 The `swarm` Live Activity (job kind, 8.13 + apple/CONTRACT-JOBLIVE.md)
+
+Push-started on the owner's devices (the `live:jobstart` tokens, as agent saves, 8.11) when a plan is stored, run id
+`swarm:<id>`; the app registers the started activity's update token like any agent job. Attributes: `id` = `swarm:<id>`,
+`kind: "swarm"`, `title: "swarm · <name>"` (cut to 40), `agent: true`, `open: "cobalt-apple://swarm/<id>"`.
+`JobLiveState` gains three optional fields (absent = old behaviour): `cells` (one letter per agent, at most 200: `q`
+queued, `r` running, `w` waiting, `d` done, `f` failed, `s` skipped), `actions` (buttons, in order: `approve`, `decline`,
+`stop`, `check`, `apply`, `open`), `hash` (the spec hash the approve button sends) and `count` (the apply button's number).
+
+| swarm | phase | steps (propose / read, act) | step | headline | detail | actions |
+| --- | --- | --- | --- | --- | --- | --- |
+| awaiting_approval | waiting | approve, run, review, apply / approve, run | 0 | the swarm's name | "from <planner> · about <low..high> · expires in <m> min" | approve, decline |
+| running | working | | 1 | "<done> of <total> agents done" | "<changes> changes · <spent>" or "1 agent is asking <planner> a question" | stop |
+| tasks ended, apply ready | waiting | | 2 | "<kept> changes ready" | "<clashes> look like duplicates and are left out · <spent>" | check, apply |
+| applying | working | | 3 | "applying changes" | "<done> of <total>" (`fraction`) | |
+| applied / done | done | | last | "applied <n> changes" / "done" | "<failed> failed · <spent>" / the reduce's first words | open |
+| failed, stopped, declined, expired | failed | | as was | "stopped at its cap", "stopped", "declined", "expired" | the reason | open |
+
+Money reads as cents under $1 ("21¢") and dollars above. Dismissal as 8.12 (done 60 s, failed 300 s); declined and
+expired end at once. The approve and apply buttons are App Intents that ask for Face ID / Touch ID first and call
+`/approve` (`spec_hash`) and `/apply` (`spec_hash`, `skip_clashes: true`) with the device's session; stop and decline call
+`/stop` and `/decline`; check and open open the app.
