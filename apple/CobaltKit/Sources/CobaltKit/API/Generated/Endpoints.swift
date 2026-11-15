@@ -327,57 +327,57 @@ enum Endpoints {
     }
 
     /// `POST /swarms` (op `swarm.plan`, auth key): Plan a swarm: one Haiku task per batch of items (e.g. 1000 7TV emotes in batches of 50), each in code mode with only the read calls in `tools`. Nothing runs until Harmony approves it on approve_url (give Harmony that link); it answers the plan with its cost estimate. mode propose (default) answers { changes } Harmony reviews before they are applied; read answers results; act may call `writes` itself. Follow it with swarm.get or job_status on its job.
-    static func swarmPlan() -> APIEndpoint<Swarm> {
+    static func swarmPlan() -> APIEndpoint<WireSwarm> {
         APIEndpoint(op: "swarm.plan", method: "POST", path: "/swarms", auth: .key)
     }
 
     /// `GET /swarms` (op `swarm.list`, auth key_or_service): Your swarms, newest first (at most 50).
-    static func swarmList() -> APIEndpoint<SwarmListResponse> {
+    static func swarmList() -> APIEndpoint<WireSwarmListResponse> {
         APIEndpoint(op: "swarm.list", method: "GET", path: "/swarms", auth: .keyOrService)
     }
 
     /// `GET /swarms/:id` (op `swarm.get`, auth key_or_service): One swarm: status, tasks done/running/failed, dollars spent, the reduce summary, and (propose mode) how many changes are proposed and applied.
-    static func swarmGet(id: String) -> APIEndpoint<Swarm> {
+    static func swarmGet(id: String) -> APIEndpoint<WireSwarm> {
         APIEndpoint(op: "swarm.get", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
     }
 
     /// `GET /swarms/:id/results` (op `swarm.results`, auth key_or_service): A swarm's results in task order (a page of up to 100), each with its error and cost.
-    static func swarmResults(id: String) -> APIEndpoint<SwarmResultsResponse> {
+    static func swarmResults(id: String) -> APIEndpoint<WireSwarmResultsResponse> {
         APIEndpoint(op: "swarm.results", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))/results", auth: .keyOrService)
     }
 
     /// `GET /swarms/:id/changes` (op `swarm.changes`, auth key_or_service): A propose-mode swarm's proposed changes in task order (a page of up to 200), with what Harmony kept, applied and what clashes.
-    static func swarmChanges(id: String) -> APIEndpoint<SwarmChangesResponse> {
+    static func swarmChanges(id: String) -> APIEndpoint<WireSwarmChangesResponse> {
         APIEndpoint(op: "swarm.changes", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))/changes", auth: .keyOrService)
     }
 
     /// `POST /swarms/:id/stop` (op `swarm.stop`, auth key_or_service): Stop a swarm: no new tasks start, running ones stop after their current step (or stop applying changes). Nothing is undone.
-    static func swarmStop(id: String) -> APIEndpoint<Swarm> {
+    static func swarmStop(id: String) -> APIEndpoint<WireSwarm> {
         APIEndpoint(op: "swarm.stop", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/stop", auth: .keyOrService)
     }
 
     /// `POST /swarms/:id/retry` (op `swarm.retry`, auth key): Run a finished swarm's failed (and skipped) tasks again: it goes back to awaiting Harmony's approval, with a new estimate and a new approve link check.
-    static func swarmRetry(id: String) -> APIEndpoint<Swarm> {
+    static func swarmRetry(id: String) -> APIEndpoint<WireSwarm> {
         APIEndpoint(op: "swarm.retry", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/retry", auth: .key)
     }
 
     /// `POST /swarms/:id/approve` (op `swarm.approve`, auth key_or_service): Harmony approves a swarm's plan (the web page or a device session); its tasks start.
-    static func swarmApprove(id: String) -> APIEndpoint<Swarm> {
+    static func swarmApprove(id: String) -> APIEndpoint<WireSwarm> {
         APIEndpoint(op: "swarm.approve", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/approve", auth: .keyOrService)
     }
 
     /// `POST /swarms/:id/decline` (op `swarm.decline`, auth key_or_service): Harmony declines a swarm's plan; nothing runs.
-    static func swarmDecline(id: String) -> APIEndpoint<Swarm> {
+    static func swarmDecline(id: String) -> APIEndpoint<WireSwarm> {
         APIEndpoint(op: "swarm.decline", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/decline", auth: .keyOrService)
     }
 
     /// `POST /swarms/:id/changes` (op `swarm.decide`, auth key_or_service): Harmony ticks or edits proposed changes on the review page (a draft until apply).
-    static func swarmDecide(id: String) -> APIEndpoint<SwarmDecideResponse> {
+    static func swarmDecide(id: String) -> APIEndpoint<WireSwarmDecideResponse> {
         APIEndpoint(op: "swarm.decide", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/changes", auth: .keyOrService)
     }
 
     /// `POST /swarms/:id/apply` (op `swarm.apply`, auth key_or_service): Harmony applies the kept changes of a propose-mode swarm (no model: each through its op).
-    static func swarmApply(id: String) -> APIEndpoint<Swarm> {
+    static func swarmApply(id: String) -> APIEndpoint<WireSwarm> {
         APIEndpoint(op: "swarm.apply", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/apply", auth: .keyOrService)
     }
 
@@ -1194,55 +1194,55 @@ struct ChatAgentsResponse: Decodable, Sendable {
     var mail: [AgentMail]
 }
 
-struct SwarmTasksCellsItem: Decodable, Sendable {
+struct WireSwarmTasksCellsItem: Decodable, Sendable {
     var idx: Double
     var status: String
     var error: String?
 }
 
-struct SwarmTasks: Decodable, Sendable {
+struct WireSwarmTasks: Decodable, Sendable {
     var total: Double
     var queued: Double
     var running: Double
     var done: Double
     var failed: Double
-    var cells: [SwarmTasksCellsItem]
+    var cells: [WireSwarmTasksCellsItem]
 }
 
-struct SwarmEstimateUsd: Decodable, Sendable {
+struct WireSwarmEstimateUsd: Decodable, Sendable {
     var low: Double
     var high: Double
 }
 
-struct SwarmChanges: Decodable, Sendable {
+struct WireSwarmChanges: Decodable, Sendable {
     var total: Double
     var kept: Double
     var done: Double
     var failed: Double
 }
 
-struct SwarmApply: Decodable, Sendable {
+struct WireSwarmApply: Decodable, Sendable {
     var status: String
     var done: Double
     var failed: Double
     var total: Double
 }
 
-struct SwarmSpecPreviewSource: Decodable, Sendable {
+struct WireSwarmSpecPreviewSource: Decodable, Sendable {
     var call: String
     var path: String?
 }
 
 /// what the approve page shows of the spec
-struct SwarmSpecPreview: Decodable, Sendable {
-    var source: SwarmSpecPreviewSource?
+struct WireSwarmSpecPreview: Decodable, Sendable {
+    var source: WireSwarmSpecPreviewSource?
     var reducePrompt: String?
     var turnsPerTask: Double
     var attempts: Double
     var stopAfterFailedTasks: Double
 }
 
-struct Swarm: Decodable, Sendable {
+struct WireSwarm: Decodable, Sendable {
     /// its id
     var swarm: String
     var name: String
@@ -1256,8 +1256,8 @@ struct Swarm: Decodable, Sendable {
     var items: Double
     var batchSize: Double
     var concurrency: Double
-    var tasks: SwarmTasks
-    var estimateUsd: SwarmEstimateUsd
+    var tasks: WireSwarmTasks
+    var estimateUsd: WireSwarmEstimateUsd
     var capUsd: Double
     var spentUsd: Double
     var createdAt: Double
@@ -1269,10 +1269,10 @@ struct Swarm: Decodable, Sendable {
     var reduce: String?
     var error: String?
     /// propose mode
-    var changes: SwarmChanges?
-    var apply: SwarmApply
+    var changes: WireSwarmChanges?
+    var apply: WireSwarmApply
     /// what the approve page shows of the spec
-    var specPreview: SwarmSpecPreview
+    var specPreview: WireSwarmSpecPreview
     /// write ops no scope key limits (none of their input fields is a scope key)
     var unscopedWrites: [String]
     /// Harmony approves (and reviews) here; give this link to Harmony
@@ -1281,24 +1281,24 @@ struct Swarm: Decodable, Sendable {
     var job: String
 }
 
-struct SwarmListResponse: Decodable, Sendable {
-    var swarms: [Swarm]
+struct WireSwarmListResponse: Decodable, Sendable {
+    var swarms: [WireSwarm]
 }
 
-struct SwarmResult: Decodable, Sendable {
+struct WireSwarmResult: Decodable, Sendable {
     var task: Double
     var status: String
     var error: String?
     var usd: Double
 }
 
-struct SwarmResultsResponse: Decodable, Sendable {
-    var results: [SwarmResult]
+struct WireSwarmResultsResponse: Decodable, Sendable {
+    var results: [WireSwarmResult]
     var total: Double
     var offset: Double
 }
 
-struct SwarmChange: Decodable, Sendable {
+struct WireSwarmChange: Decodable, Sendable {
     var n: Double
     var task: Double
     var op: String
@@ -1313,15 +1313,15 @@ struct SwarmChange: Decodable, Sendable {
     var clash: String?
 }
 
-struct SwarmChangesResponse: Decodable, Sendable {
-    var changes: [SwarmChange]
+struct WireSwarmChangesResponse: Decodable, Sendable {
+    var changes: [WireSwarmChange]
     var total: Double
     var offset: Double
 }
 
-struct SwarmDecideResponse: Decodable, Sendable {
-    var swarm: Swarm
-    var changes: [SwarmChange]
+struct WireSwarmDecideResponse: Decodable, Sendable {
+    var swarm: WireSwarm
+    var changes: [WireSwarmChange]
 }
 
 struct ShareCollectionsListResponse: Decodable, Sendable {

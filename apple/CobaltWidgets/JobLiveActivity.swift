@@ -35,13 +35,15 @@ struct JobLiveActivity: Widget {
                 // Everything sits in one region below the camera, so the star, the headline and the clock share a
                 // line. (Split over leading/center/trailing, the star sat up beside the camera while the headline sat
                 // lower down in the middle, so the two never lined up.)
-                DynamicIslandExpandedRegion(.bottom) { JobExpandedBottom(facts: facts) }
+                DynamicIslandExpandedRegion(.bottom) {
+                    if facts.isSwarm { SwarmExpandedBottom(facts: facts) } else { JobExpandedBottom(facts: facts) }
+                }
             } compactLeading: {
                 JobCompactLeading(facts: facts)
             } compactTrailing: {
                 JobCompactTrailing(facts: facts)
             } minimal: {
-                JobRing(facts: facts)
+                if facts.swarmWaits { SwarmQuestionMark(facts: facts) } else { JobRing(facts: facts) }
             }
             .keylineTint(Color(hex: 0xe1e1e1).opacity(0.35))
             .widgetURL(facts.openURL)
@@ -79,7 +81,8 @@ struct JobFacts {
     var isBad: Bool { isFailed || isLost }
     /// No news for a while: the server said so (`quiet`), or the system marked the activity stale. Never for a job that
     /// already ended.
-    var isQuiet: Bool { !isTerminal && (state.phase == .quiet || isStale) }
+    /// A swarm waiting for its owner is not "no news" however long the plan stays unanswered.
+    var isQuiet: Bool { !isTerminal && !swarmWaits && (state.phase == .quiet || isStale) }
 
     // MARK: words (all from the server; only the quiet text is ours, it is fixed in CONTRACT-JOBLIVE 3)
 
@@ -105,7 +108,12 @@ struct JobFacts {
     // MARK: bar, rows, dots
 
     /// The bar is for a job still going (working, waiting, quiet); nil number = no known fraction.
-    var showsBar: Bool { !isTerminal }
+    /// A swarm draws its agents' strip instead; the bar is left for one with no agents yet (and never while it waits for you).
+    var showsBar: Bool {
+        guard !isTerminal else { return false }
+        guard isSwarm else { return true }
+        return swarmStrip == nil && state.phase != .waiting
+    }
     /// A quiet job has no trustworthy number, so its bar has none either.
     var barFraction: Double? { isQuiet ? nil : state.fraction }
     var isChat: Bool { attributes.kind == "chat" }
@@ -185,6 +193,10 @@ struct JobLockScreenView: View {
     @Environment(\.isLuminanceReduced) private var reduced
 
     var body: some View {
+        if facts.isSwarm { SwarmLockScreenView(facts: facts) } else { card }
+    }
+
+    @ViewBuilder private var card: some View {
         let ink = JobInk(reduced: reduced)
         // One column, six points between rows; the card pads itself (iOS adds nothing) and must stay in 160 pt.
         VStack(alignment: .leading, spacing: LiveLock.gap) {
@@ -255,7 +267,7 @@ struct JobTopLine: View {
                 .foregroundStyle(ink.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if facts.attributes.agent {
+            if facts.attributes.agent && !facts.isSwarm {
                 // small, accent-filled, dark text
                 Text("agent")
                     .font(liveFont(10, .medium))
@@ -481,7 +493,9 @@ struct JobCompactLeading: View {
     @Environment(\.isLuminanceReduced) private var reduced
 
     var body: some View {
-        if facts.isChat && !facts.isTerminal {
+        if facts.swarmWaits {
+            SwarmQuestionMark(facts: facts)
+        } else if facts.isChat && !facts.isTerminal {
             let ink = JobInk(reduced: reduced)
             HStack(spacing: 3) {
                 // Still dots, growing in strength: the three beats of "thinking".
@@ -506,6 +520,8 @@ struct JobCompactTrailing: View {
     var body: some View {
         if facts.isTerminal {
             JobClock(facts: facts, size: 12)
+        } else if facts.swarmWaits {
+            SwarmWaitingTrailing()
         } else {
             let ink = JobInk(reduced: reduced)
             Text(facts.isQuiet ? "…" : facts.state.compact ?? "…")
@@ -652,6 +668,61 @@ enum JobPreview {
             ])
     }
 
+    // swarm (APP-API-CONTRACT 61.5; the values of `job-live-swarm-states.json`)
+    static let swarm = attributes(
+        "swarm", "swarm · rename 1,000 emotes", agent: true, open: "cobalt-apple://swarm/PrEvIeWswarm0001")
+
+    private static func swarmState(
+        _ phase: JobLiveState.Phase, step: Int, _ headline: String, detail: String?, cells: String, actions: [String]? = nil,
+        hash: String? = nil, count: Int? = nil, fraction: Double? = nil, compact: String? = nil, running: Double = 120
+    ) -> JobLiveState {
+        JobLiveState(
+            phase: phase, steps: ["approve", "run", "review", "apply"], step: step, headline: headline, detail: detail,
+            fraction: fraction, compact: compact, since: Date().timeIntervalSince1970 - running, cells: cells, actions: actions,
+            hash: hash, count: count)
+    }
+    static func swarmAwaiting() -> JobLiveState {
+        swarmState(
+            .waiting, step: 0, "rename 1,000 emotes", detail: "from claude code · about 30¢..50¢ · expires in 52 min",
+            cells: String(repeating: "q", count: 20), actions: ["approve", "decline"], hash: "PrEvIeWhash0001")
+    }
+    static func swarmRunning() -> JobLiveState {
+        swarmState(
+            .working, step: 1, "12 of 20 agents done", detail: "214 changes · 21¢", cells: "dddddddfdddddrrrqqqq",
+            actions: ["stop"], fraction: 0.6, compact: "12/20", running: 192)
+    }
+    static func swarmAsking() -> JobLiveState {
+        swarmState(
+            .working, step: 1, "12 of 20 agents done", detail: "1 agent is asking claude code a question",
+            cells: "ddwdddfdddddrrrddqqq", actions: ["stop"], fraction: 0.6, compact: "12/20", running: 192)
+    }
+    static func swarmReady() -> JobLiveState {
+        swarmState(
+            .waiting, step: 2, "342 changes ready", detail: "4 look like duplicates and are left out · 44¢",
+            cells: String(repeating: "d", count: 20), actions: ["check", "apply"], hash: "PrEvIeWhash0001", count: 338)
+    }
+    static func swarmApplying() -> JobLiveState {
+        swarmState(
+            .working, step: 3, "applying changes", detail: "120 of 338", cells: String(repeating: "d", count: 20),
+            fraction: 0.355, compact: "120/338")
+    }
+    static func swarmDone() -> JobLiveState {
+        swarmState(
+            .done, step: 4, "applied 336 changes", detail: "2 failed · 44¢", cells: String(repeating: "d", count: 20),
+            actions: ["open"], running: 5)
+    }
+    static func swarmDeclined() -> JobLiveState {
+        swarmState(
+            .failed, step: 0, "declined", detail: "you said no", cells: String(repeating: "q", count: 20), actions: ["open"])
+    }
+    /// A big swarm: 120 agents, one bar.
+    static func swarmBig() -> JobLiveState {
+        swarmState(
+            .working, step: 1, "74 of 120 agents done", detail: "3 failed · 1 is asking claude code · 88¢",
+            cells: String(repeating: "d", count: 70) + "fff" + "w" + String(repeating: "r", count: 5) + String(repeating: "q", count: 41),
+            actions: ["stop"], fraction: 0.617, compact: "74/120", running: 400)
+    }
+
     // Worst cases for the budget: the longest copy the server may send, five steps, and a long title.
     static let longTitle = "twitch · the whole afternoon at the harbour before the wind came up"
     static func worstWorking() -> JobLiveState {
@@ -663,6 +734,13 @@ enum JobPreview {
         state(
             .failed, ["wait", "download", "store", "read", "publish"], 1, "couldn't make the webp",
             detail: "a very long reason that runs on and on for ninety characters, the most it may be.")
+    }
+    /// The longest swarm copy: a 60-character name, a 90-character detail, 200 cells, and two buttons.
+    static func swarmWorst() -> JobLiveState {
+        swarmState(
+            .waiting, step: 2, "a very long swarm name that runs to sixty characters, no more",
+            detail: "a very long detail line that runs on and on for ninety characters, the most it may be",
+            cells: String(repeating: "dwfr", count: 50), actions: ["check", "apply"], hash: "PrEvIeWhash0001", count: 338)
     }
     static func worstDone() -> JobLiveState {
         state(
@@ -714,6 +792,43 @@ enum JobPreview {
     JobLiveActivity()
 } contentStates: {
     JobPreview.manyWorking()
+}
+
+#Preview("swarm · lock screen", as: .content, using: JobPreview.swarm) {
+    JobLiveActivity()
+} contentStates: {
+    JobPreview.swarmAwaiting()
+    JobPreview.swarmRunning()
+    JobPreview.swarmAsking()
+    JobPreview.swarmReady()
+    JobPreview.swarmApplying()
+    JobPreview.swarmDone()
+    JobPreview.swarmDeclined()
+    JobPreview.swarmBig()
+}
+
+#Preview("swarm · island compact", as: .dynamicIsland(.compact), using: JobPreview.swarm) {
+    JobLiveActivity()
+} contentStates: {
+    JobPreview.swarmAwaiting()
+    JobPreview.swarmRunning()
+    JobPreview.swarmReady()
+    JobPreview.swarmDone()
+}
+
+#Preview("swarm · island minimal", as: .dynamicIsland(.minimal), using: JobPreview.swarm) {
+    JobLiveActivity()
+} contentStates: {
+    JobPreview.swarmAwaiting()
+    JobPreview.swarmRunning()
+}
+
+#Preview("swarm · island expanded", as: .dynamicIsland(.expanded), using: JobPreview.swarm) {
+    JobLiveActivity()
+} contentStates: {
+    JobPreview.swarmAwaiting()
+    JobPreview.swarmRunning()
+    JobPreview.swarmReady()
 }
 
 #Preview("save · island compact", as: .dynamicIsland(.compact), using: JobPreview.save) {
@@ -768,6 +883,11 @@ enum JobPreview {
         (JobPreview.save, JobPreview.saveLost()),
         (JobPreview.make, JobPreview.worstWorking()), (JobPreview.make, JobPreview.worstFailed()),
         (JobPreview.make, JobPreview.worstDone()),
+        (JobPreview.swarm, JobPreview.swarmAwaiting()), (JobPreview.swarm, JobPreview.swarmRunning()),
+        (JobPreview.swarm, JobPreview.swarmAsking()), (JobPreview.swarm, JobPreview.swarmReady()),
+        (JobPreview.swarm, JobPreview.swarmApplying()), (JobPreview.swarm, JobPreview.swarmDone()),
+        (JobPreview.swarm, JobPreview.swarmDeclined()), (JobPreview.swarm, JobPreview.swarmBig()),
+        (JobPreview.swarm, JobPreview.swarmWorst()),
     ]
     ScrollView {
         VStack(spacing: 12) {

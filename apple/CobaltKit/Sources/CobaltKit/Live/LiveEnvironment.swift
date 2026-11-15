@@ -52,6 +52,9 @@ public enum LiveStatus: Sendable, Equatable {
 /// The client's side of one run, as `PUT /live/runs/<run>` takes it (APP-API-CONTRACT.md 8.2).
 public struct LiveRunRegistration: Sendable, Equatable {
     public var run: UUID
+    /// The run's id in the path when it is not a UUID: a swarm's activity is `swarm:<id>` (APP-API-CONTRACT 61.5). `run` is
+    /// then `LiveRunRegistration.swarmPlaceholder` and nothing reads it.
+    public var runName: String?
     public var environment: LiveEnvironment
     public var updateToken: String?      // lowercase hex
     public var session: String?
@@ -63,11 +66,15 @@ public struct LiveRunRegistration: Sendable, Equatable {
     /// the key has).
     public var job: Bool
 
+    /// The `run` of a registration whose path is a `runName`.
+    public static let swarmPlaceholder = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+
     public init(
         run: UUID, environment: LiveEnvironment, updateToken: String?, session: String?, start: Bool,
-        attributes: LiveRunAttributes, state: LiveContentState, job: Bool = false
+        attributes: LiveRunAttributes, state: LiveContentState, job: Bool = false, runName: String? = nil
     ) {
         self.run = run
+        self.runName = runName
         self.environment = environment
         self.updateToken = updateToken
         self.session = session

@@ -97,12 +97,22 @@ public struct JobLiveState: Codable, Hashable, Sendable {
     public var result: String?
     /// Done: a URL to copy (webp, share link); draws "copy link".
     public var link: String?
+    /// The `swarm` kind (APP-API-CONTRACT 61.5): one letter per agent, at most 200 (q queued, r running, w waiting, d done,
+    /// f failed, s skipped). Read it with `swarmCells`.
+    public var cells: String?
+    /// The `swarm` kind: the buttons in order, any of approve, decline, stop, check, apply, open. Read with `swarmActions`.
+    public var actions: [String]?
+    /// The `swarm` kind: the spec hash the approve and apply buttons send.
+    public var hash: String?
+    /// The `swarm` kind: the apply button's number (the kept changes without the clashes).
+    public var count: Int?
     /// Several jobs at once (2.1).
     public var rows: [Row]?
 
     public init(
         phase: Phase, steps: [String], step: Int, headline: String, detail: String? = nil, fraction: Double? = nil,
-        compact: String? = nil, since: Double, result: String? = nil, link: String? = nil, rows: [Row]? = nil
+        compact: String? = nil, since: Double, result: String? = nil, link: String? = nil, cells: String? = nil,
+        actions: [String]? = nil, hash: String? = nil, count: Int? = nil, rows: [Row]? = nil
     ) {
         self.phase = phase
         self.steps = steps
@@ -114,6 +124,10 @@ public struct JobLiveState: Codable, Hashable, Sendable {
         self.since = since
         self.result = result
         self.link = link
+        self.cells = cells
+        self.actions = actions
+        self.hash = hash
+        self.count = count
         self.rows = rows
     }
 
@@ -129,7 +143,8 @@ public struct JobLiveState: Codable, Hashable, Sendable {
 /// (The ActivityKit path does not need this; ActivityKit encodes `JobLiveState` through its normal `Codable`.)
 extension JobLiveState {
     /// The state as compact JSON, key for key and byte for byte what the server writes for the same state.
-    /// Order: phase, steps, step, headline, detail, fraction, compact, since, result, link, then rows.
+    /// Order: phase, steps, step, headline, detail, fraction, compact, since, result, link, cells, actions, hash, count, then
+    /// rows. (cells, actions, hash and count are the `swarm` kind's, in the order APP-API-CONTRACT 61.5 lists them.)
     public func canonicalJSON() -> String {
         var parts = [
             "\"phase\":" + JobJSON.string(phase.rawValue),
@@ -143,6 +158,10 @@ extension JobLiveState {
         parts.append("\"since\":" + JobJSON.number(since))
         if let result { parts.append("\"result\":" + JobJSON.string(result)) }
         if let link { parts.append("\"link\":" + JobJSON.string(link)) }
+        if let cells { parts.append("\"cells\":" + JobJSON.string(cells)) }
+        if let actions { parts.append("\"actions\":[" + actions.map(JobJSON.string).joined(separator: ",") + "]") }
+        if let hash { parts.append("\"hash\":" + JobJSON.string(hash)) }
+        if let count { parts.append("\"count\":" + JobJSON.number(Double(count))) }
         if let rows {
             // Row key order (title, status, phase) is ours: the server never sends rows.
             let items = rows.map {
@@ -163,6 +182,7 @@ extension JobLiveState {
         s.compact = s.compact.map { JobText.cap($0, 7) }
         s.result = s.result.map { JobText.cap($0, 60) }
         s.link = s.link.map { JobText.cap($0, 300) }
+        s.cells = s.cells.map { String($0.prefix(200)) }
         s.fraction = s.fraction.map { (min(1, max(0, $0)) * 1000).rounded(.toNearestOrAwayFromZero) / 1000 }
         return s
     }

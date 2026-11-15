@@ -60,11 +60,13 @@ struct PhoneTabs<Screen: View>: View {
                 Tab(Copy.tab(tab), systemImage: icon(for: tab), value: Slot.tab(tab)) {
                     root(tab)
                 }
+                .badge(badge(tab))
             }
             if !overflow.isEmpty {
                 Tab(Copy.more, systemImage: Symbol.moreTab, value: Slot.more) {
                     moreStack
                 }
+                .badge(overflow.reduce(0) { $0 + badge($1) })
             }
         }
         .onChange(of: selection) { _, slot in
@@ -78,6 +80,9 @@ struct PhoneTabs<Screen: View>: View {
         }
         .onChange(of: model.tabSets) { _, _ in follow(model.selectedTab) }
     }
+
+    /// What waits for the owner on a tab: the swarms that asked and the ones ready to apply.
+    private func badge(_ tab: AppTab) -> Int { tab == .swarms ? model.swarms.waitingCount : 0 }
 
     /// Something wrote `model.selectedTab` (a deep link, a paste, the studio card, a launch argument): show it.
     private func follow(_ tab: AppTab) {
@@ -108,6 +113,7 @@ struct PhoneTabs<Screen: View>: View {
                     Label(Copy.tab(tab), systemImage: icon(for: tab))
                         .font(CobaltType.body)
                 }
+                .badge(badge(tab))
                 .listRowBackground(CobaltColor.row)
             }
             .scrollContentBackground(.hidden)

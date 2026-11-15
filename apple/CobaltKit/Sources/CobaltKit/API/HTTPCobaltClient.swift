@@ -1371,7 +1371,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     }
 
     public func registerLiveRun(_ r: LiveRunRegistration) async throws -> LiveRunReply {
-        let req = try makeRequest("PUT", "/live/runs/\(Self.runPath(r.run))", keyed: true)
+        let path = r.runName.map(Self.encode) ?? Self.runPath(r.run)
+        let req = try makeRequest("PUT", "/live/runs/\(path)", keyed: true)
         let wire = try await sendJSON(LiveRunWire.self, req, body: try r.requestBody())
         return LiveRunReply(pushing: wire.pushing ?? false, started: wire.started ?? false, reason: wire.reason)
     }
