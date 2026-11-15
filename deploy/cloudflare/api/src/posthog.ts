@@ -220,7 +220,12 @@ export type SwarmStage =
     | "task_ended"
     | "finished"
     | "apply_started"
-    | "applied";
+    | "applied"
+    // section 61: messages between agents and their owner (counts only, never the text)
+    | "asked"
+    | "told"
+    | "answered"
+    | "ask_timeout";
 
 // One step of a swarm's life as a `swarm` event. Only numbers, booleans and short strings (ids, modes, op names, error
 // codes): never a prompt, an item, a proposal or a task's answer.

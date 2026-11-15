@@ -80,8 +80,11 @@ async function runOpInner(op: Op, ctx: OpContext, input: unknown, seen: (status:
     }
     seen(status);
     if (status < 200 || status > 299) {
-        const code = (body as { error?: { code?: unknown } } | null)?.error?.code;
-        throw new OpError(status, typeof code === "string" ? code : "error.api.generic");
+        const e = (body as { error?: { code?: unknown; retry_after?: unknown } } | null)?.error;
+        const err = new OpError(status, typeof e?.code === "string" ? e.code : "error.api.generic");
+        // a Retry-After the op passed on (seconds), for a swarm's retries (section 62.5)
+        if (typeof e?.retry_after === "number") Object.assign(err, { retryAfter: e.retry_after });
+        throw err;
     }
     return op.ai.result ? op.ai.result(body) : body;
 }
@@ -197,7 +200,8 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
             } catch (e) {
                 const message = e instanceof OpError ? (e.message === e.code ? `cobalt.${op.callName} failed: ${e.code}` : e.message) : e instanceof Error ? e.message : String(e);
                 record({ status: "error", error: message.slice(0, 300) });
-                if (e instanceof OpError) throw new Error(message);
+                // the op's status and code ride along (a swarm tries a passing failure again, section 62.2)
+                if (e instanceof OpError) throw Object.assign(new Error(message), { status: e.status, code: e.code, retryAfter: (e as { retryAfter?: number }).retryAfter });
                 throw e;
             }
             if (calls.length < CALLS_MAX) {

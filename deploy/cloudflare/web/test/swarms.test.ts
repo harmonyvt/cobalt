@@ -133,6 +133,15 @@ describe("proxy", () => {
         expect((await call(`/api/swarms/${ID}/results?offset=-1`)).status).toBe(400);
         expect(seen).toHaveLength(0);
     });
+    it("the board (section 62.4): known params only, each checked", async () => {
+        const r = await call(`/api/swarms/${ID}/board?q=cat%20ears&agent=3&status=done&group=x&sort=score&offset=100&limit=200&evil=1`);
+        expect(r.status).toBe(200);
+        expect(seen[0]!.url).toBe(`https://api.capybaraharmony.com/swarms/${ID}/board?offset=100&limit=200&agent=3&q=cat+ears&group=x&status=done&sort=score`);
+        expect(seen[0]!.method).toBe("GET");
+        for (const bad of ["limit=201", "agent=0", "agent=x", "sort=best", "status=nope", `q=${"x".repeat(201)}`]) expect((await call(`/api/swarms/${ID}/board?${bad}`)).status, bad).toBe(400);
+        expect((await call(`/api/swarms/${ID}/board`, { method: "POST", body: {} })).status).toBe(405);
+        expect(seen).toHaveLength(1);
+    });
     it("approve and apply send only spec_hash", async () => {
         for (const a of ["approve", "apply"]) {
             const r = await call(`/api/swarms/${ID}/${a}`, { method: "POST", body: { spec_hash: HASH, extra: "x" } });

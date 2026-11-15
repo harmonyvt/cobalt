@@ -313,3 +313,13 @@ a.ext:hover{text-decoration:underline}
 .swcells i.c-running{background:var(--pink);box-shadow:none}
 .swcells i.c-failed{background:var(--red);box-shadow:none}
 .swcells i.c-skipped{background:transparent;box-shadow:inset 0 0 0 1px var(--mute)}
+
+/* the results board (section 62.4) */
+.bdst{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px}
+.bda{width:12px;height:12px;border-radius:3px;border:0;padding:0;background:var(--soft);cursor:pointer}
+.t-good{background:var(--green)!important}.t-mid{background:var(--amber)!important}.t-low{background:var(--pink)!important}.t-bad{background:var(--red)!important}
+.bda[aria-pressed=true]{outline:2px solid var(--ink)}
+.bdt{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}.bdt input{flex:1}
+.bdt [aria-pressed=true]{background:var(--ink);color:var(--bg)}
+.bdi img{object-fit:contain}.bdg{max-height:440px;overflow:auto}
+.bdf{display:block;font-size:var(--fm);color:var(--mute);overflow:hidden;white-space:nowrap}

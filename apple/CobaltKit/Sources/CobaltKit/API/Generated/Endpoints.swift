@@ -381,6 +381,31 @@ enum Endpoints {
         APIEndpoint(op: "swarm.apply", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/apply", auth: .keyOrService)
     }
 
+    /// `GET /swarms/inbox` (op `swarm.inbox`, auth key): Unread messages from the agents of your swarms (questions and reports), oldest first, at most 100; they are marked read. Answer a question with swarm.send.
+    static func swarmInbox() -> APIEndpoint<SwarmInboxResponse> {
+        APIEndpoint(op: "swarm.inbox", method: "GET", path: "/swarms/inbox", auth: .key)
+    }
+
+    /// `POST /swarms/:id/messages` (op `swarm.send`, auth key_or_service): Message a running swarm's agents: answer an agent's question (to: its number) or tell every agent (to: "all"). It never changes the program: tools, writes, scope, cap and prompt stay what was approved.
+    static func swarmSend(id: String) -> APIEndpoint<SwarmSendResponse> {
+        APIEndpoint(op: "swarm.send", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/messages", auth: .keyOrService)
+    }
+
+    /// `GET /swarms/:id/messages` (op `swarm.messages`, auth key_or_service): A swarm's messages, both ways, oldest first (at most 200); does not mark them read.
+    static func swarmMessages(id: String) -> APIEndpoint<SwarmMessagesResponse> {
+        APIEndpoint(op: "swarm.messages", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))/messages", auth: .keyOrService)
+    }
+
+    /// `GET /swarms/:id/agents/:agent` (op `swarm.agent`, auth key_or_service): One agent of a swarm: its items, status, cost, last steps, result, messages and (propose mode) changes.
+    static func swarmAgent(id: String, agent: String) -> APIEndpoint<SwarmAgent> {
+        APIEndpoint(op: "swarm.agent", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))/agents/\(HTTPCobaltClient.encode(agent))", auth: .keyOrService)
+    }
+
+    /// `GET /swarms/:id/board` (op `swarm.board`, auth key_or_service): A swarm's results as one board: every agent's outcome and score, and a row per thing its agents answered (title, score, group, other fields, up to 4 media previews). Failed agents appear as a row too. Filter with q, agent, status, group; sort by agent, score or title; pages of up to 200.
+    static func swarmBoard(id: String) -> APIEndpoint<SwarmBoardResponse> {
+        APIEndpoint(op: "swarm.board", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))/board", auth: .keyOrService)
+    }
+
     /// `POST /library/items/:id/cutout` (op `library.cutout`, auth key): Remove a picture's background into a new png (POST /library/items/<id>/cutout); the chat uses make.cutout.
     static func libraryCutout(id: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "library.cutout", method: "POST", path: "/library/items/\(HTTPCobaltClient.encode(id))/cutout", auth: .key)
@@ -769,6 +794,16 @@ enum Endpoints {
     /// `DELETE /live/edits/:rid` (op `live.edit.delete`, auth key): An editor render's activity token.
     static func liveEditDelete(rid: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "live.edit.delete", method: "DELETE", path: "/live/edits/\(HTTPCobaltClient.encode(rid))", auth: .key)
+    }
+
+    /// `PUT /live/swarms/:id` (op `live.swarm.put`, auth key): A push-started swarm activity's token.
+    static func liveSwarmPut(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "live.swarm.put", method: "PUT", path: "/live/swarms/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
+    /// `DELETE /live/swarms/:id` (op `live.swarm.delete`, auth key): A push-started swarm activity's token.
+    static func liveSwarmDelete(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "live.swarm.delete", method: "DELETE", path: "/live/swarms/\(HTTPCobaltClient.encode(id))", auth: .key)
     }
 
     /// `PUT /studio/:sid/notify` (op `studio.notify.put`, auth key): Hark when this save is done.
@@ -1198,12 +1233,16 @@ struct SwarmTasksCellsItem: Decodable, Sendable {
     var idx: Double
     var status: String
     var error: String?
+    /// its last step
+    var step: String?
 }
 
 struct SwarmTasks: Decodable, Sendable {
     var total: Double
     var queued: Double
     var running: Double
+    /// agents parked on a question to their owner
+    var waiting: Double
     var done: Double
     var failed: Double
     var cells: [SwarmTasksCellsItem]
@@ -1233,13 +1272,26 @@ struct SwarmSpecPreviewSource: Decodable, Sendable {
     var path: String?
 }
 
+struct SwarmSpecPreviewPrefetch: Decodable, Sendable {
+    var call: String
+    var `as`: String
+}
+
 /// what the approve page shows of the spec
 struct SwarmSpecPreview: Decodable, Sendable {
     var source: SwarmSpecPreviewSource?
     var reducePrompt: String?
+    /// looks up each item with this call first (section 62.6)
+    var prefetch: SwarmSpecPreviewPrefetch?
     var turnsPerTask: Double
     var attempts: Double
     var stopAfterFailedTasks: Double
+}
+
+struct SwarmMessages: Decodable, Sendable {
+    var total: Double
+    /// open questions: answer with swarm.send
+    var waiting: Double
 }
 
 struct Swarm: Decodable, Sendable {
@@ -1279,10 +1331,31 @@ struct Swarm: Decodable, Sendable {
     var approveUrl: String
     /// swarm:<id>, for job_status
     var job: String
+    var messages: SwarmMessages
+    /// who planned it: the client key's name, chat or mcp
+    var planner: String
+    /// the mean of the ended agents' scores (section 62.3), null before any ended
+    var score: Double?
 }
 
 struct SwarmListResponse: Decodable, Sendable {
     var swarms: [Swarm]
+}
+
+struct SwarmOutcome: Decodable, Sendable {
+    var status: String
+    var items: Double
+    /// how many of its items appear in its rows
+    var answered: Double
+    var toolCalls: Double
+    /// calls that still failed after their retries
+    var toolErrors: Double
+    var asks: Double
+    var turns: Double
+    var usd: Double
+    var ms: Double?
+    /// 0..1: answered / items × (1 − tool_errors / max(tool_calls, 1)); 0 for a failed agent; null while it runs
+    var score: Double?
 }
 
 struct SwarmResult: Decodable, Sendable {
@@ -1290,6 +1363,7 @@ struct SwarmResult: Decodable, Sendable {
     var status: String
     var error: String?
     var usd: Double
+    var outcome: SwarmOutcome
 }
 
 struct SwarmResultsResponse: Decodable, Sendable {
@@ -1322,6 +1396,99 @@ struct SwarmChangesResponse: Decodable, Sendable {
 struct SwarmDecideResponse: Decodable, Sendable {
     var swarm: Swarm
     var changes: [SwarmChange]
+}
+
+struct SwarmMessage: Decodable, Sendable {
+    var id: Double
+    var swarm: String
+    /// 1-based; null: to every agent
+    var agent: Double?
+    /// up: an agent to its owner; down: to agents
+    var dir: String
+    var kind: String
+    var sender: String
+    var text: String
+    var at: Double
+    var answered: Bool
+}
+
+struct SwarmInboxResponse: Decodable, Sendable {
+    var messages: [SwarmMessage]
+}
+
+struct SwarmSendResponse: Decodable, Sendable {
+    var sent: Bool
+    /// an agent waiting on a question was woken
+    var woke: Bool
+}
+
+struct SwarmMessagesResponse: Decodable, Sendable {
+    var messages: [SwarmMessage]
+}
+
+struct SwarmAgentStepsItem: Decodable, Sendable {
+    var at: Double
+    var text: String
+}
+
+struct SwarmAgent: Decodable, Sendable {
+    var swarm: String
+    var agent: Double
+    var status: String
+    var attempts: Double
+    var inTokens: Double
+    var outTokens: Double
+    var usd: Double
+    var startedAt: Double?
+    var endedAt: Double?
+    var error: String?
+    var steps: [SwarmAgentStepsItem]
+    var messages: [SwarmMessage]
+    /// propose mode: this agent's changes
+    var changes: [SwarmChange]
+}
+
+struct SwarmBoardResponseGroupsItem: Decodable, Sendable {
+    var value: String
+    var count: Double
+}
+
+struct SwarmBoardResponseAgentsItem: Decodable, Sendable {
+    var agent: Double
+    var status: String
+    var outcome: SwarmOutcome
+    var error: String?
+}
+
+struct MediaRef: Decodable, Sendable {
+    var ref: String
+    var kind: String
+    var previewUrl: String?
+    var openUrl: String?
+    var title: String?
+    var animated: Bool?
+}
+
+struct BoardRow: Decodable, Sendable {
+    var agent: Double
+    /// the row's number within its agent, from 1
+    var n: Double
+    var title: String
+    var score: Double?
+    var group: String?
+    /// resolved, at most 4
+    var media: [MediaRef]
+    var links: [String]
+}
+
+struct SwarmBoardResponse: Decodable, Sendable {
+    var swarm: Swarm
+    var total: Double
+    var offset: Double
+    var groups: [SwarmBoardResponseGroupsItem]
+    /// every agent, for the strip
+    var agents: [SwarmBoardResponseAgentsItem]
+    var rows: [BoardRow]
 }
 
 struct ShareCollectionsListResponse: Decodable, Sendable {

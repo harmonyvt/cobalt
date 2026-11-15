@@ -7,6 +7,7 @@
 
 import { pickWebp, previewWebp, type EmoteImage } from "./emotes";
 import type { StudioReply } from "./studio";
+import { retryAfterSeconds, type SevenTvGate } from "./seventv-gate";
 
 export const SEVENTV_GQL = "https://7tv.io/v4/gql";
 const CDN_HOST = "cdn.7tv.app";
@@ -23,6 +24,8 @@ export type SevenTvDeps = {
     // HKDF base for the stored token (COBALT_API_KEY)
     secret: string;
     fetch?: typeof fetch;
+    // section 62.5: the shared pace of every 7TV API call (absent: nothing waits)
+    gate?: SevenTvGate | null;
 };
 
 type Row = {
@@ -119,8 +122,17 @@ const errorFor = (e: GqlError): StudioReply => {
     return fail(400, "error.seventv.rejected", msg);
 };
 
+// A 429, with 7TV's Retry-After passed on (section 62.5: a swarm's retry waits at least that long).
+function rateLimited(res: Response, now: number): StudioReply {
+    const after = retryAfterSeconds(res.headers.get("retry-after"), now);
+    const r = fail(429, "error.seventv.rate_limited");
+    if (after !== null) (r.body as { error: Record<string, unknown> }).error.retry_after = after;
+    return r;
+}
+
 export async function gql<T>(d: SevenTvDeps, token: string, query: string, variables: Record<string, unknown> = {}): Promise<T> {
     const f = d.fetch ?? fetch;
+    await d.gate?.slot(/^\s*mutation\b/.test(query) ? "write" : "read");
     let res: Response;
     try {
         res = await f(SEVENTV_GQL, {
@@ -133,7 +145,10 @@ export async function gql<T>(d: SevenTvDeps, token: string, query: string, varia
         throw new SevenTvError(fail(502, "error.seventv.unavailable"));
     }
     if (res.status === 401) throw new SevenTvError(fail(409, "error.seventv.relink"), true);
-    if (res.status === 429) throw new SevenTvError(fail(429, "error.seventv.rate_limited"));
+    if (res.status === 429) {
+        await d.gate?.slow();
+        throw new SevenTvError(rateLimited(res, d.now()));
+    }
     let body: { data?: unknown; errors?: GqlError[] };
     try {
         body = (await res.json()) as typeof body;
@@ -761,6 +776,7 @@ export async function sevenTvUpload(
         );
         form.append("file", new Blob([bytes], { type: sendType }), `${row.id}.${sendType.split("/")[1]}`);
         const f = d.fetch ?? fetch;
+        await d.gate?.slot("write");
         let res: Response;
         try {
             res = await f(SEVENTV_UPLOAD, {

@@ -4,6 +4,7 @@
 // request (feature flags) and must reach the client byte for byte; McpServer would re-register and re-validate them.
 // The validator is the SDK's @cfworker one (an interpreter): nothing here compiles code at runtime.
 // Free of Cloudflare imports: the tests run it under node.
+import { mediaHostsOf } from "../media-refs";
 import { ProtocolError, ProtocolErrorCode, Server, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { RESOURCE_MIME_TYPE, RESOURCE_URI_META_KEY } from "@modelcontextprotocol/ext-apps/server";
@@ -153,7 +154,9 @@ const originOf = (url: string | undefined) => {
 // API, for the upload PUT).
 export function widgetCsp(caller: McpCaller): { resourceDomains: string[]; connectDomains: string[] } {
     const { mediaBaseUrl, shareBaseUrl } = caller.ctx;
-    const resource = [originOf(mediaBaseUrl), originOf(shareBaseUrl)].filter((o): o is string => !!o);
+    // and the media allowlist (section 62.1: the board shows 7TV emotes and allowed image links)
+    const hosts = mediaHostsOf((caller.ctx.env ?? {}) as { MEDIA_HOSTS?: string }).map((h) => `https://${h}`);
+    const resource = [originOf(mediaBaseUrl), originOf(shareBaseUrl), ...hosts].filter((o): o is string => !!o);
     // the API origin too: signed previews (/mcp/media/<token>) are played and drawn from it
     return { resourceDomains: [...new Set([...resource, caller.origin])], connectDomains: [caller.origin] };
 }

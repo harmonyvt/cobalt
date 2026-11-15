@@ -45,7 +45,16 @@ export type JobWatch = {
     expires_at: number;
     misses: number;
     last: JobState | null;
+    // a swarm job (section 61.3): the highest question of its agents already handed to the thread
+    notified?: number;
 };
+
+// A swarm's open questions in its job state (make.ts JobSchema `asks`).
+type Ask = { id: number; agent: number; text: string };
+const asksOf = (s: JobState | null): Ask[] =>
+    Array.isArray(s?.asks) ? (s!.asks as unknown[]).filter((a): a is Ask => !!a && typeof (a as Ask).id === "number" && typeof (a as Ask).text === "string") : [];
+// The status of a "message" entry: the job did not end, one of its agents asked a question.
+export const JOB_MESSAGE = "message";
 
 export type JobEnded = { watch: JobWatch; result: JobState; ended_at: number };
 
@@ -145,8 +154,17 @@ export class ChatJobsCore {
                 await this.d.storage.put(ek, ended);
                 fresh.push([ek, ended]);
             } else {
+                // a swarm agent's new question continues the thread too, like agents mail (section 61.3); the watch stays
+                const fresh_asks = asksOf(state).filter((a) => a.id > (w.notified ?? 0));
+                const notified = fresh_asks.length ? Math.max(...fresh_asks.map((a) => a.id)) : w.notified;
+                if (fresh_asks.length) {
+                    const ended: JobEnded = { watch: { ...w, job: state?.job || w.job }, result: { job: state?.job || w.job, status: JOB_MESSAGE, asks: fresh_asks }, ended_at: now };
+                    const ek = `ended:${k.slice("watch:".length)}:${notified}`;
+                    await this.d.storage.put(ek, ended);
+                    fresh.push([ek, ended]);
+                }
                 // a file that opened started its job: keep the newest id
-                await this.d.storage.put(k, { ...w, job: state?.job || w.job, misses, last: state ?? w.last });
+                await this.d.storage.put(k, { ...w, job: state?.job || w.job, misses, last: state ?? w.last, ...(notified !== undefined ? { notified } : {}) });
             }
         }
 

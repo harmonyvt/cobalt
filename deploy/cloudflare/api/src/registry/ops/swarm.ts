@@ -31,6 +31,9 @@ import {
     itemsFromSource,
     refreshClashes,
     resultShape,
+    statsOf,
+    TASKS_MAX,
+    asksByTask,
     runningCounts,
     setSwarm,
     shapeOf,
@@ -46,15 +49,26 @@ import {
     type SwarmRow,
     type SwarmsNamespace,
     type TaskRow,
+    INBOX_MAX,
+    MESSAGES_PAGE_MAX,
+    MESSAGE_MAX,
+    insertMessage,
+    messageShape,
+    parseSteps,
+    refreshClashes as refresh,
+    swarmLive,
+    type MessageRow,
 } from "../../swarm";
 import { defineOp, ok, OpError, type OpContext } from "../op";
+import { mediaHostsOf } from "../../media-refs";
+import { BOARD_LIMIT_DEFAULT, BOARD_LIMIT_MAX, agentRows, answeredOf, boardPage, outcomeOf } from "../../swarm-board";
 
 const Params = { id: SWARM_ID_REGEX };
 const BAD = "error.swarm.bad_spec";
 
 // ---- shapes (APP-API-CONTRACT.md 59.4) -----------------------------------------------------------------------------------
 
-const TaskStatus = z.enum(["queued", "running", "done", "failed", "skipped"]);
+const TaskStatus = z.enum(["queued", "running", "waiting", "done", "failed", "skipped"]);
 export const SwarmSchema = z
     .object({
         swarm: z.string().describe("its id"),
@@ -73,9 +87,10 @@ export const SwarmSchema = z
             total: z.number(),
             queued: z.number(),
             running: z.number(),
+            waiting: z.number().describe("agents parked on a question to their owner"),
             done: z.number(),
             failed: z.number(),
-            cells: z.array(z.object({ idx: z.number(), status: TaskStatus, error: z.string().nullable() })),
+            cells: z.array(z.object({ idx: z.number(), status: TaskStatus, error: z.string().nullable(), step: z.string().nullable().describe("its last step") })),
         }),
         estimate_usd: z.object({ low: z.number(), high: z.number() }),
         cap_usd: z.number(),
@@ -94,6 +109,8 @@ export const SwarmSchema = z
                 source: z.object({ call: z.string(), args: z.record(z.string(), z.unknown()), path: z.string().nullable() }).nullable(),
                 output_schema: z.unknown().nullable(),
                 reduce_prompt: z.string().nullable(),
+                board: z.unknown().nullable().describe("output.board, the program's board mapping"),
+                prefetch: z.object({ call: z.string(), args: z.record(z.string(), z.unknown()), as: z.string() }).nullable().describe("looks up each item with this call first (section 62.6)"),
                 turns_per_task: z.number(),
                 attempts: z.number(),
                 stop_after_failed_tasks: z.number(),
@@ -102,8 +119,25 @@ export const SwarmSchema = z
         unscoped_writes: z.array(z.string()).describe("write ops no scope key limits (none of their input fields is a scope key)"),
         approve_url: z.string().describe("Harmony approves (and reviews) here; give this link to Harmony"),
         job: z.string().describe("swarm:<id>, for job_status"),
+        messages: z.object({ total: z.number(), waiting: z.number().describe("open questions: answer with swarm.send") }),
+        planner: z.string().describe("who planned it: the client key's name, chat or mcp"),
+        score: z.number().nullable().describe("the mean of the ended agents' scores (section 62.3), null before any ended"),
     })
     .meta({ id: "Swarm" });
+
+export const SwarmMessageSchema = z
+    .object({
+        id: z.number(),
+        swarm: z.string(),
+        agent: z.number().nullable().describe("1-based; null: to every agent"),
+        dir: z.enum(["up", "down"]).describe("up: an agent to its owner; down: to agents"),
+        kind: z.enum(["ask", "tell", "reply", "note"]),
+        sender: z.enum(["agent", "owner", "you"]),
+        text: z.string(),
+        at: z.number(),
+        answered: z.boolean(),
+    })
+    .meta({ id: "SwarmMessage" });
 
 export const SwarmChangeSchema = z
     .object({
@@ -123,8 +157,31 @@ export const SwarmChangeSchema = z
     })
     .meta({ id: "SwarmChange" });
 
+export const OutcomeSchema = z
+    .object({
+        status: z.string(),
+        items: z.number(),
+        answered: z.number().describe("how many of its items appear in its rows"),
+        tool_calls: z.number(),
+        tool_errors: z.number().describe("calls that still failed after their retries"),
+        asks: z.number(),
+        turns: z.number(),
+        usd: z.number(),
+        ms: z.number().nullable(),
+        score: z.number().nullable().describe("0..1: answered / items × (1 − tool_errors / max(tool_calls, 1)); 0 for a failed agent; null while it runs"),
+    })
+    .meta({ id: "SwarmOutcome" });
+
 export const SwarmResultSchema = z
-    .object({ task: z.number(), status: z.string(), result: z.unknown(), error: z.string().nullable(), usd: z.number() })
+    .object({
+        task: z.number(),
+        status: z.string(),
+        result: z.unknown(),
+        error: z.string().nullable(),
+        usd: z.number(),
+        items: z.array(z.unknown()).describe("the agent's batch, always"),
+        outcome: OutcomeSchema,
+    })
     .meta({ id: "SwarmResult" });
 
 // ---- who is asking --------------------------------------------------------------------------------------------------------
@@ -224,6 +281,8 @@ export const swarmPlanOp = defineOp({
             writes: spec.writes,
             source: spec.source?.call,
         });
+        // section 61.5: the approve island on Harmony's newest device
+        await swarmLive(ctx).start(id);
         return ok(await shape(ctx, id));
     },
 });
@@ -289,7 +348,8 @@ export const swarmResultsOp = defineOp({
         const offset = input.offset ?? 0;
         const { results } = await ctx.db.prepare("SELECT * FROM swarm_tasks WHERE swarm = ?1 ORDER BY idx LIMIT ?2 OFFSET ?3").bind(input.id, input.limit ?? 100, offset).all<TaskRow>();
         const total = await ctx.db.prepare("SELECT COUNT(*) AS n FROM swarm_tasks WHERE swarm = ?1").bind(input.id).first<{ n: number }>();
-        return ok({ results: results.map(resultShape), total: total?.n ?? 0, offset });
+        const asks = await asksByTask(ctx.db, input.id);
+        return ok({ results: results.map((t) => resultShape(t, asks.get(t.idx) ?? 0)), total: total?.n ?? 0, offset });
     },
 });
 
@@ -335,6 +395,7 @@ export const swarmStopOp = defineOp({
         else return ok(await shapeOf(ctx.db, ctx.registry, row, webOrigin(ctx)));
         if (row.status !== "awaiting_approval" && ctx.env.SWARMS) await port(ctx).wake(row.id).catch((e) => console.error("[swarm] wake failed", String(e)));
         trackSwarm(ctx, "stop_asked", row.id, { mode: row.mode, was: row.status, applying: row.apply_status === "applying" });
+        await swarmLive(ctx).push(row.id);
         return ok(await shape(ctx, row.id));
     },
 });
@@ -380,6 +441,8 @@ export const swarmRetryOp = defineOp({
                 .bind(row.id, round, hash, estimate.low, estimate.high, now + PLAN_TTL_MS, now),
         ]);
         trackSwarm(ctx, "retry_planned", row.id, { mode: row.mode, round, est_low_usd: estimate.low, est_high_usd: estimate.high });
+        // back to awaiting approval: a new island (the old one ended with the swarm)
+        await swarmLive(ctx).start(row.id);
         return ok(await shape(ctx, row.id));
     },
 });
@@ -433,6 +496,7 @@ export const swarmApproveOp = defineOp({
             throw new OpError(503, "error.swarm.off", "swarm: the runner did not start; try again");
         }
         trackSwarm(ctx, "approved", row.id, { mode: row.mode, by: ctx.caller === "service" ? "web" : "app", wait_ms: now - row.created_at, cap_usd: row.cap_usd });
+        await swarmLive(ctx).push(row.id);
         return ok(await shape(ctx, row.id));
     },
 });
@@ -454,6 +518,7 @@ export const swarmDeclineOp = defineOp({
         const now = ctx.now();
         await setSwarm(ctx.db, row.id, { status: "declined", finished_at: now, expires_at: null }, now);
         trackSwarm(ctx, "declined", row.id, { mode: row.mode, by: ctx.caller === "service" ? "web" : "app" });
+        await swarmLive(ctx).push(row.id);
         return ok(await shape(ctx, row.id));
     },
 });
@@ -532,6 +597,7 @@ export const swarmDecideOp = defineOp({
         for (let i = 0; i < stmts.length; i += 50) await ctx.db.batch(stmts.slice(i, i + 50));
         await refreshClashes(ctx.db, ctx.registry, row.id, spec, groups);
         const { results: after } = await pick(" ORDER BY task, n");
+        await swarmLive(ctx).push(row.id);
         return ok({ swarm: await shape(ctx, row.id), changes: after.map(changeShape) });
     },
 });
@@ -544,7 +610,7 @@ export const swarmApplyOp = defineOp({
     cors: true,
     noStore: true,
     badRequest: BAD,
-    input: HashInput,
+    input: HashInput.extend({ skip_clashes: z.boolean().optional().describe("untick every kept change with a clash first (the Live Activity's apply)") }),
     output: SwarmSchema,
     ai: { tier: "hidden", summary: "Harmony applies the kept changes of a propose-mode swarm (no model: each through its op)." },
     handler: async (ctx, input) => {
@@ -552,6 +618,11 @@ export const swarmApplyOp = defineOp({
         reviewable(row);
         if (input.spec_hash !== row.spec_hash) throw new OpError(409, "error.swarm.hash_mismatch", "swarm: the swarm changed since this page loaded");
         if (!swarmsOn(ctx.env)) throw new OpError(503, "error.swarm.off", "swarms cannot run on this server");
+        if (input.skip_clashes) {
+            // section 61.4: the one-tap apply leaves out what looks like a duplicate
+            const r = await ctx.db.prepare("UPDATE swarm_changes SET keep = 0 WHERE swarm = ?1 AND keep = 1 AND status <> 'done' AND clash IS NOT NULL").bind(row.id).run();
+            if ((r.meta?.changes ?? 0) > 0) await refresh(ctx.db, ctx.registry, row.id, specOf(row));
+        }
         const kept = await ctx.db.prepare("SELECT COUNT(*) AS n FROM swarm_changes WHERE swarm = ?1 AND keep = 1 AND status <> 'done'").bind(row.id).first<{ n: number }>();
         if ((kept?.n ?? 0) === 0) throw notAwaiting("no kept change is left to apply");
         const running = await runningCounts(ctx.db, row.key_id);
@@ -570,8 +641,275 @@ export const swarmApplyOp = defineOp({
             await setSwarm(ctx.db, row.id, { apply_status: "ready" }, now);
             throw new OpError(503, "error.swarm.off", "swarm: the runner did not start; try again");
         }
-        trackSwarm(ctx, "apply_started", row.id, { mode: row.mode, to_apply: kept?.n ?? 0, by: ctx.caller === "service" ? "web" : "app" });
+        trackSwarm(ctx, "apply_started", row.id, { mode: row.mode, to_apply: kept?.n ?? 0, by: ctx.caller === "service" ? "web" : "app", skip_clashes: input.skip_clashes === true });
+        await swarmLive(ctx).push(row.id);
         return ok(await shape(ctx, row.id));
+    },
+});
+
+// ---- messages and one agent (section 61.3) ------------------------------------------------------------------------------
+
+// A device session or the service is Harmony herself ("you"); anyone else who may see the swarm is its owner.
+async function senderOf(ctx: OpContext): Promise<"you" | "owner"> {
+    return !ctx.chat && (ctx.caller === "service" || (await isSession(ctx))) ? "you" : "owner";
+}
+
+const AgentNo = z.coerce.number().int().min(1).max(200);
+
+export const swarmInboxOp = defineOp({
+    name: "swarm.inbox",
+    route: { method: "GET", path: "/swarms/inbox" },
+    auth: "key",
+    runs: "worker",
+    cors: true,
+    noStore: true,
+    badRequest: BAD,
+    input: z.object({}),
+    output: z.object({ messages: z.array(SwarmMessageSchema) }),
+    ai: {
+        tier: "free",
+        summary: "Unread messages from the agents of your swarms (questions and reports), oldest first, at most 100; they are marked read. Answer a question with swarm.send.",
+    },
+    handler: async (ctx) => {
+        const all = await isSession(ctx);
+        const { results } = await d1(
+            (all
+                ? ctx.db.prepare(`SELECT m.* FROM swarm_messages m WHERE m.dir = 'up' AND m.read_at IS NULL ORDER BY m.id LIMIT ${INBOX_MAX}`)
+                : ctx.db
+                      .prepare(
+                          `SELECT m.* FROM swarm_messages m JOIN swarms s ON s.id = m.swarm WHERE s.key_id = ?1 AND m.dir = 'up' AND m.read_at IS NULL ORDER BY m.id LIMIT ${INBOX_MAX}`,
+                      )
+                      .bind(ownerKey(ctx))
+            ).all<MessageRow>(),
+        );
+        if (results.length > 0) {
+            await ctx.db
+                .prepare("UPDATE swarm_messages SET read_at = ?1 WHERE id IN (SELECT value FROM json_each(?2)) AND read_at IS NULL")
+                .bind(ctx.now(), JSON.stringify(results.map((m) => m.id)))
+                .run();
+        }
+        return ok({ messages: results.map(messageShape) });
+    },
+});
+
+export const swarmSendOp = defineOp({
+    name: "swarm.send",
+    route: { method: "POST", path: "/swarms/:id/messages", params: Params },
+    auth: "key_or_service",
+    runs: "worker",
+    cors: true,
+    noStore: true,
+    badRequest: BAD,
+    input: IdInput.extend({
+        to: z.union([z.number().int().min(1).max(200), z.literal("all")]).describe('an agent number (from 1), or "all"'),
+        text: z.string().trim().min(1).max(MESSAGE_MAX),
+    }),
+    output: z.object({ sent: z.boolean(), to: z.union([z.number(), z.literal("all")]), woke: z.boolean().describe("an agent waiting on a question was woken") }),
+    ai: {
+        tier: "free",
+        summary: "Message a running swarm's agents: answer an agent's question (to: its number) or tell every agent (to: \"all\"). It never changes the program: tools, writes, scope, cap and prompt stay what was approved.",
+        params: ["id", "to", "text"],
+    },
+    handler: async (ctx, input) => {
+        const row = await mustSee(ctx, input.id);
+        if (row.status !== "running" && row.status !== "stopping") throw new OpError(409, "error.swarm.not_running", `swarm: it is ${row.status.replace("_", " ")}; only a running swarm takes messages`);
+        const task = input.to === "all" ? null : input.to - 1;
+        if (task !== null && task >= row.task_count) throw badSpec(`to: this swarm has ${row.task_count} agents (1..${row.task_count})`);
+        const now = ctx.now();
+        const sender = await senderOf(ctx);
+        // an answer when it reaches an agent with an open question
+        const open = await ctx.db
+            .prepare(
+                `SELECT COUNT(*) AS n FROM swarm_messages WHERE swarm = ?1 AND dir = 'up' AND kind = 'ask' AND answered_at IS NULL AND (?2 IS NULL OR task = ?2)`,
+            )
+            .bind(row.id, task)
+            .first<{ n: number }>();
+        const answers = (open?.n ?? 0) > 0;
+        await insertMessage(ctx.db, { swarm: row.id, task, dir: "down", kind: task !== null && answers ? "reply" : "note", sender, text: input.text, now });
+        await ctx.db.batch([
+            ctx.db
+                .prepare("UPDATE swarm_messages SET answered_at = ?3 WHERE swarm = ?1 AND dir = 'up' AND kind = 'ask' AND answered_at IS NULL AND (?2 IS NULL OR task = ?2)")
+                .bind(row.id, task, now),
+        ]);
+        const woke = await ctx.db
+            .prepare("UPDATE swarm_tasks SET status = 'queued', asked_at = NULL WHERE swarm = ?1 AND status = 'waiting' AND (?2 IS NULL OR idx = ?2)")
+            .bind(row.id, task)
+            .run();
+        const n = woke.meta?.changes ?? 0;
+        if (n > 0 && ctx.env.SWARMS) await port(ctx).wake(row.id).catch((e) => console.error("[swarm] wake failed", String(e)));
+        if (answers) trackSwarm(ctx, "answered", row.id, { to: input.to === "all" ? "all" : "agent", by: sender, woke: n, chars: input.text.length });
+        if (n > 0) await swarmLive(ctx).push(row.id);
+        return ok({ sent: true, to: input.to, woke: n > 0 });
+    },
+});
+
+export const swarmMessagesOp = defineOp({
+    name: "swarm.messages",
+    route: { method: "GET", path: "/swarms/:id/messages", params: Params },
+    auth: "key_or_service",
+    runs: "worker",
+    cors: true,
+    noStore: true,
+    badRequest: BAD,
+    input: IdInput.extend({
+        agent: AgentNo.optional().describe("one agent's messages (and those to every agent)"),
+        after: z.coerce.number().int().min(0).optional().describe("only messages after this id"),
+    }),
+    output: z.object({ messages: z.array(SwarmMessageSchema) }),
+    ai: { tier: "free", summary: "A swarm's messages, both ways, oldest first (at most 200); does not mark them read.", params: ["id"], options: true },
+    handler: async (ctx, input) => {
+        const row = await mustSee(ctx, input.id);
+        const task = input.agent === undefined ? null : input.agent - 1;
+        const { results } = await ctx.db
+            .prepare(`SELECT * FROM swarm_messages WHERE swarm = ?1 AND id > ?2 AND (?3 IS NULL OR task IS NULL OR task = ?3) ORDER BY id LIMIT ${MESSAGES_PAGE_MAX}`)
+            .bind(row.id, input.after ?? 0, task)
+            .all<MessageRow>();
+        return ok({ messages: results.map(messageShape) });
+    },
+});
+
+export const SwarmAgentSchema = z
+    .object({
+        swarm: z.string(),
+        agent: z.number(),
+        status: TaskStatus,
+        items: z.array(z.unknown()),
+        attempts: z.number(),
+        in_tokens: z.number(),
+        out_tokens: z.number(),
+        usd: z.number(),
+        started_at: z.number().nullable(),
+        ended_at: z.number().nullable(),
+        error: z.string().nullable(),
+        result: z.unknown(),
+        steps: z.array(z.object({ at: z.number(), text: z.string() })),
+        messages: z.array(SwarmMessageSchema),
+        changes: z.array(SwarmChangeSchema).describe("propose mode: this agent's changes"),
+    })
+    .meta({ id: "SwarmAgent" });
+
+export const swarmAgentOp = defineOp({
+    name: "swarm.agent",
+    route: { method: "GET", path: "/swarms/:id/agents/:agent", params: { ...Params, agent: /^[1-9][0-9]{0,2}$/ } },
+    auth: "key_or_service",
+    runs: "worker",
+    cors: true,
+    noStore: true,
+    badRequest: BAD,
+    input: IdInput.extend({ agent: AgentNo.describe("the agent's number, from 1") }),
+    output: SwarmAgentSchema,
+    ai: { tier: "free", summary: "One agent of a swarm: its items, status, cost, last steps, result, messages and (propose mode) changes.", params: ["id", "agent"] },
+    handler: async (ctx, input) => {
+        const row = await mustSee(ctx, input.id);
+        const idx = input.agent - 1;
+        const t = await ctx.db.prepare("SELECT * FROM swarm_tasks WHERE swarm = ?1 AND idx = ?2").bind(row.id, idx).first<TaskRow>();
+        if (!t) throw new OpError(404, "error.swarm.not_found", `swarm: no agent ${input.agent} (it has ${row.task_count})`);
+        const [msgs, changes] = await Promise.all([
+            ctx.db.prepare(`SELECT * FROM swarm_messages WHERE swarm = ?1 AND (task IS NULL OR task = ?2) ORDER BY id LIMIT ${MESSAGES_PAGE_MAX}`).bind(row.id, idx).all<MessageRow>(),
+            row.mode === "propose" ? ctx.db.prepare("SELECT * FROM swarm_changes WHERE swarm = ?1 AND task = ?2 ORDER BY n").bind(row.id, idx).all<ChangeRow>() : Promise.resolve({ results: [] as ChangeRow[] }),
+        ]);
+        const r = resultShape(t);
+        return ok({
+            swarm: row.id,
+            agent: input.agent,
+            status: t.status,
+            items: JSON.parse(t.items) as unknown[],
+            attempts: t.attempts,
+            in_tokens: t.in_tokens,
+            out_tokens: t.out_tokens,
+            usd: r.usd,
+            started_at: t.started_at,
+            ended_at: t.ended_at,
+            error: t.error,
+            result: r.result,
+            steps: parseSteps(t.steps ?? null),
+            messages: msgs.results.map(messageShape),
+            changes: changes.results.map(changeShape),
+        });
+    },
+});
+
+// ---- the results board (section 62.4) --------------------------------------------------------------------------------------
+
+export const MediaRefSchema = z
+    .object({
+        ref: z.string(),
+        kind: z.enum(["post", "file", "emote", "image", "video"]),
+        preview_url: z.string().nullable(),
+        open_url: z.string().nullable(),
+        title: z.string().optional(),
+        animated: z.boolean().optional(),
+    })
+    .meta({ id: "MediaRef" });
+
+export const BoardRowSchema = z
+    .object({
+        agent: z.number(),
+        n: z.number().describe("the row's number within its agent, from 1"),
+        title: z.string(),
+        score: z.number().nullable(),
+        group: z.string().nullable(),
+        fields: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).describe("the other plain values, at most 12"),
+        media: z.array(MediaRefSchema).describe("resolved, at most 4"),
+        links: z.array(z.string()),
+    })
+    .meta({ id: "BoardRow" });
+
+export const swarmBoardOp = defineOp({
+    name: "swarm.board",
+    route: { method: "GET", path: "/swarms/:id/board", params: Params },
+    auth: "key_or_service",
+    runs: "worker",
+    cors: true,
+    noStore: true,
+    badRequest: BAD,
+    input: z.object({
+        id: z.string().regex(SWARM_ID_REGEX),
+        q: z.string().trim().max(200).optional().describe("matches any text of a row (case-insensitive)"),
+        agent: z.coerce.number().int().min(1).max(TASKS_MAX).optional().describe("one agent's rows (from 1)"),
+        status: z.enum(["queued", "running", "waiting", "done", "failed", "skipped"]).optional().describe("only agents with this status"),
+        group: z.string().max(200).optional().describe("one group's rows"),
+        sort: z.enum(["agent", "score", "title"]).optional().describe("agent (default), score (best first) or title"),
+        offset: z.coerce.number().int().min(0).max(1_000_000).optional().describe("default 0"),
+        limit: z.coerce.number().int().min(1).max(BOARD_LIMIT_MAX).optional().describe(`default ${BOARD_LIMIT_DEFAULT}, at most ${BOARD_LIMIT_MAX}`),
+    }),
+    output: z.object({
+        swarm: SwarmSchema,
+        total: z.number(),
+        offset: z.number(),
+        groups: z.array(z.object({ value: z.string(), count: z.number() })),
+        agents: z.array(z.object({ agent: z.number(), status: z.string(), outcome: OutcomeSchema, error: z.string().nullable() })).describe("every agent, for the strip"),
+        rows: z.array(BoardRowSchema),
+    }),
+    ai: {
+        tier: "free",
+        summary:
+            "A swarm's results as one board: every agent's outcome and score, and a row per thing its agents answered (title, score, group, other fields, up to 4 media previews). Failed agents appear as a row too. Filter with q, agent, status, group; sort by agent, score or title; pages of up to 200.",
+        params: ["id"],
+        options: true,
+    },
+    handler: async (ctx, input) => {
+        const row = await mustSee(ctx, input.id);
+        const spec = specOf(row);
+        const [{ results: tasks }, changes, asks, swarm] = await Promise.all([
+            ctx.db.prepare("SELECT * FROM swarm_tasks WHERE swarm = ?1 ORDER BY idx").bind(row.id).all<TaskRow>(),
+            row.mode === "propose" ? ctx.db.prepare("SELECT * FROM swarm_changes WHERE swarm = ?1 ORDER BY task, n").bind(row.id).all<ChangeRow>() : Promise.resolve({ results: [] as ChangeRow[] }),
+            asksByTask(ctx.db, row.id),
+            shapeOf(ctx.db, ctx.registry, row, webOrigin(ctx)),
+        ]);
+        const bases = { mediaBaseUrl: ctx.mediaBaseUrl, shareBaseUrl: ctx.shareBaseUrl, hosts: mediaHostsOf(ctx.env as { MEDIA_HOSTS?: string }, ctx) };
+        const byTask = new Map<number, ChangeRow[]>();
+        for (const c of changes.results) byTask.set(c.task, [...(byTask.get(c.task) ?? []), c]);
+        const agents = [];
+        const rows = [];
+        for (const t of tasks) {
+            const mine = agentRows(spec, t, byTask.get(t.idx) ?? [], bases);
+            const stats = statsOf(t.stats);
+            agents.push({ agent: t.idx + 1, status: t.status, outcome: outcomeOf(t, stats, stats.answered ?? answeredOf(JSON.parse(t.items) as unknown[], mine), asks.get(t.idx) ?? 0), error: t.error });
+            if (!input.status || t.status === input.status) rows.push(...mine);
+        }
+        const page = await boardPage(ctx.db, rows, input, bases);
+        return ok({ swarm, ...page, agents });
     },
 });
 
@@ -587,4 +925,9 @@ export const SWARM_OPS = [
     swarmDeclineOp,
     swarmDecideOp,
     swarmApplyOp,
+    swarmInboxOp,
+    swarmSendOp,
+    swarmMessagesOp,
+    swarmAgentOp,
+    swarmBoardOp,
 ];

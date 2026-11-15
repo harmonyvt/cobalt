@@ -934,6 +934,36 @@ await step("swarm: failed and stopped show why", async () => {
     await open("swarm.stopped", { width: 390 });
     eq(await txt(".whead .pill"), "stopped", "stopped pill");
 });
+await step("board: agent strip, cards, a card opens, search and chips call swarm_board, more on scroll", async () => {
+    await open("board.results", { width: 680 });
+    eq(await txt(".whead .pill"), "score 62%", "swarm score pill");
+    eq(await count(".bdst .bda"), 3, "one strip cell per agent");
+    ok((await F().locator(".bdst .bda").nth(2).getAttribute("class")).includes("t-bad"), "the failed agent is red");
+    eq(await count(".thumbs .th"), 100, "first page of cards");
+    ok((await txt(".note")).startsWith("100 of 130"), "count note");
+    await F().locator(".thumbs .th").first().click();
+    ok((await txt(".swk")).includes("xmas_emote_0"), "a card opens its detail");
+    await F().locator(".acts .btn").first().click();
+    ok(await F().locator(".thumbs").isVisible(), "back shows the grid");
+    await F().locator(".thumbs .th").last().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    eq(await count(".thumbs .th"), 130, "the next page loads on scroll");
+    const more = (await calls()).filter((c) => c.name === "swarm_board");
+    eq(more.at(-1).arguments.offset, 100, "asked from offset 100");
+    await F().locator(".bdt input[type=search]").fill("xmas_emote_1");
+    await F().locator(".bdt input[type=search]").press("Enter");
+    eq((await lastCall()).arguments.q, "xmas_emote_1", "search calls swarm_board with q");
+    await open("board.results", { width: 390 });
+    await F().locator(".bdt").nth(1).locator("button", { hasText: "snow" }).click();
+    eq((await lastCall()).arguments.group, "snow", "group chip calls swarm_board with group");
+    await open("board.results", { width: 390 });
+    await F().locator(".bdst .bda").first().click();
+    eq((await lastCall()).arguments.agent, 1, "agent cell filters by agent");
+    for (const w of [390, 680]) {
+        await open("board.results", { width: w });
+        await shot(`board-${w}`);
+    }
+});
 // ---------------------------------------------------------------- compact: height budgets on a phone, and the screenshots
 await step("compact: phone height budgets (390 px) and screenshots at 390 and 680", async () => {
     const budget = { "search.grid": 300, "links.list": 230, "collections.grid": 230, "edit.list": 230, "upload.tray": 250, "save.done": 130, "webp.pick": 190, "post.video": 560, "edit.project": 640 };

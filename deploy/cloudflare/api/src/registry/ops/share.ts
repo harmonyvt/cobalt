@@ -194,7 +194,10 @@ const codeOf = (body: unknown): string => {
 export function unwrap<T = Record<string, unknown>>(r: StudioReply, messages: Record<string, string> = {}): T {
     if (r.status >= 200 && r.status <= 299) return r.body as T;
     const code = codeOf(r.body);
-    throw new OpError(r.status, code, messages[code]);
+    const err = new OpError(r.status, code, messages[code]);
+    const after = (r.body as { error?: { retry_after?: unknown } } | null)?.error?.retry_after;
+    if (typeof after === "number") Object.assign(err, { retryAfter: after });
+    throw err;
 }
 
 // "1234…" or a share URL ".../g/1234…" -> the link id.

@@ -66,6 +66,7 @@ let renames: { set_id: string; emote_id: string; alias: string; at: number }[];
 let scripts: Map<string, ((s: Seen) => ModelTurn)[]>;
 let seen: (Seen & { who: string })[];
 let modelFailures: string[];
+let emoteBusy = 0;
 type Seen = { system: string; messages: any[]; tools: any[] };
 
 // ---- stand-ins for the 7TV calls, under their real names and inputs ------------------------------------------------------
@@ -97,7 +98,14 @@ const fakeOps = [
         cors: false,
         input: z.object({ emote_id: EmoteId }),
         ai: { tier: "free", only: true, summary: "One 7TV emote.", params: ["emote_id"] },
-        handler: async (_ctx, input) => ok({ id: input.emote_id, name: `emote of ${input.emote_id.slice(-3)}` }),
+        handler: async (_ctx, input) => {
+            // section 62.2: the next `emoteBusy` calls are rate limited
+            if (emoteBusy > 0) {
+                emoteBusy--;
+                throw new OpError(429, "error.seventv.rate_limited");
+            }
+            return ok({ id: input.emote_id, name: `emote of ${input.emote_id.slice(-3)}` });
+        },
     }),
     defineOp({
         name: "seventv.rename",
@@ -316,6 +324,7 @@ beforeEach(async () => {
         .run("sess-1", "phone", await hashKey(SESSION), "5e55e55e", 1, now + 90 * 86_400_000);
     clock = now;
     slept = [];
+    emoteBusy = 0;
     runners = new Map();
     renames = [];
     scripts = new Map();
@@ -332,7 +341,8 @@ describe("the program", () => {
 
     it("fills in the defaults and keeps the items out of the stored program", () => {
         const s = checkSpec(SwarmSpecSchema.parse(SPEC({ batch: undefined })), REGISTRY, {});
-        expect(s).toMatchObject({ mode: "propose", batch_size: 50, concurrency: 5, cap_usd: 1, turns: 6, attempts: 2, stop_after: 5, output: null, reduce: null });
+        // a swarm calling 7TV starts at most 3 agents at once unless it asks for more (section 62.5)
+        expect(s).toMatchObject({ mode: "propose", batch_size: 50, concurrency: 3, cap_usd: 1, turns: 6, attempts: 2, stop_after: 5, output: null, reduce: null });
         expect(s).not.toHaveProperty("items");
     });
 
@@ -420,7 +430,7 @@ describe("planning and approval", () => {
             status: "awaiting_approval",
             items: 4,
             batch_size: 2,
-            concurrency: 5,
+            concurrency: 3,
             tools: ["seventv.emote"],
             writes: ["seventv.rename"],
             scope: { set_id: [SET] },
@@ -468,7 +478,20 @@ describe("planning and approval", () => {
         // as the chat or the MCP: not even offered (hidden), and refused if reached
         const collect = { look: [], show: [], collage: null };
         const tools = chatToolbox(REG, base(), { threadId: "AbCdEfGh12345678", messageId: null, collect, legacy: chatTools({ db, mediaBaseUrl: MEDIA, embed: null }, collect), flags: { search: false, mcp: true }, pending: null }).tools;
-        expect(Object.keys(tools).filter((k) => k.startsWith("swarm."))).toEqual(["swarm.plan", "swarm.list", "swarm.get", "swarm.results", "swarm.changes", "swarm.stop", "swarm.retry"]);
+        expect(Object.keys(tools).filter((k) => k.startsWith("swarm."))).toEqual([
+            "swarm.plan",
+            "swarm.list",
+            "swarm.get",
+            "swarm.results",
+            "swarm.changes",
+            "swarm.stop",
+            "swarm.retry",
+            "swarm.inbox",
+            "swarm.send",
+            "swarm.messages",
+            "swarm.agent",
+            "swarm.board",
+        ]);
         expect(["swarm.plan", "swarm.get"].map(mcpToolName)).toEqual(["swarm_plan", "swarm_get"]);
         const chatCtx = forCall(base(), { keyId: "chat:AbCdEfGh12345678", caller: "chat", chat: { threadId: "AbCdEfGh12345678", collect, tools: {}, mcp: { origin: API, clientKeyId: "sess-1" } } });
         await expect(REG.op("swarm.approve")!.handler!(chatCtx, { id: s.swarm, spec_hash: s.spec_hash })).rejects.toMatchObject({ code: "error.swarm.owner_only" });
@@ -799,7 +822,9 @@ describe("act and read mode", () => {
         const s = await plan(SPEC({ mode: "read", writes: undefined, scope: undefined, tools: [], items: [{ id: 1 }, { id: 2 }], batch: { size: 1 }, output: { schema }, reduce: { prompt: "How many are ok?" } }));
         scripts.set("1", [
             (x) => {
-                expect(x.tools).toEqual([]);
+                // no program tools, but run_code is there for cobalt.swarm.ask / tell (section 61.2)
+                expect(x.tools.map((t: any) => t.name)).toEqual(["run_code"]);
+                expect(x.system).toContain("ask(text: string)");
                 expect(x.system).toContain('"required":["id","ok"]');
                 return say(JSON.stringify([{ id: 1, ok: "yes" }]));
             },
@@ -858,7 +883,7 @@ describe("review fixes", () => {
     it("the shape previews the spec for the approve page", async () => {
         const items = Array.from({ length: 30 }, (_, i) => ({ emote_id: emoteId(i), name: `emote_${i}` }));
         const s = await plan(SPEC({ items, batch: { size: 4 }, budget: { usd: 1, turns_per_task: 4 }, retry: { attempts: 3, stop_after_failed_tasks: 2 } }));
-        expect(s.spec_preview).toEqual({ items_sample: items.slice(0, 10), source: null, output_schema: null, reduce_prompt: null, turns_per_task: 4, attempts: 3, stop_after_failed_tasks: 2 });
+        expect(s.spec_preview).toEqual({ items_sample: items.slice(0, 10), source: null, output_schema: null, reduce_prompt: null, board: null, prefetch: null, turns_per_task: 4, attempts: 3, stop_after_failed_tasks: 2 });
         const schema = { type: "object", properties: { ok: { type: "boolean" } } };
         const r = await plan(SPEC({ mode: "read", writes: undefined, scope: undefined, tools: [], source: { call: "seventv.set", args: { set_id: SET }, path: "emotes" }, items: undefined, output: { schema }, reduce: { prompt: "sum up" } }));
         expect(r.spec_preview).toMatchObject({ source: { call: "seventv.set", args: { set_id: SET }, path: "emotes" }, output_schema: schema, reduce_prompt: "sum up", turns_per_task: 6 });
@@ -1055,3 +1080,356 @@ describe("PostHog (59.10)", () => {
         expect(ops[0]!.properties.thread).toBe(`swarm:${s.swarm}`);
     });
 });
+
+// ---- section 61: messages between agents and their owner, the step log, one agent, apply from one tap ----------------------
+
+describe("agents that talk to their owner (61)", () => {
+    const send = (id: string, to: number | "all", text: string, headers: Record<string, string> = KEY) => json(req(`/swarms/${id}/messages`, "POST", headers, { to, text }));
+    const msgs = () => db.raw.prepare("SELECT task, dir, kind, sender, text, read_at, answered_at FROM swarm_messages ORDER BY id").all() as any[];
+
+    it("an ask parks the agent (no slot, no spend), the owner's answer wakes it and starts its next turn", async () => {
+        const s = await plan(SPEC({ concurrency: 1 }));
+        scripts.set("1", [
+            (x) => {
+                expect(x.system).toContain("tell(text: string)");
+                return code("tu_1", `const a = await cobalt.swarm.ask("Which set should Cat go in?"); await cobalt.swarm.tell("halfway"); return a;`);
+            },
+            (x) => {
+                const last = x.messages.at(-1).content;
+                expect(lastResult(x).result).toEqual({ asked: true, note: "your turn ends now; the answer comes as your next message" });
+                expect(last.at(-1)).toEqual({ type: "text", text: "[answer from agent key]: the first one" });
+                return say(JSON.stringify({ changes: [rename(0, "Cat")] }));
+            },
+        ]);
+        scripts.set("2", [() => say(JSON.stringify({ changes: [] }))]);
+        await approve(s.swarm, s.spec_hash);
+        await tick(s.swarm);
+        // agent 1 waits; agent 2 took the one slot and finished; the swarm does not end while a question is open
+        expect(tasks(s.swarm).map((t) => [t.status, t.attempts])).toEqual([
+            ["waiting", 1],
+            ["done", 1],
+        ]);
+        expect(tasks(s.swarm)[0].asked_at).toBe(clock);
+        expect(row(s.swarm).status).toBe("running");
+        expect(runners.get(s.swarm)!.alarm).toBe(600_000);
+        const spent = row(s.swarm).spent_usd;
+        const got = (await json(req(`/swarms/${s.swarm}`, "GET", KEY))).body;
+        expect(got.tasks).toMatchObject({ waiting: 1, done: 1 });
+        expect(got.tasks.cells[0]).toMatchObject({ status: "waiting", step: "told the owner" });
+        expect(got).toMatchObject({ messages: { total: 2, waiting: 1 }, planner: "agent key" });
+        // the job says so, and lists the question
+        const ctx = forCall(base(), { keyId: "key-1", caller: "key" });
+        const job = await waitJob(ctx, `swarm:${s.swarm}`, 0);
+        expect(job).toMatchObject({ status: "running", activity: expect.stringMatching(/, 1 question waiting$/), asks: [{ agent: 1, text: "Which set should Cat go in?" }] });
+        // the inbox: once, then read
+        const inbox = (await json(req("/swarms/inbox", "GET", KEY))).body.messages;
+        expect(inbox.map((m: any) => [m.agent, m.dir, m.kind, m.sender, m.text, m.answered])).toEqual([
+            [1, "up", "ask", "agent", "Which set should Cat go in?", false],
+            [1, "up", "tell", "agent", "halfway", false],
+        ]);
+        expect((await json(req("/swarms/inbox", "GET", KEY))).body.messages).toEqual([]);
+        // the owner (the planning key) answers; the agent wakes
+        expect(await send(s.swarm, 1, "the first one")).toEqual({ status: 200, body: { sent: true, to: 1, woke: true } });
+        expect(tasks(s.swarm)[0]).toMatchObject({ status: "queued", asked_at: null });
+        expect(runners.get(s.swarm)!.alarm).toBe(0);
+        expect(msgs().at(-1)).toMatchObject({ task: 0, dir: "down", kind: "reply", sender: "owner" });
+        expect(msgs()[0].answered_at).toBe(clock);
+        expect(row(s.swarm).spent_usd).toBe(spent);
+        await drain(s.swarm);
+        expect(row(s.swarm)).toMatchObject({ status: "done", apply_status: "ready" });
+        expect(tasks(s.swarm)[0]).toMatchObject({ status: "done", attempts: 1 });
+        // one agent, numbered from 1: steps, messages, changes
+        const agent = (await json(req(`/swarms/${s.swarm}/agents/1`, "GET", KEY))).body;
+        expect(agent).toMatchObject({ swarm: s.swarm, agent: 1, status: "done", attempts: 1, error: null, result: { changes: 1 } });
+        expect(agent.items).toHaveLength(2);
+        expect(agent.steps.map((x: any) => x.text)).toEqual(["started", "asked a question", "told the owner", "answer arrived", "proposed 1 change", "done"]);
+        expect(agent.messages.map((m: any) => m.kind)).toEqual(["ask", "tell", "reply"]);
+        expect(agent.changes.map((c: any) => c.after)).toEqual(["Cat"]);
+        expect((await json(req(`/swarms/${s.swarm}/agents/3`, "GET", KEY))).status).toBe(404);
+        expect((await json(req(`/swarms/${s.swarm}/agents/2`, "GET", { authorization: "Api-Key 11111111-2222-4333-8444-555555555555" }))).status).toBe(401);
+        // the conversation, both ways (not marked read), and from an id on
+        const all = (await json(req(`/swarms/${s.swarm}/messages`, "GET", SERVICE))).body.messages;
+        expect(all.map((m: any) => m.text)).toEqual(["Which set should Cat go in?", "halfway", "the first one"]);
+        expect((await json(req(`/swarms/${s.swarm}/messages?agent=2&after=0`, "GET", KEY))).body.messages).toEqual([]);
+        expect((await json(req(`/swarms/${s.swarm}/messages?after=${all[1].id}`, "GET", KEY))).body.messages.map((m: any) => m.text)).toEqual(["the first one"]);
+        // a finished swarm takes no messages
+        expect(await send(s.swarm, 1, "too late")).toEqual({ status: 409, body: { status: "error", error: { code: "error.swarm.not_running" } } });
+    });
+
+    it("no answer in time: the timeout line; Harmony's messages reach a queued agent under its prompt and a waiting one at its next turn", async () => {
+        (env as any).SWARM_ASK_WAIT_MS = "60000";
+        const s = await plan(SPEC({ concurrency: 1 }));
+        await approve(s.swarm, s.spec_hash);
+        // before any agent ran: every agent gets it under its prompt
+        expect(await send(s.swarm, "all", "use lowercase names", SESS)).toEqual({ status: 200, body: { sent: true, to: "all", woke: false } });
+        expect(msgs().at(-1)).toMatchObject({ task: null, dir: "down", kind: "note", sender: "you" });
+        const underPrompt = (x: Seen) => expect(x.messages[0].content).toMatch(/Suggest a clean name for each\.\n\n\[message from Harmony\]: use lowercase names$/);
+        scripts.set("1", [
+            (x) => (underPrompt(x), code("tu_1", `return await cobalt.swarm.ask("Unsure, help?");`)),
+            (x) => {
+                expect(x.messages.at(-1).content.at(-1).text).toBe("[no answer in 1 minutes: go on with your best guess and say so in your answer]");
+                return say(JSON.stringify({ changes: [] }));
+            },
+        ]);
+        scripts.set("2", [
+            (x) => (underPrompt(x), code("tu_2", `return await cobalt.swarm.ask("And me?");`)),
+            (x) => {
+                expect(x.messages.at(-1).content.at(-1).text).toBe("[message from Harmony]: keep the 7TV names");
+                return say(JSON.stringify({ changes: [] }));
+            },
+        ]);
+        await tick(s.swarm);
+        expect(tasks(s.swarm).map((t) => t.status)).toEqual(["waiting", "waiting"]);
+        expect(runners.get(s.swarm)!.alarm).toBe(60_000);
+        clock += 30_000;
+        expect(await send(s.swarm, 2, "keep the 7TV names", SESS)).toMatchObject({ status: 200, body: { woke: true } });
+        await tick(s.swarm);
+        expect(tasks(s.swarm).map((t) => t.status)).toEqual(["waiting", "done"]);
+        expect(runners.get(s.swarm)!.alarm).toBe(30_000);
+        clock += 30_000;
+        await tick(s.swarm);
+        expect(tasks(s.swarm).map((t) => t.status)).toEqual(["done", "done"]);
+        expect(row(s.swarm).status).toBe("done");
+        const steps = JSON.parse(tasks(s.swarm)[0].steps).map((x: any) => x.text);
+        expect(steps).toContain("no answer, going on");
+        expect(JSON.parse(tasks(s.swarm)[1].steps).map((x: any) => x.text)).toContain("answer arrived");
+        // the first agent's question was never answered; the second's was
+        expect(msgs().filter((m) => m.kind === "ask").map((m) => m.answered_at !== null)).toEqual([false, true]);
+    });
+
+    it("limits: 3 asks, 20 messages, 2000 characters; a bad agent number; stop ends a waiting agent as skipped", async () => {
+        const s = await plan(SPEC({ items: [{ id: 1 }], batch: { size: 1 } }));
+        scripts.set("1", [
+            () =>
+                code(
+                    "tu_1",
+                    `const out = [];
+                     for (let i = 0; i < 4; i++) { try { await cobalt.swarm.ask("q" + i); out.push("ok") } catch (e) { out.push(e.message) } }
+                     let long; try { await cobalt.swarm.tell("x".repeat(2001)) } catch (e) { long = e.message }
+                     let empty; try { await cobalt.swarm.tell("  ") } catch (e) { empty = e.message }
+                     let n = 0, last;
+                     for (let i = 0; i < 20; i++) { try { await cobalt.swarm.tell("t" + i); n++ } catch (e) { last = e.message } }
+                     return { out, long, empty, n, last };`,
+                ),
+        ]);
+        await approve(s.swarm, s.spec_hash);
+        await tick(s.swarm);
+        const state = JSON.parse(tasks(s.swarm)[0].state);
+        const r = JSON.parse(state.messages.at(-1).content[0].content[0].text).result;
+        expect(r.out.slice(0, 3)).toEqual(["ok", "ok", "ok"]);
+        expect(r.out[3]).toMatch(/asked 3 questions already/);
+        expect(r.long).toMatch(/1\.\.2000 characters/);
+        expect(r.empty).toMatch(/1\.\.2000 characters/);
+        expect(r.n).toBe(17);
+        expect(r.last).toMatch(/sent 20 messages already/);
+        expect(tasks(s.swarm)[0].status).toBe("waiting");
+        expect((await send(s.swarm, 2, "no such agent")).body.error.code).toBe("error.swarm.bad_spec");
+        expect((await json(req(`/swarms/${s.swarm}/messages`, "POST", KEY, { to: 1, text: "x".repeat(2001) }))).status).toBe(400);
+        // stop: the waiting agent ends skipped and the swarm stops
+        expect((await json(req(`/swarms/${s.swarm}/stop`, "POST", KEY, {}))).body.status).toBe("stopping");
+        await drain(s.swarm);
+        expect(tasks(s.swarm)[0]).toMatchObject({ status: "skipped", asked_at: null });
+        expect(row(s.swarm)).toMatchObject({ status: "stopped" });
+    });
+
+    it("apply with skip_clashes unticks the kept changes that clash first", async () => {
+        const s = await plan(SPEC());
+        scripts.set("1", [() => say(JSON.stringify({ changes: [rename(0, "Cat"), rename(1, "cat")] }))]);
+        scripts.set("2", [() => say(JSON.stringify({ changes: [rename(2, "Bird")] }))]);
+        await approve(s.swarm, s.spec_hash);
+        await drain(s.swarm);
+        const r = await json(req(`/swarms/${s.swarm}/apply`, "POST", SESS, { spec_hash: s.spec_hash, skip_clashes: true }));
+        expect(r.body.apply).toMatchObject({ status: "applying", total: 1 });
+        await drain(s.swarm);
+        expect(renames.map((x) => x.alias)).toEqual(["Bird"]);
+        const rows = (await json(req(`/swarms/${s.swarm}/changes`, "GET", KEY))).body.changes;
+        expect(rows.map((c: any) => [c.after, c.keep, c.status])).toEqual([
+            ["Cat", false, "proposed"],
+            ["cat", false, "proposed"],
+            ["Bird", true, "done"],
+        ]);
+    });
+
+    it("PostHog: asked, told, answered and ask_timeout carry counts, never the text", async () => {
+        const sent: { event: string; properties: Record<string, any> }[] = [];
+        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+            if (String(url).includes("posthog")) sent.push(...JSON.parse(String(init.body)).batch);
+            return new Response("{}");
+        });
+        try {
+            (env as any).POSTHOG_PROJECT_TOKEN = "phc_test";
+            (env as any).SWARM_ASK_WAIT_MS = "1000";
+            const s = await plan(SPEC({ items: [{ id: 1 }, { id: 2 }], batch: { size: 1 }, concurrency: 1 }));
+            scripts.set("1", [() => code("tu_1", `await cobalt.swarm.tell("secret report"); return await cobalt.swarm.ask("secret question");`), () => say(JSON.stringify({ changes: [] }))]);
+            scripts.set("2", [() => code("tu_2", `return await cobalt.swarm.ask("another secret");`), () => say(JSON.stringify({ changes: [] }))]);
+            await approve(s.swarm, s.spec_hash);
+            await tick(s.swarm);
+            await send(s.swarm, 1, "secret answer");
+            clock += 1000;
+            await drain(s.swarm);
+            await new Promise((r) => setTimeout(r, 0));
+            const stages = sent.filter((e) => e.event === "swarm").map((e) => e.properties.stage);
+            for (const st of ["told", "asked", "answered", "ask_timeout"]) expect(stages, st).toContain(st);
+            expect(sent.find((e) => e.properties.stage === "asked")!.properties).toMatchObject({ agent: 1, asks: 1 });
+            expect(JSON.stringify(sent)).not.toContain("secret");
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+});
+
+// ---- section 62: steadier reads, every agent's outcome and score, the board, prefetch ----------------------------------------
+
+describe("results board platform (62)", () => {
+    const READ = (over: Record<string, unknown> = {}) => SPEC({ mode: "read", writes: undefined, scope: undefined, ...over });
+    const board = async (id: string, qs = "", headers: Record<string, string> = KEY) => json(req(`/swarms/${id}/board${qs}`, "GET", headers));
+
+    it("a read that is rate limited is tried again after 2 and 8 s; the step log says so and the outcome counts it", async () => {
+        const s = await plan(READ({ items: SET_EMOTES.slice(0, 2).map((e) => ({ emote_id: e.id, name: e.name })), batch: { size: 2 } }));
+        emoteBusy = 2;
+        scripts.set("1", [() => code("tu_1", `return await cobalt.seventv.emote("${emoteId(0)}");`), () => say(JSON.stringify([{ name: "emote_0" }, { name: "emote_1" }]))]);
+        await approve(s.swarm, s.spec_hash);
+        await drain(s.swarm);
+        expect(slept).toEqual(expect.arrayContaining([2000, 8000]));
+        expect(lastResult(seen.at(-1)!).result).toMatchObject({ id: emoteId(0) });
+        const t = tasks(s.swarm)[0];
+        expect(JSON.parse(t.steps).map((x: any) => x.text)).toEqual(["started", "seventv.emote busy, waited 2 s", "seventv.emote busy, waited 8 s", "read seventv.emote", "done"]);
+        expect(JSON.parse(t.stats)).toMatchObject({ tool_calls: 1, tool_errors: 0, waits: 2, answered: 2, score: 1 });
+    });
+
+    it("a read still failing after 2, 8 and 30 s reaches the agent and counts as a tool error in its score", async () => {
+        const s = await plan(READ({ items: SET_EMOTES.slice(0, 2).map((e) => ({ emote_id: e.id, name: e.name })), batch: { size: 2 } }));
+        emoteBusy = 4;
+        scripts.set("1", [
+            () => code("tu_1", `try { await cobalt.seventv.emote("${emoteId(0)}") } catch (e) { return e.message }`),
+            () => code("tu_2", `return await cobalt.seventv.emote("${emoteId(1)}");`),
+            () => say(JSON.stringify({ results: [{ name: "emote_0" }] })),
+        ]);
+        await approve(s.swarm, s.spec_hash);
+        await drain(s.swarm);
+        expect(slept.filter((m) => m >= 2000)).toEqual([2000, 8000, 30_000]);
+        expect(JSON.stringify(seen[1]!.messages.at(-1))).toMatch(/rate_limited/);
+        // half its items answered, one of two calls failed: 0.5 × (1 − 1/2)
+        const r = (await json(req(`/swarms/${s.swarm}/results`, "GET", KEY))).body.results[0];
+        expect(r.items).toEqual(SET_EMOTES.slice(0, 2).map((e) => ({ emote_id: e.id, name: e.name })));
+        expect(r.outcome).toMatchObject({ status: "done", items: 2, answered: 1, tool_calls: 2, tool_errors: 1, asks: 0, turns: 3, score: 0.25 });
+        expect(r.outcome.ms).toBeGreaterThanOrEqual(0);
+    });
+
+    it("the board: rows guessed from any answer, media resolved, groups, search, sort, and a failed agent as a row", async () => {
+        const s = await plan(READ({ batch: { size: 2 }, retry: { attempts: 1 } }));
+        scripts.set("1", [
+            () =>
+                say(
+                    JSON.stringify({
+                        matches: [
+                            { name: "emote_0", emote_id: emoteId(0), confidence: "high", group: "cats", note: "a cat", seen_on: "https://7tv.app/emotes/" + emoteId(0) },
+                            { name: "emote_1", preview_url: `https://cdn.7tv.app/emote/${emoteId(1)}/2x.webp`, score: 0.5, group: "dogs", link: "https://example.com/x" },
+                        ],
+                    }),
+                ),
+        ]);
+        scripts.set("2", [() => say("not json"), () => say("still not json")]);
+        await approve(s.swarm, s.spec_hash);
+        await drain(s.swarm);
+        const b = (await board(s.swarm)).body;
+        expect(b.swarm).toMatchObject({ swarm: s.swarm, score: 0.5 });
+        expect(b.agents.map((a: any) => [a.agent, a.status, a.outcome.score, a.outcome.answered])).toEqual([
+            [1, "done", 1, 2],
+            [2, "failed", 0, 0],
+        ]);
+        expect(b.total).toBe(3);
+        expect(b.groups).toEqual([
+            { value: "cats", count: 1 },
+            { value: "dogs", count: 1 },
+        ]);
+        const [a, c, f] = b.rows;
+        expect(a).toMatchObject({ agent: 1, n: 1, title: "emote_0", score: 0.9, group: "cats", fields: { note: "a cat" } });
+        // emote_id is the picture (and so not a field); seen_on is not a media-ish name, so it stays a field and a link
+        expect(a.media.map((m: any) => [m.kind, m.preview_url])).toEqual([["emote", `https://cdn.7tv.app/emote/${emoteId(0)}/2x.webp`]]);
+        expect(a.fields.emote_id).toBeUndefined();
+        expect(a.links).toEqual([`https://7tv.app/emotes/${emoteId(0)}`]);
+        expect(c).toMatchObject({ title: "emote_1", score: 0.5, links: ["https://example.com/x"] });
+        expect(c.media).toHaveLength(1);
+        expect(f).toMatchObject({ agent: 2, title: expect.stringMatching(/^agent 2 failed: error\.swarm\.bad_answer/), fields: { items: "emote_2, emote_3" }, media: [] });
+        // filters
+        expect((await board(s.swarm, "?q=CAT")).body.rows.map((r: any) => r.title)).toEqual(["emote_0"]);
+        expect((await board(s.swarm, "?group=dogs")).body.rows.map((r: any) => r.title)).toEqual(["emote_1"]);
+        expect((await board(s.swarm, "?status=failed")).body.rows.map((r: any) => r.agent)).toEqual([2]);
+        expect((await board(s.swarm, "?agent=1&sort=score")).body.rows.map((r: any) => r.score)).toEqual([0.9, 0.5]);
+        expect((await board(s.swarm, "?sort=title&limit=1&offset=1", SERVICE)).body).toMatchObject({ total: 3, offset: 1, rows: [{ title: "emote_0" }] });
+        expect((await board(s.swarm, "?limit=201")).status).toBe(400);
+    });
+
+    it("output.board maps the answer's fields, checked against output.schema", async () => {
+        const schema = { type: "array", items: { type: "object", properties: { label: { type: "string" }, pic: { type: "string" }, conf: { type: "number" }, kind: { type: "string" }, note: { type: "string" }, junk: { type: "string" } } } };
+        const bad = await json(req("/swarms", "POST", KEY, READ({ output: { schema, board: { title: "nope" } } })));
+        expect(bad.status).toBe(400);
+        expect(bad.body.error.code).toBe("error.swarm.bad_spec");
+        expect(() => checkSpec(SwarmSpecSchema.parse(READ({ output: { schema, board: { title: "nope" } } })), REGISTRY, {})).toThrow(/nope is not a field/);
+        const s = await plan(READ({ items: [{ name: "a" }], batch: { size: 1 }, output: { schema, board: { title: "label", media: "pic", score: "conf", group: "kind", fields: ["note"] } } }));
+        expect(s.spec_preview.board).toEqual({ title: "label", media: ["pic"], score: "conf", group: "kind", fields: ["note"] });
+        scripts.set("1", [() => say(JSON.stringify([{ label: "A", pic: emoteId(5), conf: 80, kind: "k", note: "n", junk: "j", name: "a" }]))]);
+        await approve(s.swarm, s.spec_hash);
+        await drain(s.swarm);
+        const row1 = (await board(s.swarm)).body.rows[0];
+        expect(row1).toMatchObject({ title: "A", score: 0.8, group: "k", fields: { note: "n" }, media: [{ kind: "emote" }] });
+        expect(row1.fields.junk).toBeUndefined();
+    });
+
+    it("prefetch: the runner looks each item up before its agent starts, the answer rides on the item, a failure says why", async () => {
+        const items = SET_EMOTES.slice(0, 3).map((e) => ({ emote_id: e.id, name: e.name }));
+        const refused = await json(req("/swarms", "POST", KEY, READ({ prefetch: { call: "seventv.emote", args: { emote_id: "{{items}}" } } })));
+        expect(refused.status).toBe(400);
+        expect((await json(req("/swarms", "POST", KEY, READ({ prefetch: { call: "library.delete", args: {} } })))).status).toBe(400);
+        const s = await plan(READ({ items, batch: { size: 3 }, tools: [], prefetch: { call: "seventv.emote", args: { emote_id: "{{item.emote_id}}" }, as: "emote" } }));
+        expect(s.spec_preview.prefetch).toEqual({ call: "seventv.emote", args: { emote_id: "{{item.emote_id}}" }, as: "emote" });
+        expect(s.estimate_usd).toEqual((await plan(READ({ items, batch: { size: 3 }, tools: [] }))).estimate_usd);
+        // the third lookup stays rate limited through its retries
+        emoteBusy = 0;
+        let calls = 0;
+        scripts.set("1", [
+            (x) => {
+                const prompt = x.messages[0].content as string;
+                expect(prompt).toContain(`"emote":{"id":"${emoteId(0)}","name":"emote of 000"}`);
+                expect(prompt).toContain(`"emote":{"id":"${emoteId(1)}"`);
+                expect(prompt).toMatch(/"emote":\{"error":"cobalt\.seventv\.emote failed: error\.seventv\.rate_limited"\}/);
+                calls++;
+                return say("[]");
+            },
+        ]);
+        await approve(s.swarm, s.spec_hash);
+        // the third item's lookup: busy through every retry
+        const orig = emoteBusy;
+        expect(orig).toBe(0);
+        let n = 0;
+        const fake = REG.op("seventv.emote")!;
+        const handler = fake.handler!;
+        (fake as any).handler = async (ctx: any, input: any) => {
+            if (input.emote_id === emoteId(2)) throw new OpError(429, "error.seventv.rate_limited");
+            n++;
+            return handler(ctx, input);
+        };
+        try {
+            await drain(s.swarm);
+        } finally {
+            (fake as any).handler = handler;
+        }
+        expect(calls).toBe(1);
+        expect(n).toBe(2);
+        const t = tasks(s.swarm)[0];
+        expect(JSON.parse(t.steps).map((x: any) => x.text)).toEqual([
+            "prefetched 1 of 3",
+            "prefetched 2 of 3",
+            "seventv.emote busy, waited 2 s",
+            "seventv.emote busy, waited 8 s",
+            "seventv.emote busy, waited 30 s",
+            "prefetched 3 of 3",
+            "started",
+            "done",
+        ]);
+        expect(JSON.parse(t.items)[0]).toEqual({ ...items[0], emote: { id: emoteId(0), name: "emote of 000" } });
+        expect(row(s.swarm).spent_usd).toBeCloseTo(0.0015, 6);
+    });
+});
+
