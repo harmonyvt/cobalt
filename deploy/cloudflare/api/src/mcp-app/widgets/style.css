@@ -299,3 +299,17 @@ a.ext:hover{text-decoration:underline}
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
 }
+.swb>*+*{margin-top:8px}
+.swk{display:grid;gap:3px}
+.swk .kvr{display:grid;grid-template-columns:62px minmax(0,1fr);gap:8px}
+.swk .k{color:var(--mute);font-size:var(--fm)}
+.swk .v{overflow-wrap:anywhere;min-width:0}
+.swt{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;padding:6px 8px;background:var(--card);border:1px solid var(--line);border-radius:8px;font-size:var(--fm)}
+.swt.clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.swn{margin:0}
+.swcells{display:flex;flex-wrap:wrap;gap:2px;margin-bottom:4px}
+.swcells i{width:9px;height:9px;border-radius:2px;background:var(--soft);box-shadow:inset 0 0 0 1px var(--line)}
+.swcells i.c-done{background:var(--green);box-shadow:none}
+.swcells i.c-running{background:var(--pink);box-shadow:none}
+.swcells i.c-failed{background:var(--red);box-shadow:none}
+.swcells i.c-skipped{background:transparent;box-shadow:inset 0 0 0 1px var(--mute)}

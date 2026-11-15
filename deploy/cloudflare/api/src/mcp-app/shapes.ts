@@ -3,7 +3,7 @@
 // "may be missing" value is nullable, and every result carries `view`, the widget view that draws it.
 import * as z from "zod";
 
-export const VIEWS = ["search", "post", "edit", "collections", "links", "webp", "upload", "save", "terminal"] as const;
+export const VIEWS = ["search", "post", "edit", "collections", "links", "webp", "upload", "save", "terminal", "swarm"] as const;
 export type View = (typeof VIEWS)[number];
 export const widgetUri = (view: View) => `ui://capystore/${view}.html`;
 

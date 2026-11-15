@@ -291,6 +291,8 @@ describe("defineOp and the registry", () => {
             "jobs.wait",
             "jobs.onDone",
             "chat.video",
+            // section 59: agent swarms (approve, decline, decide and apply are Harmony's own, hidden)
+            "swarm.plan", "swarm.list", "swarm.get", "swarm.results", "swarm.changes", "swarm.stop", "swarm.retry",
             "make.cutout",
             "edits.addOverlay",
             // section 44.2

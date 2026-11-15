@@ -63,7 +63,9 @@ const NEW_TITLE = "new chat";
 // ---- injected pieces ----------------------------------------------------------------------------
 
 
-export type ModelTurn = { content: any[]; stop_reason: string | null };
+// usage: the turn's token counts as the API reported them (agent swarms, section 59, price their tasks from it)
+export type ModelUsage = { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
+export type ModelTurn = { content: any[]; stop_reason: string | null; usage?: ModelUsage };
 export type ChatModel = {
     model: string;
     turn(req: { system: string; tools: any[]; messages: any[]; onText: (delta: string) => void }): Promise<ModelTurn>;
@@ -101,7 +103,7 @@ export function chatModelFrom(
                 });
                 stream.on("text", (d) => onText(d));
                 const final = await stream.finalMessage();
-                return { content: final.content as any[], stop_reason: final.stop_reason };
+                return { content: final.content as any[], stop_reason: final.stop_reason, usage: final.usage as ModelUsage | undefined };
             } catch (e) {
                 throw new ModelError(e instanceof Error ? e.message : String(e));
             }

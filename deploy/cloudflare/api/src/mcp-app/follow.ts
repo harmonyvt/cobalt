@@ -94,6 +94,16 @@ const boxSave: Follow = {
     },
 };
 
+// swarm.plan and swarm.get answer a SwarmShape (APP-API-CONTRACT.md section 59.4): the card draws it as it is. There is
+// deliberately no follow for approve or apply: only Harmony does those, from the capystore page the card links to.
+const swarm: Follow = {
+    view: "swarm",
+    async build(_ctx, _input, result) {
+        const r = rec(result);
+        return str(r.swarm) && str(r.status) ? { ...r, view: "swarm" } : null;
+    },
+};
+
 const idsOf = (i: Json) => (typeof i.ids === "string" ? [i.ids] : strings(i.ids));
 
 // by chat call name
@@ -112,4 +122,6 @@ export const FOLLOWS: Record<string, Follow> = {
     "box.run": boxRun,
     "box.pull": boxPull,
     "box.save": boxSave,
+    "swarm.plan": swarm,
+    "swarm.get": swarm,
 };

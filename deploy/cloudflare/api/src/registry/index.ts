@@ -24,6 +24,7 @@ import { PRIVATE_OPS } from "./ops/private";
 import { SHARE_OPS } from "./ops/share";
 import { SEVENTV_OPS } from "./ops/seventv";
 import { STAGE_OPS } from "./ops/stage";
+import { SWARM_OPS } from "./ops/swarm";
 import { SYSTEM_OPS } from "./ops/system";
 import { Registry } from "./registry";
 import { toolTypesFor } from "./typescript";
@@ -39,6 +40,7 @@ export const REGISTRY = new Registry([
     ...MAKE_OPS,
     ...CHAT_VIDEO_OPS,
     ...AGENT_OPS,
+    ...SWARM_OPS,
     ...EDITOR_OPS,
     ...POST_FRAME_OPS,
     ...SHARE_OPS,

@@ -125,7 +125,7 @@ export function previewMetaOf(sc) {
     const m = {};
     const expires_at = inOneHour();
     const put = (id, v) => (m[id] = { ...m[id], ...v, expires_at });
-    for (const p of sc.items || []) if (p.status && p.status !== "public" && !p.thumb_url && p.id !== "post-priv-2") put(p.id, { thumb: signed(p.id, true) });
+    for (const p of Array.isArray(sc.items) ? sc.items : []) if (p.status && p.status !== "public" && !p.thumb_url && p.id !== "post-priv-2") put(p.id, { thumb: signed(p.id, true) });
     const post = sc.post;
     if (sc.view === "post" && post && post.status !== "public" && post.id !== "post-priv-2") {
         put(post.id, { thumb: signed(post.id, true) });
@@ -200,3 +200,21 @@ export const termSave = (pub = false) => ({
     public_url: pub ? `${MEDIA}clip720.mp4` : null,
     post: pub ? POSTS[1] : { ...POSTS[3], title: "clip 720p" },
 });
+
+// ---- the swarm card (swarm_plan, swarm_get: the op's SwarmShape plus view)
+const cellsOf = (list) => list.map((status, idx) => ({ idx, status, error: status === "failed" ? "the model answered with no JSON" : null }));
+const swTasks = (list) => ({ total: list.length, queued: list.filter((s) => s === "queued").length, running: list.filter((s) => s === "running").length, done: list.filter((s) => s === "done").length, failed: list.filter((s) => s === "failed").length, cells: cellsOf(list) });
+const SW_PROMPT = "For each emote in your batch, decide whether its name is a close duplicate of another emote in the channel set (ignore case and trailing digits). Skip anything animated. For every duplicate, propose a rename that keeps the meme but makes the name unique, and explain it in one short line. Never touch emotes that are not in the channel's own set, and never propose a rename that collides with a name already taken in the set.";
+export const swarm = (o = {}) => ({
+    view: "swarm", swarm: "swm-8Kp2xQ", name: "Rename duplicate emotes", mode: "propose", status: "awaiting_approval", spec_hash: "9f3c1a", prompt: SW_PROMPT,
+    tools: ["seventv.set", "seventv.emote"], writes: ["seventv.rename"], scope: { sets: ["01H-main"] }, items: 1000, batch_size: 50, concurrency: 5,
+    tasks: swTasks(Array(20).fill("queued")), estimate_usd: { low: 0.8, high: 2.4 }, cap_usd: 3, spent_usd: 0,
+    created_at: 1_763_000_000_000, approved_at: null, finished_at: null, expires_at: 1_763_086_400_000, reduce: null, error: null, changes: null,
+    apply: { status: "none", done: 0, failed: 0, total: 0 }, approve_url: "https://cobalt.capybaraharmony.com/swarms/swm-8Kp2xQ", job: "swarm:swm-8Kp2xQ", ...o,
+});
+export const swarmAwaiting = () => swarm();
+export const swarmRunning = () => swarm({ status: "running", approved_at: 1_763_000_100_000, tasks: swTasks(["done", "done", "done", "done", "done", "done", "failed", "done", "running", "running", "running", "running", "running", "queued", "queued", "queued", "queued", "queued", "queued", "queued"]), spent_usd: 0.74 });
+export const swarmPropose = () => swarm({ status: "done", approved_at: 1_763_000_100_000, finished_at: 1_763_000_900_000, tasks: swTasks(Array(20).fill("done")), spent_usd: 1.62, changes: { total: 137, kept: 137, done: 0, failed: 0 }, apply: { status: "ready", done: 0, failed: 0, total: 137 } });
+export const swarmRead = () => swarm({ mode: "read", writes: [], status: "done", approved_at: 1_763_000_100_000, finished_at: 1_763_000_900_000, tasks: swTasks([...Array(19).fill("done"), "failed"]), spent_usd: 1.18, reduce: "Of 1000 emotes, 212 are animated and 41 share a name with another emote once case and trailing digits are ignored. The largest clash is the pepe family (9 names). 3 emotes have no owner set." });
+export const swarmFailed = () => swarm({ status: "failed", approved_at: 1_763_000_100_000, finished_at: 1_763_000_500_000, tasks: swTasks(["done", "done", "failed", "failed", "failed", "skipped", "skipped", "skipped"]), spent_usd: 0.31, error: "7TV rejected the session token (401), so every batch after the third stopped" });
+export const swarmStopped = () => swarm({ status: "stopped", approved_at: 1_763_000_100_000, finished_at: 1_763_000_500_000, tasks: swTasks(["done", "done", "done", "skipped", "skipped", "skipped"]), spent_usd: 0.4 });

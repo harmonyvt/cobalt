@@ -194,6 +194,19 @@ export const PATHS: string[] = [
     "/auth/keys/0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a99",
     "/auth/keys/bad",
     "/auth/other",
+    // added with agent swarms (section 59): plan and list, one swarm, its pages, the agent's and Harmony's actions
+    "/swarms",
+    `/swarms/${ID16}`,
+    `/swarms/${ID16}/results`,
+    `/swarms/${ID16}/results?offset=0&limit=100`,
+    `/swarms/${ID16}/changes`,
+    `/swarms/${ID16}/stop`,
+    `/swarms/${ID16}/retry`,
+    `/swarms/${ID16}/approve`,
+    `/swarms/${ID16}/decline`,
+    `/swarms/${ID16}/apply`,
+    `/swarms/${ID16}/other`,
+    "/swarms/bad",
     "/nope",
 ];
 

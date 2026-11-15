@@ -9071,6 +9071,864 @@
         }
       }
     },
+    "/swarms": {
+      "post": {
+        "operationId": "swarm.plan",
+        "summary": "Plan a swarm: one Haiku task per batch of items (e.g. 1000 7TV emotes in batches of 50), each in code mode with only the read calls in `tools`. Nothing runs until Harmony approves it on approve_url (give Harmony that link); it answers the plan with its cost estimate. mode propose (default) answers { changes } Harmony reviews before they are applied; read answers results; act may call `writes` itself. Follow it with swarm.get or job_status on its job.",
+        "tags": [
+          "swarm"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80,
+                    "description": "shown on the approve page"
+                  },
+                  "mode": {
+                    "description": "propose (default): tasks only read and answer { changes }, Harmony reviews them, then they are applied; read: tasks answer results; act: tasks may also call `writes` themselves",
+                    "type": "string",
+                    "enum": [
+                      "propose",
+                      "read",
+                      "act"
+                    ]
+                  },
+                  "items": {
+                    "description": "the items to split (at most 5000, JSON at most 512 KB); or give source",
+                    "maxItems": 5000,
+                    "type": "array",
+                    "items": {}
+                  },
+                  "source": {
+                    "description": "fetch the items server-side now (pages are followed, at most 5000 items)",
+                    "type": "object",
+                    "properties": {
+                      "call": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "description": "a swarm read call, e.g. seventv.set"
+                      },
+                      "args": {
+                        "description": "its input object",
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      },
+                      "path": {
+                        "description": "dot path to the list in its answer, e.g. emotes",
+                        "type": "string",
+                        "maxLength": 200
+                      }
+                    },
+                    "required": [
+                      "call"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "batch": {
+                    "type": "object",
+                    "properties": {
+                      "size": {
+                        "description": "items per task, default 50",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8000,
+                    "description": "each task's message; must contain {{items}}; may use {{index}} {{total}} {{count}} {{name}}"
+                  },
+                  "tools": {
+                    "description": "read calls a task may make: library.list, library.search, library.post, library.about, library.transcript, look, collections.list, links.list, sets.list, names.list, emotes.find, seventv.status, seventv.sets, seventv.set, seventv.emote, seventv.owned, seventv.uploads",
+                    "maxItems": 30,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    }
+                  },
+                  "writes": {
+                    "description": "propose: ops a change may name; act: ops a task may call. Any of seventv.rename, seventv.add, seventv.remove, library.title, library.about.set",
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    }
+                  },
+                  "scope": {
+                    "description": "a write whose args have key k must have args[k] in scope[k], e.g. { set_id: [\"...\"] }",
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    "additionalProperties": {
+                      "minItems": 1,
+                      "maxItems": 5000,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      }
+                    }
+                  },
+                  "output": {
+                    "description": "read/act: each task's answer must match this JSON Schema",
+                    "type": "object",
+                    "properties": {
+                      "schema": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {},
+                        "description": "a JSON Schema"
+                      }
+                    },
+                    "required": [
+                      "schema"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "reduce": {
+                    "description": "one final summary over all results",
+                    "type": "object",
+                    "properties": {
+                      "prompt": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4000
+                      }
+                    },
+                    "required": [
+                      "prompt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "concurrency": {
+                    "description": "tasks at once, default 5",
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8
+                  },
+                  "budget": {
+                    "type": "object",
+                    "properties": {
+                      "usd": {
+                        "description": "the dollar cap, default 1 (at most SWARM_MAX_USD, 10 by default)",
+                        "type": "number",
+                        "minimum": 0.05
+                      },
+                      "turns_per_task": {
+                        "description": "model turns per task, default 6",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "retry": {
+                    "type": "object",
+                    "properties": {
+                      "attempts": {
+                        "description": "attempts per task, default 2",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5
+                      },
+                      "stop_after_failed_tasks": {
+                        "description": "the swarm stops after this many failed tasks, default 5",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "name",
+                  "prompt"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      },
+      "get": {
+        "operationId": "swarm.list",
+        "summary": "Your swarms, newest first (at most 50).",
+        "tags": [
+          "swarm"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "swarms": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Swarm"
+                      }
+                    }
+                  },
+                  "required": [
+                    "swarms"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}": {
+      "get": {
+        "operationId": "swarm.get",
+        "summary": "One swarm: status, tasks done/running/failed, dollars spent, the reduce summary, and (propose mode) how many changes are proposed and applied.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}/apply": {
+      "post": {
+        "operationId": "swarm.apply",
+        "summary": "Harmony applies the kept changes of a propose-mode swarm (no model: each through its op).",
+        "tags": [
+          "swarm"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spec_hash": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "spec_hash"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/swarms/{id}/approve": {
+      "post": {
+        "operationId": "swarm.approve",
+        "summary": "Harmony approves a swarm's plan (the web page or a device session); its tasks start.",
+        "tags": [
+          "swarm"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spec_hash": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "spec_hash"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/swarms/{id}/changes": {
+      "get": {
+        "operationId": "swarm.changes",
+        "summary": "A propose-mode swarm's proposed changes in task order (a page of up to 200), with what Harmony kept, applied and what clashes.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "default 0",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "default and most 200",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "changes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SwarmChange"
+                      }
+                    },
+                    "total": {
+                      "type": "number"
+                    },
+                    "offset": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "changes",
+                    "total",
+                    "offset"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      },
+      "post": {
+        "operationId": "swarm.decide",
+        "summary": "Harmony ticks or edits proposed changes on the review page (a draft until apply).",
+        "tags": [
+          "swarm"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "changes": {
+                    "minItems": 1,
+                    "maxItems": 500,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "n": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "keep": {
+                          "type": "boolean"
+                        },
+                        "after": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 300
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "n"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "changes"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "swarm": {
+                      "$ref": "#/components/schemas/Swarm"
+                    },
+                    "changes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SwarmChange"
+                      }
+                    }
+                  },
+                  "required": [
+                    "swarm",
+                    "changes"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/swarms/{id}/decline": {
+      "post": {
+        "operationId": "swarm.decline",
+        "summary": "Harmony declines a swarm's plan; nothing runs.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/swarms/{id}/results": {
+      "get": {
+        "operationId": "swarm.results",
+        "summary": "A swarm's results in task order (a page of up to 100), each with its error and cost.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "default 0",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "default and most 100",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SwarmResult"
+                      }
+                    },
+                    "total": {
+                      "type": "number"
+                    },
+                    "offset": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "results",
+                    "total",
+                    "offset"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}/retry": {
+      "post": {
+        "operationId": "swarm.retry",
+        "summary": "Run a finished swarm's failed (and skipped) tasks again: it goes back to awaiting Harmony's approval, with a new estimate and a new approve link check.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}/stop": {
+      "post": {
+        "operationId": "swarm.stop",
+        "summary": "Stop a swarm: no new tasks start, running ones stop after their current step (or stop applying changes). Nothing is undone.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
     "/sync": {
       "get": {
         "operationId": "sync",
@@ -10091,6 +10949,506 @@
         ],
         "additionalProperties": false,
         "x-swift": "ShareCollection"
+      },
+      "Swarm": {
+        "type": "object",
+        "properties": {
+          "swarm": {
+            "type": "string",
+            "description": "its id"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "propose",
+              "read",
+              "act"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "awaiting_approval",
+              "running",
+              "stopping",
+              "done",
+              "failed",
+              "stopped",
+              "declined",
+              "expired"
+            ]
+          },
+          "spec_hash": {
+            "type": "string",
+            "description": "the approve and apply POSTs send it back"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "writes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "items": {
+            "type": "number"
+          },
+          "batch_size": {
+            "type": "number"
+          },
+          "concurrency": {
+            "type": "number"
+          },
+          "tasks": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "number"
+              },
+              "queued": {
+                "type": "number"
+              },
+              "running": {
+                "type": "number"
+              },
+              "done": {
+                "type": "number"
+              },
+              "failed": {
+                "type": "number"
+              },
+              "cells": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "idx": {
+                      "type": "number"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "running",
+                        "done",
+                        "failed",
+                        "skipped"
+                      ]
+                    },
+                    "error": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "idx",
+                    "status",
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "total",
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "cells"
+            ],
+            "additionalProperties": false
+          },
+          "estimate_usd": {
+            "type": "object",
+            "properties": {
+              "low": {
+                "type": "number"
+              },
+              "high": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "low",
+              "high"
+            ],
+            "additionalProperties": false
+          },
+          "cap_usd": {
+            "type": "number"
+          },
+          "spent_usd": {
+            "type": "number"
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "approved_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "description": "an unapproved plan expires then",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "reduce": {
+            "description": "the reduce step's summary",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changes": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "total": {
+                    "type": "number"
+                  },
+                  "kept": {
+                    "type": "number"
+                  },
+                  "done": {
+                    "type": "number"
+                  },
+                  "failed": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "total",
+                  "kept",
+                  "done",
+                  "failed"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "propose mode"
+          },
+          "apply": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "ready",
+                  "applying",
+                  "applied",
+                  "failed"
+                ]
+              },
+              "done": {
+                "type": "number"
+              },
+              "failed": {
+                "type": "number"
+              },
+              "total": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "status",
+              "done",
+              "failed",
+              "total"
+            ],
+            "additionalProperties": false
+          },
+          "spec_preview": {
+            "type": "object",
+            "properties": {
+              "items_sample": {
+                "type": "array",
+                "items": {},
+                "description": "the first 10 items"
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "call": {
+                        "type": "string"
+                      },
+                      "args": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      },
+                      "path": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "call",
+                      "args",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "output_schema": {
+                "anyOf": [
+                  {},
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reduce_prompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "turns_per_task": {
+                "type": "number"
+              },
+              "attempts": {
+                "type": "number"
+              },
+              "stop_after_failed_tasks": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "items_sample",
+              "source",
+              "output_schema",
+              "reduce_prompt",
+              "turns_per_task",
+              "attempts",
+              "stop_after_failed_tasks"
+            ],
+            "additionalProperties": false,
+            "description": "what the approve page shows of the spec"
+          },
+          "unscoped_writes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "write ops no scope key limits (none of their input fields is a scope key)"
+          },
+          "approve_url": {
+            "type": "string",
+            "description": "Harmony approves (and reviews) here; give this link to Harmony"
+          },
+          "job": {
+            "type": "string",
+            "description": "swarm:<id>, for job_status"
+          }
+        },
+        "required": [
+          "swarm",
+          "name",
+          "mode",
+          "status",
+          "spec_hash",
+          "prompt",
+          "tools",
+          "writes",
+          "scope",
+          "items",
+          "batch_size",
+          "concurrency",
+          "tasks",
+          "estimate_usd",
+          "cap_usd",
+          "spent_usd",
+          "created_at",
+          "approved_at",
+          "finished_at",
+          "expires_at",
+          "reduce",
+          "error",
+          "changes",
+          "apply",
+          "spec_preview",
+          "unscoped_writes",
+          "approve_url",
+          "job"
+        ],
+        "additionalProperties": false
+      },
+      "SwarmChange": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "number"
+          },
+          "task": {
+            "type": "number"
+          },
+          "op": {
+            "type": "string"
+          },
+          "args": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "edit_arg": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preview_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keep": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "applying",
+              "done",
+              "failed",
+              "skipped"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "clash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "n",
+          "task",
+          "op",
+          "args",
+          "target",
+          "before",
+          "after",
+          "edit_arg",
+          "preview_url",
+          "keep",
+          "status",
+          "error",
+          "clash"
+        ],
+        "additionalProperties": false
+      },
+      "SwarmResult": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "result": {},
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "usd": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "task",
+          "status",
+          "result",
+          "error",
+          "usd"
+        ],
+        "additionalProperties": false
       },
       "TranscriptLine": {
         "type": "object",

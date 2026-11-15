@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { WIDGETS } from "../src/mcp-app/widgets.generated";
 import { VIEWS, widgetUri } from "../src/mcp-app/shapes";
 
-const CEILING = 80 * 1024;
+const CEILING = 88 * 1024; // ten views (the swarm card took it from 80)
 
 describe("widgets.generated.ts", () => {
     it("is fresh (build-widgets --check)", () => {

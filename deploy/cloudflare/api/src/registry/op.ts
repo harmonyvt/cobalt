@@ -96,6 +96,8 @@ export type ChatCallContext = {
     mcp?: { origin: string; clientKeyId: string };
     // a sub-agent's calls (section 43): its own id and its parent thread, whose daily caps and box it shares
     agent?: { id: string; parent: string } | null;
+    // a swarm task's calls (section 59): the swarm's id (its PostHog surface is "swarm")
+    swarm?: string;
 };
 
 // The thread whose daily caps (renders, saves) and workbench box a chat call uses: a sub-agent's parent (section 43.7).
