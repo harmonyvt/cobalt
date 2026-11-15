@@ -39,7 +39,7 @@ export const jobStatus: AppTool<z.infer<typeof Input>> = {
     name: "job_status",
     title: "Check a job",
     description:
-        "Check on a job that convert_to_webp, save_link, a make_* tool, edits_render, chat_video or a helper (agents_spawn) left running, with the job id it gave. Waits a few seconds (seconds, up to 25; default 8), then says whether it is running, done (with the post and its share link, or a helper's report) or failed. If it is still running, call it again with the job id in the answer (it can change while a file opens). Call it one at a time.",
+        "Check on a job that convert_to_webp, save_link, a make_* tool, edits_render, chat_video, a helper (agents_spawn) or a swarm (swarm_plan) left running, with the job id it gave. Waits a few seconds (seconds, up to 25; default 8), then says whether it is running, done (with the post and its share link, or a helper's report) or failed. If it is still running, call it again with the job id in the answer (it can change while a file opens). Call it one at a time.",
     input: Input,
     output: JobOut,
     // it can move a job along (a file that has finished opening starts its render), so it is not a pure read
@@ -53,6 +53,17 @@ export const jobStatus: AppTool<z.infer<typeof Input>> = {
         const extras = extrasOf(job);
         const phase = phaseOf(job);
         const id = str(job.job) ?? input.job;
+        // a swarm (swarm:<id>): its summary line; swarm_get and swarm_results have the rest
+        const swarm = str(job.swarm) ? { name: str(job.name), result: str(job.result), activity: str(job.activity) } : null;
+        if (swarm && phase.state === "done") {
+            return { text: `Done: swarm ${swarm.name ?? id}. ${swarm.result ?? ""}`.trim(), structured: { job: id, state: "done", progress: 1, error: null, post: null, share_url: null, ...extras } satisfies Out };
+        }
+        if (swarm && phase.state === "running") {
+            return {
+                text: `Still running${swarm.activity ? ` (${swarm.activity})` : ""}. Call job_status again with job ${id}, or swarm_get.`,
+                structured: { job: id, state: "running", progress: phase.progress, error: null, post: null, share_url: null, ...extras } satisfies Out,
+            };
+        }
         if (phase.state === "done") {
             const made = await madePost(ctx, str(job.post_id), str(job.share_url));
             const agent = extras.agent;

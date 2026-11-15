@@ -100,6 +100,11 @@ export type ChatToolboxOpts = {
     onCall?: (call: ToolCall) => void;
     // a sub-agent's run (section 43): its id and parent
     agent?: { id: string; parent: string } | null;
+    // a swarm task's run (section 59): only these ops are in its `cobalt` (default: every op the flags allow)
+    allow?: (op: Op) => boolean;
+    // a swarm task's run (section 59): an `ask` op this returns true for runs at once, without a confirm card (the
+    // swarm's approval already covered it: an op in its `writes`, inside its `scope`)
+    preapproved?: (op: Op, input: unknown) => boolean;
 };
 
 export type ChatToolbox = {
@@ -134,6 +139,7 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
     });
     const tools: ChatTools = {};
     for (const op of registry.toolsFor("chat", o.flags)) {
+        if (o.allow && !o.allow(op)) continue;
         const fn = async (...args: unknown[]) => {
             if (paused) throw new Error("waiting for Harmony to answer the confirm card: end this run now and say in one line what you asked");
             const parsed = op.input.safeParse(argsToInput(op, args));
@@ -146,7 +152,7 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
                 calls.push(c);
                 o.onCall?.(c);
             };
-            if (op.ai.tier === "ask" && (op.ai.asks ? await op.ai.asks(input, ctx) : true)) {
+            if (op.ai.tier === "ask" && !(o.preapproved?.(op, input) ?? false) && (op.ai.asks ? await op.ai.asks(input, ctx) : true)) {
                 if (o.agent) {
                     record({ status: "error", error: "a sub-agent cannot ask Harmony" });
                     throw new Error(`cobalt.${op.callName} needs Harmony's ok, and a sub-agent cannot ask: put what should be done in your report (or cobalt.agents.send("parent", ...)) and the main chat will ask`);

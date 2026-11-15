@@ -126,6 +126,12 @@ export interface WorkerEnv {
     CHAT_AGENTS?: DurableObjectNamespace;
     // How many sub-agents one chat may start per UTC day (default 20, "0" turns sub-agents off).
     CHAT_DAILY_AGENTS?: string;
+    // Agent swarms (section 59): the Swarm Durable Object namespace (one object per swarm, its tasks run in its alarm).
+    // Absent (or no ANTHROPIC_API_KEY): swarm.plan still stores plans, swarm.approve answers 503 error.swarm.off.
+    SWARMS?: DurableObjectNamespace;
+    // The most one swarm's dollar cap may be (default 10), and the dollars all swarms may spend per UTC day (default 5).
+    SWARM_MAX_USD?: string;
+    SWARM_DAILY_USD?: string;
     // "1": every request's D1 round trips are counted and one JSON line per request is logged (src/d1-timing.ts).
     // Anything else: DB is the plain binding and nothing is logged.
     D1_TIMING?: string;
