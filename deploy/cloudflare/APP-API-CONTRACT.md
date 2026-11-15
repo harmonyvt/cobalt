@@ -7078,54 +7078,69 @@ expired end at once. The approve and apply buttons are App Intents that ask for 
 `/approve` (`spec_hash`) and `/apply` (`spec_hash`, `skip_clashes: true`) with the device's session; stop and decline call
 `/stop` and `/decline`; check and open open the app.
 
-## 62. Swarm results board, pictures for agents, and steadier 7TV reads (addendum, 2026-11-15; owner, after the first live swarm "nyaphelia Christmas variants" (419 emotes, 21 agents, read mode): "they need like a combined place to put their results, like a board ... along with how well they did, the result, the outcome", "I don't know what emote they're actually showing. They're just showing me a name", "the MCP tools should be the same for the swarm agents ... they should be able to see the images ... the picture of the emote through the 7TV CDN. And also our capystore videos, images". No migration beyond 0044.)
+## 62. Results board platform: any swarm's results as a searchable board with media, agents that can see media, steadier reads (addendum, 2026-11-15; owner, after the first live swarm "nyaphelia Christmas variants" (419 emotes, 21 agents, read mode): "they need like a combined place to put their results, like a board ... along with how well they did, the result, the outcome", "I don't know what emote they're actually showing. They're just showing me a name", "the MCP tools should be the same for the swarm agents ... they should be able to see the images ... through the 7TV CDN. And also our capystore videos, images", then "not specific solve my problem but create a platform please". No migration beyond 0044.)
 
-What went wrong in that run: 7TV answered "rate limited" to about a third of the searches and the agents passed the
-error on as "search failed"; one agent crashed and its 20 emotes vanished from the results; every match was made by name,
-because no agent could look at an emote's picture; and the results were names only.
+A general platform, not an emote feature: every swarm, whatever its items, gets one board of results with each agent's
+outcome and a quality score, media previews for any kind of item, and the same "see this media" ability for the agents,
+the chat and the MCP. The first run's problems are the test cases: about a third of 7TV searches were rate limited and
+passed on as failures, one crashed agent's items vanished, matches were made by name because no agent could look at a
+picture, and the results were bare names.
 
-### 62.1 Agents can see pictures
+### 62.1 Media refs, and seeing them
 
-`look` (33) also takes `emote` (a 7TV emote id) or `url` (an image on `cdn.7tv.app` or `media.capybaraharmony.com`, or a
-`7tv.app/emotes/<id>` link): it fetches the 2x webp (the first frame of an animated one) and shows it to the model the
-same way it shows a post's picture, with `{ id, name?, animated?, preview_url }` as text. Same for the chat, the MCP
-(`look` tool) and swarm agents (`look` is already a swarm read call). `emotes.find`, `seventv.set` and `seventv.emote`
-answers keep their `preview_url`, and the swarm cheat sheet tells agents to put `preview_url` (or the emote id) next to
-every emote they name in an answer.
+A **media ref** is any of: a capystore ref (60.1: post key, file id, media/share/gallery link, a saved page's URL); a 7TV
+emote id, `7tv.app/emotes/<id>` link or `cdn.7tv.app` URL; any other `https` image or video URL on the media allowlist
+(`MEDIA_HOSTS` var, default `cdn.7tv.app,media.capybaraharmony.com,share.capybaraharmony.com`). `resolveMedia(refs)`
+(`src/media-refs.ts`) turns a list into `{ ref, kind: "post" | "file" | "emote" | "image" | "video", preview_url,
+open_url, title?, animated? } | { ref, error }` in one batch (capystore refs through `resolveRefs`, emotes as
+`https://cdn.7tv.app/emote/<id>/2x.webp`, URLs as given after the host check; nothing else is fetched to resolve).
 
-### 62.2 Steadier 7TV reads in a swarm
+`look` (33) takes `media` (one media ref) besides its post ids: it shows the picture (a video's or animated image's
+first frame, through the existing frame path for posts and files, a direct fetch of the preview for allowlisted URLs)
+to the model the way it shows a post. This is the one way to see media for the chat, the MCP (`look` tool) and swarm
+agents (`look` is already a swarm read call). The swarm cheat sheet asks agents to put a `media` ref beside every thing
+they name in an answer.
 
-A 7TV read that answers `rate_limited`, `busy` or a 5xx inside a swarm is tried again after 2, 8 and 30 s before the
-agent sees an error, and the swarm's 7TV limiter widens its gap (×2, up to 2 s, back to 200 ms after a minute without
-one). The step log says "7tv busy, waited <s> s". Waiting counts toward the task's time, not its turns.
+### 62.2 Steadier reads in a swarm
 
-### 62.3 Every agent's outcome, kept
+A read call inside a swarm that fails for a passing reason (rate limited, busy, 5xx, timed out) is tried again after 2,
+8 and 30 s before the agent sees an error; for 7TV the swarm's limiter also widens its gap (×2, up to 2 s, back to 200 ms
+after a minute without one). The step log says "<op> busy, waited <s> s". Waiting counts toward the task's time, not
+its turns.
+
+### 62.3 Every agent's outcome and score, kept
 
 `SwarmResult` (59.5) gains `items` (the agent's batch, always, even when it failed or was skipped) and `outcome`:
-`{ status, items, tool_calls, tool_errors, asks, turns, usd, ms }` (`tool_errors` counts calls that ended in an error
-after the retries of 62.2). A task that crashes keeps its items and gets `error` = the reason.
+`{ status, items, answered, tool_calls, tool_errors, asks, turns, usd, ms, score }`. `answered` is how many of its items
+appear in its rows (62.4; matched by the item itself or its `name`/`id`/`title`), `tool_errors` counts calls that still
+failed after 62.2, `score` (0..1) is `answered / items × (1 − tool_errors / max(tool_calls, 1))`, 0 for a failed agent.
+A task that crashes keeps its items and gets `error` = the reason. The swarm gains `score` (the mean) in its shape.
 
 ### 62.4 The board
 
-`swarm.board` (MCP tool `swarm_board`, an app tool with a widget) and `GET /swarms/<id>/board?q&agent&status&offset&limit`
-(limit ≤ 200, key_or_service):
+The program may say how its answers read: `output.board: { title?, media?, score?, group?, fields? }`, each a field name
+(`media` may be a list), checked like the rest of the program. Without it the board guesses: rows come from an answer that
+is an array (or an object holding one under `results`, `matches`, `items`, `rows`, `answers`), else one row per agent;
+`title` is the first text among `title`, `name`, `alias`, `label`, `id`; `media` is every value that is a media ref
+(62.1) in a field named `media`, `image`, `url`, `link`, `preview_url`, `*_url`, `*_id`, `id` (at most 4 a row); `score` is
+`score` or `confidence` (a number 0..1, or high/medium/low as 0.9/0.6/0.3).
+
+`swarm.board` (MCP tool `swarm_board`, an app tool with a widget) and `GET /swarms/<id>/board?q&agent&status&group&sort&offset&limit`
+(limit ≤ 200, key_or_service; `sort`: `agent` (default), `score`, `title`):
 
 ```ts
-{ swarm: Swarm, total, offset,
+{ swarm: Swarm, total, offset, groups: { value, count }[],
   agents: { agent, status, outcome, error }[],                 // every agent, for the strip
-  rows: { agent, n, title, fields: Record<string, string | number | boolean | null>, images: string[], links: string[] }[] }
+  rows: { agent, n, title, score: number | null, group: string | null,
+          fields: Record<string, string | number | boolean | null>,   // the other plain values, at most 12
+          media: MediaRef[],                                          // resolved (62.1), at most 4
+          links: string[] }[] }
 ```
 
-Rows: when an agent's answer is an array (or an object holding one array under `results`, `matches`, `items`, `rows` or
-`emotes`), one row per entry; otherwise one row per agent. `title` is the first of `name`, `title`, `alias`, `emote`,
-`original` that is text; `fields` are the entry's other plain values (at most 12, nested values as short JSON);
-`images` are the entry's picture URLs: any value on `cdn.7tv.app` or `media.capybaraharmony.com` that ends in an image
-type, a `7tv.app/emotes/<id>` link (made into `https://cdn.7tv.app/emote/<id>/2x.webp`), and a 26-character 7TV id in a
-field whose name contains `emote` or ends in `_id` when the swarm used 7TV (same CDN form); at most 4 a row. `links` are
-other http(s) values. `q` matches any text of a row (case-insensitive); `agent` and `status` filter by agent. Read only;
-nothing is fetched from 7TV to build it.
+A failed or skipped agent adds one row (`title` "agent <n> failed: <reason>", its items in `fields.items`) so nothing goes
+missing. `q` matches any text of a row (case-insensitive). The board is computed from stored results on each call
+(D1 + one `resolveMedia` batch for the page), never by a model.
 
-Where it shows: the MCP widget (a grid of picture cards with the title and fields, the agent strip with each agent's
-outcome as a coloured cell, a search box, more on scroll), the web page `/swarms/<id>` (a "results" section under the
-batches, same layout), and the apps (`apple/CONTRACT-SWARMS.md` 6). A failed agent shows as a row "agent 12 failed: <reason>"
-with its items listed, so nothing goes missing.
+Where it shows: the MCP widget (agent strip coloured by score, search, group chips, a grid of media cards with title,
+score and up to 3 fields, more on scroll, tap a card for all of it), the web page `/swarms/<id>` (a "results" section,
+same layout), and the apps (`apple/CONTRACT-SWARMS.md` 6). Large sets page 100 at a time everywhere.

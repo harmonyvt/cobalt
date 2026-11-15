@@ -62,10 +62,12 @@ the UI. Lowercase house copy, IBM Plex Mono tokens, `.mediaMask()` not needed (n
 Model decoding for every 59.5/61.3 shape, store polling stops when hidden, the Live Activity renders each swarm state
 within the 160 pt budget, button lists per state, Face ID gate on approve/apply, deep links route.
 
-## 6. Results board (APP-API-CONTRACT 62.4)
+## 6. Results board (APP-API-CONTRACT 62.3, 62.4): one board for any swarm
 
-When a swarm has results ("see results" on the swarm screen; also while it runs): a board screen with a search field, the
-agent strip (one cell per agent, coloured by outcome; tap = that agent's sheet, which shows `outcome` as "20 emotes ·
-3 lookups failed · 41 s · 1¢"), and a grid of cards: the first image (AsyncImage from the 7TV CDN or media host, animated
-webp shown as its first frame is fine), the title, up to 3 fields as small lines. Tap a card for all its fields, images
-and links. Failed agents show as a red card listing their items. Paged 100 at a time.
+Not specific to emotes: it draws whatever the swarm returned. A board screen (on the swarm screen: "see results", also
+while it runs): a search field, group chips (when the board has groups), sort (agent / score / title), the agent strip
+(one cell per agent, coloured by score; tap = that agent's sheet, which shows its outcome as "20 items · 18 answered ·
+3 lookups failed · 41 s · 1¢ · score 0.75"), and a grid of cards: the first media preview (AsyncImage of `preview_url`;
+posts and files open in the app's own viewer, emotes and URLs in the browser), the title, the score as a small bar, up
+to 3 fields. Tap a card for all its fields, media and links. Failed agents show as a red card with their items. Paged
+100 at a time; the swarm list rows show the swarm's score once it has one.
