@@ -11,6 +11,7 @@ import { forCall, type OpBase } from "./context";
 import { OpError, type AiFlags, type Op, type OpContext } from "./op";
 import { CONFIRM_TTL_MS, type PendingConfirm, type PendingPort } from "./pending";
 import type { Registry } from "./registry";
+import { withRefs } from "./refs";
 import { argsToInput } from "./typescript";
 import { capture, opEvent } from "../posthog";
 
@@ -145,7 +146,15 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
         if (o.allow && !o.allow(op)) continue;
         const fn = async (...args: unknown[]) => {
             if (paused) throw new Error("waiting for Harmony to answer the confirm card: end this run now and say in one line what you asked");
-            const parsed = op.input.safeParse(argsToInput(op, args));
+            // links and file names in the fields that name posts become their posts' ids first (section 60)
+            let raw: unknown;
+            try {
+                raw = await withRefs(op, ctx, argsToInput(op, args));
+            } catch (e) {
+                if (e instanceof OpError) throw new Error(`cobalt.${op.callName}: ${e.message}`);
+                throw e;
+            }
+            const parsed = op.input.safeParse(raw);
             if (!parsed.success) throw new Error(zodMessage(op.callName, parsed.error));
             const input = parsed.data;
             let t0 = Date.now();

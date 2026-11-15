@@ -577,6 +577,7 @@ const uploadOp = defineOp({
     }),
     output: UploadShape.omit({ status: true }),
     ai: {
+        refs: { file: "file" },
         tier: "ask",
         only: true,
         summary:

@@ -6,6 +6,7 @@ import { SearchOut } from "../shapes";
 import { timecode } from "../../transcripts";
 import type { AppTool } from "../types";
 import { arr, clock, cut, listText, num, plural, readPosts, rec, signThumbs, str, strings, summaryOf, type PostsRead } from "./common";
+import { resolveRefs } from "../../refs";
 
 type Out = z.infer<typeof SearchOut>;
 type Item = Out["items"][number];
@@ -24,7 +25,12 @@ const Within = z.union([
 ]);
 
 const Input = z.object({
-    query: z.string().min(1).max(200).optional().describe("what to look for; leave it out to list the library newest first"),
+    query: z
+        .string()
+        .min(1)
+        .max(2048)
+        .optional()
+        .describe("what to look for; or a capystore link, file name (e.g. vFhaasY6GA.webp) or id, which finds that post directly, hidden ones too; leave it out to list the library newest first"),
     kind: z.enum(["video", "image", "gallery"]).optional(),
     since: When.optional().describe("ISO date or ms"),
     until: When.optional().describe("ISO date or ms"),
@@ -88,11 +94,43 @@ function itemOf(record: unknown, read: PostsRead): Item | null {
     return { ...summary, source_link: str(r.link), caption: str(r.caption), score, why, said: said && said.length > 0 ? said : null };
 }
 
+// A query that is one link, file name or id rather than words: a URL, "<name>.<ext>", or one token of 6-40 letters and
+// digits that mixes cases or has a digit (the random names and ids; a plain word is searched as words).
+export function refQuery(q: string): boolean {
+    const t = q.trim();
+    if (/\s/.test(t)) return false;
+    if (/^https?:\/\//i.test(t) || /^[a-z0-9.-]+\.[a-z]{2,}\/\S/i.test(t)) return true;
+    if (/^[A-Za-z0-9]{6,40}\.[A-Za-z0-9]{1,8}$/.test(t)) return true;
+    return /^[A-Za-z0-9]{6,40}$/.test(t) && (/[0-9]/.test(t) || (/[A-Z]/.test(t) && /[a-z]/.test(t)));
+}
+
+// The posts a link, file name or id names, as search rows (hidden ones as a text line only: they have no picture or
+// status to show). Null when it names nothing, so the query is searched as words.
+async function direct(ctx: Parameters<AppTool<unknown>["run"]>[0], query: string): Promise<{ text: string; structured: Out } | null> {
+    const found = (await resolveRefs(ctx.op.db, [query.trim()], { mediaBaseUrl: ctx.op.mediaBaseUrl, shareBaseUrl: ctx.op.shareBaseUrl })).get(query.trim());
+    if (!found) return null;
+    if (found.posts.length === 0) {
+        return { text: `${query} was in the library but has been deleted.`, structured: { view: "search", query, mode: "text", total: 0, items: [] } };
+    }
+    const records = (await Promise.all(found.posts.slice(0, 50).map((id) => ctx.call("library.post", { id }).catch(() => null)))).map(rec);
+    const read = await readPosts(ctx.op, { posts: found.posts });
+    const hidden = records.filter((r) => r.hidden === true);
+    const items = records.flatMap((r) => (r.hidden === true ? [] : (itemOf(r, read) ?? [])));
+    await signThumbs(ctx, read, items);
+    const lines = [
+        ...items.map((p) => rowOf(p, read.posts.get(p.id)?.share_url ?? null, "text")),
+        ...hidden.map((r) => `${cut(str(r.title) ?? "Untitled", 80)} · ${str(r.id)} · HIDDEN: library_status with ids ["${str(r.id)}"] and status "off" unhides it`),
+    ];
+    const what = found.file ? `file ${found.file} of ` : "";
+    const count = `${query} is ${what}${plural(found.posts.length, "post")}${hidden.length > 0 ? ` (${hidden.length} hidden)` : ""}:`;
+    return { text: listText(count, lines, lines.length, lines.length), structured: { view: "search", query, mode: "text", total: items.length, items } };
+}
+
 export const searchLibrary: AppTool<z.infer<typeof Input>> = {
     name: "search_library",
     title: "Search the library",
     description:
-        "Find videos, images and galleries in the capystore library by what they show or say (meaning search), or by title when meaning search is off. With no query it lists the library newest first. match: text is a plain substring match of title, names, link and caption. Filters: kind, since/until (ISO date or ms), source (a host such as tiktok.com), within (a collection, link or list of posts; meaning search only). Shows the best matches as pictures and lists every row with its id in text.",
+        "Find videos, images and galleries in the capystore library by what they show or say (meaning search), or by title when meaning search is off. A query that is a capystore link (media.../<name>.<ext>, share..., a gallery or private link), a file name or an id finds that post directly, hidden and private ones included. With no query it lists the library newest first. match: text is a plain substring match of title, names, link and caption. Filters: kind, since/until (ISO date or ms), source (a host such as tiktok.com), within (a collection, link or list of posts; meaning search only). Shows the best matches as pictures and lists every row with its id in text.",
     input: Input,
     output: SearchOut,
     readOnly: true,
@@ -102,6 +140,12 @@ export const searchLibrary: AppTool<z.infer<typeof Input>> = {
         const since = ms(input.since);
         const until = ms(input.until);
         const query = input.query ?? null;
+        // a link, file name or id: that post, found directly (hidden and private ones too)
+        if (query !== null && refQuery(query)) {
+            const hit = await direct(ctx, query);
+            if (hit) return hit;
+        }
+        if (query !== null && query.length > 200) throw new OpError(400, "error.library.bad_request", "query: at most 200 characters (a link is looked up as a link)");
         if (query === null && input.within !== undefined) {
             throw new OpError(400, "error.search.within_needs_query", "within narrows a meaning search: add a query (what to look for), or leave within out to list the library");
         }

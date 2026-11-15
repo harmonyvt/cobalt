@@ -6947,3 +6947,42 @@ Every step of a swarm sends one `swarm` event (58.2) through `background()`, `th
 
 Each tool call a task makes is an ordinary `op` event with `surface = swarm` and the same `thread`, so one swarm reads as
 one timeline. Never sent: prompts, items, model answers, proposed values, tool inputs.
+
+## 60. Links as ids: any capystore link or file name names its post (addendum, 2026-11-15; owner: "Optimise the mcp please", with screenshots of an agent that could not unhide `https://media.capybaraharmony.com/vFhaasY6GA.webp`: search had no match, `library_status` answered "done" having changed nothing, and hidden posts showed no file names. Numbering: 59 is proposed by the agent-swarms plan; this needs no migration)
+
+### 60.1 What a ref is (`src/refs.ts`)
+
+Where the chat AI or the MCP names a post or file, it may pass, as given (whitespace, `<>`, quotes and a trailing full
+stop are dropped):
+
+| ref | names |
+|---|---|
+| a post key, file id or old public id | that post (an exact live post key always wins, even a key that is a URL) |
+| `media.../<name>.<ext>`, `share.../<name>`, `<name>.<ext>`, a bare `<name>` | the file whose public object is `<name>.*` (`r2_key` in the public bucket) or that kept that name in `public_key` after it went private or hidden, and its post |
+| `share.../g/<id>` | every post of that gallery link (live or revoked), in its order |
+| `share.../p/<key>[/<n>.<ext>]` | a private link's file (kind item) or gallery (kind set) |
+| any other http(s) link | the post saved from that page (`media_items.link`, with or without a trailing slash) |
+
+Hidden and private posts resolve like any other. A ref whose rows are all deleted is "gone". `resolveRefs` reads a whole
+list in one D1 batch, plus one read for which posts are live (and one more for a private gallery link's items).
+
+### 60.2 Which inputs take refs (`ai.refs`, `src/registry/refs.ts`)
+
+An op lists the fields that name posts: `post`/`posts` become post ids, `file`/`files` the one file a ref names (else its
+post). They are swapped before the op's input is checked, for the chat toolbox (before an ask op's card, so the card
+holds ids) and both MCP paths. 16- and 22-character ids are never looked up. A ref that names nothing (or something
+deleted) fails the call with one line and nothing is run or asked; a gallery link in a one-post field fails naming its
+posts. Marked: `library.post`, `library.title`, `library.about`, `library.about.set`, `library.transcript`, `look`, `show`,
+`collage`, `library.visibility`, `library.delete`, `library.status`, `agents.spawn` (posts); `links.create` (files);
+`make.webp`, `make.still`, `make.trim`, `make.crop`, `make.cutout`, `make.cropImage`, `make.postFrame`, `make.frames`,
+`box.pull`, `edits.addOverlay`, `seventv.uploadEmote`, `library.deleteFile` (file); `make.slideshow`, `make.galleryImage`
+(post). `library.post` also takes one of a post's file ids.
+
+### 60.3 Answers that say what happened
+
+- `library.status` where every id failed throws (`nothing changed. <id>: <reason>`) instead of answering an empty
+  `posts` list, so the MCP never shows a bare "done.".
+- `library.hidden` rows carry `names`: their files' public names (what a media link ends with), kept while hidden.
+- `show_post` on a hidden post: `post <id> “<title>” is hidden (library_status unhides it: ids ["<id>"], status "off" …)`.
+- `search_library` with a ref as its query: MCP-APP-CONTRACT.md section 4.
+- The MCP instructions say any link may be passed where an id is asked for, and that a tool that changed nothing errors.
