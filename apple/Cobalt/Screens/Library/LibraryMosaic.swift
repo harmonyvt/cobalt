@@ -145,7 +145,8 @@ struct LibraryMosaic: View {
                 Color.clear
                     .frame(height: hasWidth ? plan.height + Self.topInset : 0)
                     .overlay(alignment: .topLeading) {
-                        if hasWidth { columns(layout, numbers: numbers) }
+                        // one band of light over all the grey tiles at once (one clock, not one per tile)
+                        if hasWidth { columns(layout, numbers: numbers).skeletonShimmer(skeleton) }
                     }
                 if !skeleton { LibraryFooterView(state: footer) { controller.loadMoreAgain() } }
                 Color.clear.frame(height: 24)

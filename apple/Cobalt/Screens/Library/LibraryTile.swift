@@ -259,7 +259,7 @@ private struct LitRing: View {
     }
 }
 
-/// A grey tile of the skeleton (the first load): static, no shimmer.
+/// A grey tile of the skeleton (the first load). The mosaic draws one shimmer over all of them (`skeletonShimmer`).
 struct LibraryGhostTile: View {
     let size: CGSize
     let index: Int
