@@ -147,7 +147,9 @@ struct SwarmActionRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            ForEach(facts.swarmButtons, id: \.self) { action in
+            // `rawValue`, not `\.self`: a Live Activity archives its views and a ForEach id must be Encodable (the log said
+            // "ID type is not Encodable: CobaltKit.SwarmLiveAction"); `SwarmLiveAction` is not, its raw string is.
+            ForEach(facts.swarmButtons, id: \.rawValue) { action in
                 button(action)
             }
         }
