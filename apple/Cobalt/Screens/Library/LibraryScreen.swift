@@ -248,18 +248,9 @@ private struct LibraryContent: View {
                         LibrarySearchField(text: $library.query, prompt: searchPrompt, fold: controller.fold)
                     }
                     #endif
-                    if model.capabilities.gallery || model.capabilities.hidden {
-                        LibraryKindChips(
-                            model: model, extra: debugExtra,
-                            pickAll: { kind, share in pickKind(kind, thenShare: share) })
-                        .equatable()
-                    }
+                    filterRow(unfiltered: unfiltered, shareIndex: shareIndex)
                     if controller.albumOpen {
                         HiddenAlbumNote(count: library.hiddenCount)
-                    }
-                    if model.capabilities.shareSets, !model.shareSets.sets.isEmpty, !library.showingHidden {
-                        LibraryShareChips(
-                            model: model, rows: unfiltered, index: shareIndex, filter: $controller.shareFilter)
                     }
                     LibraryStatusLine(state: library.searchState)
                     if model.capabilities.transcripts {
@@ -426,7 +417,7 @@ private struct LibraryContent: View {
             let loading = phase == .loading
             LibraryMosaic(
                 rows: loading ? [] : rows, controller: controller, tier: tier, footer: loading ? .none : footer,
-                skeleton: loading, zoom: zoomSpace, shareIndex: shareIndex, shelves: loading ? nil : shelves)
+                skeleton: loading, zoom: zoomSpace, shareIndex: shareIndex, shelves: shelves(loading: loading))
         case .rows:
             if tier == .compact {
                 LibraryList(rows: rows, controller: controller, footer: footer, zoom: zoomSpace, shareIndex: shareIndex)
@@ -440,6 +431,40 @@ private struct LibraryContent: View {
         }
     }
 
+    // MARK: the filter row
+
+    /// One row of filters (2026-11-15; it was two): the kind chips scroll, and the links menu chip stays pinned at the
+    /// trailing end behind a hairline, so the one filter that names an owner's set or collection is always in reach.
+    @ViewBuilder
+    private func filterRow(unfiltered: [LibraryRow], shareIndex: ShareSetIndex) -> some View {
+        let kinds = model.capabilities.gallery || model.capabilities.hidden
+        let links = model.capabilities.shareSets && !model.shareSets.sets.isEmpty && !library.showingHidden
+        if kinds || links {
+            HStack(spacing: 0) {
+                if kinds {
+                    LibraryKindChips(
+                        model: model, extra: debugExtra,
+                        pickAll: { kind, share in pickKind(kind, thenShare: share) })
+                    .equatable()
+                }
+                if links {
+                    if kinds {
+                        Rectangle()
+                            .fill(CobaltColor.caption.opacity(0.3))
+                            .frame(width: 1, height: 18)
+                            .accessibilityHidden(true)
+                    }
+                    LibraryShareMenu(model: model, rows: unfiltered, index: shareIndex, filter: $controller.shareFilter)
+                        .padding(.leading, kinds ? 8 : 12)
+                        .padding(.trailing, 12)
+                        .padding(.vertical, 6)
+                    if !kinds { Spacer(minLength: 0) }
+                }
+            }
+            .background(.bar)
+        }
+    }
+
     // MARK: what is already shared
 
     /// The links and collections the tiles badge (empty while the server makes no share links).
@@ -448,12 +473,17 @@ private struct LibraryContent: View {
         return ShareSetIndex(sets: model.shareSets.sets, collections: model.shareSets.collections)
     }
 
-    /// The shelves over the mosaic: while not selecting or searching (iPhone, iPad and Mac alike).
-    private var shelves: LibraryShelves? {
-        guard !controller.selecting, !library.showingHidden, LibraryShelves.hasContent(model),
+    /// The shelf over the mosaic: while not selecting or searching (iPhone, iPad and Mac alike). While the library or the
+    /// links are still loading, a device that has shown the shelf before gets its grey cards in the same place, so the
+    /// tiles do not jump down when the links arrive.
+    private func shelves(loading: Bool) -> LibraryShelves? {
+        guard !controller.selecting, !library.showingHidden,
               library.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
-        return LibraryShelves(model: model, controller: controller)
+        if LibraryShelves.hasContent(model) { return LibraryShelves(model: model, controller: controller) }
+        let waiting = loading || model.shareSets.state == .loading || model.shareSets.state == .idle
+        if waiting, LibraryShelves.wasSeen { return LibraryShelves(model: model, controller: controller, placeholder: true) }
+        return nil
     }
 
     // MARK: toolbar
@@ -780,15 +810,49 @@ private struct LibraryPlaceholder: View {
                 case .failed:
                     LibraryProblem(state: .failed) { Task { await controller.refresh() } }
                 case .loading:
-                    LibraryProblem(state: .loading) {}
+                    // the list's and the table's first load: grey rows where the rows land, never a spinner
+                    LibrarySkeletonRows()
                 case .empty, .rows, .locked:
                     LibraryProblem(state: .empty) {}
                 }
             }
             .frame(maxWidth: .infinity)
-            .padding(.top, 40)
+            .padding(.top, phase == .loading ? 8 : 40)
         }
         .refreshable { controller.pullToRefresh() }
+    }
+}
+
+/// The list's and the table's skeleton: a dozen rows the shape of a library row (a square thumbnail, a title line, a
+/// caption line, a short trailing size), widths varied so it reads as content, under one band of light.
+struct LibrarySkeletonRows: View {
+    private static let titles: [CGFloat] = [0.62, 0.48, 0.71, 0.55, 0.66, 0.42, 0.58, 0.69, 0.5, 0.64, 0.45, 0.6]
+
+    var body: some View {
+        GeometryReader { proxy in
+            let text = max(proxy.size.width - 32 - 44 - 10 - 56, 60)
+            VStack(spacing: 0) {
+                ForEach(Self.titles.indices, id: \.self) { i in
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Skeleton.fill)
+                            .frame(width: 44, height: 44)
+                        VStack(alignment: .leading, spacing: 7) {
+                            Capsule().fill(Skeleton.fill).frame(width: text * Self.titles[i], height: 10)
+                            Capsule().fill(Skeleton.fill).frame(width: text * 0.32, height: 7)
+                        }
+                        Spacer(minLength: 0)
+                        Capsule().fill(Skeleton.fill).frame(width: 36, height: 7)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                }
+            }
+            .skeletonShimmer()
+        }
+        .frame(height: CGFloat(Self.titles.count) * 60)
+        .accessibilityElement()
+        .accessibilityLabel(Copy.Library2.loadingA11y)
     }
 }
 

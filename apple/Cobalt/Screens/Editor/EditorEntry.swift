@@ -70,8 +70,8 @@ struct EditPicksButton: View {
 
 // MARK: - the shelf
 
-/// `edits` and its count, then the saved projects newest first as cards: the cover (canvas-shaped, 96 pt tall for 9:16),
-/// the title, `0:26 · 4 clips`, `edited 2 h ago`, and a badge for the newest render. A tap opens; the context menu has `open`,
+/// The saved projects newest first as cards (the library shelf's `edits` tab): the cover (canvas-shaped, 56 pt tall), the
+/// title, `0:26 · 17 clips · 3 d ago`, `open`, and a badge for the newest render. A tap opens; the context menu has `open`,
 /// `rename…` and `delete…`. Shown while the editor is available and there is a project; the library puts it above the links.
 struct LibraryEditsShelf: View {
     let model: AppModel
@@ -88,32 +88,20 @@ struct LibraryEditsShelf: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(Copy.Editor.edits)
-                    .font(CobaltType.bodySemibold)
-                    .foregroundStyle(CobaltColor.text)
-                    .accessibilityAddTraits(.isHeader)
-                Text("\(store.projects.count)")
-                    .font(CobaltType.captionSmall)
-                    .foregroundStyle(CobaltColor.caption)
-                Spacer(minLength: 8)
-            }
-            .padding(.horizontal, 16)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 10) {
-                    ForEach(store.projects) { project in
-                        Button { open(project) } label: {
-                            EditCard(project: project, render: store.render(project.render?.id ?? "") ?? project.render)
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu { menu(project) }
+        // the shelf's `edits` tab supplies the header (`LibraryShelves`); this is the row of cards
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: 10) {
+                ForEach(store.projects) { project in
+                    Button { open(project) } label: {
+                        EditCard(project: project, render: store.render(project.render?.id ?? "") ?? project.render)
                     }
+                    .buttonStyle(.plain)
+                    .contextMenu { menu(project) }
                 }
-                .padding(.horizontal, 12)
             }
-            .scrollClipDisabled()
+            .padding(.horizontal, 12)
         }
+        .scrollClipDisabled()
         .alert(Copy.Editor.renameTitle, isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField(Copy.Editor.renamePlaceholder, text: $newName)
             Button(Copy.Editor.rename.replacingOccurrences(of: "…", with: "")) { commitRename() }
@@ -164,56 +152,44 @@ private struct EditCard: View {
     let project: EditProject
     let render: EditRender?
 
-    private static let height: CGFloat = 96
+    /// The cover's height: the shelf's one card size (`ShelfCard`).
+    private static let height: CGFloat = 56
 
     private var coverWidth: CGFloat {
         let aspect = CGFloat(project.canvas.w) / CGFloat(max(1, project.canvas.h))
-        return min(170, max(64, (Self.height * aspect).rounded()))
+        return min(100, max(40, (Self.height * aspect).rounded()))
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            EditorPoster(url: project.coverURL, fallback: CobaltColor.elevated, maxPixel: 320)
+        ShelfCard {
+            EditorPoster(url: project.coverURL, fallback: CobaltColor.elevated, maxPixel: 200)
                 .frame(width: coverWidth, height: Self.height)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(alignment: .topLeading) { badge }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(project.title.isEmpty ? Copy.Editor.untitled : project.title)
-                    .font(CobaltType.bodyMedium)
-                    .foregroundStyle(CobaltColor.text)
-                    .lineLimit(1)
-                Text(Copy.Editor.clipsLine(Copy.Editor.clock(project.duration), project.clipCount))
+        } lines: {
+            Text(project.title.isEmpty ? Copy.Editor.untitled : project.title)
+                .font(CobaltType.bodyMedium)
+                .foregroundStyle(CobaltColor.text)
+                .lineLimit(1)
+            Text(Copy.Editor.clipsLine(Copy.Editor.clock(project.duration), project.clipCount))
+                .font(CobaltType.badge)
+                .foregroundStyle(CobaltColor.caption)
+                .monospacedDigit()
+                .lineLimit(1)
+            // the newest render's word (`rendered`, `rendering 40%`) in place of when, so it never wraps on the cover
+            if let text = Copy.Editor.badge(render) {
+                Text(text)
                     .font(CobaltType.badge)
-                    .foregroundStyle(CobaltColor.caption)
-                    .monospacedDigit()
+                    .foregroundStyle(render?.status == .error ? CobaltColor.errorText : CobaltColor.linkBlue)
+                    .lineLimit(1)
+            } else {
                 Text(Copy.Editor.editedAgo(Copy.Editor.ago(project.updatedAt, now: Date())))
                     .font(CobaltType.badge)
                     .foregroundStyle(CobaltColor.caption)
-                Text(Copy.Editor.open)
-                    .font(CobaltType.badge)
-                    .foregroundStyle(CobaltColor.linkBlue)
+                    .lineLimit(1)
             }
-            .frame(width: 118, alignment: .leading)
         }
-        .padding(8)
-        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(a11y)
         .accessibilityAddTraits(.isButton)
-    }
-
-    @ViewBuilder
-    private var badge: some View {
-        if let text = Copy.Editor.badge(render) {
-            Text(text)
-                .font(CobaltType.badge)
-                .foregroundStyle(render?.status == .error ? CobaltColor.errorText : CobaltColor.badgeInk)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(CobaltColor.badgeBack, in: Capsule())
-                .padding(5)
-        }
     }
 
     private var a11y: String {

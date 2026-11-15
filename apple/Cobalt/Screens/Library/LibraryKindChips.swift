@@ -81,6 +81,10 @@ struct LibraryKindChips: View, Equatable {
                     Text("\(count)")
                         .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
                         .monospacedDigit()
+                        .transition(.opacity)
+                } else if countsLoading {
+                    // the count's room, held while the library loads: the chip does not grow when the number lands
+                    countPlaceholder(selected: selected)
                 }
             }
             .foregroundStyle(selected ? CobaltColor.onText : Color.primary)
@@ -105,6 +109,26 @@ struct LibraryKindChips: View, Equatable {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
+    // MARK: loading
+
+    /// Whether the counts are on their way (the first page, the whole library paging in, or the album loading): only
+    /// then do the chips hold a shimmering placeholder where the number goes. A library that is simply not all here
+    /// (more pages on scroll) shows no count and no placeholder, as before.
+    private var countsLoading: Bool {
+        library.showingHidden ? library.hiddenLoading || library.loadingAll != nil
+            : library.isLoading || library.loadingAll != nil
+    }
+
+    private func countPlaceholder(selected: Bool) -> some View {
+        Capsule()
+            // a shade darker than the chip itself (the chip is already the skeleton grey)
+            .fill(selected ? CobaltColor.onText.opacity(0.35) : Color.primary.opacity(0.12))
+            .frame(width: 22, height: 8)
+            .skeletonShimmer()
+            .accessibilityHidden(true)
+            .transition(.opacity)
+    }
+
     // MARK: hidden
 
     /// How many posts are hidden, once the library has said (a count read before the first page would be a 0 that lies).
@@ -126,6 +150,9 @@ struct LibraryKindChips: View, Equatable {
                     Text("\(hiddenCount)")
                         .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
                         .monospacedDigit()
+                        .transition(.opacity)
+                } else if countsLoading {
+                    countPlaceholder(selected: selected)
                 }
             }
             .foregroundStyle(selected ? Color.white : Color.primary)
