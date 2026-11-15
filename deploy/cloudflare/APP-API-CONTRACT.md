@@ -6685,6 +6685,25 @@ App events (all flat, never titles, text or links):
 | `frame_hang` | a single frame of 250 ms or more (at most 3 per stretch) | `ms`, `screen`, `breadcrumbs` |
 | `hang_stack` | the main thread did not answer a 50 ms ping for 250 ms or more (`Cobalt/App/HangSampler.swift`); sent when it answers | `ms` (the stall), `screen`, `breadcrumbs`, `samples`, `at_N` (ms into the stall) and `stack_N` (frames newest first, one per line: `image symbol+off` or `image+0xoffset`; app frames symbolicate with `atos -o <dSYM> -l 0x100000000`), `top` (the first sample's 12 frames) |
 | `daily_metrics` | MetricKit's daily payload | `scroll_hitch_ratio` (iOS), `launch_ms`/`_n`, `resume_ms`/`_n`, `hang_ms`/`_n`, `cpu_s`, `gpu_s`, `peak_mb`, `foreground_s`, `version`, `build`, `hours` |
+| `engine_ops` | about once a minute while engines ran, and when the app goes to the background (`EngineClock`, CobaltKit `Telemetry/EngineClock.swift`); never one per call | per operation name (`area.op`, from `EngineClock.measure("area.op")`): `<op>_n` (calls), `<op>_ms_total`, `<op>_ms_max` (tenths of a ms), `<op>_slow` (calls over 16 ms), `<op>_slow100` (over 100 ms), `<op>_main` (any call on the main thread); plus `window_s` and `ops` (names in the window, at most 64; later names fold into `other`) |
+
+Every app event also carries two super properties: `screen` (above) and `replay` (true while session replay is really
+recording, re-registered whenever replay starts or stops and after each flag load), so `frames`, `frame_hang` and
+`hang_stack` can be compared with replay on and off. `tap_probe` sends the whole `hit` chain, `under` and `breadcrumbs`
+only for a tap that hit nothing useful (no view, the window, or an empty `UIViewControllerWrapperView`); an ordinary tap
+sends just the leaf's class as `hit`, with `x` and `y`.
+
+How the app captures (8.17): `Analytics` is the only caller of the SDK. A caller builds a flat `[String: TelemetryValue]`
+and `Analytics.event(_:values:)` (any thread) hands it to one private serial utility queue, where PostHog's `capture`
+and `register` (which build properties, encode JSON and write a file on the calling thread) run in order; the main
+thread never does. Replay snapshots are taken every 2 s (`sessionReplayConfig.throttleDelay`, default 1 s).
+`EngineClock` itself is an `os_signpost` interval (subsystem `com.capybaraharmony.cobalt`, category `engine`) and a
+locked tally per name, so Instruments shows the same operations.
+
+Replay kill switch: the boolean feature flag `replay-off` in the PostHog project. The app reads it with
+`isFeatureEnabled` (no `$feature_flag_called` event) each time the SDK loads its flags (no request of its own); when
+on, replay stops on every install and stays off until the flag is turned off. The last value is kept on the device, so
+a launch after the switch never starts replay before the flags arrive.
 
 A hitch is a frame more than half a refresh late; hitch ratio is hitch time per second (Apple's measure: under 5 smooth,
 5 to 10 noticeable, over 10 bad). The frame monitor (`Cobalt/App/FrameMonitor.swift`) runs a display link only during a

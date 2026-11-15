@@ -214,7 +214,7 @@ private struct LibraryContent: View {
 
     var body: some View {
         @Bindable var library = model.library
-        // `libraryRows` joins every post: built once here, not once per reader
+        // `libraryRows` is the snapshot the rows engine built off the main thread: read once here, not once per reader
         let unfiltered = unfilteredRows
         let shareIndex = self.shareIndex
         let rows = self.rows(from: unfiltered, index: shareIndex)
@@ -592,7 +592,9 @@ private struct LibraryContent: View {
             shell.showStatus(Copy.Library2.notFound)
             return
         }
-        if !model.libraryRows.contains(where: { $0.id == id }) {
+        // the rows that follow the pages `locate` loaded (the snapshot on screen may still be a build behind)
+        let settled = await model.settledLibraryRows()
+        if !settled.contains(where: { $0.id == id }) {
             library.query = ""
             library.show = .everything
         }
@@ -695,7 +697,14 @@ private struct LibraryPush: ViewModifier {
         let screen = MediaDetail(model: model, item: target.item, initial: target.initial)
             .hiddenCover(controller)
         #if os(iOS)
-        screen.navigationTransition(.zoom(sourceID: target.item.post?.id ?? target.item.id, in: zoom))
+        // A post with a video opens with the plain push: iOS 26/27's zoom back from a playing video leaves the grid out
+        // of the stack (taps die until LibraryController rebuilds it; 8.16 needed that on every back) and costs a 350-540
+        // ms frame on the way. Galleries and webps keep the zoom.
+        if target.item.video != nil {
+            screen
+        } else {
+            screen.navigationTransition(.zoom(sourceID: target.item.post?.id ?? target.item.id, in: zoom))
+        }
         #else
         screen
         #endif

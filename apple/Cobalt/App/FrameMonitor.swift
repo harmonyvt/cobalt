@@ -16,6 +16,10 @@ import AppKit
 /// The link times the main thread's frames: a stall in SwiftUI, layout, image decoding or our own code shows; a frame the
 /// render server drops on its own (GPU) mostly does not. MetricKit's daily `scrollHitchTimeRatio` (`daily_metrics`)
 /// covers that side.
+///
+/// Whether session replay was recording is the `replay` super property `Analytics` keeps on every event, so `frames`
+/// can be split replay on and off without a property of its own. Building an event here is a few flat values; the SDK's
+/// work happens on `Analytics`' queue (8.17).
 @MainActor
 enum FrameMonitor {
     /// What started a stretch: a short touch, a drag mostly up or down, or one mostly sideways (swipe back, pager).

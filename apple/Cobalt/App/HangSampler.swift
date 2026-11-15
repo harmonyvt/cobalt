@@ -1,5 +1,7 @@
+import CobaltKit
 import Darwin
 import Foundation
+import os
 import Synchronization
 
 /// What the main thread was doing when it stopped answering (owner, 2026-11-14: "butter smooth... telemetry first").
@@ -9,6 +11,10 @@ import Synchronization
 /// on. When the main thread answers, the samples go out as one `hang_stack` event: the stall's length, the screen, the
 /// breadcrumbs, and each sample's frames as `image+0xoffset` (with the symbol when the system has one). App frames are
 /// symbolicated on the Mac against the build's dSYM (`atos -o <dSYM> -l 0x100000000 <0x100000000 + offset>`).
+///
+/// Debug builds also raise an alarm for every stall of 100 ms or more once it ends (8.17: the main thread is
+/// display-only, apple/ARCHITECTURE.md rule 7), so a developer sees a slow main thread on the first run instead of in
+/// next week's `hang_stack` events. Release builds behave exactly as before.
 final class HangSampler: @unchecked Sendable {
     static let shared = HangSampler()
 
@@ -30,6 +36,10 @@ final class HangSampler: @unchecked Sendable {
     private static let maxFrames = 48
     private static let pollNs: UInt64 = 50_000_000
     private static let sampleAtMs = [250, 700, 1500]
+    #if DEBUG
+    private static let alarmMs = 100
+    private static let alarmLog = Logger(subsystem: "com.capybaraharmony.cobalt", category: "main-thread")
+    #endif
 
     #if os(iOS)
     /// iOS user addresses fit in 36 bits; anything above is a pointer-authentication signature on a saved return address.
@@ -74,6 +84,13 @@ final class HangSampler: @unchecked Sendable {
             }
             lastTick = now
             if !outstanding.load(ordering: .acquiring) {
+                #if DEBUG
+                // The main thread answered the last ping, so it is running again: logging (which allocates) is safe.
+                let pong = pongAt.load(ordering: .acquiring)
+                if sentAt > 0, pong > sentAt, Int((pong - sentAt) / 1_000_000) >= HangSampler.alarmMs {
+                    HangSampler.alarm(stallMs: Int((pong - sentAt) / 1_000_000))
+                }
+                #endif
                 if !samples.isEmpty {
                     let answered = pongAt.load(ordering: .acquiring)
                     let stallMs = answered > sentAt ? Int((answered - sentAt) / 1_000_000) : samples.last?.atMs ?? 0
@@ -148,6 +165,15 @@ final class HangSampler: @unchecked Sendable {
     }
 
     // MARK: the report
+
+    #if DEBUG
+    /// Loud on purpose: a warn line in the app's own log (and so in the Xcode console) plus an os_log fault, which
+    /// Console.app and Instruments show in red. Runs on the sampler's thread after the main thread answered.
+    private static func alarm(stallMs: Int) {
+        Telemetry.log(.warn, .ui, "main thread stall", data: ["ms": .int(stallMs)])
+        alarmLog.fault("main thread stall: \(stallMs, privacy: .public) ms (apple/ARCHITECTURE.md)")
+    }
+    #endif
 
     private func report(stallMs: Int, samples: [(atMs: Int, frames: [UInt])]) {
         let named = samples.map { (atMs: $0.atMs, frames: $0.frames.map(HangSampler.describe)) }

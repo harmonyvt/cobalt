@@ -3,7 +3,8 @@ import Foundation
 
 /// The last few things the app did on screen (open a detail, close it, a video starting or failing), newest last, for
 /// the tap probe and the freeze hunt (owner, 2026-11-14). Each step is also a self-hosted log line (`ui`) and a PostHog
-/// event (`step`), so it sits in the replay's timeline. Short names only: never titles, text or links.
+/// event (`step`), so it sits in the replay's timeline. Short names only: never titles, text or links. Cheap on the main
+/// thread: an append to a short list, and the log line and the event are written on their own queues (8.17).
 @MainActor
 enum Breadcrumbs {
     private static var steps: [(at: TimeInterval, what: String)] = []

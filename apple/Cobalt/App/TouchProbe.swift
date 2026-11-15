@@ -4,11 +4,14 @@ import UIKit
 
 /// Where a tap really lands (owner, 2026-11-14: "after watching a video the library becomes uninteractable, but I can
 /// still swap tabs"). A watcher on the window, never in the way: it recognises nothing, cancels nothing, delays nothing,
-/// and runs beside every other gesture. For each short tap it records
-///  - `hit`: the view UIKit delivers the tap to and its ancestors (class names only), and
+/// and runs beside every other gesture. For each short tap it records `hit`, the view UIKit delivers the tap to (class
+/// names only). Only a tap that lands on nothing useful (no view, the window itself, or an empty
+/// `UIViewControllerWrapperView`, the stuck-library symptom) pays for the full picture:
+///  - `hit` as the whole chain of ancestors, and
 ///  - `under`: the deepest view drawn at that point regardless of whether it takes touches, with the reason it does not
 ///    (`!ui` user interaction off, `hidden`, `a0` invisible) for any ancestor that blocks it,
-/// so a grid that stopped answering shows either what is lying on top of it or which of its ancestors turned off.
+/// so a grid that stopped answering shows either what is lying on top of it or which of its ancestors turned off. An
+/// ordinary tap costs one class name (8.17: the walk visited up to 4000 views after every tap).
 /// Goes to the self-hosted log (`ui` "tap") and to PostHog (`tap_probe`, inside the replay). Names of views only: never
 /// text, titles or links.
 @MainActor
@@ -37,7 +40,16 @@ enum TouchProbe {
         lastSent = now
         let hit = window.hitTest(point, with: nil)
         let dead = hit == nil || hit === window
-        if let hit, String(describing: type(of: hit)) == "UIViewControllerWrapperView" { emptyWrapperTapped?() }
+        let wrapper = hit.map { String(describing: type(of: $0)) == "UIViewControllerWrapperView" } ?? false
+        if wrapper { emptyWrapperTapped?() }
+        guard dead || wrapper else {
+            // an ordinary tap: the leaf's name is all it costs
+            var data: [String: TelemetryValue] = ["x": .int(Int(point.x)), "y": .int(Int(point.y))]
+            if let hit { data["hit"] = .string(shortName(hit)) }
+            Telemetry.log(.info, .ui, "tap", data: data)
+            Analytics.event("tap_probe", values: data)
+            return
+        }
         // the names and the walk wait until the tap's own frames are drawn: done here they landed in the frame that
         // stops a fling or opens a page (8.15, scroll jitter)
         Task { @MainActor [weak window, weak hit] in

@@ -3,7 +3,6 @@ import Foundation
 import Network
 import Observation
 import SwiftUI
-import Synchronization
 
 // Which mosaic tiles move (CONTRACT-LIBRARY2 decision 12): only webp faces, only while at least 80 % visible, at
 // most 4 at once on iPhone and 8 on iPad and Mac (the ones nearest the centre of the viewport win), none
@@ -146,81 +145,27 @@ final class AnimationBudget {
 
 // MARK: - the moving picture
 
-private final class StopFlag: Sendable {
-    private let flag = Mutex(false)
-    func stop() { flag.withLock { $0 = true } }
-    var isStopped: Bool { flag.withLock { $0 } }
-}
-
-/// One frame on its way to the main actor at a time: a frame that comes while the last is not shown yet is dropped.
-private final class FrameGate: Sendable {
-    private let pending = Mutex(false)
-    /// True (and the gate shut) when no frame is waiting.
-    func claim() -> Bool {
-        pending.withLock { busy in
-            if busy { return false }
-            busy = true
-            return true
-        }
-    }
-    func release() { pending.withLock { $0 = false } }
-}
-
-/// ImageIO's animation callback arrives on its own queue, so this lives outside any actor and the callback is
-/// `@Sendable`; the owner hops to the main actor to show a frame.
-private enum LibraryAnimationDriver {
-    /// Frames are shrunk to this many pixels on their long side, here, off the main thread: a tile is never wider than
-    /// about 400 points of 2x or 3x pixels' worth of detail that a person can see while it loops, and a full-size frame
-    /// meant a full-size texture upload on the main thread for every frame of up to 8 tiles (8.15, scroll jitter).
-    static let maxPixel = 512
-
-    static func play(data: Data, stop: StopFlag, onFrame: @escaping @Sendable (ImageBox) -> Void) -> Bool {
-        let status = CGAnimateImageDataWithBlock(data as CFData, nil) { @Sendable _, image, halt in
-            if stop.isStopped { halt.pointee = true; return }
-            onFrame(ImageBox(shrunk(image)))
-        }
-        return status == noErr
-    }
-
-    /// The frame at most `maxPixel` on its long side, drawn into a display-ready bitmap (premultiplied BGRA, sRGB), so
-    /// the main thread only hands it to Core Animation. A frame already small enough is drawn as is.
-    private static func shrunk(_ image: CGImage) -> CGImage {
-        let w = image.width, h = image.height
-        let scale = min(1, Double(maxPixel) / Double(max(w, h, 1)))
-        let tw = max(1, Int((Double(w) * scale).rounded())), th = max(1, Int((Double(h) * scale).rounded()))
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(
-                data: nil, width: tw, height: th, bitsPerComponent: 8, bytesPerRow: 0, space: space,
-                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
-        else { return image }
-        ctx.interpolationQuality = .medium
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: tw, height: th))
-        return ctx.makeImage() ?? image
-    }
-}
-
+/// A tile's player. The frames come from `MediaPipeline` (8.17): shrunk to `maxPixel` off the main thread and gated one
+/// at a time, so this only assigns them. A tile is never wider than about 400 points of 2x or 3x pixels' worth of detail
+/// that a person can see while it loops, and a full-size frame meant a full-size texture upload on the main thread for
+/// every frame of up to 8 tiles (8.15, scroll jitter).
 @MainActor @Observable
 private final class LibraryAnimator {
+    static let maxPixel = 512
+
     var image: ImageBox?
-    @ObservationIgnored private var stopFlag: StopFlag?
+    @ObservationIgnored private var animation: MediaAnimation?
 
     func play(data: Data) {
         halt()
-        let flag = StopFlag()
-        stopFlag = flag
-        let gate = FrameGate()
-        _ = LibraryAnimationDriver.play(data: data, stop: flag) { @Sendable [weak self] frame in
-            guard gate.claim() else { return }
-            Task { @MainActor in
-                self?.image = frame
-                gate.release()
-            }
+        animation = MediaAnimation.play(data: data, maxPixel: Self.maxPixel) { [weak self] frame in
+            self?.image = frame
         }
     }
 
     func halt() {
-        stopFlag?.stop()
-        stopFlag = nil
+        animation?.stop()
+        animation = nil
     }
 }
 

@@ -170,9 +170,12 @@ public final class AppModel {
     /// (the Hark summary, APP-API-CONTRACT 17.8) used to set it; it now opens the queue tab (apple/CONTRACT.md 12).
     public var requestedJobs = false
 
+    /// The library's rows and kind counts as the views read them (`libraryRows`, `LibraryView.swift`): built off the main
+    /// thread whenever an input changes and assigned here only when they changed. The only observed part of the engine.
+    var libraryRowsSnapshot = LibraryRowsSnapshot.empty
+    /// The rows engine's bookkeeping: what was built, the build in flight, its generation.
+    @ObservationIgnored var libraryRowsEngine = LibraryRowsEngine()
     /// Live Activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
-    /// The last `libraryRows` and what it was built from (`LibraryView.swift`): the library screen asks on every redraw.
-    @ObservationIgnored var libraryRowsMemo: LibraryRowsMemo?
     @ObservationIgnored var liveManager: LiveActivityManager?
     /// The editor's render activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
     @ObservationIgnored var editLive: EditLiveManager? {

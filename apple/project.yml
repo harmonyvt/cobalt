@@ -21,7 +21,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: "8.16"
+    MARKETING_VERSION: "8.17"
     CURRENT_PROJECT_VERSION: "26"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
@@ -34,7 +34,7 @@ packages:
   # the extensions never link it. Used through Cobalt/App/Analytics.swift and Cobalt/Shared/MediaMask.swift.
   PostHog:
     url: https://github.com/PostHog/posthog-ios
-    from: "3.97.0"
+    from: "3.97.1"
 
 targets:
   Cobalt:
