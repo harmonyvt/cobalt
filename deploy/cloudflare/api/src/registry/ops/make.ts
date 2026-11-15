@@ -16,7 +16,9 @@ import { hiddenRows } from "../../hidden-store";
 import { effectiveVisibility } from "../../visibility";
 import { budgetPort, dailyCap } from "../budget";
 import { AGENT_JOB_REGEX, agentJobState, agentRow, isMissingTable } from "../../chat-agents";
-import { SWARM_JOB_REGEX, cellsOf, isMissingTable as isMissingSwarmTable, swarmJobState, swarmRow } from "../../swarm";
+// swarm.ts is loaded only when a swarm job is waited on: a static import pulls in chat.ts and so the registry, whose
+// editor ops read this module's exports (ProjectSchema) while it is still loading (an import cycle the bundle trips on).
+const SWARM_JOB_REGEX = /^swarm:([A-Za-z0-9]{16})$/;
 import { defineOp, ok, OpError, type OpContext, type OpReply, capThreadOf } from "../op";
 
 export const CHAT_DAILY_RENDERS_DEFAULT = 10;
@@ -458,6 +460,7 @@ async function waitSwarm(ctx: OpContext, id: string, deadline: number): Promise<
         const k = await ctx.db.prepare("SELECT kind FROM api_keys WHERE id = ?1").bind(ctx.keyId).first<{ kind: string }>();
         all = k?.kind === "session";
     }
+    const { cellsOf, isMissingTable: isMissingSwarmTable, swarmJobState, swarmRow } = await import("../../swarm");
     for (;;) {
         const row = await swarmRow(ctx.db, id).catch((e) => (isMissingSwarmTable(e) ? null : Promise.reject(e)));
         if (!row || (!all && row.key_id !== owner)) throw stop("jobs.wait", `swarm:${id} is not one of your swarms`);
