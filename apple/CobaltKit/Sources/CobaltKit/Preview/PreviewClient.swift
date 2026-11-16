@@ -702,6 +702,20 @@ public struct PreviewClient: CobaltClient {
         return SavedEmote(id: "PrEvIeWemote0001", name: "catJAM", url: Self.catJAM.fileURL, emoteID: id)
     }
 
+    /// catJAM and three re-uploads of it under the same name (any case), for the variants sheet.
+    public func emoteVariants(name: String, page: Int) async throws -> EmotePage {
+        guard page == 1 else { return EmotePage(items: [], page: page, hasMore: false) }
+        let all = [Self.catJAM] + ["01PREVIEWVARIANT000000001", "01PREVIEWVARIANT000000002", "01PREVIEWVARIANT000000003"]
+            .enumerated().map { i, id in
+                var hit = Self.catJAM
+                hit.id = id
+                hit.name = i == 1 ? "CATJAM" : "catJAM"
+                hit.animated = i != 2
+                return hit
+            }
+        return EmotePage(items: EmoteVariants.keep(all, name: name), page: 1, hasMore: false)
+    }
+
     private static let catJAM = EmoteHit(
         id: "01F6MQ33FG000FFJ97ZB8MWV52",
         name: "catJAM",

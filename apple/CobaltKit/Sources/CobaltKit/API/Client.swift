@@ -116,6 +116,9 @@ public protocol CobaltClient: Sendable {
     func searchEmotes(query: String) async throws -> [EmoteHit]
     /// `GET /emotes?q=&sort=&page=` (section 20.1): browse a sort, with or without a name.
     func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage
+    /// `GET /emotes?q=<name>&sort=top&page=&exact=1` (section 20.2): one page of the emotes on 7TV with this own name, most
+    /// used first. Defaulted below to `browseEmotes` filtered to the name, so older fakes compile.
+    func emoteVariants(name: String, page: Int) async throws -> EmotePage
     /// `POST /emotes` `{id}`. The first save is new; the same id again is the same file.
     func saveEmote(id: String) async throws -> SavedEmote
     /// `GET /library/search?q=&limit=&v=` (APP-API-CONTRACT 21; keyed; only when `features.search`): the posts best
@@ -447,6 +450,10 @@ extension CobaltClient {
     public func searchEmotes(query: String) async throws -> [EmoteHit] { throw PipelineFailure.unsupported }
     public func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage {
         throw PipelineFailure.unsupported
+    }
+    public func emoteVariants(name: String, page: Int) async throws -> EmotePage {
+        let found = try await browseEmotes(query: name, sort: .top, page: page)
+        return EmotePage(items: EmoteVariants.keep(found.items, name: name), page: found.page, hasMore: found.hasMore)
     }
     public func saveEmote(id: String) async throws -> SavedEmote { throw PipelineFailure.unsupported }
     public func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult {

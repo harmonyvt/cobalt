@@ -623,6 +623,17 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         return EmotePage(items: wire.items, page: wire.page ?? page, hasMore: wire.hasMore ?? false)
     }
 
+    /// `exact=1` (20.2); a server without it ignores the key, and the page is filtered here either way.
+    public func emoteVariants(name: String, page: Int) async throws -> EmotePage {
+        let q = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
+        let params: [(String, String)] = [("q", q), ("sort", EmoteSort.top.rawValue), ("page", String(max(1, page))), ("exact", "1")]
+        let req = try makeRequest("GET", "/emotes", query: params, keyed: true)
+        let wire = try await sendJSON(EmotePageWire.self, req)
+        let items = EmoteVariants.keep(wire.items, name: q)
+        await EmoteCache.shared.prefetch(items.map(\.previewURL))
+        return EmotePage(items: items, page: wire.page ?? page, hasMore: wire.hasMore ?? false)
+    }
+
     public func saveEmote(id: String) async throws -> SavedEmote {
         let req = try makeRequest("POST", "/emotes", keyed: true)
         return try await sendJSON(SavedEmote.self, req, body: Self.jsonBody(["id": id]))
