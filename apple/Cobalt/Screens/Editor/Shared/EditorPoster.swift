@@ -1,3 +1,4 @@
+import CobaltKit
 import SwiftUI
 
 /// A library file's poster, filling its frame, over a flat colour that stands in until it loads (and for good when the server

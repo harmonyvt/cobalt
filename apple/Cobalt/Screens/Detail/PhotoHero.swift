@@ -1,5 +1,4 @@
 import CobaltKit
-import ImageIO
 import SwiftUI
 
 // The hero of a picture that is a still (CONTRACT-GALLERY 1.19-1.20): a photo item, a crop, an older single photo, and a
@@ -17,16 +16,30 @@ enum PhotoSource: Equatable, Sendable {
     case poster(URL)
     case none
 
-    init(_ r: Rendition) {
-        if let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) {
+    /// Pure: the choice, given what the disk holds (`fileHere`: the rendition's local file, `posterHere`: its local poster).
+    init(_ r: Rendition, fileHere: Bool, posterHere: Bool) {
+        if let url = r.local?.fileURL, fileHere {
             self = .file(url)
         } else if let url = r.publicURL ?? r.file?.url {
             self = .remote(HeroSource.resolve(url))
-        } else if let url = r.local?.posterURL.flatMap({ FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }) ?? r.posterURL {
+        } else if let url = (posterHere ? r.local?.posterURL : nil) ?? r.posterURL {
             self = .poster(HeroSource.resolve(url))
         } else {
             self = .none
         }
+    }
+
+    /// Before the disk has been looked at: trusts the record (a local file it names is taken as here), so the first frame
+    /// draws the likely picture and no "not here" badge flickers in and out.
+    static func assumed(_ r: Rendition) -> PhotoSource {
+        PhotoSource(r, fileHere: r.local?.fileURL != nil, posterHere: r.local?.posterURL != nil)
+    }
+
+    /// Looks at the disk off the main thread. 8.16 did it in `init`, so every body pass of a hero stat'ed two files on
+    /// the main thread.
+    nonisolated static func resolved(_ r: Rendition) async -> PhotoSource {
+        let here = { (url: URL?) -> Bool in url.map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
+        return PhotoSource(r, fileHere: here(r.local?.fileURL), posterHere: here(r.local?.posterURL))
     }
 
     var url: URL? {
@@ -51,36 +64,14 @@ enum PhotoSource: Equatable, Sendable {
     }
 }
 
-/// Decodes pictures off the main thread at a size, with a cache of its own (`ImageLoader` keys by URL only, so a 360 px
-/// poster would answer a 1400 px request). Bounded by decoded bytes.
-actor PhotoDecoder {
+/// Decodes pictures off the main thread at a size, through `MediaPipeline` and the app's shared cache (keyed by size, so
+/// a 360 px poster never answers a 1400 px request). Not an actor: a hero and the full-screen viewer decode side by side.
+final class PhotoDecoder: Sendable {
     static let shared = PhotoDecoder()
 
-    private final class Holder: Sendable {
-        let box: ImageBox
-        init(_ box: ImageBox) { self.box = box }
-    }
-
-    private let cache: NSCache<NSString, Holder> = {
-        let c = NSCache<NSString, Holder>()
-        c.totalCostLimit = 96 * 1024 * 1024
-        return c
-    }()
-
-    func image(at url: URL, maxPixel: Int) -> ImageBox? {
-        let key = "\(url.path)|\(maxPixel)" as NSString
-        if let hit = cache.object(forKey: key) { return hit.box }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        let box = ImageBox(image)
-        cache.setObject(Holder(box), forKey: key, cost: max(1, image.bytesPerRow * image.height))
-        return box
+    /// Runs on the global executor (a nonisolated async method), never on the caller's main actor.
+    func image(at url: URL, maxPixel: Int) async -> ImageBox? {
+        MediaPipeline.still(file: url, maxPixel: maxPixel)
     }
 
     static func load(_ source: PhotoSource, maxPixel: Int) async -> ImageBox? {
@@ -146,9 +137,14 @@ struct PhotoHero: View {
 
     @State private var fullScreen: HeroFullScreen?
     @State private var decoded: CGFloat?
+    /// What the disk check found, once per rendition (`.task(id:)`); until then the record's word.
+    @State private var checked: (rendition: Rendition, source: PhotoSource)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var source: PhotoSource { PhotoSource(rendition) }
+    private var source: PhotoSource {
+        if let checked, checked.rendition == rendition { return checked.source }
+        return PhotoSource.assumed(rendition)
+    }
 
     /// The record's own size, else what decoding found, else a portrait photo's.
     private var aspect: CGFloat {
@@ -178,6 +174,10 @@ struct PhotoHero: View {
             .accessibilityLabel(Copy.Media.heroA11y(rendition.itemLabel ?? rendition.tabName, evicted: !source.isHere))
             .accessibilityAddTraits([.isImage, .isButton])
             .accessibilityHint(Copy.Media.fullScreen)
+            .task(id: rendition) {
+                let found = await PhotoSource.resolved(rendition)
+                if !Task.isCancelled { checked = (rendition, found) }
+            }
             #if DEBUG
             .task(id: source) {
                 // `-previewHeroFullScreen 1` (simulator evidence): opens the viewer by itself, like the player's
@@ -215,9 +215,14 @@ struct GalleryImageHero: View {
     @State private var width: CGFloat = 0
     @State private var decoded: CGFloat?
     @State private var fullScreen: HeroFullScreen?
+    /// What the disk check found, once per rendition (`.task(id:)`); until then the record's word.
+    @State private var checked: (rendition: Rendition, source: PhotoSource)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var source: PhotoSource { PhotoSource(rendition) }
+    private var source: PhotoSource {
+        if let checked, checked.rendition == rendition { return checked.source }
+        return PhotoSource.assumed(rendition)
+    }
 
     private var aspect: CGFloat {
         if let w = rendition.width, let h = rendition.height, w > 0, h > 0 { return CGFloat(w) / CGFloat(h) }
@@ -276,6 +281,10 @@ struct GalleryImageHero: View {
         .heroFullScreen(item: $fullScreen) { _ in }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Media.heroA11y(rendition.tabName, evicted: !source.isHere))
+        .task(id: rendition) {
+            let found = await PhotoSource.resolved(rendition)
+            if !Task.isCancelled { checked = (rendition, found) }
+        }
         #if DEBUG
         .task(id: source) {
             guard UserDefaults.standard.bool(forKey: "previewHeroFullScreen"), source != .none else { return }

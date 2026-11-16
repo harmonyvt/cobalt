@@ -247,6 +247,10 @@ public final class OfflineStore {
     @ObservationIgnored private(set) var pins: [String: Int] = [:]
     /// The index as last read or written; `usage` sums it, with no disk I/O.
     @ObservationIgnored private(set) var records: [Record] = []
+    /// Where the index is read and written off the main thread, one job at a time (`OfflineIndexEngine`).
+    @ObservationIgnored let engine: OfflineIndexEngine
+    /// The newest engine snapshot adopted: an older one that resumes later is dropped (`adopt(_:)` for snapshots).
+    @ObservationIgnored private var adoptedSequence = 0
     /// Flipbooks being made right now, by entry id: a second `ensurePreviewFrames` joins the first.
     @ObservationIgnored private var previewJobs: [String: Task<Void, Never>] = [:]
     /// Entries whose flipbook could not be made this session (an unreadable file): not retried on every ask.
@@ -297,7 +301,10 @@ public final class OfflineStore {
         self.tools = tools
         self.defaults = defaults
         self.now = now
+        self.engine = OfflineIndexEngine(root: root)
         publishRoot()
+        // Still on the main thread: an initializer cannot wait. It runs once per process; `reload()`, which the app runs on
+        // every foreground, reconciles on the engine.
         adopt(Self.reconciled(root: root))
         Self.purgeInbox(root: root, olderThan: Self.inboxLifetime)
     }
@@ -387,6 +394,9 @@ public final class OfflineStore {
     }
 
     /// What `setLimit(limit)` would evict right now, in bytes (the "this removes about 1.2 GB" confirm).
+    ///
+    /// Synchronous, so it still reads and decodes the index on the main thread: Settings asks for it while it draws the
+    /// confirm. It should move to the engine once that caller can wait for an answer.
     public func bytesToFree(for limit: Int64?) -> Int64 {
         var copy = Self.readRecords(root: root)
         let before = Self.offlineUsage(of: copy).cache.bytes
@@ -401,43 +411,58 @@ public final class OfflineStore {
         let keep = pinnedIDs
         let refused = await purgeVisible(of: records.filter { !keep.contains($0.id) })      // a file not provably its own stays
         let stay = keep.union(refused)
-        var gone: [Record] = []
-        guard let merged = try? Self.mutate(root: root, { records in
-            gone = records.filter { !stay.contains($0.id) }
+        guard let gone = try? await write({ records -> [Record] in
+            let gone = records.filter { !stay.contains($0.id) }
             records.removeAll { !stay.contains($0.id) }
+            return gone
         }) else { return }
-        Self.delete(
+        await engine.delete(
             Eviction(
                 files: gone.compactMap(\.fileName), posters: gone.compactMap(\.posterName),
-                previews: gone.flatMap { $0.previewNames ?? [] }),
-            root: root)
-        adopt(merged)
+                previews: gone.flatMap { $0.previewNames ?? [] }))
     }
 
     /// "clear cache" (decision 4): drops the files nobody asked to keep. Every record, poster and flipbook and
     /// every kept file (in the visible folder or waiting in `files/`) stays. Entries a running pipeline pins stay.
     public func clearCache() async {
         let pinned = pinnedIDs
-        var names: [String] = []
-        guard let merged = try? Self.mutate(root: root, { records in
+        guard let names = try? await write({ records -> [String] in
+            var names: [String] = []
             for i in records.indices where records[i].keep != true && !pinned.contains(records[i].id) {
                 if let name = records[i].fileName {
                     names.append(name)
                     records[i].fileName = nil
                 }
             }
+            return names
         }) else { return }
-        Self.delete(Eviction(files: names), root: root)
-        adopt(merged)
+        await engine.delete(Eviction(files: names))
     }
 
     /// One pass over the current index with the effective limit (app launch, `reload`, `setLimit`).
-    /// Writes only when something has to go.
+    /// Writes only when something has to go. The read, the plan and the write all run on the engine; the main actor only
+    /// adopts the result, and that changes nothing when the index is what it already shows.
     func enforceLimit() async {
-        var preview = Self.readRecords(root: root)
-        let plan = Self.enforce(&preview, limit: limitBytes, protecting: pinnedIDs)
-        guard !plan.isEmpty else { adopt(Self.readRecords(root: root)); return }
-        _ = try? commit { _ in }
+        let (limit, pinned, generation) = (limitBytes, pinnedIDs, directAdoptions)
+        if let snapshot = await engine.enforceLimit(limit: limit, pinned: pinned) { await land(snapshot, queuedAt: generation) }
+    }
+
+    /// The limit's plan for the index on disk: the records as read and what `enforce` would take from them. Nil when the
+    /// index cannot be read. Off the main thread only (`OfflineIndexEngine.enforceLimit`): a full read and decode.
+    nonisolated static func planEviction(
+        root: URL, limit: Int64?, protecting: Set<String>
+    ) -> (records: [Record], plan: Eviction)? {
+        MainThreadGuard.assertOffMain()
+        let onMain = Thread.isMainThread
+        OfflineIndexEngine.planThreads.withLock { counts in
+            if onMain { counts.onMain += 1 } else { counts.offMain += 1 }
+        }
+        return EngineClock.measure("store.enforcePlan") { () -> (records: [Record], plan: Eviction)? in
+            guard let read = try? readRecordsChecked(root: root) else { return nil }
+            var copy = read
+            let plan = enforce(&copy, limit: limit, protecting: protecting)
+            return (read, plan)
+        }
     }
 
     // MARK: pins (this process only: a file another process has open survives its unlink on iOS)
@@ -559,11 +584,11 @@ public final class OfflineStore {
 
         // The identity check runs inside the coordinated index write (re-read from disk first), so
         // two adds of the same item, in this process or the other one, can never both insert.
-        var result = record
-        var discard = Eviction()
-        var survivor = id
+        let committed: (result: Record, survivor: String, discard: Eviction)
         do {
-            try commit(protecting: [survivor]) { records in
+            // what survives (the new record, or the one it folded into) is only known inside the write, and is what the
+            // limit must spare
+            committed = try await commit(protecting: { [$0.survivor] }) { records -> (result: Record, survivor: String, discard: Eviction) in
                 guard let i = Self.duplicateIndex(of: record, in: records) else {
                     // The media is resolved here, against the index just re-read: the app and the
                     // share extension can never split one media (CONTRACT-MEDIA 1.2).
@@ -572,13 +597,10 @@ public final class OfflineStore {
                     // a new rendition of a titled media carries the media's title (decision 8)
                     placed.title = records.first { $0.media == placed.media && $0.title != nil }?.title
                     records.insert(placed, at: 0)
-                    result = placed
-                    survivor = id
-                    return
+                    return (placed, id, Eviction())
                 }
-                discard = Self.merge(record, into: &records[i])
-                result = records[i]
-                survivor = records[i].id
+                let discard = Self.merge(record, into: &records[i])
+                return (records[i], records[i].id, discard)
             }
         } catch {
             Telemetry.log(.error, .store, "store add failed", data: Self.failureData(step: "index", error))
@@ -587,7 +609,8 @@ public final class OfflineStore {
             Self.delete(Eviction(previews: flipbook.names), root: root)
             throw error
         }
-        Self.delete(discard, root: root)
+        let (result, survivor) = (committed.result, committed.survivor)
+        await engine.delete(committed.discard)
         // A kept file goes into the visible folder now (decision 3); where that cannot happen (no root, a record
         // in use, a failure) it stays kept in `files/` and `reload()` tries again.
         if keep, visibleRoot != nil { await promote(only: [survivor]) }
@@ -612,7 +635,7 @@ public final class OfflineStore {
     /// Never duplicates, however alike they look: an original with no `sessionID` (a plain cobalt
     /// save, a picker item: two saves of the same link are two copies the owner asked for), and a
     /// webp with no `remoteURL`.
-    static func duplicateIndex(of new: Record, in records: [Record]) -> Int? {
+    nonisolated static func duplicateIndex(of new: Record, in records: [Record]) -> Int? {
         // A gallery's items and the files made from it (apple/CONTRACT-GALLERY.md 4): an item is the same item when its
         // session and its index are; a made file when it is the same library row. Nothing else is ever folded in.
         switch new.role {
@@ -640,7 +663,7 @@ public final class OfflineStore {
     /// and flipbook; only gaps are filled. An existing entry whose file was evicted takes the
     /// duplicate's file instead (a fresh download is a refill, as `attach` does) and, if it had
     /// none, its poster and flipbook too.
-    static func merge(_ new: Record, into old: inout Record) -> Eviction {
+    nonisolated static func merge(_ new: Record, into old: inout Record) -> Eviction {
         old.duration = old.duration ?? new.duration
         old.width = old.width ?? new.width
         old.height = old.height ?? new.height
@@ -737,23 +760,21 @@ public final class OfflineStore {
             }
         }
 
-        var found = false
-        var replaced: String?
         let stamp = now()
-        var result: Record?
+        let committed: (replaced: String?, result: Record?)
         do {
-            try commit(protecting: [id]) { records in
-                guard let i = records.firstIndex(where: { $0.id == id }) else { return }
-                found = true
-                replaced = records[i].fileName
-                records[i].fileName = fileName
+            let (newName, newPoster, newPosterBytes) = (fileName, posterName, posterBytes)
+            committed = try await commit(protecting: { _ in [id] }) { records -> (replaced: String?, result: Record?) in
+                guard let i = records.firstIndex(where: { $0.id == id }) else { return (nil, nil) }
+                let replaced = records[i].fileName
+                records[i].fileName = newName
                 records[i].visiblePath = nil
                 records[i].keep = keep ? true : (records[i].keep ?? false)
                 records[i].bytes = size
                 records[i].addedAt = stamp
-                records[i].posterName = posterName
-                records[i].posterBytes = posterBytes
-                result = records[i]
+                records[i].posterName = newPoster
+                records[i].posterBytes = newPosterBytes
+                return (replaced, records[i])
             }
         } catch {
             Telemetry.log(.error, .store, "store attach failed", data: Self.failureData(step: "index", error))
@@ -761,7 +782,8 @@ public final class OfflineStore {
             if let madePoster { try? fm.removeItem(at: madePoster) }
             throw error
         }
-        guard found, let result else {
+        let replaced = committed.replaced
+        guard let result = committed.result else {
             // removed while the download ran
             Telemetry.log(.warn, .store, "store attach failed", data: ["step": "index", "reason": "removed while downloading"])
             try? fm.removeItem(at: destination)
@@ -850,18 +872,15 @@ public final class OfflineStore {
 
     public func remove(_ id: String) async {
         guard await purgeVisible(of: records.filter { $0.id == id }).isEmpty else { return }   // a file not provably its own stays
-        var removed: Record?
-        guard let records = try? Self.mutate(root: root, { records in
-            guard let index = records.firstIndex(where: { $0.id == id }) else { return }
-            removed = records.remove(at: index)
+        // `try?` flattens: nil when the write failed and when there was no such record
+        guard let removed = try? await write({ records -> Record? in
+            guard let index = records.firstIndex(where: { $0.id == id }) else { return nil }
+            return records.remove(at: index)
         }) else { return }
-        guard let removed else { return }
-        Self.delete(
+        await engine.delete(
             Eviction(
                 files: removed.fileName.map { [$0] } ?? [], posters: removed.posterName.map { [$0] } ?? [],
-                previews: removed.previewNames ?? []),
-            root: root)
-        adopt(records)
+                previews: removed.previewNames ?? []))
     }
 
     /// Every record of the media `id` (files, posters, flipbooks) goes, and its planet with it
@@ -873,22 +892,19 @@ public final class OfflineStore {
         let pinned = pinnedIDs
         let current = records.filter { $0.media == id }
         if !current.contains(where: { pinned.contains($0.id) }), !(await purgeVisible(of: current)).isEmpty { return false }
-        var gone: [Record] = []
-        var blocked = false
-        guard let merged = try? Self.mutate(root: root, { records in
+        guard let outcome = try? await write({ records -> (gone: [Record], blocked: Bool) in
             let members = records.filter { $0.media == id }
-            if members.contains(where: { pinned.contains($0.id) }) { blocked = true; return }
-            gone = members
+            if members.contains(where: { pinned.contains($0.id) }) { return ([], true) }
             records.removeAll { $0.media == id }
+            return (members, false)
         }) else { return false }
+        let (gone, blocked) = (outcome.gone, outcome.blocked)
         if !gone.isEmpty {
-            Self.delete(
+            await engine.delete(
                 Eviction(
                     files: gone.compactMap(\.fileName), posters: gone.compactMap(\.posterName),
-                    previews: gone.flatMap { $0.previewNames ?? [] }),
-                root: root)
+                    previews: gone.flatMap { $0.previewNames ?? [] }))
         }
-        adopt(merged)
         return !blocked && !gone.isEmpty
     }
 
@@ -896,6 +912,9 @@ public final class OfflineStore {
     /// of `sessionID`, or just `id` when given. One coordinated index write (the share extension
     /// may write too); `videos` updates. Returns how many entries took it (0: the original is not
     /// kept on this device, so there is nothing to badge). Nil clears it (the owner switched the link off).
+    ///
+    /// Synchronous, so its write still runs on the main thread: its callers (the pipeline's hosted original, the gallery and
+    /// media visibility changes, private links) use the count at once. They should move to an async variant on the engine.
     @discardableResult
     public func setPublicURL(_ url: URL?, forSession sessionID: String?, orEntry id: String? = nil) -> Int {
         var touched = 0
@@ -921,47 +940,53 @@ public final class OfflineStore {
     ///
     /// The kept files of the media follow the new title (decision 8): see `followTitle(media:)`.
     public func setTitle(_ title: String?, media id: String) async {
-        let (_, changed) = applyTitle(title, media: id)
-        if changed { await followTitle(media: id) }
+        let cleaned = title.flatMap(MediaTitle.clean)
+        guard let touched = try? await write({ records in Self.retitle(&records, media: id, to: cleaned) }) else { return }
+        if touched > 0 { await followTitle(media: id) }
     }
 
     /// `setTitle` for callers that must not suspend (an optimistic rename, a run). False when the index
     /// could not be written (the caller keeps the title in memory). A change renames the kept files in a
     /// task of its own.
+    ///
+    /// Synchronous, so its write still runs on the main thread (LibraryModel's rename, AppModel+Media's title,
+    /// PipelineTitle's run title use the answer at once). Those callers should move to `setTitle` once they can wait.
     @discardableResult
     func writeTitle(_ title: String?, media id: String) -> Bool {
-        let (written, changed) = applyTitle(title, media: id)
-        if changed, visibleRoot != nil { Task { await followTitle(media: id) } }
-        return written
-    }
-
-    private func applyTitle(_ title: String?, media id: String) -> (written: Bool, changed: Bool) {
         let cleaned = title.flatMap(MediaTitle.clean)
         var touched = 0
-        guard let merged = try? Self.mutate(root: root, { records in
-            for i in records.indices where records[i].media == id && records[i].title != cleaned {
-                records[i].title = cleaned
-                touched += 1
-            }
-        }) else { return (false, false) }
+        guard let merged = try? Self.mutate(root: root, { records in touched = Self.retitle(&records, media: id, to: cleaned) })
+        else { return false }
         if touched > 0 { adopt(merged) }
-        return (true, touched > 0)
+        if touched > 0, visibleRoot != nil { Task { await followTitle(media: id) } }
+        return true
+    }
+
+    /// Gives every record of the media `id` the title `cleaned`; returns how many changed (unchanged records are not
+    /// rewritten).
+    private nonisolated static func retitle(_ records: inout [Record], media id: String, to cleaned: String?) -> Int {
+        var touched = 0
+        for i in records.indices where records[i].media == id && records[i].title != cleaned {
+            records[i].title = cleaned
+            touched += 1
+        }
+        return touched
     }
 
     /// Drops every file nobody asked to keep and keeps every record and poster (the old "keep videos" off). Kept
     /// files stay: turning "keep new saves offline" off deletes nothing (decision 5).
     public func dropFilesKeepingPosters() async {
-        var names: [String] = []
-        guard let records = try? Self.mutate(root: root, { records in
+        guard let names = try? await write({ records -> [String] in
+            var names: [String] = []
             for i in records.indices where records[i].keep != true {
                 if let name = records[i].fileName {
                     names.append(name)
                     records[i].fileName = nil
                 }
             }
+            return names
         }) else { return }
-        Self.delete(Eviction(files: names, posters: []), root: root)
-        adopt(records)
+        await engine.delete(Eviction(files: names, posters: []))
     }
 
     /// An entry a running pipeline reads frames from or plays right now (its file must stay).
@@ -1011,7 +1036,8 @@ public final class OfflineStore {
         return outcome.refused
     }
 
-    /// Previews: writes poster-less, file-less entries into the index so `reload()` keeps them.
+    /// Previews: writes poster-less, file-less entries into the index so `reload()` keeps them. Synchronous on purpose: the
+    /// preview context seeds before its first frame.
     func seed(_ seeds: [StoredVideo]) {
         let records = seeds.map { v in
             Record(
@@ -1032,11 +1058,21 @@ public final class OfflineStore {
     /// With a visible root it also runs, in this order: the scan of the visible folder (decision 7), the
     /// migration (section 2) and the promotion of kept files that wait in `files/`.
     public func reload() async {
-        adopt(Self.reconciled(root: root))
-        Self.purgeInbox(root: root, olderThan: Self.inboxLifetime)
-        Self.purgeOrphanPreviews(
-            root: root, referenced: Set(records.flatMap { $0.previewNames ?? [] }), olderThan: Self.inboxLifetime)
-        if !canKeep { releaseUnpromotableKeeps() }
+        // Off the main thread: the reconcile checks every file, poster and flipbook frame on disk (thousands of stats
+        // for a ~900-entry index), which held the main thread 330-430 ms on each foreground and tab switch (8.16
+        // hang_stack, OfflineStore.reconciled). The purges list folders the same way.
+        // It runs on the engine, in line with the writes: a write queued behind it re-reads what it fixed, and a write that
+        // went before it is in what it read, so its snapshot is adopted in order like any other.
+        let root = root
+        let lifetime = Self.inboxLifetime
+        let generation = directAdoptions
+        await land(await engine.reconcile(), queuedAt: generation)
+        let referenced = Set(records.flatMap { $0.previewNames ?? [] })
+        await Task.detached(priority: .utility) {
+            Self.purgeInbox(root: root, olderThan: lifetime)
+            Self.purgeOrphanPreviews(root: root, referenced: referenced, olderThan: lifetime)
+        }.value
+        if !canKeep { await releaseUnpromotableKeeps() }
         if visibleRoot != nil {
             if rootMode == .macFolder {
                 // The Mac: where is the root now, and is it the folder cobalt was using? Then what FolderSync wrote is
@@ -1057,42 +1093,81 @@ public final class OfflineStore {
 
     /// A store nobody promotes from (see `canKeep`) that an earlier build filled with kept files: they are cache
     /// now, so the limit governs them again.
-    private func releaseUnpromotableKeeps() {
+    private func releaseUnpromotableKeeps() async {
         guard records.contains(where: { $0.keep == true && $0.visiblePath == nil }) else { return }
-        guard let merged = try? Self.mutate(root: root, { records in
+        _ = try? await write { records in
             for i in records.indices where records[i].keep == true && records[i].visiblePath == nil { records[i].keep = false }
-        }) else { return }
-        adopt(merged)
+        }
     }
 
-    func adopt(_ merged: [Record]) {
+    /// Counts `adopt` calls, the ones that changed nothing included (tests read it to tell an unchanged adopt from none).
+    @ObservationIgnored private(set) var adoptions = 0
+
+    /// Shows `merged`. The same records as now change nothing: `records`, `videos` and `media` are only assigned when they
+    /// differ, because each assignment invalidates every observer and rebuilds the library's rows (a foreground's reload
+    /// adopts the same index three or four times). `force` re-derives `videos` from unchanged records: the visible root
+    /// moved (`swapRoot`), so every kept file's URL did.
+    ///
+    /// This is the door for everything that does not come from the engine (the folder gate's writes, the synchronous
+    /// writes, the preview seed); it is counted in `directAdoptions` so an engine snapshot queued before it can tell.
+    func adopt(_ merged: [Record], force: Bool = false) {
+        directAdoptions &+= 1
+        show(merged, force: force)
+    }
+
+    /// Adopts not through the engine since the last engine job was queued: see `land(_:queuedAt:)`.
+    @ObservationIgnored private var directAdoptions = 0
+
+    private func show(_ merged: [Record], force: Bool = false) {
+        adoptions &+= 1
+        guard force || merged != records else { return }
         records = merged
         videos = merged.map { $0.video(root: root, visibleRoot: visibleRoot) }
         media = StoredMedia.build(from: videos)
-        mediaIndex = nil
+        mediaIndex = nil                                    // built from `media`, so only stale when `media` was replaced
     }
 
-    /// One coordinated write: `body` changes the merged index, then (unless `enforce` is false) the
-    /// limit is applied to the result, all before the index is written. The evicted files are
-    /// deleted only after that write.
+    /// An engine job's snapshot, unless a later job's was adopted already (two writes that resume out of order: the later
+    /// one re-read the index, so it holds the earlier one's change too).
+    func adopt<Value: Sendable>(_ snapshot: OfflineIndexSnapshot<Value>) {
+        guard snapshot.sequence > adoptedSequence else { return }
+        adoptedSequence = snapshot.sequence
+        show(snapshot.records)
+    }
+
+    /// An engine snapshot, back on the main actor. When something else was adopted while the job was queued or ran (a
+    /// synchronous `writeTitle`, the folder gate's promote), the snapshot may predate that write: the index is read again on
+    /// the engine, in line, and that read is shown instead (8.17's reload did the same with its own counter).
+    func land<Value: Sendable>(_ snapshot: OfflineIndexSnapshot<Value>, queuedAt generation: Int) async {
+        guard directAdoptions != generation else { adopt(snapshot); return }
+        if let fresh = await engine.read() { adopt(fresh) } else { adopt(snapshot) }
+    }
+
+    /// One coordinated write on the engine, off the main thread: `body` changes the merged index and answers a value; the
+    /// written index is adopted here. No storage limit (`commit` applies it). `body` runs on the engine, so it takes only
+    /// `Sendable` values and hands back what the caller needs instead of writing to the caller's variables.
     @discardableResult
-    func commit(
-        protecting extra: @autoclosure () -> Set<String> = [], enforce: Bool = true, _ body: (inout [Record]) -> Void
-    ) throws -> [Record] {
-        let pinned = pinnedIDs
-        let defaults = defaults
-        var evicted = Eviction()
-        let merged = try Self.mutate(root: root) { records in
-            body(&records)
-            // evaluated after `body`: `add` learns inside the write which entry it must protect
-            if enforce {
-                evicted = Self.enforce(
-                    &records, limit: LimitDefaults.bytes(defaults), protecting: extra().union(pinned))
-            }
-        }
-        Self.delete(evicted, root: root)
-        adopt(merged)
-        return merged
+    func write<Value: Sendable>(_ body: @escaping @Sendable (inout [Record]) -> Value) async throws -> Value {
+        let generation = directAdoptions
+        let snapshot = try await engine.write(
+            limit: nil, enforce: false, pinned: [], protecting: { _ in [] }, body)
+        await land(snapshot, queuedAt: generation)
+        return snapshot.value
+    }
+
+    /// `write`, then (unless `enforce` is false) the limit applied to the result before the index is written, sparing the
+    /// pinned entries and what `protecting` names from `body`'s answer (`add` learns inside the write which entry it must
+    /// protect). The evicted files are deleted only after that write. The limit is read here, as the job is queued.
+    @discardableResult
+    func commit<Value: Sendable>(
+        protecting: @escaping @Sendable (Value) -> Set<String> = { _ in [] }, enforce: Bool = true,
+        _ body: @escaping @Sendable (inout [Record]) -> Value
+    ) async throws -> Value {
+        let generation = directAdoptions
+        let snapshot = try await engine.write(
+            limit: limitBytes, enforce: enforce, pinned: pinnedIDs, protecting: protecting, body)
+        await land(snapshot, queuedAt: generation)
+        return snapshot.value
     }
 
     // MARK: flipbook (preview frames)
@@ -1118,7 +1193,7 @@ public final class OfflineStore {
         pin(id)                                                // the file stays until the frames are read
         let job = Task {
             let book = await Self.renderFlipbook(tools: tools, file: file, animated: animated, id: id, root: root)
-            finishPreviews(id: id, book: book)
+            await finishPreviews(id: id, book: book)
         }
         previewJobs[id] = job
         await job.value
@@ -1143,24 +1218,19 @@ public final class OfflineStore {
     /// (one is still made on demand by `ensurePreviewFrames(for:)`).
     nonisolated static let backfillLimit = 35
 
-    private func finishPreviews(id: String, book: Flipbook) {
+    private func finishPreviews(id: String, book: Flipbook) async {
         previewJobs[id] = nil
         unpin(id)
         guard !book.names.isEmpty else { previewFailures.insert(id); return }
-        var present = false
-        do {
-            try commit(protecting: [id]) { records in
-                guard let i = records.firstIndex(where: { $0.id == id }) else { return }
-                present = true
-                // another process may have made them meanwhile: same names, keep what is there
-                if records[i].previewNames?.isEmpty == false { return }
-                records[i].previewNames = book.names
-                records[i].previewBytes = book.bytes
-            }
-        } catch {
-            present = false
-        }
-        if !present { Self.delete(Eviction(previews: book.names), root: root) }     // removed while it ran
+        let present = (try? await commit(protecting: { _ in [id] }) { records -> Bool in
+            guard let i = records.firstIndex(where: { $0.id == id }) else { return false }
+            // another process may have made them meanwhile: same names, keep what is there
+            if records[i].previewNames?.isEmpty == false { return true }
+            records[i].previewNames = book.names
+            records[i].previewBytes = book.bytes
+            return true
+        }) ?? false
+        if !present { await engine.delete(Eviction(previews: book.names)) }     // removed while it ran
     }
 
     enum PreviewSource { case video, animatedImage, none }
@@ -1226,7 +1296,7 @@ public final class OfflineStore {
 
     // MARK: index on disk
 
-    struct Record: Codable, Equatable {
+    struct Record: Codable, Equatable, Sendable {
         var id: String
         var kind: StoredVideo.Kind
         var fileName: String?
@@ -1343,7 +1413,7 @@ public final class OfflineStore {
     /// 2. else the media of any record with the same non-nil session (an original added after its webps
     ///    joins them; the same rule keeps a second original out of a media that has one);
     /// 3. else a new media, named by this record.
-    static func resolveMediaID(for new: Record, explicit: String?, in records: [Record]) -> String {
+    nonisolated static func resolveMediaID(for new: Record, explicit: String?, in records: [Record]) -> String {
         func hasOriginal(_ media: String) -> Bool { records.contains { $0.media == media && $0.isPlainOriginal } }
         func accepts(_ media: String) -> Bool { !(new.isPlainOriginal && hasOriginal(media)) }
         if let explicit, !explicit.isEmpty, records.contains(where: { $0.media == explicit }), accepts(explicit) {
@@ -1410,14 +1480,14 @@ public final class OfflineStore {
     }
 
     /// Every file, both tiers, plus every poster and flipbook (what `usage` has always meant).
-    static func usage(of records: [Record]) -> StorageUsage {
+    nonisolated static func usage(of records: [Record]) -> StorageUsage {
         let kept = records.filter(\.hasFile)
         return StorageUsage(count: kept.count, bytes: records.reduce(0) { $0 + $1.cost }, mediaCount: Set(kept.map(\.media)).count)
     }
 
     /// The two tiers. `offline`: kept files (the bytes of the files only). `cache`: files nobody asked to keep,
     /// and the posters and flipbooks of media with nothing kept: exactly what `enforce` can free.
-    static func offlineUsage(of records: [Record]) -> OfflineUsage {
+    nonisolated static func offlineUsage(of records: [Record]) -> OfflineUsage {
         let anchored = Set(records.filter(\.isAnchored).map(\.media))
         let keptFiles = records.filter { $0.hasFile && $0.isAnchored }
         let cacheFiles = records.filter { $0.hasFile && !$0.isAnchored }
@@ -1442,7 +1512,7 @@ public final class OfflineStore {
     }
 
     /// Files, posters and flipbook frames to delete once the index no longer names them.
-    struct Eviction {
+    struct Eviction: Sendable {
         var files: [String] = []
         var posters: [String] = []
         var previews: [String] = []
@@ -1456,7 +1526,7 @@ public final class OfflineStore {
     /// Never touched: every record of the newest `protectedNewest` media (by latest activity: the
     /// newest `added` of its records, so a refill keeps its media young) and `protecting` (the entry
     /// just added, entries pinned by a running pipeline). A file alone over the limit is kept.
-    static func enforce(_ records: inout [Record], limit: Int64?, protecting: Set<String>) -> Eviction {
+    nonisolated static func enforce(_ records: inout [Record], limit: Int64?, protecting: Set<String>) -> Eviction {
         var plan = Eviction()
         guard let limit else { return plan }
         var total = offlineUsage(of: records).cache.bytes
@@ -1619,7 +1689,7 @@ public final class OfflineStore {
     /// The index with entries whose file or poster has vanished (a container restore, a manual
     /// clean-up) turned into "poster only" / "metadata only" instead of pointing at nothing, and
     /// the poster sizes an older index did not have filled in (stat once, then stored).
-    private static func reconciled(root: URL) -> [Record] {
+    nonisolated static func reconciled(root: URL) -> [Record] {
         let fm = FileManager.default
         func missing(_ sub: String, _ name: String?) -> Bool {
             guard let name else { return false }

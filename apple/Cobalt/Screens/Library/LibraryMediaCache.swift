@@ -63,35 +63,24 @@ enum LibraryMediaCache {
     }
 }
 
-/// Decoded pictures, bounded by bytes (about 64 MB) and count (300). Thread safe, so a tile can look a
-/// picture up synchronously in its first frame (no grey flash when it scrolls back).
-final class LibraryPictureCache: @unchecked Sendable {
+/// The library's view of the app's one picture cache (`MediaPipeline.memory`, 8.17): the same keys as every other still,
+/// so a poster decoded for the orbit or a detail sheet is found here too. Thread safe, so a tile can look a picture up
+/// synchronously in its first frame (no grey flash when it scrolls back).
+final class LibraryPictureCache: Sendable {
     static let shared = LibraryPictureCache()
 
-    private final class Holder: Sendable {
-        let box: ImageBox
-        init(_ box: ImageBox) { self.box = box }
-    }
-
-    private let cache: NSCache<NSString, Holder> = {
-        let c = NSCache<NSString, Holder>()
-        c.countLimit = 300
-        c.totalCostLimit = 64 * 1024 * 1024
-        return c
-    }()
-
-    private static func key(_ source: LibraryPictureSource, _ maxPixel: Int) -> NSString {
+    private static func key(_ source: LibraryPictureSource, _ maxPixel: Int) -> String {
         let kind: String
         switch source {
         case .file: kind = "f"
         case .image: kind = "i"
         case .videoFrame: kind = "v"
         }
-        return "\(kind)|\(maxPixel)|\(source.url.absoluteString)" as NSString
+        return MediaPipeline.key(kind, source.url, maxPixel: maxPixel)
     }
 
     func image(_ source: LibraryPictureSource, maxPixel: Int) -> ImageBox? {
-        cache.object(forKey: Self.key(source, maxPixel))?.box
+        MediaPipeline.memory.image(forKey: Self.key(source, maxPixel))
     }
 
     /// The first of `chain` the cache already holds.
@@ -101,7 +90,7 @@ final class LibraryPictureCache: @unchecked Sendable {
     }
 
     func store(_ box: ImageBox, _ source: LibraryPictureSource, maxPixel: Int) {
-        cache.setObject(Holder(box), forKey: Self.key(source, maxPixel), cost: max(1, box.image.bytesPerRow * box.image.height))
+        MediaPipeline.memory.store(box, forKey: Self.key(source, maxPixel))
     }
 }
 
@@ -190,28 +179,17 @@ actor LibraryPictureLoader {
     private static func decode(_ source: LibraryPictureSource, maxPixel: Int) async -> ImageBox? {
         switch source {
         case .file(let url):
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-            return thumbnail(of: source, maxPixel: maxPixel)
+            return MediaPipeline.still(file: url, maxPixel: maxPixel)
         case .image(let url):
-            guard let data = try? await LibraryMediaCache.data(from: url), !Task.isCancelled,
-                  let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-            return thumbnail(of: source, maxPixel: maxPixel)
+            guard let data = try? await LibraryMediaCache.data(from: url), !Task.isCancelled else { return nil }
+            return MediaPipeline.still(data: data, maxPixel: maxPixel)
         case .videoFrame(let url):
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: LibraryMediaCache.resolve(url)))
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: maxPixel, height: maxPixel)
             guard let (image, _) = try? await generator.image(at: CMTime(seconds: 0.1, preferredTimescale: 600)) else { return nil }
-            return ImageBox(image)
+            // the generator's frame may still be lazily backed: draw it here, not on the first frame it is shown
+            return ImageBox(MediaPipeline.shrink(image, maxPixel: maxPixel))
         }
-    }
-
-    /// The first frame (an animated webp's too), at most `maxPixel` on its long side.
-    private static func thumbnail(of source: CGImageSource, maxPixel: Int) -> ImageBox? {
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary).map(ImageBox.init)
     }
 }

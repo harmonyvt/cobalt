@@ -112,6 +112,27 @@ enum Pasteboard {
         #endif
     }
 
+    /// `contents()` with the pasteboard read off the main thread (8.18). On iPhone and iPad `UIPasteboard.string` holds
+    /// the thread that reads it while iOS shows "Allow Paste": read on the main thread, the app stopped drawing for as
+    /// long as the prompt was up (a 3.3 s stall on the save tab in 8.17). The Mac reads as before (files need AppKit).
+    static func contentsOffMain() async -> [PastedContent] {
+        if let override { return [.text(override)] }
+        #if canImport(UIKit)
+        let text = await readGeneralString()
+        return text.map { [.text($0)] } ?? []
+        #else
+        return contents()
+        #endif
+    }
+
+    #if canImport(UIKit)
+    @concurrent
+    nonisolated private static func readGeneralString() async -> String? {
+        MainThreadGuard.assertOffMain()
+        return UIPasteboard.general.string
+    }
+    #endif
+
     #if canImport(AppKit)
     /// The same reading of any pasteboard: the general one for a paste, the one a service is handed (`QuickSave`).
     static func contents(of pasteboard: NSPasteboard) -> [PastedContent] {

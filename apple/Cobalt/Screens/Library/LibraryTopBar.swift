@@ -87,18 +87,18 @@ struct LibraryBarFoldEffect: ViewModifier {
         let moving = offset > 0
         content
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fold.height = $0 }
+            // no fade while folding: opacity under 1 over the bar's glass and material forced an offscreen pass on every
+            // scroll frame (8.15, scroll jitter); the mask below already hides it as it goes
             .offset(y: -offset)
-            .opacity(1 - fold.progress * 0.5)
             // while open nothing is clipped (exactly the bar as it always was)
             .mask(alignment: .top) {
                 Rectangle()
                     .padding(.top, moving ? 0 : -1000)
                     .padding([.horizontal, .bottom], -1000)
             }
+            // always there, shown or not, so the first frame of a fold does not insert a view
             .background(alignment: .top) {
-                if moving {
-                    Color.clear.frame(height: 0).background(.bar)
-                }
+                Color.clear.frame(height: 0).background(.bar).opacity(moving ? 1 : 0)
             }
             .accessibilityHidden(fold.progress >= 1)
     }

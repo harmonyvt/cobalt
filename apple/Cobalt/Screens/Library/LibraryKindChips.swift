@@ -11,7 +11,7 @@ import SwiftUI
 /// black when on. It is the hidden album's switch (`LibraryModel.showingHidden`), not a case of `LibraryKindFilter`: the
 /// kind chips are off while it is on, and a kind chip turns it off.
 ///
-/// A view of its own: it counts the loaded posts, and a download tick or a scroll in the tiles must not redo that.
+/// A view of its own: a download tick or a scroll in the tiles must not redraw it.
 ///
 /// `Equatable` on its plain inputs (not `pickAll`): the body reads the model itself, so a parent pass that changed
 /// neither does not recount.
@@ -28,26 +28,17 @@ struct LibraryKindChips: View, Equatable {
 
     private var library: LibraryModel { model.library }
 
-    /// `nil` while the library is not all here: a count of the first page would grow as the owner scrolls.
+    /// `nil` while the library is not all here: a count of the first page would grow as the owner scrolls. The posts are
+    /// counted off the main thread with the rows (`AppModel.libraryKindCounts`); this only adds a preview's extra rows.
     private var counts: [LibraryKindFilter: Int]? {
         // in the album the chips count the album's posts (the filter applies there too)
         let album = library.showingHidden
         guard !(album ? library.hiddenHasMore : library.hasMore) else { return nil }
-        var out: [LibraryKindFilter: Int] = [:]
-        func add(_ kind: MediaKind, hasWebp: Bool) {
-            out[.all, default: 0] += 1
-            for chip in LibraryKindFilter.chips(kind: kind, hasWebp: hasWebp) { out[chip, default: 0] += 1 }
-        }
-        for post in (album ? library.hiddenPosts : library.posts) {
-            if post.isEmote { out[.emotes, default: 0] += 1 }
-            else {
-                let item = model.mediaItem(for: post)
-                add(item.kind, hasWebp: item.hasMadeWebp)
-            }
-        }
+        var out = model.libraryKindCounts
         for row in extra {
-            if row.emote { out[.emotes, default: 0] += 1 }
-            else { add(row.kind, hasWebp: row.hasWebp) }
+            if row.emote { out[.emotes, default: 0] += 1; continue }
+            out[.all, default: 0] += 1
+            for chip in LibraryKindFilter.chips(kind: row.kind, hasWebp: row.hasWebp) { out[chip, default: 0] += 1 }
         }
         return out
     }
@@ -90,6 +81,10 @@ struct LibraryKindChips: View, Equatable {
                     Text("\(count)")
                         .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
                         .monospacedDigit()
+                        .transition(.opacity)
+                } else if countsLoading {
+                    // the count's room, held while the library loads: the chip does not grow when the number lands
+                    countPlaceholder(selected: selected)
                 }
             }
             .foregroundStyle(selected ? CobaltColor.onText : Color.primary)
@@ -114,6 +109,26 @@ struct LibraryKindChips: View, Equatable {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
+    // MARK: loading
+
+    /// Whether the counts are on their way (the first page, the whole library paging in, or the album loading): only
+    /// then do the chips hold a shimmering placeholder where the number goes. A library that is simply not all here
+    /// (more pages on scroll) shows no count and no placeholder, as before.
+    private var countsLoading: Bool {
+        library.showingHidden ? library.hiddenLoading || library.loadingAll != nil
+            : library.isLoading || library.loadingAll != nil
+    }
+
+    private func countPlaceholder(selected: Bool) -> some View {
+        Capsule()
+            // a shade darker than the chip itself (the chip is already the skeleton grey)
+            .fill(selected ? CobaltColor.onText.opacity(0.35) : Color.primary.opacity(0.12))
+            .frame(width: 22, height: 8)
+            .skeletonShimmer()
+            .accessibilityHidden(true)
+            .transition(.opacity)
+    }
+
     // MARK: hidden
 
     /// How many posts are hidden, once the library has said (a count read before the first page would be a 0 that lies).
@@ -135,6 +150,9 @@ struct LibraryKindChips: View, Equatable {
                     Text("\(hiddenCount)")
                         .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
                         .monospacedDigit()
+                        .transition(.opacity)
+                } else if countsLoading {
+                    countPlaceholder(selected: selected)
                 }
             }
             .foregroundStyle(selected ? Color.white : Color.primary)

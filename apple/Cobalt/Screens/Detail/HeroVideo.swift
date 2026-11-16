@@ -251,6 +251,9 @@ struct HeroVideoBox: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { if !hasBar { openFullScreen() } }
         .task(id: url) { await start() }
+        .onChange(of: video.phase) { _, phase in
+            if phase == .ready || phase == .failed { Breadcrumbs.add("video.\(phase)") }
+        }
         .onDisappear { leave() }
         .heroFullScreen(item: $fullScreen) { closedFullScreen(at: $0) }
         #if DEBUG
@@ -315,6 +318,7 @@ struct HeroVideoBox: View {
         if let lent {
             if lent.wholeClip {
                 // the planet's own player, already over the whole clip: the picture is on screen now
+                Breadcrumbs.add("video.adopt")
                 video.adopt(lent.player)
                 transport.attach(lent.player)
                 return
@@ -326,12 +330,14 @@ struct HeroVideoBox: View {
         }
         if poster == nil, bridge == nil, url.isFileURL { firstFrame = await Self.frame(of: url) }
         guard !Task.isCancelled else { return }
+        Breadcrumbs.add("video.load", ["file": .bool(url.isFileURL), "bridged": .bool(bridge != nil)])
         await video.load(url, from: resume)
         guard !Task.isCancelled else { return }
         transport.attach(video.player)
     }
 
     private func leave() {
+        Breadcrumbs.add("video.leave", ["phase": .string(String(describing: video.phase)), "muted": .bool(muted)])
         // the player stops before the sound is let go: deactivating a session with audio still running is what held
         // the main thread on the way back to the library
         // the orbit's own player goes back to the orbit still playing (a pause was the owner's, and ends here)
@@ -357,6 +363,7 @@ struct HeroVideoBox: View {
     }
 
     private func openFullScreen() {
+        Breadcrumbs.add("video.fullscreen")
         guard video.phase != .failed else { retry(); return }
         let seconds = video.player?.currentTime().seconds ?? 0
         let start = seconds.isFinite && seconds > 0 ? CMTime(seconds: seconds, preferredTimescale: 600) : .zero
@@ -373,6 +380,7 @@ struct HeroVideoBox: View {
 
     /// Back from the full-screen player: the same clip, muted, from where it got to.
     private func closedFullScreen(at time: CMTime?) {
+        Breadcrumbs.add("video.fullscreen.closed")
         guard let player = video.player else { return }
         player.isMuted = true
         let resumes = wasPlaying

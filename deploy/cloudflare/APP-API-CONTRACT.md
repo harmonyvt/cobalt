@@ -6706,7 +6706,7 @@ Sent after the answer through `background()`, 3 s timeout, never changing a resp
 | `app_log` | `POST /telemetry`: warn and error lines only | `level`, `cat`, `msg`, `data_<key>`, `platform`, `app_version`, `app_build`, `os_version`, `device`, `process`, `install` |
 | `$exception` | `POST /telemetry` crashes | `crash_kind`, `$exception_list` (kind, summary), `$exception_level` fatal for `crash` |
 | `swarm` | each swarm step (59.10) | `swarm`, `stage`, `thread`, `model`, counts, costs and timings only |
-| `cron_run` | each scheduled trigger | `job` (every-15-min, daily), `cron`, `ms`, `ok` |
+| `cron_run` | each scheduled trigger | `job` (every-15-min, daily), `cron`, `ms`, `ok`, and `<step>_ms` for each step the 15-minute run reached (`sync`, `edits`, `captions`, `titles`, `about_kick`, `transcripts`, `about`, `safety_kick`, `safety`, `hidden`, `post_details`, `space_wake`, `names`, `index`, `moments`, `terms`) |
 
 Public hosts (share, stage, studio pages) send only their 5xx; `/telemetry` itself is never an `op` event. Never sent:
 keys, request bodies, saved links, file contents, chat text, tool inputs.
@@ -6724,7 +6724,42 @@ the server's `op` events. Ids that are not UUIDs are dropped. Chat and MCP calls
 when the server names a project and "send crash reports and logs" is on; identifies as `owner`. iPhone and iPad record
 session replays (screenshot mode, `maskAllImages`, `maskAllTextInputs`) unless "record sessions" is off; the Mac sends
 events only (PostHog has no Mac replay). Every view that draws media wears `.mediaMask()` (`Cobalt/Shared/MediaMask.swift`,
-`postHogMask()` on iOS). Tabs are `$screen` events.
+`postHogMask()` on iOS). Tabs, and the library's detail page (`library.detail`), are `$screen` events and the `screen`
+super property on every later event.
+
+App events (all flat, never titles, text or links):
+
+| event | when | properties |
+|---|---|---|
+| `step` | a breadcrumb (detail open/close, video ready/failed, tab, `library.unstuck`) | `step` and the step's own values |
+| `tap_probe` | a short tap (iOS) | `hit`, `under`, `x`, `y`, `breadcrumbs`, `dead` |
+| `frames` | one stretch of interaction: a touch (iOS) or scroll/click (Mac) until 1.6 s after it ends (0.6 s after a Mac scroll) | `screen`, `to` (when it changed), `kind` (tap, scroll, swipe), `frames`, `hitches`, `severe` (frames of 50 ms or more), `hitch_ms`, `hitch_ratio` (ms/s), `worst_ms`, `span_ms`, `hz`, `fps`, `move`, `thermal`, `low_power`, `breadcrumbs` (worst frame 100 ms or more) |
+| `frame_hang` | a single frame of 250 ms or more (at most 3 per stretch) | `ms`, `screen`, `breadcrumbs` |
+| `hang_stack` | the main thread did not answer a 50 ms ping for 250 ms or more (`Cobalt/App/HangSampler.swift`); sent when it answers | `ms` (the stall), `screen`, `breadcrumbs`, `samples`, `at_N` (ms into the stall) and `stack_N` (frames newest first, one per line: `image symbol+off` or `image+0xoffset`; app frames symbolicate with `atos -o <dSYM> -l 0x100000000`), `top` (the first sample's 12 frames) |
+| `daily_metrics` | MetricKit's daily payload | `scroll_hitch_ratio` (iOS), `launch_ms`/`_n`, `resume_ms`/`_n`, `hang_ms`/`_n`, `cpu_s`, `gpu_s`, `peak_mb`, `foreground_s`, `version`, `build`, `hours` |
+| `engine_ops` | about once a minute while engines ran, and when the app goes to the background (`EngineClock`, CobaltKit `Telemetry/EngineClock.swift`); never one per call | per operation name (`area.op`, from `EngineClock.measure("area.op")`): `<op>_n` (calls), `<op>_ms_total`, `<op>_ms_max` (tenths of a ms), `<op>_slow` (calls over 16 ms), `<op>_slow100` (over 100 ms), `<op>_main` (any call on the main thread); plus `window_s` and `ops` (names in the window, at most 64; later names fold into `other`) |
+
+Every app event also carries two super properties: `screen` (above) and `replay` (true while session replay is really
+recording, re-registered whenever replay starts or stops and after each flag load), so `frames`, `frame_hang` and
+`hang_stack` can be compared with replay on and off. `tap_probe` sends the whole `hit` chain, `under` and `breadcrumbs`
+only for a tap that hit nothing useful (no view, the window, or an empty `UIViewControllerWrapperView`); an ordinary tap
+sends just the leaf's class as `hit`, with `x` and `y`.
+
+How the app captures (8.17): `Analytics` is the only caller of the SDK. A caller builds a flat `[String: TelemetryValue]`
+and `Analytics.event(_:values:)` (any thread) hands it to one private serial utility queue, where PostHog's `capture`
+and `register` (which build properties, encode JSON and write a file on the calling thread) run in order; the main
+thread never does. Replay snapshots are taken every 2 s (`sessionReplayConfig.throttleDelay`, default 1 s).
+`EngineClock` itself is an `os_signpost` interval (subsystem `com.capybaraharmony.cobalt`, category `engine`) and a
+locked tally per name, so Instruments shows the same operations.
+
+Replay kill switch: the boolean feature flag `replay-off` in the PostHog project. The app reads it with
+`isFeatureEnabled` (no `$feature_flag_called` event) each time the SDK loads its flags (no request of its own); when
+on, replay stops on every install and stays off until the flag is turned off. The last value is kept on the device, so
+a launch after the switch never starts replay before the flags arrive.
+
+A hitch is a frame more than half a refresh late; hitch ratio is hitch time per second (Apple's measure: under 5 smooth,
+5 to 10 noticeable, over 10 bad). The frame monitor (`Cobalt/App/FrameMonitor.swift`) runs a display link only during a
+stretch, so an untouched app pays nothing.
 
 ## 59. Agent swarms: many Haiku tasks over one list, run only after Harmony approves (addendum, 2026-11-15; owner: "an MCP tool which will allow agents to queue up swarms in capystore of our Haiku agent ... it will need confirmation ... break up the 1,000 emotes into groups of like 50", then "an interactive page is created from it?", then "Implement please"; plan `agent-swarms/PLAN.md`, mockup `agent-swarms/review-mockup.html`. Numbering: 58 is PostHog, migration 0042 is the 7TV uploads, so this is migration 0043)
 

@@ -136,22 +136,17 @@ struct LibraryMosaic: View {
                 // measured from the very column it sizes: on the Mac the split view's detail column read it as its
                 // minimum width, changed it every layout pass and AppKit threw "more Update Constraints passes than
                 // there are views". The spacer's width is flexible, so the minimum no longer depends on the plan.
+                //
+                // No tiles until the scroll view has told its width (8.17). Its first pass has none: a plan for a width of
+                // 1 gave every tile a height of 0, so each lazy column found hundreds of them "on screen" and built and
+                // measured every one, then threw them all away when the real width came in a moment later (the 914 ms
+                // frame on the switch to the library: AttributeGraph and LayoutProxy.dimensions). The width arrives in the
+                // same transaction (`onGeometryChange` below), so the first frame drawn already has the real tiles.
                 Color.clear
-                    .frame(height: plan.height + Self.topInset)
+                    .frame(height: hasWidth ? plan.height + Self.topInset : 0)
                     .overlay(alignment: .topLeading) {
-                        HStack(alignment: .top, spacing: Self.gap) {
-                            ForEach(0..<plan.columns, id: \.self) { column in
-                                LazyVStack(spacing: Self.gap) {
-                                    ForEach(layout.columns.indices.contains(column) ? layout.columns[column] : []) { tile in
-                                        tileView(tile.slot, plan: plan, numbers: numbers)
-                                    }
-                                }
-                                .frame(width: plan.columnWidth)
-                            }
-                        }
-                        .padding(.horizontal, Self.margin)
-                        .padding(.top, Self.topInset)
-                        .frame(maxHeight: .infinity, alignment: .top)
+                        // one band of light over all the grey tiles at once (one clock, not one per tile)
+                        if hasWidth { columns(layout, numbers: numbers).skeletonShimmer(skeleton) }
                     }
                 if !skeleton { LibraryFooterView(state: footer) { controller.loadMoreAgain() } }
                 Color.clear.frame(height: 24)
@@ -179,6 +174,27 @@ struct LibraryMosaic: View {
         .onDisappear { budget.stop() }
         .refreshable { controller.pullToRefresh() }
         .accessibilityLabel(Copy.postsA11y)
+    }
+
+    /// Whether the scroll view's width is known (and leaves room for a column): before it, the plan has no real sizes.
+    private var hasWidth: Bool { width > 0 && Double(width) > 2 * Self.margin }
+
+    /// The columns: one `LazyVStack` each, so only the tiles on screen are built and measured.
+    private func columns(_ layout: MosaicLayout, numbers: [String: Int]) -> some View {
+        let plan = layout.plan
+        return HStack(alignment: .top, spacing: Self.gap) {
+            ForEach(0..<plan.columns, id: \.self) { column in
+                LazyVStack(spacing: Self.gap) {
+                    ForEach(layout.columns.indices.contains(column) ? layout.columns[column] : []) { tile in
+                        tileView(tile.slot, plan: plan, numbers: numbers)
+                    }
+                }
+                .frame(width: plan.columnWidth)
+            }
+        }
+        .padding(.horizontal, Self.margin)
+        .padding(.top, Self.topInset)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     @ViewBuilder

@@ -191,6 +191,12 @@ struct AppShell: View {
                 #if DEBUG
                 DebugHooks.log("AppShell .task")
                 #endif
+                #if os(iOS)
+                TouchProbe.install()                         // also feeds the frame monitor its touches
+                #else
+                FrameMonitor.install()
+                #endif
+                model.warmLibraryRows()                      // the library's rows are built off the main thread from the start
                 await model.foreground()
                 // the "swarms" badge: what waits for the owner is known before the tab is opened
                 if model.visibleTabs.contains(.swarms) { await model.swarms.loadList() }
@@ -204,6 +210,10 @@ struct AppShell: View {
                 // the queue tab polls the server only while the app is in front (apple/CONTRACT.md 12)
                 model.unifiedQueue.setForeground(phase == .active)
                 guard phase == .active else { return }
+                #if os(iOS)
+                // where taps really land (the library freeze hunt, owner 2026-11-14)
+                TouchProbe.install()
+                #endif
                 Task { if model.visibleTabs.contains(.swarms) { await model.swarms.loadList() } }
                 Task {
                     await model.foreground()                 // shares the launch task's run when they overlap
@@ -319,7 +329,10 @@ struct AppShell: View {
                 #endif
                 .modifier(MoveOverPresenter(model: model))
                 // PostHog (APP-API-CONTRACT 58): each tab the owner opens is a `$screen`, so a replay reads by tab
-                .onChange(of: model.selectedTab, initial: true) { Analytics.screen(model.selectedTab.rawValue) }
+                .onChange(of: model.selectedTab, initial: true) {
+                    Analytics.screen(model.selectedTab.rawValue)
+                    Breadcrumbs.add("tab.\(model.selectedTab.rawValue)")
+                }
         }
     }
 
@@ -459,7 +472,7 @@ struct AppShell: View {
 
     private func makeActions() -> ShellActions {
         ShellActions(
-            paste: { handle(Pasteboard.contents(), via: .circle, dropped: false) },
+            paste: { Task { handle(await Pasteboard.contentsOffMain(), via: .circle, dropped: false) } },
             chooseFile: { showImporter = true },
             choosePhotos: { showPhotos = true },
             trimNewWebp: { post in
@@ -528,7 +541,7 @@ struct AppShell: View {
         #if os(iOS)
         VStack {
             if #unavailable(iOS 27.0) {
-                Button(Copy.pasteA11y, systemImage: Symbol.paste) { handle(Pasteboard.contents(), via: .paste, dropped: false) }
+                Button(Copy.pasteA11y, systemImage: Symbol.paste) { Task { handle(await Pasteboard.contentsOffMain(), via: .paste, dropped: false) } }
                     .keyboardShortcut("v", modifiers: .command)
             }
             Button(Copy.trimNewWebp, systemImage: Symbol.trim) { trimSelected(model) }.keyboardShortcut("t", modifiers: .command)

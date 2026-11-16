@@ -63,7 +63,9 @@ extension LibraryController {
             showStatus(Copy.Library2.notFound)
             return
         }
-        if !model.libraryRows.contains(where: { $0.id == postKey }) {
+        // the rows are a snapshot built off the main thread: wait for the one that includes the post `locate` loaded
+        let settled = await model.settledLibraryRows()
+        if !settled.contains(where: { $0.id == postKey }) {
             library.query = ""
             library.show = .everything
             library.kindFilter = .all

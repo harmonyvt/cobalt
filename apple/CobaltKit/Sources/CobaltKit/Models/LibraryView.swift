@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 // The library's two views and what they share (CONTRACT-LIBRARY2 decisions 10-14, section 4.3): the
 // remembered view mode, sort, filter and search, and `LibraryRow`, one media as the views show it.
@@ -231,54 +232,148 @@ extension LibraryModel {
     var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 }
 
+// MARK: - the rows, built off the main thread (8.17)
+
 extension AppModel {
-    /// The posts as rows: joined with the device's media, filtered by `show`, searched by `query`, sorted
-    /// by `sort`. While the server's search has answered the query (`LibraryModel.activeSearchResults`), its posts come
-    /// first in score order (the loaded copy of each when there is one), then the name matches it did not return, in
-    /// `sort` order; `show` and the kind chip still apply.
-    public var libraryRows: [LibraryRow] {
-        // The hidden chip shows the album (name search only: the server's search never lists a hidden post); every other
-        // view leaves hidden posts out, whatever list they came in (APP-API-CONTRACT 37.2).
-        // The album is served only while the server still has `features.hidden`.
-        let album = library.showingHidden && capabilities.hidden
-        if !album, let results = library.activeSearchResults { return searchRows(results) }
-        let known = hiddenIndex
-        let source = album ? library.hiddenPosts : library.posts.filter { !$0.hidden && !known.contains(post: $0.id) }
-        var rows = source.map { LibraryRow(item: mediaItem(for: $0)) }
-        if library.show != .everything { rows = rows.filter { $0.passes(library.show) } }
-        rows = rows.filter { library.kindFilter.passes(kind: $0.kind, emote: $0.emote, hasWebp: $0.hasWebp) }
-        let query = library.trimmedQuery
-        if !query.isEmpty {
-            let folded = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-            rows = rows.filter { $0.matches(folded: folded) }
+    /// The posts as rows: joined with the device's media, filtered by `show` and the kind chip, searched by `query`,
+    /// sorted by `sort` (`LibraryRowsBuilder.build`). In the app this is the last finished snapshot: a view reading it
+    /// observes only the snapshot, and a change to any input builds the next one off the main thread
+    /// (`libraryRowInputsChanged`). Joining, filtering and sorting every post in the library's body cost a 914 ms frame
+    /// on the switch to the library (8.16).
+    public var libraryRows: [LibraryRow] { librarySnapshot.rows }
+
+    /// How many loaded posts each kind chip has (the album's while the hidden chip is on), from the same build.
+    public var libraryKindCounts: [LibraryKindFilter: Int] { librarySnapshot.kindCounts }
+
+    /// The rows the library has settled on: every input change made so far is built in. For a caller that just changed
+    /// what the library holds and decides by the rows that follow ("open in library", the sky map), where the snapshot
+    /// may still be a build behind.
+    public func settledLibraryRows() async -> [LibraryRow] {
+        guard !libraryRowsInline, libraryRowsEngine.started else { return libraryRows }
+        // A change made while a build runs starts another; a few rounds always catch up (each is one build).
+        for _ in 0..<8 {
+            guard let task = scheduleLibraryRows(libraryRowsInputs) else { break }
+            await task.value
         }
-        let sort = library.sort
-        return rows.sorted { LibraryRow.areInIncreasingOrder($0, $1, by: sort) }
+        return libraryRowsSnapshot.rows
     }
 
-    /// `libraryRows` while the server's results are in.
-    private func searchRows(_ results: [LibraryPost]) -> [LibraryRow] {
-        let known = hiddenIndex
-        let results = results.filter { !$0.hidden && !known.contains(post: $0.id) }
-        let loaded = Dictionary(library.posts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let show = library.show
-        let kind = library.kindFilter
-        func keeps(_ row: LibraryRow) -> Bool {
-            (show == .everything || row.passes(show)) && kind.passes(kind: row.kind, emote: row.emote, hasWebp: row.hasWebp)
-        }
-        var seen = Set<String>()
-        var rows: [LibraryRow] = []
-        for post in results where seen.insert(post.id).inserted {
-            let row = LibraryRow(item: mediaItem(for: loaded[post.id] ?? post))
-            if keeps(row) { rows.append(row) }
-        }
-        let folded = library.trimmedQuery.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-        let sort = library.sort
-        let extra = library.posts
-            .filter { !seen.contains($0.id) && !$0.hidden && !known.contains(post: $0.id) }
-            .map { LibraryRow(item: mediaItem(for: $0)) }
-            .filter { keeps($0) && $0.matches(folded: folded) }
-            .sorted { LibraryRow.areInIncreasingOrder($0, $1, by: sort) }
-        return rows + extra
+    /// Everything the rows read, copied out of the models (each read here is observed by whoever reads this).
+    var libraryRowsInputs: LibraryRowsInputs {
+        LibraryRowsInputs(
+            posts: library.posts, hiddenPosts: library.hiddenPosts, showingHidden: library.showingHidden,
+            hiddenServed: capabilities.hidden, search: library.activeSearchResults, hiddenIndex: hiddenIndex,
+            show: library.show, kind: library.kindFilter, query: library.trimmedQuery, sort: library.sort,
+            media: store.media, localTitles: library.localTitles)
     }
+
+    /// Previews and tests build inline, on the reader's thread, so a test that changes the library reads the rows that
+    /// follow at once (every library test does). The app builds off the main thread.
+    var libraryRowsInline: Bool { libraryRowsEngine.inline ?? ctx.isPreview }
+
+    private var librarySnapshot: LibraryRowsSnapshot {
+        if libraryRowsInline {
+            // Reads every input, so a view is invalidated by each of them, but builds only when one really changed.
+            let inputs = libraryRowsInputs
+            if let memo = libraryRowsEngine.memo, memo.inputs == inputs { return memo.snapshot }
+            let built = EngineClock.measure("library.rows") { LibraryRowsBuilder.build(inputs) }
+            libraryRowsEngine.memo = LibraryRowsMemo(inputs: inputs, snapshot: built)
+            return built
+        }
+        if !libraryRowsEngine.started {
+            // The first read builds synchronously, once, on the reader's thread: the library's first frame shows its
+            // tiles instead of an empty grid for a frame. Every later build runs off the main thread. The snapshot is
+            // written before anything reads it, so the view reading this is not invalidated by its own write.
+            libraryRowsEngine.started = true
+            let inputs = watchLibraryRowInputs()
+            let built = EngineClock.measure("library.rows") { LibraryRowsBuilder.build(inputs) }
+            libraryRowsEngine.wanted = inputs
+            libraryRowsEngine.publishes &+= 1
+            libraryRowsSnapshot = built
+            return built
+        }
+        return libraryRowsSnapshot
+    }
+
+    /// Starts the rows engine before anything shows the library (8.18): the first build runs off the main thread, so the
+    /// library's first read finds a finished snapshot instead of building one on the main thread (0.77 s in 8.17 (120)
+    /// on a hot phone). Later changes are watched as usual. Does nothing in previews and tests (they build inline) or
+    /// once the engine has started. Called at launch before the library loads: each load that follows is built off the
+    /// main thread as it lands.
+    public func warmLibraryRows() {
+        guard !libraryRowsInline, !libraryRowsEngine.started else { return }
+        libraryRowsEngine.started = true
+        scheduleLibraryRows(watchLibraryRowInputs())
+    }
+
+    /// Reads the inputs under observation and arms a one-shot watch on them; returns what it read.
+    @discardableResult
+    private func watchLibraryRowInputs() -> LibraryRowsInputs {
+        withObservationTracking {
+            libraryRowsInputs
+        } onChange: { [weak self] in
+            // Called on the writer's thread before the write lands: hop to the main actor, where the new value is in.
+            guard let self else { return }
+            Task { @MainActor in self.libraryRowInputsChanged() }
+        }
+    }
+
+    /// An input changed: watch again (so a change during the build starts the next one), then build what is there now.
+    /// Several writes in one turn of the main actor fire the watch once and are built together.
+    func libraryRowInputsChanged() {
+        let inputs = watchLibraryRowInputs()
+        scheduleLibraryRows(inputs)
+    }
+
+    /// Builds `inputs` off the main thread unless they are what the snapshot holds or what the build in flight was given.
+    /// A newer build makes every older one stale: its result is dropped (generation counter), never published. The
+    /// snapshot is assigned only when the rows or counts changed, so an input change that moves no row redraws nothing.
+    /// Returns the build that will settle these inputs, or nil when the snapshot already holds them.
+    @discardableResult
+    func scheduleLibraryRows(_ inputs: LibraryRowsInputs) -> Task<Void, Never>? {
+        if libraryRowsEngine.wanted == inputs { return libraryRowsEngine.task }
+        libraryRowsEngine.generation &+= 1
+        let generation = libraryRowsEngine.generation
+        libraryRowsEngine.wanted = inputs
+        libraryRowsEngine.task?.cancel()
+        let previous = libraryRowsSnapshot
+        let task = Task.detached(priority: .userInitiated) { [weak self] in
+            let (built, changed) = LibraryRowsBuilder.buildOffMain(inputs, against: previous)
+            // a newer build is already out: skip the hop (`finishLibraryRows` would drop it anyway)
+            if Task.isCancelled { return }
+            await self?.finishLibraryRows(built, changed: changed, generation: generation)
+        }
+        libraryRowsEngine.task = task
+        return task
+    }
+
+    private func finishLibraryRows(_ built: LibraryRowsSnapshot, changed: Bool, generation: Int) {
+        // a newer build is out: this one was made from inputs that are gone
+        guard generation == libraryRowsEngine.generation else { return }
+        libraryRowsEngine.task = nil
+        guard changed else { return }
+        libraryRowsEngine.publishes &+= 1
+        libraryRowsSnapshot = built
+    }
+}
+
+/// The rows engine's bookkeeping on `AppModel` (not observed: only `libraryRowsSnapshot` is).
+struct LibraryRowsEngine {
+    /// Nil: previews and tests inline, the app off the main thread. A test sets it to try the other path.
+    var inline: Bool?
+    /// Inline builds: the last one and what it was built from.
+    var memo: LibraryRowsMemo?
+    /// The first (synchronous) build happened and the inputs are watched.
+    var started = false
+    /// What the snapshot holds, or what the build in flight was given.
+    var wanted: LibraryRowsInputs?
+    var generation = 0
+    var task: Task<Void, Never>?
+    /// How many times a snapshot was assigned (the tests' equality gate).
+    var publishes = 0
+}
+
+struct LibraryRowsMemo {
+    var inputs: LibraryRowsInputs
+    var snapshot: LibraryRowsSnapshot
 }

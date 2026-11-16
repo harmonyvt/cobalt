@@ -12,6 +12,9 @@ extension Symbol {
         static let sortMenu = "arrow.up.arrow.down"
         static let descending = "chevron.down"
         static let ascending = "chevron.up"
+        /// The library shelf's fold chevron (folded: the one to open it again).
+        static let shelfFold = "chevron.up"
+        static let shelfUnfold = "chevron.down"
         static let open = "arrow.up.left.and.arrow.down.right"
         static let copyLink = "doc.on.doc"
         static let copied = "checkmark"
