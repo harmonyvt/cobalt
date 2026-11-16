@@ -225,6 +225,22 @@ public final class SevenTvSetModel {
         }
     }
 
+    /// Swaps `held` out for another emote (a variant from section 20.2): the new one goes in under the held one's alias, so
+    /// the word in chat stays the same, and takes its place in the grid. 7TV does it in one call (`overrideConflicts` on the
+    /// alias the held one has); the count stays. Picking the held emote itself changes nothing.
+    public func swap(_ held: SevenTvSetItem, for hit: EmoteHit) async throws {
+        guard hit.id != held.emoteID else { return }
+        try await write(held.emoteID) {
+            let change = try await self.store.setClient().addSevenTvEmote(
+                setID: self.setID, emoteID: hit.id, alias: held.alias, overrideConflicts: true)
+            let next = SevenTvSetItem(
+                emoteID: hit.id, alias: change.alias ?? held.alias, name: hit.name, animated: hit.animated,
+                previewURL: hit.previewURL, fileURL: hit.fileURL, addedAt: self.store.now())
+            self.all = self.all.map { $0.id == held.id ? next : $0 }
+            self.matches = self.matches.map { $0.id == held.id ? next : $0 }
+        }
+    }
+
     /// Copies the emote, under the alias it has here, into another set of the same channel. A name the other set already
     /// has answers its clash (nothing changed); nil once copied.
     @discardableResult

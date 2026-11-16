@@ -4,7 +4,7 @@ import SwiftUI
 // A 7TV set (APP-API-CONTRACT 57.7, mockup `7tv-tab/` "managing a set"), pushed from the 7tv tab (and the studio's old card),
 // or embedded as the Mac's right column (`embedded`: a header with rename, make live and "+ add emotes" instead of the chips).
 // Two chips: "in this set" (a 4-column grid with a name filter and paging; a tap opens the emote sheet; a long press opens
-// its variants on 7TV, every emote with its own 7TV name (APP-API-CONTRACT 20.2); "select" picks several for "copy to…" and
+// its variants on 7TV, every emote with its own 7TV name, and a tap on one swaps it in (APP-API-CONTRACT 20.2); "select" picks several for "copy to…" and
 // "remove N") and "add from 7tv" (section 20's search and sorts; + adds under the
 // emote's own name, a long press or right click adds with another name, ✓ marks what is already in the set; a name already
 // in the set opens the clash sheet). Rename the set and make it live from the title menu. Every edit changes the grid once
@@ -64,7 +64,7 @@ struct SevenTvSetScreen: View {
                 SevenTvClashSheet(emoteSet: emoteSet, clash: found)
             }
             .sheet(item: $variants) { found in
-                SevenTvVariantsSheet(variants: found, memberIDs: emoteSet.memberIDs)
+                SevenTvVariantsSheet(variants: found, emoteSet: emoteSet)
             }
             .modifier(SevenTvRenameSetAlert(emoteSet: emoteSet, isPresented: $renaming, draft: $draftName, done: { doneTick += 1 }, failed: { failTick += 1 }))
             .confirmationDialog(

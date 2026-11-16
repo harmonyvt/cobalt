@@ -1121,6 +1121,31 @@ struct SevenTvManageModelTests {
         #expect(late.existing == nil && late.existingEmoteID == PreviewData.sevenTvEmoteID(400) && late.alias == "catJAM5")
     }
 
+    @Test func aVariantSwapsInUnderTheHeldAliasInItsPlace() async throws {
+        let app = await linkedApp()
+        let own = try #require(app.sevenTv.selectedChannel)
+        let main = try #require(app.sevenTv.sets(of: own.id).first)
+        let set = app.sevenTv.openSet(main.id, channelID: own.id)
+        await set.load()
+        let count = set.info?.count
+        let jam = try #require(set.emote(aliased: "catJAM"))
+        let at = try #require(set.all.firstIndex { $0.id == jam.id })
+
+        // the same name: the word in chat stays, the place in the grid too, the count does not move
+        let other = outsider(7, name: "CATJAM")
+        try await set.swap(jam, for: other)
+        #expect(set.all[at].emoteID == other.id && set.all[at].alias == "catJAM" && set.all[at].renamed)
+        #expect(!set.all.contains { $0.id == jam.id })
+        #expect(set.info?.count == count)
+
+        // picking the held one changes nothing and asks nothing
+        let preview = try #require(app.ctx.client as? PreviewClient)
+        let calls = preview.sevenTvState.calls.count
+        try await set.swap(set.all[at], for: other)
+        #expect(preview.sevenTvState.calls.count == calls)
+        #expect(set.all[at].emoteID == other.id)
+    }
+
     @Test func copiesGoUnderTheAliasAndAClashInTheOtherSetIsAnswered() async throws {
         let app = await linkedApp()
         let own = try #require(app.sevenTv.selectedChannel)
