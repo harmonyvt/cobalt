@@ -96,6 +96,8 @@ export type ChatCallContext = {
     mcp?: { origin: string; clientKeyId: string };
     // a sub-agent's calls (section 43): its own id and its parent thread, whose daily caps and box it shares
     agent?: { id: string; parent: string } | null;
+    // a swarm task's calls (section 59): the swarm's id (its PostHog surface is "swarm")
+    swarm?: string;
 };
 
 // The thread whose daily caps (renders, saves) and workbench box a chat call uses: a sub-agent's parent (section 43.7).
@@ -126,7 +128,12 @@ export type AiSpec<I> = {
     preview?: (ctx: OpContext, input: I) => Promise<{ summary: string; effect: Record<string, unknown> }>;
     // what the model gets from a 2xx reply body (default: the body)
     result?: (body: unknown) => unknown;
+    // input fields that name posts and may be given as any capystore link or file name (section 60): "post"/"posts" become
+    // post ids, "file"/"files" the one file a link names (else its post). Resolved before the input is checked (registry/refs.ts).
+    refs?: Record<string, RefMode>;
 };
+
+export type RefMode = "post" | "posts" | "file" | "files";
 
 // search: meaning search is configured; box: the workbench is on (section 33.11); mcp: the caller is the MCP server
 // (section 35), which also sees the MCP-only ops (`when: (f) => f.mcp === true`)

@@ -14,7 +14,7 @@ export const JOB_ATTRIBUTES_TYPE = "CobaltJobActivityAttributes";
 export const JOB_STALE_S = 180;
 export const JOB_LOST_CODE = "error.live.lost";
 
-export type JobKind = "save" | "upload" | "make" | "edit" | "chat";
+export type JobKind = "save" | "upload" | "make" | "edit" | "chat" | "swarm";
 export type JobPhase = "waiting" | "working" | "quiet" | "done" | "failed" | "lost";
 
 // JobLiveAttributes / CobaltJobActivityAttributes in the app (Swift property names).
@@ -32,11 +32,19 @@ export type JobState = {
     since: number;
     result?: string;
     link?: string;
+    // a swarm (APP-API-CONTRACT 61.5): one letter per agent (q r w d f s, at most 200), the buttons in order, the spec hash
+    // the approve and apply buttons send, and the apply button's number
+    cells?: string;
+    actions?: SwarmAction[];
+    hash?: string;
+    count?: number;
 };
+
+export type SwarmAction = "approve" | "decline" | "stop" | "check" | "apply" | "open";
 
 export type Job = { attributes: JobAttributes; state: JobState };
 
-const KEY_ORDER = ["phase", "steps", "step", "headline", "detail", "fraction", "compact", "since", "result", "link"] as const;
+const KEY_ORDER = ["phase", "steps", "step", "headline", "detail", "fraction", "compact", "since", "result", "link", "cells", "actions", "hash", "count"] as const;
 const LIMITS: Partial<Record<(typeof KEY_ORDER)[number], number>> = { headline: 60, detail: 90, compact: 7, result: 60, link: 300 };
 
 // Canonical key order and the length caps, so two equal states serialise to the same bytes (the fixture pins it).
@@ -260,6 +268,170 @@ export function jobOfChat(thread: string, prompt: string, s: ChatLiveState): Job
     }
     return { attributes, state: canonicalJob(state) };
 }
+
+// ---- swarms (APP-API-CONTRACT 61.5) ------------------------------------------------------------------------------
+
+// What the swarm island is drawn from: the swarm's row and counts (swarm-live.ts reads them from D1).
+export type SwarmLiveInput = {
+    id: string;
+    name: string;
+    mode: "propose" | "read" | "act";
+    status: "awaiting_approval" | "running" | "stopping" | "done" | "failed" | "stopped" | "declined" | "expired";
+    apply_status: "none" | "ready" | "applying" | "applied" | "failed";
+    spec_hash: string;
+    planner: string;
+    est_low: number;
+    est_high: number;
+    spent_usd: number;
+    cap_usd: number;
+    error: string | null;
+    reduce: string | null;
+    created_at: number;
+    approved_at: number | null;
+    finished_at: number | null;
+    expires_at: number | null;
+    // one letter per agent, in order: q queued, r running, w waiting on a question, d done, f failed, s skipped
+    cells: string;
+    // propose mode: every change, the kept ones, the kept ones not applied yet and how many of those clash, applied, failed
+    changes: { total: number; kept: number; open: number; clashes: number; done: number; failed: number };
+};
+
+export const SWARM_CELLS_MAX = 200;
+export const SWARM_TITLE_MAX = 40;
+
+// Money as the island says it: cents under $1 ("21¢", "<1¢"), dollars above ("$1.40").
+export function moneyText(usd: number): string {
+    const c = Math.round(usd * 100);
+    if (c >= 100) return `$${(c / 100).toFixed(2)}`;
+    return usd > 0 && c === 0 ? "<1¢" : `${c}¢`;
+}
+
+const cut = (s: string, n: number) => (Array.from(s).length <= n ? s : `${Array.from(s).slice(0, n - 1).join("").trimEnd()}…`);
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+function swarmReason(s: SwarmLiveInput): string {
+    switch (s.status) {
+        case "declined":
+            return "you declined it.";
+        case "expired":
+            return "nobody approved it within an hour.";
+        default:
+            break;
+    }
+    switch (s.error) {
+        case "error.swarm.over_cap":
+            return `it reached its ${moneyText(s.cap_usd)} cap.`;
+        case "error.swarm.daily_cap":
+            return "today's swarm budget is spent.";
+        case "error.swarm.too_many_failed":
+            return "too many agents failed.";
+        case "error.swarm.all_failed":
+            return "no agent finished.";
+        case "error.swarm.off":
+            return "swarms are off on this server.";
+        case null:
+            return s.status === "stopped" ? "it was stopped. nothing was undone." : "something went wrong. open capystore to see what happened.";
+        default:
+            return "something went wrong. open capystore to see what happened.";
+    }
+}
+
+// The swarm island (61.5): every word, the buttons, the grid. `now` (ms) only for "expires in <m> min".
+export function jobOfSwarm(s: SwarmLiveInput, now: number): Job {
+    const attributes: JobAttributes = { id: `swarm:${s.id}`, kind: "swarm", title: cut(`swarm · ${s.name}`, SWARM_TITLE_MAX), agent: true, open: `cobalt-apple://swarm/${s.id}` };
+    const steps = s.mode === "propose" ? ["approve", "run", "review", "apply"] : ["approve", "run"];
+    const cells = s.cells.slice(0, SWARM_CELLS_MAX);
+    const n = (c: string) => cells.split("").filter((x) => x === c).length;
+    const total = cells.length;
+    const done = n("d");
+    const ended = done + n("f") + n("s");
+    const waiting = n("w");
+    const spent = moneyText(s.spent_usd);
+    const secs = (ms: number | null) => Math.floor((ms ?? s.created_at) / 1000);
+    const base = { steps, cells };
+    const expired = s.status === "expired" || (s.status === "awaiting_approval" && s.expires_at !== null && s.expires_at <= now);
+    let state: JobState;
+    if (s.status === "awaiting_approval" && !expired) {
+        const mins = Math.max(1, Math.ceil(((s.expires_at ?? now) - now) / 60_000));
+        state = {
+            ...base,
+            phase: "waiting",
+            step: 0,
+            headline: s.name,
+            detail: `from ${s.planner} · about ${moneyText(s.est_low)}–${moneyText(s.est_high)} · expires in ${mins} min`,
+            since: secs(s.created_at),
+            actions: ["approve", "decline"],
+            hash: s.spec_hash,
+        };
+    } else if (s.status === "running") {
+        state = {
+            ...base,
+            phase: "working",
+            step: 1,
+            headline: `${done} of ${total} agents done`,
+            detail:
+                waiting > 0
+                    ? waiting === 1
+                        ? `1 agent is asking ${s.planner} a question`
+                        : `${waiting} agents are asking ${s.planner} questions`
+                    : s.mode === "propose"
+                      ? `${plural(s.changes.total, "change", "changes")} · ${spent}`
+                      : `${spent} spent`,
+            fraction: total > 0 ? ended / total : undefined,
+            compact: `${done}/${total}`,
+            since: secs(s.approved_at),
+            actions: ["stop"],
+        };
+    } else if (s.status === "stopping") {
+        state = { ...base, phase: "working", step: 1, headline: "stopping", detail: `${done} of ${total} agents done · ${spent}`, fraction: total > 0 ? ended / total : undefined, compact: `${done}/${total}`, since: secs(s.approved_at) };
+    } else if (s.mode === "propose" && s.apply_status === "applying") {
+        const all = s.changes.kept;
+        state = { ...base, phase: "working", step: 3, headline: "applying changes", detail: `${s.changes.done} of ${all}`, fraction: all > 0 ? s.changes.done / all : undefined, compact: `${s.changes.done}/${all}`, since: secs(s.finished_at) };
+    } else if (s.mode === "propose" && s.apply_status === "ready" && s.changes.open > 0 && (s.status === "done" || s.status === "stopped" || s.status === "failed")) {
+        const count = s.changes.open - s.changes.clashes;
+        state = {
+            ...base,
+            phase: "waiting",
+            step: 2,
+            headline: `${plural(s.changes.open, "change", "changes")} ready`,
+            detail: s.changes.clashes > 0 ? `${s.changes.clashes} ${s.changes.clashes === 1 ? "looks like a duplicate and is" : "look like duplicates and are"} left out · ${spent}` : `${spent} spent`,
+            since: secs(s.finished_at),
+            actions: count > 0 ? ["check", "apply"] : ["check"],
+            hash: s.spec_hash,
+            count,
+        };
+    } else if (s.mode === "propose" && (s.apply_status === "applied" || s.apply_status === "failed")) {
+        state = {
+            ...base,
+            phase: "done",
+            step: steps.length,
+            headline: `applied ${plural(s.changes.done, "change", "changes")}`,
+            detail: s.changes.failed > 0 ? `${s.changes.failed} failed · ${spent}` : `${spent} spent`,
+            since: secs(s.finished_at),
+            actions: ["open"],
+        };
+    } else if (s.status === "done") {
+        const words = s.reduce?.replace(/\s+/g, " ").trim();
+        state = { ...base, phase: "done", step: steps.length, headline: "done", detail: words ? words : `${done} of ${total} agents done · ${spent}`, since: secs(s.finished_at), actions: ["open"] };
+    } else {
+        const capped = s.error === "error.swarm.over_cap" || s.error === "error.swarm.daily_cap";
+        const headline = expired ? "expired" : s.status === "declined" ? "declined" : capped ? "stopped at its cap" : s.status === "stopped" ? "stopped" : "failed";
+        state = {
+            ...base,
+            phase: "failed",
+            step: expired || s.status === "declined" ? 0 : 1,
+            headline,
+            detail: expired ? swarmReason({ ...s, status: "expired" }) : swarmReason(s),
+            since: secs(s.finished_at ?? s.expires_at),
+            actions: ["open"],
+        };
+    }
+    return { attributes, state: canonicalJob(state) };
+}
+
+// The swarm island ends at once (no lingering card) when nobody approved it.
+export const swarmEndsAtOnce = (s: Pick<SwarmLiveInput, "status" | "expires_at">, now: number) =>
+    s.status === "declined" || s.status === "expired" || (s.status === "awaiting_approval" && s.expires_at !== null && s.expires_at <= now);
 
 // ---- payloads -------------------------------------------------------------------------------------------------------
 

@@ -1,0 +1,2803 @@
+{
+ "_source": "Answers of the real routes, captured by running the server's own handlers over node:sqlite in the shape of deploy/cloudflare/api/test/swarm.test.ts (propose end to end, a read swarm with a board and a failed agent, an agent asking its owner a question). Not edited by hand. 2026-11-15, server at the merge of claude/swarms-app-2.",
+ "plan.propose": {
+  "swarm": "7pleCr03d6yc2Mw2",
+  "name": "tidy emote names",
+  "mode": "propose",
+  "status": "awaiting_approval",
+  "spec_hash": "597e7414c24d697c6748d3bd3050c8bfdddca9a1ab247d904da9ca76f3ff8d57",
+  "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+  "tools": [
+   "seventv.emote"
+  ],
+  "writes": [
+   "seventv.rename"
+  ],
+  "scope": {
+   "set_id": [
+    "01HSETAAAAAAAAAAAAAAAAAAAA"
+   ]
+  },
+  "items": 4,
+  "batch_size": 2,
+  "concurrency": 2,
+  "tasks": {
+   "total": 2,
+   "queued": 2,
+   "running": 0,
+   "waiting": 0,
+   "done": 0,
+   "failed": 0,
+   "cells": [
+    {
+     "idx": 0,
+     "status": "queued",
+     "error": null,
+     "step": null
+    },
+    {
+     "idx": 1,
+     "status": "queued",
+     "error": null,
+     "step": null
+    }
+   ]
+  },
+  "estimate_usd": {
+   "low": 0.0045,
+   "high": 0.0089
+  },
+  "cap_usd": 1,
+  "spent_usd": 0,
+  "created_at": 1800000000000,
+  "approved_at": null,
+  "finished_at": null,
+  "expires_at": 1800003600000,
+  "reduce": null,
+  "error": null,
+  "changes": {
+   "total": 0,
+   "kept": 0,
+   "done": 0,
+   "failed": 0
+  },
+  "apply": {
+   "status": "none",
+   "done": 0,
+   "failed": 0,
+   "total": 0
+  },
+  "spec_preview": {
+   "items_sample": [
+    {
+     "emote_id": "01HEMOTE000000000000000000",
+     "name": "emote_0"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000001",
+     "name": "emote_1"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000002",
+     "name": "emote_2"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000003",
+     "name": "emote_3"
+    }
+   ],
+   "source": null,
+   "output_schema": null,
+   "reduce_prompt": null,
+   "board": null,
+   "prefetch": null,
+   "turns_per_task": 6,
+   "attempts": 2,
+   "stop_after_failed_tasks": 5
+  },
+  "unscoped_writes": [],
+  "approve_url": "https://cobalt.capybaraharmony.com/swarms/7pleCr03d6yc2Mw2",
+  "job": "swarm:7pleCr03d6yc2Mw2",
+  "messages": {
+   "total": 0,
+   "waiting": 0
+  },
+  "planner": "agent key",
+  "score": null
+ },
+ "approve": {
+  "swarm": "7pleCr03d6yc2Mw2",
+  "name": "tidy emote names",
+  "mode": "propose",
+  "status": "running",
+  "spec_hash": "597e7414c24d697c6748d3bd3050c8bfdddca9a1ab247d904da9ca76f3ff8d57",
+  "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+  "tools": [
+   "seventv.emote"
+  ],
+  "writes": [
+   "seventv.rename"
+  ],
+  "scope": {
+   "set_id": [
+    "01HSETAAAAAAAAAAAAAAAAAAAA"
+   ]
+  },
+  "items": 4,
+  "batch_size": 2,
+  "concurrency": 2,
+  "tasks": {
+   "total": 2,
+   "queued": 2,
+   "running": 0,
+   "waiting": 0,
+   "done": 0,
+   "failed": 0,
+   "cells": [
+    {
+     "idx": 0,
+     "status": "queued",
+     "error": null,
+     "step": null
+    },
+    {
+     "idx": 1,
+     "status": "queued",
+     "error": null,
+     "step": null
+    }
+   ]
+  },
+  "estimate_usd": {
+   "low": 0.0045,
+   "high": 0.0089
+  },
+  "cap_usd": 1,
+  "spent_usd": 0,
+  "created_at": 1800000000000,
+  "approved_at": 1800000000000,
+  "finished_at": null,
+  "expires_at": null,
+  "reduce": null,
+  "error": null,
+  "changes": {
+   "total": 0,
+   "kept": 0,
+   "done": 0,
+   "failed": 0
+  },
+  "apply": {
+   "status": "none",
+   "done": 0,
+   "failed": 0,
+   "total": 0
+  },
+  "spec_preview": {
+   "items_sample": [
+    {
+     "emote_id": "01HEMOTE000000000000000000",
+     "name": "emote_0"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000001",
+     "name": "emote_1"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000002",
+     "name": "emote_2"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000003",
+     "name": "emote_3"
+    }
+   ],
+   "source": null,
+   "output_schema": null,
+   "reduce_prompt": null,
+   "board": null,
+   "prefetch": null,
+   "turns_per_task": 6,
+   "attempts": 2,
+   "stop_after_failed_tasks": 5
+  },
+  "unscoped_writes": [],
+  "approve_url": "https://cobalt.capybaraharmony.com/swarms/7pleCr03d6yc2Mw2",
+  "job": "swarm:7pleCr03d6yc2Mw2",
+  "messages": {
+   "total": 0,
+   "waiting": 0
+  },
+  "planner": "agent key",
+  "score": null
+ },
+ "get.running": {
+  "swarm": "7pleCr03d6yc2Mw2",
+  "name": "tidy emote names",
+  "mode": "propose",
+  "status": "running",
+  "spec_hash": "597e7414c24d697c6748d3bd3050c8bfdddca9a1ab247d904da9ca76f3ff8d57",
+  "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+  "tools": [
+   "seventv.emote"
+  ],
+  "writes": [
+   "seventv.rename"
+  ],
+  "scope": {
+   "set_id": [
+    "01HSETAAAAAAAAAAAAAAAAAAAA"
+   ]
+  },
+  "items": 4,
+  "batch_size": 2,
+  "concurrency": 2,
+  "tasks": {
+   "total": 2,
+   "queued": 2,
+   "running": 0,
+   "waiting": 0,
+   "done": 0,
+   "failed": 0,
+   "cells": [
+    {
+     "idx": 0,
+     "status": "queued",
+     "error": null,
+     "step": null
+    },
+    {
+     "idx": 1,
+     "status": "queued",
+     "error": null,
+     "step": null
+    }
+   ]
+  },
+  "estimate_usd": {
+   "low": 0.0045,
+   "high": 0.0089
+  },
+  "cap_usd": 1,
+  "spent_usd": 0,
+  "created_at": 1800000000000,
+  "approved_at": 1800000000000,
+  "finished_at": null,
+  "expires_at": null,
+  "reduce": null,
+  "error": null,
+  "changes": {
+   "total": 0,
+   "kept": 0,
+   "done": 0,
+   "failed": 0
+  },
+  "apply": {
+   "status": "none",
+   "done": 0,
+   "failed": 0,
+   "total": 0
+  },
+  "spec_preview": {
+   "items_sample": [
+    {
+     "emote_id": "01HEMOTE000000000000000000",
+     "name": "emote_0"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000001",
+     "name": "emote_1"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000002",
+     "name": "emote_2"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000003",
+     "name": "emote_3"
+    }
+   ],
+   "source": null,
+   "output_schema": null,
+   "reduce_prompt": null,
+   "board": null,
+   "prefetch": null,
+   "turns_per_task": 6,
+   "attempts": 2,
+   "stop_after_failed_tasks": 5
+  },
+  "unscoped_writes": [],
+  "approve_url": "https://cobalt.capybaraharmony.com/swarms/7pleCr03d6yc2Mw2",
+  "job": "swarm:7pleCr03d6yc2Mw2",
+  "messages": {
+   "total": 0,
+   "waiting": 0
+  },
+  "planner": "agent key",
+  "score": null
+ },
+ "get.propose.ready": {
+  "swarm": "7pleCr03d6yc2Mw2",
+  "name": "tidy emote names",
+  "mode": "propose",
+  "status": "done",
+  "spec_hash": "597e7414c24d697c6748d3bd3050c8bfdddca9a1ab247d904da9ca76f3ff8d57",
+  "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+  "tools": [
+   "seventv.emote"
+  ],
+  "writes": [
+   "seventv.rename"
+  ],
+  "scope": {
+   "set_id": [
+    "01HSETAAAAAAAAAAAAAAAAAAAA"
+   ]
+  },
+  "items": 4,
+  "batch_size": 2,
+  "concurrency": 2,
+  "tasks": {
+   "total": 2,
+   "queued": 0,
+   "running": 0,
+   "waiting": 0,
+   "done": 2,
+   "failed": 0,
+   "cells": [
+    {
+     "idx": 0,
+     "status": "done",
+     "error": null,
+     "step": "done"
+    },
+    {
+     "idx": 1,
+     "status": "done",
+     "error": null,
+     "step": "done"
+    }
+   ]
+  },
+  "estimate_usd": {
+   "low": 0.0045,
+   "high": 0.0089
+  },
+  "cap_usd": 1,
+  "spent_usd": 0.0045,
+  "created_at": 1800000000000,
+  "approved_at": 1800000000000,
+  "finished_at": 1800000000000,
+  "expires_at": null,
+  "reduce": null,
+  "error": null,
+  "changes": {
+   "total": 4,
+   "kept": 4,
+   "done": 0,
+   "failed": 0
+  },
+  "apply": {
+   "status": "ready",
+   "done": 0,
+   "failed": 0,
+   "total": 4
+  },
+  "spec_preview": {
+   "items_sample": [
+    {
+     "emote_id": "01HEMOTE000000000000000000",
+     "name": "emote_0"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000001",
+     "name": "emote_1"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000002",
+     "name": "emote_2"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000003",
+     "name": "emote_3"
+    }
+   ],
+   "source": null,
+   "output_schema": null,
+   "reduce_prompt": null,
+   "board": null,
+   "prefetch": null,
+   "turns_per_task": 6,
+   "attempts": 2,
+   "stop_after_failed_tasks": 5
+  },
+  "unscoped_writes": [],
+  "approve_url": "https://cobalt.capybaraharmony.com/swarms/7pleCr03d6yc2Mw2",
+  "job": "swarm:7pleCr03d6yc2Mw2",
+  "messages": {
+   "total": 0,
+   "waiting": 0
+  },
+  "planner": "agent key",
+  "score": 1
+ },
+ "list": {
+  "swarms": [
+   {
+    "swarm": "7pleCr03d6yc2Mw2",
+    "name": "tidy emote names",
+    "mode": "propose",
+    "status": "done",
+    "spec_hash": "597e7414c24d697c6748d3bd3050c8bfdddca9a1ab247d904da9ca76f3ff8d57",
+    "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+    "tools": [
+     "seventv.emote"
+    ],
+    "writes": [
+     "seventv.rename"
+    ],
+    "scope": {
+     "set_id": [
+      "01HSETAAAAAAAAAAAAAAAAAAAA"
+     ]
+    },
+    "items": 4,
+    "batch_size": 2,
+    "concurrency": 2,
+    "tasks": {
+     "total": 2,
+     "queued": 0,
+     "running": 0,
+     "waiting": 0,
+     "done": 2,
+     "failed": 0,
+     "cells": [
+      {
+       "idx": 0,
+       "status": "done",
+       "error": null,
+       "step": "done"
+      },
+      {
+       "idx": 1,
+       "status": "done",
+       "error": null,
+       "step": "done"
+      }
+     ]
+    },
+    "estimate_usd": {
+     "low": 0.0045,
+     "high": 0.0089
+    },
+    "cap_usd": 1,
+    "spent_usd": 0.0045,
+    "created_at": 1800000000000,
+    "approved_at": 1800000000000,
+    "finished_at": 1800000000000,
+    "expires_at": null,
+    "reduce": null,
+    "error": null,
+    "changes": {
+     "total": 4,
+     "kept": 4,
+     "done": 0,
+     "failed": 0
+    },
+    "apply": {
+     "status": "ready",
+     "done": 0,
+     "failed": 0,
+     "total": 4
+    },
+    "spec_preview": {
+     "items_sample": [
+      {
+       "emote_id": "01HEMOTE000000000000000000",
+       "name": "emote_0"
+      },
+      {
+       "emote_id": "01HEMOTE000000000000000001",
+       "name": "emote_1"
+      },
+      {
+       "emote_id": "01HEMOTE000000000000000002",
+       "name": "emote_2"
+      },
+      {
+       "emote_id": "01HEMOTE000000000000000003",
+       "name": "emote_3"
+      }
+     ],
+     "source": null,
+     "output_schema": null,
+     "reduce_prompt": null,
+     "board": null,
+     "prefetch": null,
+     "turns_per_task": 6,
+     "attempts": 2,
+     "stop_after_failed_tasks": 5
+    },
+    "unscoped_writes": [],
+    "approve_url": "https://cobalt.capybaraharmony.com/swarms/7pleCr03d6yc2Mw2",
+    "job": "swarm:7pleCr03d6yc2Mw2",
+    "messages": {
+     "total": 0,
+     "waiting": 0
+    },
+    "planner": "agent key",
+    "score": 1
+   }
+  ]
+ },
+ "results.propose": {
+  "results": [
+   {
+    "task": 0,
+    "status": "done",
+    "result": {
+     "changes": 2
+    },
+    "error": null,
+    "usd": 0.003,
+    "items": [
+     {
+      "emote_id": "01HEMOTE000000000000000000",
+      "name": "emote_0"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000001",
+      "name": "emote_1"
+     }
+    ],
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 2,
+     "tool_calls": 1,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 2,
+     "usd": 0.003,
+     "ms": 0,
+     "score": 1
+    }
+   },
+   {
+    "task": 1,
+    "status": "done",
+    "result": {
+     "changes": 2
+    },
+    "error": null,
+    "usd": 0.0015,
+    "items": [
+     {
+      "emote_id": "01HEMOTE000000000000000002",
+      "name": "emote_2"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000003",
+      "name": "emote_3"
+     }
+    ],
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 2,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 1,
+     "usd": 0.0015,
+     "ms": 0,
+     "score": 1
+    }
+   }
+  ],
+  "total": 2,
+  "offset": 0
+ },
+ "changes": {
+  "changes": [
+   {
+    "n": 3,
+    "task": 0,
+    "op": "seventv.rename",
+    "args": {
+     "set_id": "01HSETAAAAAAAAAAAAAAAAAAAA",
+     "emote_id": "01HEMOTE000000000000000000",
+     "alias": "Cat"
+    },
+    "target": "emote_0",
+    "before": "emote_0",
+    "after": "Cat",
+    "edit_arg": "alias",
+    "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000000/2x.webp",
+    "keep": true,
+    "status": "proposed",
+    "error": null,
+    "clash": "duplicate name: also proposed by #1"
+   },
+   {
+    "n": 4,
+    "task": 0,
+    "op": "seventv.rename",
+    "args": {
+     "set_id": "01HSETAAAAAAAAAAAAAAAAAAAA",
+     "emote_id": "01HEMOTE000000000000000001",
+     "alias": "dog"
+    },
+    "target": "emote_1",
+    "before": "emote_1",
+    "after": "dog",
+    "edit_arg": "alias",
+    "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000001/2x.webp",
+    "keep": true,
+    "status": "proposed",
+    "error": null,
+    "clash": null
+   },
+   {
+    "n": 1,
+    "task": 1,
+    "op": "seventv.rename",
+    "args": {
+     "set_id": "01HSETAAAAAAAAAAAAAAAAAAAA",
+     "emote_id": "01HEMOTE000000000000000002",
+     "alias": "cat"
+    },
+    "target": "emote_2",
+    "before": "emote_2",
+    "after": "cat",
+    "edit_arg": "alias",
+    "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000002/2x.webp",
+    "keep": true,
+    "status": "proposed",
+    "error": null,
+    "clash": "duplicate name: also proposed by #3"
+   },
+   {
+    "n": 2,
+    "task": 1,
+    "op": "seventv.rename",
+    "args": {
+     "set_id": "01HSETAAAAAAAAAAAAAAAAAAAA",
+     "emote_id": "01HEMOTE000000000000000003",
+     "alias": "Bird"
+    },
+    "target": "emote_3",
+    "before": "emote_3",
+    "after": "Bird",
+    "edit_arg": "alias",
+    "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000003/2x.webp",
+    "keep": true,
+    "status": "proposed",
+    "error": null,
+    "clash": null
+   }
+  ],
+  "total": 4,
+  "offset": 0
+ },
+ "agent.propose": {
+  "swarm": "7pleCr03d6yc2Mw2",
+  "agent": 1,
+  "status": "done",
+  "items": [
+   {
+    "emote_id": "01HEMOTE000000000000000000",
+    "name": "emote_0"
+   },
+   {
+    "emote_id": "01HEMOTE000000000000000001",
+    "name": "emote_1"
+   }
+  ],
+  "attempts": 1,
+  "in_tokens": 20000,
+  "out_tokens": 2000,
+  "usd": 0.003,
+  "started_at": 1800000000000,
+  "ended_at": 1800000000000,
+  "error": null,
+  "result": {
+   "changes": 2
+  },
+  "steps": [
+   {
+    "at": 1800000000000,
+    "text": "started"
+   },
+   {
+    "at": 1800000000000,
+    "text": "read seventv.emote"
+   },
+   {
+    "at": 1800000000000,
+    "text": "proposed 2 changes"
+   },
+   {
+    "at": 1800000000000,
+    "text": "done"
+   }
+  ],
+  "messages": [],
+  "changes": [
+   {
+    "n": 3,
+    "task": 0,
+    "op": "seventv.rename",
+    "args": {
+     "set_id": "01HSETAAAAAAAAAAAAAAAAAAAA",
+     "emote_id": "01HEMOTE000000000000000000",
+     "alias": "Cat"
+    },
+    "target": "emote_0",
+    "before": "emote_0",
+    "after": "Cat",
+    "edit_arg": "alias",
+    "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000000/2x.webp",
+    "keep": true,
+    "status": "proposed",
+    "error": null,
+    "clash": "duplicate name: also proposed by #1"
+   },
+   {
+    "n": 4,
+    "task": 0,
+    "op": "seventv.rename",
+    "args": {
+     "set_id": "01HSETAAAAAAAAAAAAAAAAAAAA",
+     "emote_id": "01HEMOTE000000000000000001",
+     "alias": "dog"
+    },
+    "target": "emote_1",
+    "before": "emote_1",
+    "after": "dog",
+    "edit_arg": "alias",
+    "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000001/2x.webp",
+    "keep": true,
+    "status": "proposed",
+    "error": null,
+    "clash": null
+   }
+  ]
+ },
+ "board.propose": {
+  "swarm": {
+   "swarm": "7pleCr03d6yc2Mw2",
+   "name": "tidy emote names",
+   "mode": "propose",
+   "status": "done",
+   "spec_hash": "597e7414c24d697c6748d3bd3050c8bfdddca9a1ab247d904da9ca76f3ff8d57",
+   "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+   "tools": [
+    "seventv.emote"
+   ],
+   "writes": [
+    "seventv.rename"
+   ],
+   "scope": {
+    "set_id": [
+     "01HSETAAAAAAAAAAAAAAAAAAAA"
+    ]
+   },
+   "items": 4,
+   "batch_size": 2,
+   "concurrency": 2,
+   "tasks": {
+    "total": 2,
+    "queued": 0,
+    "running": 0,
+    "waiting": 0,
+    "done": 2,
+    "failed": 0,
+    "cells": [
+     {
+      "idx": 0,
+      "status": "done",
+      "error": null,
+      "step": "done"
+     },
+     {
+      "idx": 1,
+      "status": "done",
+      "error": null,
+      "step": "done"
+     }
+    ]
+   },
+   "estimate_usd": {
+    "low": 0.0045,
+    "high": 0.0089
+   },
+   "cap_usd": 1,
+   "spent_usd": 0.0045,
+   "created_at": 1800000000000,
+   "approved_at": 1800000000000,
+   "finished_at": 1800000000000,
+   "expires_at": null,
+   "reduce": null,
+   "error": null,
+   "changes": {
+    "total": 4,
+    "kept": 4,
+    "done": 0,
+    "failed": 0
+   },
+   "apply": {
+    "status": "ready",
+    "done": 0,
+    "failed": 0,
+    "total": 4
+   },
+   "spec_preview": {
+    "items_sample": [
+     {
+      "emote_id": "01HEMOTE000000000000000000",
+      "name": "emote_0"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000001",
+      "name": "emote_1"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000002",
+      "name": "emote_2"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000003",
+      "name": "emote_3"
+     }
+    ],
+    "source": null,
+    "output_schema": null,
+    "reduce_prompt": null,
+    "board": null,
+    "prefetch": null,
+    "turns_per_task": 6,
+    "attempts": 2,
+    "stop_after_failed_tasks": 5
+   },
+   "unscoped_writes": [],
+   "approve_url": "https://cobalt.capybaraharmony.com/swarms/7pleCr03d6yc2Mw2",
+   "job": "swarm:7pleCr03d6yc2Mw2",
+   "messages": {
+    "total": 0,
+    "waiting": 0
+   },
+   "planner": "agent key",
+   "score": 1
+  },
+  "total": 4,
+  "offset": 0,
+  "groups": [
+   {
+    "value": "seventv.rename",
+    "count": 4
+   }
+  ],
+  "rows": [
+   {
+    "agent": 1,
+    "n": 1,
+    "title": "Cat",
+    "score": null,
+    "group": "seventv.rename",
+    "fields": {
+     "op": "seventv.rename",
+     "target": "emote_0",
+     "before": "emote_0",
+     "after": "Cat",
+     "status": "proposed",
+     "keep": true,
+     "clash": "duplicate name: also proposed by #1"
+    },
+    "links": [],
+    "media": [
+     {
+      "ref": "https://cdn.7tv.app/emote/01HEMOTE000000000000000000/2x.webp",
+      "kind": "emote",
+      "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000000/2x.webp",
+      "open_url": "https://7tv.app/emotes/01HEMOTE000000000000000000"
+     }
+    ]
+   },
+   {
+    "agent": 1,
+    "n": 2,
+    "title": "dog",
+    "score": null,
+    "group": "seventv.rename",
+    "fields": {
+     "op": "seventv.rename",
+     "target": "emote_1",
+     "before": "emote_1",
+     "after": "dog",
+     "status": "proposed",
+     "keep": true
+    },
+    "links": [],
+    "media": [
+     {
+      "ref": "https://cdn.7tv.app/emote/01HEMOTE000000000000000001/2x.webp",
+      "kind": "emote",
+      "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000001/2x.webp",
+      "open_url": "https://7tv.app/emotes/01HEMOTE000000000000000001"
+     }
+    ]
+   },
+   {
+    "agent": 2,
+    "n": 1,
+    "title": "cat",
+    "score": null,
+    "group": "seventv.rename",
+    "fields": {
+     "op": "seventv.rename",
+     "target": "emote_2",
+     "before": "emote_2",
+     "after": "cat",
+     "status": "proposed",
+     "keep": true,
+     "clash": "duplicate name: also proposed by #3"
+    },
+    "links": [],
+    "media": [
+     {
+      "ref": "https://cdn.7tv.app/emote/01HEMOTE000000000000000002/2x.webp",
+      "kind": "emote",
+      "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000002/2x.webp",
+      "open_url": "https://7tv.app/emotes/01HEMOTE000000000000000002"
+     }
+    ]
+   },
+   {
+    "agent": 2,
+    "n": 2,
+    "title": "Bird",
+    "score": null,
+    "group": "seventv.rename",
+    "fields": {
+     "op": "seventv.rename",
+     "target": "emote_3",
+     "before": "emote_3",
+     "after": "Bird",
+     "status": "proposed",
+     "keep": true
+    },
+    "links": [],
+    "media": [
+     {
+      "ref": "https://cdn.7tv.app/emote/01HEMOTE000000000000000003/2x.webp",
+      "kind": "emote",
+      "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000003/2x.webp",
+      "open_url": "https://7tv.app/emotes/01HEMOTE000000000000000003"
+     }
+    ]
+   }
+  ],
+  "agents": [
+   {
+    "agent": 1,
+    "status": "done",
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 2,
+     "tool_calls": 1,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 2,
+     "usd": 0.003,
+     "ms": 0,
+     "score": 1
+    },
+    "error": null
+   },
+   {
+    "agent": 2,
+    "status": "done",
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 2,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 1,
+     "usd": 0.0015,
+     "ms": 0,
+     "score": 1
+    },
+    "error": null
+   }
+  ]
+ },
+ "board.propose.q": {
+  "swarm": {
+   "swarm": "7pleCr03d6yc2Mw2",
+   "name": "tidy emote names",
+   "mode": "propose",
+   "status": "done",
+   "spec_hash": "597e7414c24d697c6748d3bd3050c8bfdddca9a1ab247d904da9ca76f3ff8d57",
+   "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+   "tools": [
+    "seventv.emote"
+   ],
+   "writes": [
+    "seventv.rename"
+   ],
+   "scope": {
+    "set_id": [
+     "01HSETAAAAAAAAAAAAAAAAAAAA"
+    ]
+   },
+   "items": 4,
+   "batch_size": 2,
+   "concurrency": 2,
+   "tasks": {
+    "total": 2,
+    "queued": 0,
+    "running": 0,
+    "waiting": 0,
+    "done": 2,
+    "failed": 0,
+    "cells": [
+     {
+      "idx": 0,
+      "status": "done",
+      "error": null,
+      "step": "done"
+     },
+     {
+      "idx": 1,
+      "status": "done",
+      "error": null,
+      "step": "done"
+     }
+    ]
+   },
+   "estimate_usd": {
+    "low": 0.0045,
+    "high": 0.0089
+   },
+   "cap_usd": 1,
+   "spent_usd": 0.0045,
+   "created_at": 1800000000000,
+   "approved_at": 1800000000000,
+   "finished_at": 1800000000000,
+   "expires_at": null,
+   "reduce": null,
+   "error": null,
+   "changes": {
+    "total": 4,
+    "kept": 4,
+    "done": 0,
+    "failed": 0
+   },
+   "apply": {
+    "status": "ready",
+    "done": 0,
+    "failed": 0,
+    "total": 4
+   },
+   "spec_preview": {
+    "items_sample": [
+     {
+      "emote_id": "01HEMOTE000000000000000000",
+      "name": "emote_0"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000001",
+      "name": "emote_1"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000002",
+      "name": "emote_2"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000003",
+      "name": "emote_3"
+     }
+    ],
+    "source": null,
+    "output_schema": null,
+    "reduce_prompt": null,
+    "board": null,
+    "prefetch": null,
+    "turns_per_task": 6,
+    "attempts": 2,
+    "stop_after_failed_tasks": 5
+   },
+   "unscoped_writes": [],
+   "approve_url": "https://cobalt.capybaraharmony.com/swarms/7pleCr03d6yc2Mw2",
+   "job": "swarm:7pleCr03d6yc2Mw2",
+   "messages": {
+    "total": 0,
+    "waiting": 0
+   },
+   "planner": "agent key",
+   "score": 1
+  },
+  "total": 2,
+  "offset": 0,
+  "groups": [
+   {
+    "value": "seventv.rename",
+    "count": 2
+   }
+  ],
+  "rows": [
+   {
+    "agent": 2,
+    "n": 1,
+    "title": "cat",
+    "score": null,
+    "group": "seventv.rename",
+    "fields": {
+     "op": "seventv.rename",
+     "target": "emote_2",
+     "before": "emote_2",
+     "after": "cat",
+     "status": "proposed",
+     "keep": true,
+     "clash": "duplicate name: also proposed by #3"
+    },
+    "links": [],
+    "media": [
+     {
+      "ref": "https://cdn.7tv.app/emote/01HEMOTE000000000000000002/2x.webp",
+      "kind": "emote",
+      "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000002/2x.webp",
+      "open_url": "https://7tv.app/emotes/01HEMOTE000000000000000002"
+     }
+    ]
+   },
+   {
+    "agent": 1,
+    "n": 1,
+    "title": "Cat",
+    "score": null,
+    "group": "seventv.rename",
+    "fields": {
+     "op": "seventv.rename",
+     "target": "emote_0",
+     "before": "emote_0",
+     "after": "Cat",
+     "status": "proposed",
+     "keep": true,
+     "clash": "duplicate name: also proposed by #1"
+    },
+    "links": [],
+    "media": [
+     {
+      "ref": "https://cdn.7tv.app/emote/01HEMOTE000000000000000000/2x.webp",
+      "kind": "emote",
+      "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000000/2x.webp",
+      "open_url": "https://7tv.app/emotes/01HEMOTE000000000000000000"
+     }
+    ]
+   }
+  ],
+  "agents": [
+   {
+    "agent": 1,
+    "status": "done",
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 2,
+     "tool_calls": 1,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 2,
+     "usd": 0.003,
+     "ms": 0,
+     "score": 1
+    },
+    "error": null
+   },
+   {
+    "agent": 2,
+    "status": "done",
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 2,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 1,
+     "usd": 0.0015,
+     "ms": 0,
+     "score": 1
+    },
+    "error": null
+   }
+  ]
+ },
+ "decided": {
+  "swarm": {
+   "swarm": "7pleCr03d6yc2Mw2",
+   "name": "tidy emote names",
+   "mode": "propose",
+   "status": "done",
+   "spec_hash": "597e7414c24d697c6748d3bd3050c8bfdddca9a1ab247d904da9ca76f3ff8d57",
+   "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+   "tools": [
+    "seventv.emote"
+   ],
+   "writes": [
+    "seventv.rename"
+   ],
+   "scope": {
+    "set_id": [
+     "01HSETAAAAAAAAAAAAAAAAAAAA"
+    ]
+   },
+   "items": 4,
+   "batch_size": 2,
+   "concurrency": 2,
+   "tasks": {
+    "total": 2,
+    "queued": 0,
+    "running": 0,
+    "waiting": 0,
+    "done": 2,
+    "failed": 0,
+    "cells": [
+     {
+      "idx": 0,
+      "status": "done",
+      "error": null,
+      "step": "done"
+     },
+     {
+      "idx": 1,
+      "status": "done",
+      "error": null,
+      "step": "done"
+     }
+    ]
+   },
+   "estimate_usd": {
+    "low": 0.0045,
+    "high": 0.0089
+   },
+   "cap_usd": 1,
+   "spent_usd": 0.0045,
+   "created_at": 1800000000000,
+   "approved_at": 1800000000000,
+   "finished_at": 1800000000000,
+   "expires_at": null,
+   "reduce": null,
+   "error": null,
+   "changes": {
+    "total": 4,
+    "kept": 3,
+    "done": 0,
+    "failed": 0
+   },
+   "apply": {
+    "status": "ready",
+    "done": 0,
+    "failed": 0,
+    "total": 3
+   },
+   "spec_preview": {
+    "items_sample": [
+     {
+      "emote_id": "01HEMOTE000000000000000000",
+      "name": "emote_0"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000001",
+      "name": "emote_1"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000002",
+      "name": "emote_2"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000003",
+      "name": "emote_3"
+     }
+    ],
+    "source": null,
+    "output_schema": null,
+    "reduce_prompt": null,
+    "board": null,
+    "prefetch": null,
+    "turns_per_task": 6,
+    "attempts": 2,
+    "stop_after_failed_tasks": 5
+   },
+   "unscoped_writes": [],
+   "approve_url": "https://cobalt.capybaraharmony.com/swarms/7pleCr03d6yc2Mw2",
+   "job": "swarm:7pleCr03d6yc2Mw2",
+   "messages": {
+    "total": 0,
+    "waiting": 0
+   },
+   "planner": "agent key",
+   "score": 1
+  },
+  "changes": [
+   {
+    "n": 4,
+    "task": 0,
+    "op": "seventv.rename",
+    "args": {
+     "set_id": "01HSETAAAAAAAAAAAAAAAAAAAA",
+     "emote_id": "01HEMOTE000000000000000001",
+     "alias": "dog"
+    },
+    "target": "emote_1",
+    "before": "emote_1",
+    "after": "dog",
+    "edit_arg": "alias",
+    "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000001/2x.webp",
+    "keep": false,
+    "status": "proposed",
+    "error": null,
+    "clash": null
+   },
+   {
+    "n": 1,
+    "task": 1,
+    "op": "seventv.rename",
+    "args": {
+     "set_id": "01HSETAAAAAAAAAAAAAAAAAAAA",
+     "emote_id": "01HEMOTE000000000000000002",
+     "alias": "kitty"
+    },
+    "target": "emote_2",
+    "before": "emote_2",
+    "after": "kitty",
+    "edit_arg": "alias",
+    "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000002/2x.webp",
+    "keep": true,
+    "status": "proposed",
+    "error": null,
+    "clash": null
+   }
+  ]
+ },
+ "apply": {
+  "swarm": "7pleCr03d6yc2Mw2",
+  "name": "tidy emote names",
+  "mode": "propose",
+  "status": "done",
+  "spec_hash": "597e7414c24d697c6748d3bd3050c8bfdddca9a1ab247d904da9ca76f3ff8d57",
+  "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+  "tools": [
+   "seventv.emote"
+  ],
+  "writes": [
+   "seventv.rename"
+  ],
+  "scope": {
+   "set_id": [
+    "01HSETAAAAAAAAAAAAAAAAAAAA"
+   ]
+  },
+  "items": 4,
+  "batch_size": 2,
+  "concurrency": 2,
+  "tasks": {
+   "total": 2,
+   "queued": 0,
+   "running": 0,
+   "waiting": 0,
+   "done": 2,
+   "failed": 0,
+   "cells": [
+    {
+     "idx": 0,
+     "status": "done",
+     "error": null,
+     "step": "done"
+    },
+    {
+     "idx": 1,
+     "status": "done",
+     "error": null,
+     "step": "done"
+    }
+   ]
+  },
+  "estimate_usd": {
+   "low": 0.0045,
+   "high": 0.0089
+  },
+  "cap_usd": 1,
+  "spent_usd": 0.0045,
+  "created_at": 1800000000000,
+  "approved_at": 1800000000000,
+  "finished_at": 1800000000000,
+  "expires_at": null,
+  "reduce": null,
+  "error": null,
+  "changes": {
+   "total": 4,
+   "kept": 3,
+   "done": 0,
+   "failed": 0
+  },
+  "apply": {
+   "status": "applying",
+   "done": 0,
+   "failed": 0,
+   "total": 3
+  },
+  "spec_preview": {
+   "items_sample": [
+    {
+     "emote_id": "01HEMOTE000000000000000000",
+     "name": "emote_0"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000001",
+     "name": "emote_1"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000002",
+     "name": "emote_2"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000003",
+     "name": "emote_3"
+    }
+   ],
+   "source": null,
+   "output_schema": null,
+   "reduce_prompt": null,
+   "board": null,
+   "prefetch": null,
+   "turns_per_task": 6,
+   "attempts": 2,
+   "stop_after_failed_tasks": 5
+  },
+  "unscoped_writes": [],
+  "approve_url": "https://cobalt.capybaraharmony.com/swarms/7pleCr03d6yc2Mw2",
+  "job": "swarm:7pleCr03d6yc2Mw2",
+  "messages": {
+   "total": 0,
+   "waiting": 0
+  },
+  "planner": "agent key",
+  "score": 1
+ },
+ "get.propose.applied": {
+  "swarm": "7pleCr03d6yc2Mw2",
+  "name": "tidy emote names",
+  "mode": "propose",
+  "status": "done",
+  "spec_hash": "597e7414c24d697c6748d3bd3050c8bfdddca9a1ab247d904da9ca76f3ff8d57",
+  "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+  "tools": [
+   "seventv.emote"
+  ],
+  "writes": [
+   "seventv.rename"
+  ],
+  "scope": {
+   "set_id": [
+    "01HSETAAAAAAAAAAAAAAAAAAAA"
+   ]
+  },
+  "items": 4,
+  "batch_size": 2,
+  "concurrency": 2,
+  "tasks": {
+   "total": 2,
+   "queued": 0,
+   "running": 0,
+   "waiting": 0,
+   "done": 2,
+   "failed": 0,
+   "cells": [
+    {
+     "idx": 0,
+     "status": "done",
+     "error": null,
+     "step": "done"
+    },
+    {
+     "idx": 1,
+     "status": "done",
+     "error": null,
+     "step": "done"
+    }
+   ]
+  },
+  "estimate_usd": {
+   "low": 0.0045,
+   "high": 0.0089
+  },
+  "cap_usd": 1,
+  "spent_usd": 0.0045,
+  "created_at": 1800000000000,
+  "approved_at": 1800000000000,
+  "finished_at": 1800000000000,
+  "expires_at": null,
+  "reduce": null,
+  "error": null,
+  "changes": {
+   "total": 4,
+   "kept": 3,
+   "done": 3,
+   "failed": 0
+  },
+  "apply": {
+   "status": "applied",
+   "done": 3,
+   "failed": 0,
+   "total": 3
+  },
+  "spec_preview": {
+   "items_sample": [
+    {
+     "emote_id": "01HEMOTE000000000000000000",
+     "name": "emote_0"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000001",
+     "name": "emote_1"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000002",
+     "name": "emote_2"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000003",
+     "name": "emote_3"
+    }
+   ],
+   "source": null,
+   "output_schema": null,
+   "reduce_prompt": null,
+   "board": null,
+   "prefetch": null,
+   "turns_per_task": 6,
+   "attempts": 2,
+   "stop_after_failed_tasks": 5
+  },
+  "unscoped_writes": [],
+  "approve_url": "https://cobalt.capybaraharmony.com/swarms/7pleCr03d6yc2Mw2",
+  "job": "swarm:7pleCr03d6yc2Mw2",
+  "messages": {
+   "total": 0,
+   "waiting": 0
+  },
+  "planner": "agent key",
+  "score": 1
+ },
+ "plan.read": {
+  "swarm": "DpFN1pQbupaxi8j9",
+  "name": "tidy emote names",
+  "mode": "read",
+  "status": "awaiting_approval",
+  "spec_hash": "183a45cac1f24162d56c3030eafcf377330da8e13c2d026b904acd49eb0d5a5c",
+  "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+  "tools": [
+   "seventv.emote"
+  ],
+  "writes": [],
+  "scope": {},
+  "items": 4,
+  "batch_size": 2,
+  "concurrency": 3,
+  "tasks": {
+   "total": 2,
+   "queued": 2,
+   "running": 0,
+   "waiting": 0,
+   "done": 0,
+   "failed": 0,
+   "cells": [
+    {
+     "idx": 0,
+     "status": "queued",
+     "error": null,
+     "step": null
+    },
+    {
+     "idx": 1,
+     "status": "queued",
+     "error": null,
+     "step": null
+    }
+   ]
+  },
+  "estimate_usd": {
+   "low": 0.0043,
+   "high": 0.0087
+  },
+  "cap_usd": 1,
+  "spent_usd": 0,
+  "created_at": 1800000002000,
+  "approved_at": null,
+  "finished_at": null,
+  "expires_at": 1800003602000,
+  "reduce": null,
+  "error": null,
+  "changes": null,
+  "apply": {
+   "status": "none",
+   "done": 0,
+   "failed": 0,
+   "total": 0
+  },
+  "spec_preview": {
+   "items_sample": [
+    {
+     "emote_id": "01HEMOTE000000000000000000",
+     "name": "emote_0"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000001",
+     "name": "emote_1"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000002",
+     "name": "emote_2"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000003",
+     "name": "emote_3"
+    }
+   ],
+   "source": null,
+   "output_schema": null,
+   "reduce_prompt": null,
+   "board": null,
+   "prefetch": null,
+   "turns_per_task": 6,
+   "attempts": 1,
+   "stop_after_failed_tasks": 5
+  },
+  "unscoped_writes": [],
+  "approve_url": "https://cobalt.capybaraharmony.com/swarms/DpFN1pQbupaxi8j9",
+  "job": "swarm:DpFN1pQbupaxi8j9",
+  "messages": {
+   "total": 0,
+   "waiting": 0
+  },
+  "planner": "agent key",
+  "score": null
+ },
+ "get.read.done": {
+  "swarm": "DpFN1pQbupaxi8j9",
+  "name": "tidy emote names",
+  "mode": "read",
+  "status": "done",
+  "spec_hash": "183a45cac1f24162d56c3030eafcf377330da8e13c2d026b904acd49eb0d5a5c",
+  "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+  "tools": [
+   "seventv.emote"
+  ],
+  "writes": [],
+  "scope": {},
+  "items": 4,
+  "batch_size": 2,
+  "concurrency": 3,
+  "tasks": {
+   "total": 2,
+   "queued": 0,
+   "running": 0,
+   "waiting": 0,
+   "done": 1,
+   "failed": 1,
+   "cells": [
+    {
+     "idx": 0,
+     "status": "done",
+     "error": null,
+     "step": "done"
+    },
+    {
+     "idx": 1,
+     "status": "failed",
+     "error": "error.swarm.bad_answer: it is not JSON",
+     "step": "failed: error.swarm.bad_answer: it is not JSON"
+    }
+   ]
+  },
+  "estimate_usd": {
+   "low": 0.0043,
+   "high": 0.0087
+  },
+  "cap_usd": 1,
+  "spent_usd": 0.0045,
+  "created_at": 1800000002000,
+  "approved_at": 1800000002000,
+  "finished_at": 1800000002000,
+  "expires_at": null,
+  "reduce": null,
+  "error": null,
+  "changes": null,
+  "apply": {
+   "status": "none",
+   "done": 0,
+   "failed": 0,
+   "total": 0
+  },
+  "spec_preview": {
+   "items_sample": [
+    {
+     "emote_id": "01HEMOTE000000000000000000",
+     "name": "emote_0"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000001",
+     "name": "emote_1"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000002",
+     "name": "emote_2"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000003",
+     "name": "emote_3"
+    }
+   ],
+   "source": null,
+   "output_schema": null,
+   "reduce_prompt": null,
+   "board": null,
+   "prefetch": null,
+   "turns_per_task": 6,
+   "attempts": 1,
+   "stop_after_failed_tasks": 5
+  },
+  "unscoped_writes": [],
+  "approve_url": "https://cobalt.capybaraharmony.com/swarms/DpFN1pQbupaxi8j9",
+  "job": "swarm:DpFN1pQbupaxi8j9",
+  "messages": {
+   "total": 0,
+   "waiting": 0
+  },
+  "planner": "agent key",
+  "score": 0.5
+ },
+ "results.read": {
+  "results": [
+   {
+    "task": 0,
+    "status": "done",
+    "result": {
+     "matches": [
+      {
+       "name": "emote_0",
+       "emote_id": "01HEMOTE000000000000000000",
+       "confidence": "high",
+       "group": "cats",
+       "note": "a cat",
+       "seen_on": "https://7tv.app/emotes/01HEMOTE000000000000000000"
+      },
+      {
+       "name": "emote_1",
+       "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000001/2x.webp",
+       "score": 0.5,
+       "group": "dogs",
+       "link": "https://example.com/x",
+       "count": 3,
+       "flag": true,
+       "nothing": null
+      }
+     ]
+    },
+    "error": null,
+    "usd": 0.0015,
+    "items": [
+     {
+      "emote_id": "01HEMOTE000000000000000000",
+      "name": "emote_0"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000001",
+      "name": "emote_1"
+     }
+    ],
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 2,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 1,
+     "usd": 0.0015,
+     "ms": 0,
+     "score": 1
+    }
+   },
+   {
+    "task": 1,
+    "status": "failed",
+    "result": null,
+    "error": "error.swarm.bad_answer: it is not JSON",
+    "usd": 0.003,
+    "items": [
+     {
+      "emote_id": "01HEMOTE000000000000000002",
+      "name": "emote_2"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000003",
+      "name": "emote_3"
+     }
+    ],
+    "outcome": {
+     "status": "failed",
+     "items": 2,
+     "answered": 0,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 2,
+     "usd": 0.003,
+     "ms": 0,
+     "score": 0
+    }
+   }
+  ],
+  "total": 2,
+  "offset": 0
+ },
+ "board.read": {
+  "swarm": {
+   "swarm": "DpFN1pQbupaxi8j9",
+   "name": "tidy emote names",
+   "mode": "read",
+   "status": "done",
+   "spec_hash": "183a45cac1f24162d56c3030eafcf377330da8e13c2d026b904acd49eb0d5a5c",
+   "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+   "tools": [
+    "seventv.emote"
+   ],
+   "writes": [],
+   "scope": {},
+   "items": 4,
+   "batch_size": 2,
+   "concurrency": 3,
+   "tasks": {
+    "total": 2,
+    "queued": 0,
+    "running": 0,
+    "waiting": 0,
+    "done": 1,
+    "failed": 1,
+    "cells": [
+     {
+      "idx": 0,
+      "status": "done",
+      "error": null,
+      "step": "done"
+     },
+     {
+      "idx": 1,
+      "status": "failed",
+      "error": "error.swarm.bad_answer: it is not JSON",
+      "step": "failed: error.swarm.bad_answer: it is not JSON"
+     }
+    ]
+   },
+   "estimate_usd": {
+    "low": 0.0043,
+    "high": 0.0087
+   },
+   "cap_usd": 1,
+   "spent_usd": 0.0045,
+   "created_at": 1800000002000,
+   "approved_at": 1800000002000,
+   "finished_at": 1800000002000,
+   "expires_at": null,
+   "reduce": null,
+   "error": null,
+   "changes": null,
+   "apply": {
+    "status": "none",
+    "done": 0,
+    "failed": 0,
+    "total": 0
+   },
+   "spec_preview": {
+    "items_sample": [
+     {
+      "emote_id": "01HEMOTE000000000000000000",
+      "name": "emote_0"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000001",
+      "name": "emote_1"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000002",
+      "name": "emote_2"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000003",
+      "name": "emote_3"
+     }
+    ],
+    "source": null,
+    "output_schema": null,
+    "reduce_prompt": null,
+    "board": null,
+    "prefetch": null,
+    "turns_per_task": 6,
+    "attempts": 1,
+    "stop_after_failed_tasks": 5
+   },
+   "unscoped_writes": [],
+   "approve_url": "https://cobalt.capybaraharmony.com/swarms/DpFN1pQbupaxi8j9",
+   "job": "swarm:DpFN1pQbupaxi8j9",
+   "messages": {
+    "total": 0,
+    "waiting": 0
+   },
+   "planner": "agent key",
+   "score": 0.5
+  },
+  "total": 3,
+  "offset": 0,
+  "groups": [
+   {
+    "value": "cats",
+    "count": 1
+   },
+   {
+    "value": "dogs",
+    "count": 1
+   }
+  ],
+  "rows": [
+   {
+    "agent": 1,
+    "n": 1,
+    "title": "emote_0",
+    "score": 0.9,
+    "group": "cats",
+    "fields": {
+     "note": "a cat",
+     "seen_on": "https://7tv.app/emotes/01HEMOTE000000000000000000"
+    },
+    "links": [
+     "https://7tv.app/emotes/01HEMOTE000000000000000000"
+    ],
+    "media": [
+     {
+      "ref": "01HEMOTE000000000000000000",
+      "kind": "emote",
+      "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000000/2x.webp",
+      "open_url": "https://7tv.app/emotes/01HEMOTE000000000000000000"
+     }
+    ]
+   },
+   {
+    "agent": 1,
+    "n": 2,
+    "title": "emote_1",
+    "score": 0.5,
+    "group": "dogs",
+    "fields": {
+     "link": "https://example.com/x",
+     "count": 3,
+     "flag": true,
+     "nothing": null
+    },
+    "links": [
+     "https://example.com/x"
+    ],
+    "media": [
+     {
+      "ref": "https://cdn.7tv.app/emote/01HEMOTE000000000000000001/2x.webp",
+      "kind": "emote",
+      "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000001/2x.webp",
+      "open_url": "https://7tv.app/emotes/01HEMOTE000000000000000001"
+     }
+    ]
+   },
+   {
+    "agent": 2,
+    "n": 1,
+    "title": "agent 2 failed: error.swarm.bad_answer: it is not JSON",
+    "score": null,
+    "group": null,
+    "fields": {
+     "items": "emote_2, emote_3"
+    },
+    "links": [],
+    "media": []
+   }
+  ],
+  "agents": [
+   {
+    "agent": 1,
+    "status": "done",
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 2,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 1,
+     "usd": 0.0015,
+     "ms": 0,
+     "score": 1
+    },
+    "error": null
+   },
+   {
+    "agent": 2,
+    "status": "failed",
+    "outcome": {
+     "status": "failed",
+     "items": 2,
+     "answered": 0,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 2,
+     "usd": 0.003,
+     "ms": 0,
+     "score": 0
+    },
+    "error": "error.swarm.bad_answer: it is not JSON"
+   }
+  ]
+ },
+ "board.read.group": {
+  "swarm": {
+   "swarm": "DpFN1pQbupaxi8j9",
+   "name": "tidy emote names",
+   "mode": "read",
+   "status": "done",
+   "spec_hash": "183a45cac1f24162d56c3030eafcf377330da8e13c2d026b904acd49eb0d5a5c",
+   "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+   "tools": [
+    "seventv.emote"
+   ],
+   "writes": [],
+   "scope": {},
+   "items": 4,
+   "batch_size": 2,
+   "concurrency": 3,
+   "tasks": {
+    "total": 2,
+    "queued": 0,
+    "running": 0,
+    "waiting": 0,
+    "done": 1,
+    "failed": 1,
+    "cells": [
+     {
+      "idx": 0,
+      "status": "done",
+      "error": null,
+      "step": "done"
+     },
+     {
+      "idx": 1,
+      "status": "failed",
+      "error": "error.swarm.bad_answer: it is not JSON",
+      "step": "failed: error.swarm.bad_answer: it is not JSON"
+     }
+    ]
+   },
+   "estimate_usd": {
+    "low": 0.0043,
+    "high": 0.0087
+   },
+   "cap_usd": 1,
+   "spent_usd": 0.0045,
+   "created_at": 1800000002000,
+   "approved_at": 1800000002000,
+   "finished_at": 1800000002000,
+   "expires_at": null,
+   "reduce": null,
+   "error": null,
+   "changes": null,
+   "apply": {
+    "status": "none",
+    "done": 0,
+    "failed": 0,
+    "total": 0
+   },
+   "spec_preview": {
+    "items_sample": [
+     {
+      "emote_id": "01HEMOTE000000000000000000",
+      "name": "emote_0"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000001",
+      "name": "emote_1"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000002",
+      "name": "emote_2"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000003",
+      "name": "emote_3"
+     }
+    ],
+    "source": null,
+    "output_schema": null,
+    "reduce_prompt": null,
+    "board": null,
+    "prefetch": null,
+    "turns_per_task": 6,
+    "attempts": 1,
+    "stop_after_failed_tasks": 5
+   },
+   "unscoped_writes": [],
+   "approve_url": "https://cobalt.capybaraharmony.com/swarms/DpFN1pQbupaxi8j9",
+   "job": "swarm:DpFN1pQbupaxi8j9",
+   "messages": {
+    "total": 0,
+    "waiting": 0
+   },
+   "planner": "agent key",
+   "score": 0.5
+  },
+  "total": 1,
+  "offset": 0,
+  "groups": [
+   {
+    "value": "cats",
+    "count": 1
+   },
+   {
+    "value": "dogs",
+    "count": 1
+   }
+  ],
+  "rows": [
+   {
+    "agent": 1,
+    "n": 1,
+    "title": "emote_0",
+    "score": 0.9,
+    "group": "cats",
+    "fields": {
+     "note": "a cat",
+     "seen_on": "https://7tv.app/emotes/01HEMOTE000000000000000000"
+    },
+    "links": [
+     "https://7tv.app/emotes/01HEMOTE000000000000000000"
+    ],
+    "media": [
+     {
+      "ref": "01HEMOTE000000000000000000",
+      "kind": "emote",
+      "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000000/2x.webp",
+      "open_url": "https://7tv.app/emotes/01HEMOTE000000000000000000"
+     }
+    ]
+   }
+  ],
+  "agents": [
+   {
+    "agent": 1,
+    "status": "done",
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 2,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 1,
+     "usd": 0.0015,
+     "ms": 0,
+     "score": 1
+    },
+    "error": null
+   },
+   {
+    "agent": 2,
+    "status": "failed",
+    "outcome": {
+     "status": "failed",
+     "items": 2,
+     "answered": 0,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 2,
+     "usd": 0.003,
+     "ms": 0,
+     "score": 0
+    },
+    "error": "error.swarm.bad_answer: it is not JSON"
+   }
+  ]
+ },
+ "agent.read.failed": {
+  "swarm": "DpFN1pQbupaxi8j9",
+  "agent": 2,
+  "status": "failed",
+  "items": [
+   {
+    "emote_id": "01HEMOTE000000000000000002",
+    "name": "emote_2"
+   },
+   {
+    "emote_id": "01HEMOTE000000000000000003",
+    "name": "emote_3"
+   }
+  ],
+  "attempts": 1,
+  "in_tokens": 20000,
+  "out_tokens": 2000,
+  "usd": 0.003,
+  "started_at": 1800000002000,
+  "ended_at": 1800000002000,
+  "error": "error.swarm.bad_answer: it is not JSON",
+  "result": null,
+  "steps": [
+   {
+    "at": 1800000002000,
+    "text": "started"
+   },
+   {
+    "at": 1800000002000,
+    "text": "failed: error.swarm.bad_answer: it is not JSON"
+   }
+  ],
+  "messages": [],
+  "changes": []
+ },
+ "agent.read.done": {
+  "swarm": "DpFN1pQbupaxi8j9",
+  "agent": 1,
+  "status": "done",
+  "items": [
+   {
+    "emote_id": "01HEMOTE000000000000000000",
+    "name": "emote_0"
+   },
+   {
+    "emote_id": "01HEMOTE000000000000000001",
+    "name": "emote_1"
+   }
+  ],
+  "attempts": 1,
+  "in_tokens": 10000,
+  "out_tokens": 1000,
+  "usd": 0.0015,
+  "started_at": 1800000002000,
+  "ended_at": 1800000002000,
+  "error": null,
+  "result": {
+   "matches": [
+    {
+     "name": "emote_0",
+     "emote_id": "01HEMOTE000000000000000000",
+     "confidence": "high",
+     "group": "cats",
+     "note": "a cat",
+     "seen_on": "https://7tv.app/emotes/01HEMOTE000000000000000000"
+    },
+    {
+     "name": "emote_1",
+     "preview_url": "https://cdn.7tv.app/emote/01HEMOTE000000000000000001/2x.webp",
+     "score": 0.5,
+     "group": "dogs",
+     "link": "https://example.com/x",
+     "count": 3,
+     "flag": true,
+     "nothing": null
+    }
+   ]
+  },
+  "steps": [
+   {
+    "at": 1800000002000,
+    "text": "started"
+   },
+   {
+    "at": 1800000002000,
+    "text": "done"
+   }
+  ],
+  "messages": [],
+  "changes": []
+ },
+ "get.asking": {
+  "swarm": "Kayno9G0jLxhnygf",
+  "name": "tidy emote names",
+  "mode": "propose",
+  "status": "running",
+  "spec_hash": "aff5ad5fb7a13a595b19e9050421bc486cb57a9f34b766f1ba585e6e60fdc290",
+  "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+  "tools": [
+   "seventv.emote"
+  ],
+  "writes": [
+   "seventv.rename"
+  ],
+  "scope": {
+   "set_id": [
+    "01HSETAAAAAAAAAAAAAAAAAAAA"
+   ]
+  },
+  "items": 4,
+  "batch_size": 2,
+  "concurrency": 1,
+  "tasks": {
+   "total": 2,
+   "queued": 0,
+   "running": 0,
+   "waiting": 1,
+   "done": 1,
+   "failed": 0,
+   "cells": [
+    {
+     "idx": 0,
+     "status": "waiting",
+     "error": null,
+     "step": "told the owner"
+    },
+    {
+     "idx": 1,
+     "status": "done",
+     "error": null,
+     "step": "done"
+    }
+   ]
+  },
+  "estimate_usd": {
+   "low": 0.0045,
+   "high": 0.0089
+  },
+  "cap_usd": 1,
+  "spent_usd": 0.003,
+  "created_at": 1800000002000,
+  "approved_at": 1800000002000,
+  "finished_at": null,
+  "expires_at": null,
+  "reduce": null,
+  "error": null,
+  "changes": {
+   "total": 0,
+   "kept": 0,
+   "done": 0,
+   "failed": 0
+  },
+  "apply": {
+   "status": "none",
+   "done": 0,
+   "failed": 0,
+   "total": 0
+  },
+  "spec_preview": {
+   "items_sample": [
+    {
+     "emote_id": "01HEMOTE000000000000000000",
+     "name": "emote_0"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000001",
+     "name": "emote_1"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000002",
+     "name": "emote_2"
+    },
+    {
+     "emote_id": "01HEMOTE000000000000000003",
+     "name": "emote_3"
+    }
+   ],
+   "source": null,
+   "output_schema": null,
+   "reduce_prompt": null,
+   "board": null,
+   "prefetch": null,
+   "turns_per_task": 6,
+   "attempts": 2,
+   "stop_after_failed_tasks": 5
+  },
+  "unscoped_writes": [],
+  "approve_url": "https://cobalt.capybaraharmony.com/swarms/Kayno9G0jLxhnygf",
+  "job": "swarm:Kayno9G0jLxhnygf",
+  "messages": {
+   "total": 2,
+   "waiting": 1
+  },
+  "planner": "agent key",
+  "score": 0
+ },
+ "board.asking": {
+  "swarm": {
+   "swarm": "Kayno9G0jLxhnygf",
+   "name": "tidy emote names",
+   "mode": "propose",
+   "status": "running",
+   "spec_hash": "aff5ad5fb7a13a595b19e9050421bc486cb57a9f34b766f1ba585e6e60fdc290",
+   "prompt": "Batch {{index}} of {{total}} ({{count}}) for {{name}}:\n{{items}}\nSuggest a clean name for each.",
+   "tools": [
+    "seventv.emote"
+   ],
+   "writes": [
+    "seventv.rename"
+   ],
+   "scope": {
+    "set_id": [
+     "01HSETAAAAAAAAAAAAAAAAAAAA"
+    ]
+   },
+   "items": 4,
+   "batch_size": 2,
+   "concurrency": 1,
+   "tasks": {
+    "total": 2,
+    "queued": 0,
+    "running": 0,
+    "waiting": 1,
+    "done": 1,
+    "failed": 0,
+    "cells": [
+     {
+      "idx": 0,
+      "status": "waiting",
+      "error": null,
+      "step": "told the owner"
+     },
+     {
+      "idx": 1,
+      "status": "done",
+      "error": null,
+      "step": "done"
+     }
+    ]
+   },
+   "estimate_usd": {
+    "low": 0.0045,
+    "high": 0.0089
+   },
+   "cap_usd": 1,
+   "spent_usd": 0.003,
+   "created_at": 1800000002000,
+   "approved_at": 1800000002000,
+   "finished_at": null,
+   "expires_at": null,
+   "reduce": null,
+   "error": null,
+   "changes": {
+    "total": 0,
+    "kept": 0,
+    "done": 0,
+    "failed": 0
+   },
+   "apply": {
+    "status": "none",
+    "done": 0,
+    "failed": 0,
+    "total": 0
+   },
+   "spec_preview": {
+    "items_sample": [
+     {
+      "emote_id": "01HEMOTE000000000000000000",
+      "name": "emote_0"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000001",
+      "name": "emote_1"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000002",
+      "name": "emote_2"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000003",
+      "name": "emote_3"
+     }
+    ],
+    "source": null,
+    "output_schema": null,
+    "reduce_prompt": null,
+    "board": null,
+    "prefetch": null,
+    "turns_per_task": 6,
+    "attempts": 2,
+    "stop_after_failed_tasks": 5
+   },
+   "unscoped_writes": [],
+   "approve_url": "https://cobalt.capybaraharmony.com/swarms/Kayno9G0jLxhnygf",
+   "job": "swarm:Kayno9G0jLxhnygf",
+   "messages": {
+    "total": 2,
+    "waiting": 1
+   },
+   "planner": "agent key",
+   "score": 0
+  },
+  "total": 0,
+  "offset": 0,
+  "groups": [],
+  "rows": [],
+  "agents": [
+   {
+    "agent": 1,
+    "status": "waiting",
+    "outcome": {
+     "status": "waiting",
+     "items": 2,
+     "answered": 0,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 1,
+     "turns": 1,
+     "usd": 0.0015,
+     "ms": null,
+     "score": null
+    },
+    "error": null
+   },
+   {
+    "agent": 2,
+    "status": "done",
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 0,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 1,
+     "usd": 0.0015,
+     "ms": 0,
+     "score": 0
+    },
+    "error": null
+   }
+  ]
+ },
+ "results.asking": {
+  "results": [
+   {
+    "task": 0,
+    "status": "waiting",
+    "result": null,
+    "error": null,
+    "usd": 0.0015,
+    "items": [
+     {
+      "emote_id": "01HEMOTE000000000000000000",
+      "name": "emote_0"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000001",
+      "name": "emote_1"
+     }
+    ],
+    "outcome": {
+     "status": "waiting",
+     "items": 2,
+     "answered": 0,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 1,
+     "turns": 1,
+     "usd": 0.0015,
+     "ms": null,
+     "score": null
+    }
+   },
+   {
+    "task": 1,
+    "status": "done",
+    "result": {
+     "changes": 0
+    },
+    "error": null,
+    "usd": 0.0015,
+    "items": [
+     {
+      "emote_id": "01HEMOTE000000000000000002",
+      "name": "emote_2"
+     },
+     {
+      "emote_id": "01HEMOTE000000000000000003",
+      "name": "emote_3"
+     }
+    ],
+    "outcome": {
+     "status": "done",
+     "items": 2,
+     "answered": 0,
+     "tool_calls": 0,
+     "tool_errors": 0,
+     "asks": 0,
+     "turns": 1,
+     "usd": 0.0015,
+     "ms": 0,
+     "score": 0
+    }
+   }
+  ],
+  "total": 2,
+  "offset": 0
+ },
+ "agent.asking": {
+  "swarm": "Kayno9G0jLxhnygf",
+  "agent": 1,
+  "status": "waiting",
+  "items": [
+   {
+    "emote_id": "01HEMOTE000000000000000000",
+    "name": "emote_0"
+   },
+   {
+    "emote_id": "01HEMOTE000000000000000001",
+    "name": "emote_1"
+   }
+  ],
+  "attempts": 1,
+  "in_tokens": 10000,
+  "out_tokens": 1000,
+  "usd": 0.0015,
+  "started_at": 1800000002000,
+  "ended_at": null,
+  "error": null,
+  "result": null,
+  "steps": [
+   {
+    "at": 1800000002000,
+    "text": "started"
+   },
+   {
+    "at": 1800000002000,
+    "text": "asked a question"
+   },
+   {
+    "at": 1800000002000,
+    "text": "told the owner"
+   }
+  ],
+  "messages": [
+   {
+    "id": 1,
+    "swarm": "Kayno9G0jLxhnygf",
+    "agent": 1,
+    "dir": "up",
+    "kind": "ask",
+    "sender": "agent",
+    "text": "Which set should Cat go in?",
+    "at": 1800000002000,
+    "answered": false
+   },
+   {
+    "id": 2,
+    "swarm": "Kayno9G0jLxhnygf",
+    "agent": 1,
+    "dir": "up",
+    "kind": "tell",
+    "sender": "agent",
+    "text": "halfway",
+    "at": 1800000002000,
+    "answered": false
+   }
+  ],
+  "changes": []
+ },
+ "messages": {
+  "messages": [
+   {
+    "id": 1,
+    "swarm": "Kayno9G0jLxhnygf",
+    "agent": 1,
+    "dir": "up",
+    "kind": "ask",
+    "sender": "agent",
+    "text": "Which set should Cat go in?",
+    "at": 1800000002000,
+    "answered": false
+   },
+   {
+    "id": 2,
+    "swarm": "Kayno9G0jLxhnygf",
+    "agent": 1,
+    "dir": "up",
+    "kind": "tell",
+    "sender": "agent",
+    "text": "halfway",
+    "at": 1800000002000,
+    "answered": false
+   }
+  ]
+ },
+ "inbox": {
+  "messages": [
+   {
+    "id": 1,
+    "swarm": "Kayno9G0jLxhnygf",
+    "agent": 1,
+    "dir": "up",
+    "kind": "ask",
+    "sender": "agent",
+    "text": "Which set should Cat go in?",
+    "at": 1800000002000,
+    "answered": false
+   },
+   {
+    "id": 2,
+    "swarm": "Kayno9G0jLxhnygf",
+    "agent": 1,
+    "dir": "up",
+    "kind": "tell",
+    "sender": "agent",
+    "text": "halfway",
+    "at": 1800000002000,
+    "answered": false
+   }
+  ]
+ },
+ "send": {
+  "sent": true,
+  "to": 1,
+  "woke": true
+ },
+ "send.all": {
+  "sent": true,
+  "to": "all",
+  "woke": false
+ },
+ "messages.after": {
+  "messages": [
+   {
+    "id": 1,
+    "swarm": "Kayno9G0jLxhnygf",
+    "agent": 1,
+    "dir": "up",
+    "kind": "ask",
+    "sender": "agent",
+    "text": "Which set should Cat go in?",
+    "at": 1800000002000,
+    "answered": true
+   },
+   {
+    "id": 2,
+    "swarm": "Kayno9G0jLxhnygf",
+    "agent": 1,
+    "dir": "up",
+    "kind": "tell",
+    "sender": "agent",
+    "text": "halfway",
+    "at": 1800000002000,
+    "answered": false
+   },
+   {
+    "id": 3,
+    "swarm": "Kayno9G0jLxhnygf",
+    "agent": 1,
+    "dir": "down",
+    "kind": "reply",
+    "sender": "owner",
+    "text": "the first one",
+    "at": 1800000002000,
+    "answered": false
+   },
+   {
+    "id": 4,
+    "swarm": "Kayno9G0jLxhnygf",
+    "agent": null,
+    "dir": "down",
+    "kind": "note",
+    "sender": "you",
+    "text": "hurry up",
+    "at": 1800000002000,
+    "answered": false
+   }
+  ]
+ }
+}

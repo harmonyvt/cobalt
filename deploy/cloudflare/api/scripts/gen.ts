@@ -240,6 +240,13 @@ const swiftFuncName = (opName: string) => {
     return ident(p[0]!.toLowerCase() + p.slice(1));
 };
 
+// The app's hand-written swarm models (apple/CobaltKit/.../Swarms) own the plain names `Swarm`, `SwarmChange`, `SwarmResult`,
+// ...; the generated wire structs of the same names would be a second declaration in the module, so they carry a `Wire` prefix.
+// CobaltKit declares its own swarm and board types (Swarms/, apple/CONTRACT-SWARMS.md); the generated wire structs of the
+// same names get a `Wire` prefix so the module keeps one type per name.
+const WIRE_PREFIXED = /^(Swarm|Board|MediaRef$)/;
+const swiftName = (n: string) => (WIRE_PREFIXED.test(n) ? `Wire${n}` : n);
+
 type SwiftCtx = { components: Json; structs: string[]; named: Set<string> };
 
 const refName = (ref: string) => ref.slice(ref.lastIndexOf("/") + 1);
@@ -254,7 +261,7 @@ function swiftType(s: Json, where: string, cx: SwiftCtx, inArray = false): strin
             cx.named.add(id);
             swiftStruct(id, target, cx);
         }
-        return id;
+        return swiftName(id);
     }
     if (s["x-swift"]) return inArray ? `Lossy<${s["x-swift"]}>` : s["x-swift"];
     const types: string[] = Array.isArray(s.type) ? s.type : s.type ? [s.type] : [];
@@ -289,7 +296,7 @@ function swiftType(s: Json, where: string, cx: SwiftCtx, inArray = false): strin
         case "object":
             if (!s.properties || Object.keys(s.properties).length === 0) return null;
             swiftStruct(where, s, cx);
-            t = where;
+            t = swiftName(where);
             break;
         default:
             t = null;
@@ -309,7 +316,7 @@ function swiftStruct(name: string, s: Json, cx: SwiftCtx): void {
         fields.push(`    var ${ident(camel(key))}: ${t}${optional}`);
     }
     const doc = s.description ? `/// ${s.description}\n` : "";
-    cx.structs.push(`${doc}struct ${name}: Decodable, Sendable {\n${fields.join("\n")}\n}`);
+    cx.structs.push(`${doc}struct ${swiftName(name)}: Decodable, Sendable {\n${fields.join("\n")}\n}`);
 }
 
 export function swiftClient(): string {

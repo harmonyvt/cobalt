@@ -94,6 +94,28 @@ const boxSave: Follow = {
     },
 };
 
+// swarm.plan and swarm.get answer a SwarmShape (APP-API-CONTRACT.md section 59.4): the card draws it as it is. There is
+// deliberately no follow for approve or apply: only Harmony does those, from the capystore page the card links to.
+const swarm: Follow = {
+    view: "swarm",
+    async build(_ctx, _input, result) {
+        const r = rec(result);
+        return str(r.swarm) && str(r.status) ? { ...r, view: "swarm" } : null;
+    },
+};
+
+// swarm.board answers the board (section 62.4); the view keeps the filters it was asked with, for its next calls.
+const board: Follow = {
+    view: "board",
+    async build(_ctx, input, result) {
+        const r = rec(result);
+        const i = rec(input);
+        if (!Array.isArray(r.rows) || !rec(r.swarm).swarm) return null;
+        const pick = (k: string) => (i[k] === undefined ? {} : { [k]: i[k] });
+        return { ...r, view: "board", ...pick("q"), ...pick("agent"), ...pick("group"), ...pick("sort"), ...pick("status") };
+    },
+};
+
 const idsOf = (i: Json) => (typeof i.ids === "string" ? [i.ids] : strings(i.ids));
 
 // by chat call name
@@ -112,4 +134,7 @@ export const FOLLOWS: Record<string, Follow> = {
     "box.run": boxRun,
     "box.pull": boxPull,
     "box.save": boxSave,
+    "swarm.plan": swarm,
+    "swarm.get": swarm,
+    "swarm.board": board,
 };

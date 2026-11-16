@@ -10,13 +10,13 @@ import UserNotifications
 /// (APP-API-CONTRACT 27), after the studio, and shows only with `features.chat`. iPhone shows the first four of these
 /// (the queue is a sheet there) and a "more" tab for the rest.
 public enum AppTab: String, Sendable, CaseIterable {
-    case save, library, links, sevenTv, stage, chat, names, queue, settings
+    case save, library, links, sevenTv, stage, chat, swarms, names, queue, settings
 
     /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
     /// chat needs `features.chat`, the studio needs `features.stage`, search names need `features.names` (48.6).
     public func isAvailable(with caps: Capabilities) -> Bool {
         switch self {
-        case .library: return caps.library
+        case .library, .swarms: return caps.library
         case .links: return caps.shareSets
         case .chat: return caps.chat
         case .stage, .sevenTv: return caps.stage
@@ -111,6 +111,8 @@ public final class AppModel {
     public let chat: ChatStore
     /// Stage, the studio tab (APP-API-CONTRACT 30). Idle until `load()`.
     public let stage: StageStore
+    /// Swarms (APP-API-CONTRACT 59, 61, 62; the swarms tab, "more" on iPhone). Idle until `loadList()`.
+    public let swarms: SwarmStore
     /// The auto-hide rules (APP-API-CONTRACT 37; settings › hidden). Idle until `load()`.
     public let hiddenRules: HiddenRulesModel
     /// Search names (APP-API-CONTRACT 48; library › names). Idle until `load()`.
@@ -231,6 +233,7 @@ public final class AppModel {
         self.shareSets = ShareSetStore(context: context)
         self.chat = ChatStore(context: context)
         self.stage = StageStore(context: context)
+        self.swarms = SwarmStore(context: context)
         self.editor = EditorStore(context: context)
         self.postFrames = PostFrameStore(context: context)
         self.skyMap = SkyMapModel(context: context)
@@ -447,6 +450,7 @@ public final class AppModel {
         if selectedTab == .links, !caps.shareSets, caps.kind != .unreachable { selectedTab = .save }
         if selectedTab == .chat, !caps.chat, caps.kind != .unreachable { selectedTab = .save }
         if selectedTab == .stage, !caps.stage, caps.kind != .unreachable { selectedTab = .save }
+        if selectedTab == .swarms, !caps.library, caps.kind != .unreachable { selectedTab = .save }
         if !caps.hidden, library.showingHidden { library.showingHidden = false }       // `features.hidden` went: the album closes
         liveManager?.capabilitiesChanged()
         unifiedQueue.capabilitiesChanged()            // `features.queue` came or went: poll, or stop
@@ -486,6 +490,7 @@ public final class AppModel {
         shareSets.reset()
         chat.reset()
         stage.reset()
+        swarms.reset()
         editor.reset()
         postFrames.reset()
         skyMap.reset()

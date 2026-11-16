@@ -198,6 +198,8 @@ struct AppShell: View {
                 #endif
                 model.warmLibraryRows()                      // the library's rows are built off the main thread from the start
                 await model.foreground()
+                // the "swarms" badge: what waits for the owner is known before the tab is opened
+                if model.visibleTabs.contains(.swarms) { await model.swarms.loadList() }
             }
             .onChange(of: scenePhase) { _, phase in
                 #if DEBUG
@@ -212,6 +214,7 @@ struct AppShell: View {
                 // where taps really land (the library freeze hunt, owner 2026-11-14)
                 TouchProbe.install()
                 #endif
+                Task { if model.visibleTabs.contains(.swarms) { await model.swarms.loadList() } }
                 Task {
                     await model.foreground()                 // shares the launch task's run when they overlap
                     await model.store.backfillPreviewFrames()
@@ -351,6 +354,7 @@ struct AppShell: View {
                             tabRoot(tab)
                                 .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
                         }
+                        .badge(tab == .swarms ? model.swarms.waitingCount : 0)
                     }
                 }
             }
@@ -366,7 +370,7 @@ struct AppShell: View {
                 ForEach(model.visibleTabs.filter { $0 != .settings }, id: \.self) { tab in
                     Label(Copy.tab(tab), systemImage: icon(for: tab))
                         .font(Font.cobalt(13, .regular, relativeTo: .body))
-                        .badge(tab == .queue ? model.unifiedQueue.badgeCount : 0)
+                        .badge(tab == .queue ? model.unifiedQueue.badgeCount : tab == .swarms ? model.swarms.waitingCount : 0)
                         .tag(tab)
                 }
             }
@@ -379,6 +383,7 @@ struct AppShell: View {
                 case .library: LibraryScreen(model: model, tier: tier)
                 case .links: NavigationStack { LinksScreen(model: model) }
                 case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
+                case .swarms: NavigationStack { SwarmsScreen(model: model, tier: tier) }
                 case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
                 case .sevenTv: NavigationStack { SevenTvScreen(model: model, tier: tier) }
                 case .names: NavigationStack { NamesScreen(model: model) }
@@ -403,6 +408,7 @@ struct AppShell: View {
         case .library: LibraryScreen(model: model, tier: tier)
         case .links: LinksScreen(model: model)
         case .chat: ChatScreen(model: model, tier: tier)
+        case .swarms: SwarmsScreen(model: model, tier: tier)
         case .stage: StageScreen(model: model, tier: tier)
         case .sevenTv: SevenTvScreen(model: model, tier: tier)
         case .names: NamesScreen(model: model)
@@ -711,6 +717,7 @@ func icon(for tab: AppTab) -> String {
     case .library: return Symbol.library
     case .links: return Symbol.links
     case .chat: return Symbol.chat
+    case .swarms: return Symbol.Swarms.tab
     case .stage: return Symbol.stage
     case .sevenTv: return Symbol.SevenTv.tab
     case .names: return Symbol.Names.menu

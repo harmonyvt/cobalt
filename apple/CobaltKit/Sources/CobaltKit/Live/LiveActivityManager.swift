@@ -1008,9 +1008,26 @@ final class LiveActivityManager: JobLiveSink {
     private func registerAdopted(_ id: String) {
         guard var entry = adopted[id], let token = entry.token, entry.registeredToken != token,
               pushAvailable, let ctx, let env = environment,
-              let handle = adapter.activities.first(where: { $0.attributes.id == id && !$0.isEnded }),
-              let runID = UUID(uuidString: id)
+              let handle = adapter.activities.first(where: { $0.attributes.id == id && !$0.isEnded })
         else { return }
+        // A swarm's activity is `swarm:<id>`, not a UUID: the registration goes to `PUT /live/runs/swarm:<id>`, with the
+        // job type and the update token; the server holds the swarm's own state, so the body's is a placeholder.
+        if handle.attributes.kind == SwarmLiveActivities.kind {
+            entry.registeredToken = token
+            adopted[id] = entry
+            var attributes = LiveRunAttributes(pushStarted: handle.attributes, run: LiveRunRegistration.swarmPlaceholder)
+            attributes.run = id
+            let registration = LiveRunRegistration(
+                run: LiveRunRegistration.swarmPlaceholder, environment: env, updateToken: token, session: nil, start: false,
+                attributes: attributes, state: Self.registrationState(nil, since: handle.state.since), job: true, runName: id)
+            let client = ctx.client
+            network.enqueue { [weak self] in
+                do { _ = try await client.registerLiveRun(registration) }
+                catch { self?.adopted[id]?.registeredToken = nil }
+            }
+            return
+        }
+        guard let runID = UUID(uuidString: id) else { return }
         entry.registeredToken = token
         adopted[id] = entry
         let job = ctx.jobs.all().first { $0.id == runID }
@@ -1091,7 +1108,8 @@ final class LiveActivityManager: JobLiveSink {
                 _ = endIfDuplicate(handle)
                 continue
             }
-            if known.contains(id) || handle.isFresh(at: t) {
+            // A swarm waiting for its owner can stay unchanged for an hour: it is not an orphan, and the server ends it.
+            if known.contains(id) || handle.isFresh(at: t) || handle.attributes.kind == SwarmLiveActivities.kind {
                 adoptIfWanted(handle)
             } else {
                 adopted[id]?.task.cancel()

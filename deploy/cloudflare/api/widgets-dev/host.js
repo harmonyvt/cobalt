@@ -8,7 +8,7 @@ let UP = params.get("up") || "http://127.0.0.1:9";
 // ?mcp=<url>: a dev MCP server (mcp-dev.mjs). Tool calls from a widget go to it, not to the fixtures, and __host.loadLive()
 // opens a widget from a real tool result and the widget HTML the server serves (with the CSP it advertises).
 const MCP = params.get("mcp");
-const LIVE_VIEW = { search_library: "search", show_post: "post", show_edit: "edit", list_collections: "collections", list_share_links: "links", create_share_link: "links", convert_to_webp: "webp", upload_files: "upload", save_link: "save", box_run: "terminal", box_pull: "terminal", box_save: "terminal" };
+const LIVE_VIEW = { search_library: "search", show_post: "post", show_edit: "edit", list_collections: "collections", list_share_links: "links", create_share_link: "links", convert_to_webp: "webp", upload_files: "upload", save_link: "save", box_run: "terminal", box_pull: "terminal", box_save: "terminal", swarm_plan: "swarm", swarm_get: "swarm" };
 let rpcId = 1;
 async function mcpRpc(method, p) {
     const res = await fetch(MCP, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: rpcId++, method, params: p }) });
@@ -63,6 +63,13 @@ const FIX = {
     "term.running": { tool: "box_run", args: { cmd: 'ffmpeg -y -i out.mp4 -vf "thumbnail,scale=480:-2" -frames:v 1 poster.jpg' }, out: null, view: "terminal" },
     // the box is off for the day: one red line under the command
     "term.off": { tool: "box_run", args: { cmd: "ls -lh" }, error: "cobalt.box.run: the workbench is used up for today (60 awake minutes); it opens again at midnight UTC", view: "terminal" },
+    "swarm.awaiting": { tool: "swarm_plan", args: { name: "Rename duplicate emotes" }, out: F.swarmAwaiting },
+    "swarm.running": { tool: "swarm_get", args: { id: "swm-8Kp2xQ" }, out: F.swarmRunning },
+    "swarm.propose": { tool: "swarm_get", args: { id: "swm-8Kp2xQ" }, out: F.swarmPropose },
+    "swarm.read": { tool: "swarm_get", args: { id: "swm-8Kp2xQ" }, out: F.swarmRead },
+    "swarm.failed": { tool: "swarm_get", args: { id: "swm-8Kp2xQ" }, out: F.swarmFailed },
+    "swarm.stopped": { tool: "swarm_get", args: { id: "swm-8Kp2xQ" }, out: F.swarmStopped },
+    "board.results": { tool: "swarm_board", args: { id: "swm-8Kp2xQ" }, out: () => F.boardOut() },
     // never answers: the skeleton
     "skeleton.search": { tool: "search_library", args: { query: "pink" }, out: null, view: "search" },
     "skeleton.webp": { tool: "convert_to_webp", args: { id: "x" }, out: null, view: "webp" },
@@ -93,6 +100,8 @@ function handleCall(p) {
             const d = F.postDetail(a.id);
             return d ? ok(d) : bad("no post with that id");
         }
+        case "swarm_get": return ok(F.swarmRunning());
+        case "swarm_board": return ok(F.boardOut(a));
         case "search_library": return ok(F.searchOut(a.query, 6));
         case "list_share_links": return ok({ ...F.linksOut(), links: F.LINKS.slice(0, 2), total: 2 });
         case "show_edit": return ok(a.id === "edit-priv" ? F.editPrivate() : F.editOut(F.EDIT));

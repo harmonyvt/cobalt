@@ -195,6 +195,8 @@ public struct PreviewClient: CobaltClient {
     let chatShareState = PreviewChatShareState()
     /// The stage the "server" holds (`PreviewStage.swift`).
     let stageState = PreviewStageState()
+    /// The swarms the "server" holds (`PreviewSwarms.swift`; `-previewSwarm <state>` picks the story's starting state).
+    let swarmState = PreviewSwarmState()
     /// The editor's projects and renders the "server" holds (`Editor/PreviewEditor.swift`).
     let editorState = PreviewEditorState()
     /// How agents reach the MCP on the "server" (`PreviewMcp.swift`).
@@ -218,7 +220,8 @@ public struct PreviewClient: CobaltClient {
 
     init(
         scenario: PreviewScenario, timeScale: Double, clock: any PipelineClock, visibility: VisibilityPreviewMode = .off,
-        line: LinePreviewMode = .off, queue: QueuePreviewState = .off, search: PreviewSearchMode = .off
+        line: LinePreviewMode = .off, queue: QueuePreviewState = .off, search: PreviewSearchMode = .off,
+        swarms: PreviewSwarmStart? = nil
     ) {
         self.scenario = scenario
         // the sky map's scenario is a server whose search has embedded every post
@@ -245,6 +248,7 @@ public struct PreviewClient: CobaltClient {
         if scenario.hasStage {
             stageState.seed(scenario, now: now)
         }
+        swarmState.seed(swarms ?? PreviewSwarmStart.launch ?? .awaiting, now: now)
         if scenario.hasAccounts {
             accountState.seed(scenario, now: now)
         }
@@ -696,6 +700,20 @@ public struct PreviewClient: CobaltClient {
     public func saveEmote(id: String) async throws -> SavedEmote {
         guard id == Self.catJAM.id else { throw CobaltError.api(code: "error.emote.not_found", httpStatus: 404) }
         return SavedEmote(id: "PrEvIeWemote0001", name: "catJAM", url: Self.catJAM.fileURL, emoteID: id)
+    }
+
+    /// catJAM and three re-uploads of it under the same name (any case), for the variants sheet.
+    public func emoteVariants(name: String, page: Int) async throws -> EmotePage {
+        guard page == 1 else { return EmotePage(items: [], page: page, hasMore: false) }
+        let all = [Self.catJAM] + ["01PREVIEWVARIANT000000001", "01PREVIEWVARIANT000000002", "01PREVIEWVARIANT000000003"]
+            .enumerated().map { i, id in
+                var hit = Self.catJAM
+                hit.id = id
+                hit.name = i == 1 ? "CATJAM" : "catJAM"
+                hit.animated = i != 2
+                return hit
+            }
+        return EmotePage(items: EmoteVariants.keep(all, name: name), page: 1, hasMore: false)
     }
 
     private static let catJAM = EmoteHit(

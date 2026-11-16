@@ -25,10 +25,11 @@ import {
     sevenTvUploads,
     sevenTvOwned,
 } from "../../seventv";
+import { gateOf } from "../../seventv-gate";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
 
-const deps = (ctx: OpContext): SevenTvDeps => ({ db: ctx.db, now: ctx.now, secret: ctx.env.COBALT_API_KEY });
+const deps = (ctx: OpContext): SevenTvDeps => ({ db: ctx.db, now: ctx.now, secret: ctx.env.COBALT_API_KEY, gate: gateOf(ctx.env) });
 const uploadDeps = (ctx: OpContext): SevenTvUploadDeps => ({
     ...deps(ctx),
     media: ctx.env.MEDIA,
@@ -577,6 +578,7 @@ const uploadOp = defineOp({
     }),
     output: UploadShape.omit({ status: true }),
     ai: {
+        refs: { file: "file" },
         tier: "ask",
         only: true,
         summary:

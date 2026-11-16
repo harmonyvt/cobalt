@@ -113,7 +113,9 @@ enum JobLiveLinks {
 /// The kinds each manager follows (`JobLiveAttributes.kind`). Every job activity arrives through the same ActivityKit type,
 /// so each manager picks its own.
 enum JobLiveKinds {
-    static let saves: Set<String> = ["save", "upload", "make", "many"]
+    /// A swarm (push-started by the server, run id `swarm:<id>`, APP-API-CONTRACT 61.5) is followed like an agent's save: the
+    /// manager adopts the activity and hands its update token to the server.
+    static let saves: Set<String> = ["save", "upload", "make", "many", SwarmLiveActivities.kind]
     static let edits: Set<String> = ["edit"]
     static let chats: Set<String> = ["chat"]
 }

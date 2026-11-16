@@ -194,7 +194,10 @@ const codeOf = (body: unknown): string => {
 export function unwrap<T = Record<string, unknown>>(r: StudioReply, messages: Record<string, string> = {}): T {
     if (r.status >= 200 && r.status <= 299) return r.body as T;
     const code = codeOf(r.body);
-    throw new OpError(r.status, code, messages[code]);
+    const err = new OpError(r.status, code, messages[code]);
+    const after = (r.body as { error?: { retry_after?: unknown } } | null)?.error?.retry_after;
+    if (typeof after === "number") Object.assign(err, { retryAfter: after });
+    throw err;
 }
 
 // "1234…" or a share URL ".../g/1234…" -> the link id.
@@ -383,6 +386,7 @@ export const linksCreateOp = defineOp({
     }),
     output: LinkShape,
     ai: {
+        refs: { ids: "files" },
         tier: "free",
         only: true,
         summary: `Make one share link for these posts and return it: a gallery link (share.capybaraharmony.com/g/<id>, 2 to ${SHARE_SET_MAX} files) or, for a single file, that file's share page.\nA gallery post brings all its public files. Only public files can be shared: a private post throws and is named. Give Harmony the url, never a media URL.\nprivate: true makes a private link instead (share.../p/<key>), which may hold files that are not public; for one file it makes that file not public.`,

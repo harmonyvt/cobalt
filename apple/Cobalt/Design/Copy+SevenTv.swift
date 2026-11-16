@@ -345,7 +345,32 @@ extension Copy {
         static func copiedMany(_ n: Int, to set: String) -> String { n == 1 ? "copied 1 emote to \(set)" : "copied \(n) emotes to \(set)" }
         static func removedMany(_ n: Int) -> String { n == 1 ? "removed 1 emote" : "removed \(n) emotes" }
         static func alreadyThere(_ n: Int) -> String { n == 1 ? "1 name was already there" : "\(n) names were already there" }
-        static let selectHintA11y = "hold to pick several"
+        static let selectHintA11y = "hold for its variants on 7tv"
+
+        // MARK: variants (APP-API-CONTRACT 20.2)
+
+        static let variants = "variants"
+        static func variantsOf(_ name: String) -> String { "every \(name) on 7tv" }
+        static func variantsCount(_ others: Int, more: Bool) -> String {
+            if others == 0 && !more { return "only this one so far" }
+            let n = more ? "\(others)+" : "\(others)"
+            return others == 1 && !more ? "1 other emote with this name" : "\(n) other emotes with this name"
+        }
+        static let variantsHint = "most used first · tap one to open it on 7tv"
+        static let variantsDown = "7tv didn't answer. try again in a bit."
+        static let thisOne = "this one"
+        static func variantA11y(_ name: String, held: Bool, inSet: Bool, animated: Bool) -> String {
+            var parts = [name]
+            if held { parts.append("the one you held") } else if inSet { parts.append("in this set") }
+            if animated { parts.append("animated") }
+            return parts.joined(separator: ", ")
+        }
+        static let variantHintA11y = "opens it on 7tv"
+        static let variantsSwapHint = "most used first · tap one to swap it in"
+        static let variantSwapHintA11y = "swaps it in for the one you held, under the same name"
+        static func swapped(_ name: String, as alias: String) -> String {
+            name == alias ? "swapped in another \(name)" : "swapped in \(name) as \(alias)"
+        }
         static let pickA11y = "pick"
 
         // MARK: the emote sheet

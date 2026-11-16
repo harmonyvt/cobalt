@@ -459,7 +459,7 @@ export const libraryTitleOp = defineOp({
     cors: false,
     input: z.object({ id: PostId, title: z.string().max(80).nullable().describe("1..80 characters; null clears it") }),
     output: z.object({ post_id: z.string(), title: z.string().nullable() }),
-    ai: { tier: "free", only: true, summary: "Set a post's title (null goes back to the original name).", params: ["id", "title"] },
+    ai: { refs: { id: "post" }, tier: "free", only: true, summary: "Set a post's title (null goes back to the original name).", params: ["id", "title"] },
     handler: async (ctx, input) => {
         chatOnly(ctx);
         const { files } = await onePost(ctx, input.id);
@@ -495,6 +495,7 @@ export const libraryVisibilityOp = defineOp({
     input: z.object({ ids: PostIds, public: z.boolean().describe("true: give them public links; false: make them private") }),
     output: z.object({ public: z.boolean(), changed: z.number(), posts: z.array(z.object({ id: z.string(), links: z.array(z.string()) })) }),
     ai: {
+        refs: { ids: "posts" },
         tier: "ask",
         only: true,
         summary:
@@ -548,6 +549,7 @@ export const libraryDeleteOp = defineOp({
     input: z.object({ ids: PostIds }),
     output: z.object({ deleted: z.array(z.string()), files: z.number() }),
     ai: {
+        refs: { ids: "posts" },
         tier: "ask",
         only: true,
         summary: "Delete whole posts and every file of them, public links included. Several posts go on one card.",
@@ -595,6 +597,7 @@ export const libraryDeleteFileOp = defineOp({
     input: z.object({ id: z.string().regex(ITEM_ID_REGEX, "a file id (16 letters/digits, from library.post's files)") }),
     output: z.object({ deleted: z.string() }),
     ai: {
+        refs: { id: "file" },
         tier: "ask",
         only: true,
         summary: "Delete one file of a post: a gallery item or a made file (a crop, export, slideshow). The post's last item can't go this way: delete the post.",

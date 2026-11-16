@@ -319,7 +319,7 @@ describe("write tools that end on a widget view", () => {
             library_status: "post",
         };
         // and the box tools' terminal (listed only while the box is on: test/mcp-app-terminal.test.ts)
-        expect(Object.keys(FOLLOWS).map(mcpToolName).sort()).toEqual([...Object.keys(want), "box_pull", "box_run", "box_save"].sort());
+        expect(Object.keys(FOLLOWS).map(mcpToolName).sort()).toEqual([...Object.keys(want), "box_pull", "box_run", "box_save", "swarm_board", "swarm_get", "swarm_plan"].sort());
         for (const [name, view] of Object.entries(want)) expect(viewOf(tools, name), name).toEqual(link(view));
         for (const name of ["library_delete", "links_revoke", "collections_delete", "make_crop", "names_list", "library_hidden"]) expect(viewOf(tools, name), name).toBeUndefined();
         for (const name of ["links_rotate", "links_private", "library_visibility", "library_status"]) expect(tools.find((t) => t.name === name).annotations, name).toEqual({ destructiveHint: true, readOnlyHint: false });

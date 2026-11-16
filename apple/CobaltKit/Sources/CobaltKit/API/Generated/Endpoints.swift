@@ -326,6 +326,86 @@ enum Endpoints {
         APIEndpoint(op: "chat.agents", method: "GET", path: "/chat/threads/\(HTTPCobaltClient.encode(id))/agents", auth: .key)
     }
 
+    /// `POST /swarms` (op `swarm.plan`, auth key): Plan a swarm: one Haiku task per batch of items (e.g. 1000 7TV emotes in batches of 50), each in code mode with only the read calls in `tools`. Nothing runs until Harmony approves it on approve_url (give Harmony that link); it answers the plan with its cost estimate. mode propose (default) answers { changes } Harmony reviews before they are applied; read answers results; act may call `writes` itself. Follow it with swarm.get or job_status on its job.
+    static func swarmPlan() -> APIEndpoint<WireSwarm> {
+        APIEndpoint(op: "swarm.plan", method: "POST", path: "/swarms", auth: .key)
+    }
+
+    /// `GET /swarms` (op `swarm.list`, auth key_or_service): Your swarms, newest first (at most 50).
+    static func swarmList() -> APIEndpoint<WireSwarmListResponse> {
+        APIEndpoint(op: "swarm.list", method: "GET", path: "/swarms", auth: .keyOrService)
+    }
+
+    /// `GET /swarms/:id` (op `swarm.get`, auth key_or_service): One swarm: status, tasks done/running/failed, dollars spent, the reduce summary, and (propose mode) how many changes are proposed and applied.
+    static func swarmGet(id: String) -> APIEndpoint<WireSwarm> {
+        APIEndpoint(op: "swarm.get", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))", auth: .keyOrService)
+    }
+
+    /// `GET /swarms/:id/results` (op `swarm.results`, auth key_or_service): A swarm's results in task order (a page of up to 100), each with its error and cost.
+    static func swarmResults(id: String) -> APIEndpoint<WireSwarmResultsResponse> {
+        APIEndpoint(op: "swarm.results", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))/results", auth: .keyOrService)
+    }
+
+    /// `GET /swarms/:id/changes` (op `swarm.changes`, auth key_or_service): A propose-mode swarm's proposed changes in task order (a page of up to 200), with what Harmony kept, applied and what clashes.
+    static func swarmChanges(id: String) -> APIEndpoint<WireSwarmChangesResponse> {
+        APIEndpoint(op: "swarm.changes", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))/changes", auth: .keyOrService)
+    }
+
+    /// `POST /swarms/:id/stop` (op `swarm.stop`, auth key_or_service): Stop a swarm: no new tasks start, running ones stop after their current step (or stop applying changes). Nothing is undone.
+    static func swarmStop(id: String) -> APIEndpoint<WireSwarm> {
+        APIEndpoint(op: "swarm.stop", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/stop", auth: .keyOrService)
+    }
+
+    /// `POST /swarms/:id/retry` (op `swarm.retry`, auth key): Run a finished swarm's failed (and skipped) tasks again: it goes back to awaiting Harmony's approval, with a new estimate and a new approve link check.
+    static func swarmRetry(id: String) -> APIEndpoint<WireSwarm> {
+        APIEndpoint(op: "swarm.retry", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/retry", auth: .key)
+    }
+
+    /// `POST /swarms/:id/approve` (op `swarm.approve`, auth key_or_service): Harmony approves a swarm's plan (the web page or a device session); its tasks start.
+    static func swarmApprove(id: String) -> APIEndpoint<WireSwarm> {
+        APIEndpoint(op: "swarm.approve", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/approve", auth: .keyOrService)
+    }
+
+    /// `POST /swarms/:id/decline` (op `swarm.decline`, auth key_or_service): Harmony declines a swarm's plan; nothing runs.
+    static func swarmDecline(id: String) -> APIEndpoint<WireSwarm> {
+        APIEndpoint(op: "swarm.decline", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/decline", auth: .keyOrService)
+    }
+
+    /// `POST /swarms/:id/changes` (op `swarm.decide`, auth key_or_service): Harmony ticks or edits proposed changes on the review page (a draft until apply).
+    static func swarmDecide(id: String) -> APIEndpoint<WireSwarmDecideResponse> {
+        APIEndpoint(op: "swarm.decide", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/changes", auth: .keyOrService)
+    }
+
+    /// `POST /swarms/:id/apply` (op `swarm.apply`, auth key_or_service): Harmony applies the kept changes of a propose-mode swarm (no model: each through its op).
+    static func swarmApply(id: String) -> APIEndpoint<WireSwarm> {
+        APIEndpoint(op: "swarm.apply", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/apply", auth: .keyOrService)
+    }
+
+    /// `GET /swarms/inbox` (op `swarm.inbox`, auth key): Unread messages from the agents of your swarms (questions and reports), oldest first, at most 100; they are marked read. Answer a question with swarm.send.
+    static func swarmInbox() -> APIEndpoint<WireSwarmInboxResponse> {
+        APIEndpoint(op: "swarm.inbox", method: "GET", path: "/swarms/inbox", auth: .key)
+    }
+
+    /// `POST /swarms/:id/messages` (op `swarm.send`, auth key_or_service): Message a running swarm's agents: answer an agent's question (to: its number) or tell every agent (to: "all"). It never changes the program: tools, writes, scope, cap and prompt stay what was approved.
+    static func swarmSend(id: String) -> APIEndpoint<WireSwarmSendResponse> {
+        APIEndpoint(op: "swarm.send", method: "POST", path: "/swarms/\(HTTPCobaltClient.encode(id))/messages", auth: .keyOrService)
+    }
+
+    /// `GET /swarms/:id/messages` (op `swarm.messages`, auth key_or_service): A swarm's messages, both ways, oldest first (at most 200); does not mark them read.
+    static func swarmMessages(id: String) -> APIEndpoint<WireSwarmMessagesResponse> {
+        APIEndpoint(op: "swarm.messages", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))/messages", auth: .keyOrService)
+    }
+
+    /// `GET /swarms/:id/agents/:agent` (op `swarm.agent`, auth key_or_service): One agent of a swarm: its items, status, cost, last steps, result, messages and (propose mode) changes.
+    static func swarmAgent(id: String, agent: String) -> APIEndpoint<WireSwarmAgent> {
+        APIEndpoint(op: "swarm.agent", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))/agents/\(HTTPCobaltClient.encode(agent))", auth: .keyOrService)
+    }
+
+    /// `GET /swarms/:id/board` (op `swarm.board`, auth key_or_service): A swarm's results as one board: every agent's outcome and score, and a row per thing its agents answered (title, score, group, other fields, up to 4 media previews). Failed agents appear as a row too. Filter with q, agent, status, group; sort by agent, score or title; pages of up to 200.
+    static func swarmBoard(id: String) -> APIEndpoint<WireSwarmBoardResponse> {
+        APIEndpoint(op: "swarm.board", method: "GET", path: "/swarms/\(HTTPCobaltClient.encode(id))/board", auth: .keyOrService)
+    }
+
     /// `POST /library/items/:id/cutout` (op `library.cutout`, auth key): Remove a picture's background into a new png (POST /library/items/<id>/cutout); the chat uses make.cutout.
     static func libraryCutout(id: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "library.cutout", method: "POST", path: "/library/items/\(HTTPCobaltClient.encode(id))/cutout", auth: .key)
@@ -714,6 +794,16 @@ enum Endpoints {
     /// `DELETE /live/edits/:rid` (op `live.edit.delete`, auth key): An editor render's activity token.
     static func liveEditDelete(rid: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "live.edit.delete", method: "DELETE", path: "/live/edits/\(HTTPCobaltClient.encode(rid))", auth: .key)
+    }
+
+    /// `PUT /live/swarms/:id` (op `live.swarm.put`, auth key): A push-started swarm activity's token.
+    static func liveSwarmPut(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "live.swarm.put", method: "PUT", path: "/live/swarms/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
+    /// `DELETE /live/swarms/:id` (op `live.swarm.delete`, auth key): A push-started swarm activity's token.
+    static func liveSwarmDelete(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "live.swarm.delete", method: "DELETE", path: "/live/swarms/\(HTTPCobaltClient.encode(id))", auth: .key)
     }
 
     /// `PUT /studio/:sid/notify` (op `studio.notify.put`, auth key): Hark when this save is done.
@@ -1137,6 +1227,268 @@ struct AgentMail: Decodable, Sendable {
 struct ChatAgentsResponse: Decodable, Sendable {
     var agents: [Agent]
     var mail: [AgentMail]
+}
+
+struct WireSwarmTasksCellsItem: Decodable, Sendable {
+    var idx: Double
+    var status: String
+    var error: String?
+    /// its last step
+    var step: String?
+}
+
+struct WireSwarmTasks: Decodable, Sendable {
+    var total: Double
+    var queued: Double
+    var running: Double
+    /// agents parked on a question to their owner
+    var waiting: Double
+    var done: Double
+    var failed: Double
+    var cells: [WireSwarmTasksCellsItem]
+}
+
+struct WireSwarmEstimateUsd: Decodable, Sendable {
+    var low: Double
+    var high: Double
+}
+
+struct WireSwarmChanges: Decodable, Sendable {
+    var total: Double
+    var kept: Double
+    var done: Double
+    var failed: Double
+}
+
+struct WireSwarmApply: Decodable, Sendable {
+    var status: String
+    var done: Double
+    var failed: Double
+    var total: Double
+}
+
+struct WireSwarmSpecPreviewSource: Decodable, Sendable {
+    var call: String
+    var path: String?
+}
+
+struct WireSwarmSpecPreviewPrefetch: Decodable, Sendable {
+    var call: String
+    var `as`: String
+}
+
+/// what the approve page shows of the spec
+struct WireSwarmSpecPreview: Decodable, Sendable {
+    var source: WireSwarmSpecPreviewSource?
+    var reducePrompt: String?
+    /// looks up each item with this call first (section 62.6)
+    var prefetch: WireSwarmSpecPreviewPrefetch?
+    var turnsPerTask: Double
+    var attempts: Double
+    var stopAfterFailedTasks: Double
+}
+
+struct WireSwarmMessages: Decodable, Sendable {
+    var total: Double
+    /// open questions: answer with swarm.send
+    var waiting: Double
+}
+
+struct WireSwarm: Decodable, Sendable {
+    /// its id
+    var swarm: String
+    var name: String
+    var mode: String
+    var status: String
+    /// the approve and apply POSTs send it back
+    var specHash: String
+    var prompt: String
+    var tools: [String]
+    var writes: [String]
+    var items: Double
+    var batchSize: Double
+    var concurrency: Double
+    var tasks: WireSwarmTasks
+    var estimateUsd: WireSwarmEstimateUsd
+    var capUsd: Double
+    var spentUsd: Double
+    var createdAt: Double
+    var approvedAt: Double?
+    var finishedAt: Double?
+    /// an unapproved plan expires then
+    var expiresAt: Double?
+    /// the reduce step's summary
+    var reduce: String?
+    var error: String?
+    /// propose mode
+    var changes: WireSwarmChanges?
+    var apply: WireSwarmApply
+    /// what the approve page shows of the spec
+    var specPreview: WireSwarmSpecPreview
+    /// write ops no scope key limits (none of their input fields is a scope key)
+    var unscopedWrites: [String]
+    /// Harmony approves (and reviews) here; give this link to Harmony
+    var approveUrl: String
+    /// swarm:<id>, for job_status
+    var job: String
+    var messages: WireSwarmMessages
+    /// who planned it: the client key's name, chat or mcp
+    var planner: String
+    /// the mean of the ended agents' scores (section 62.3), null before any ended
+    var score: Double?
+}
+
+struct WireSwarmListResponse: Decodable, Sendable {
+    var swarms: [WireSwarm]
+}
+
+struct WireSwarmOutcome: Decodable, Sendable {
+    var status: String
+    var items: Double
+    /// how many of its items appear in its rows
+    var answered: Double
+    var toolCalls: Double
+    /// calls that still failed after their retries
+    var toolErrors: Double
+    var asks: Double
+    var turns: Double
+    var usd: Double
+    var ms: Double?
+    /// 0..1: answered / items × (1 − tool_errors / max(tool_calls, 1)); 0 for a failed agent; null while it runs
+    var score: Double?
+}
+
+struct WireSwarmResult: Decodable, Sendable {
+    var task: Double
+    var status: String
+    var error: String?
+    var usd: Double
+    var outcome: WireSwarmOutcome
+}
+
+struct WireSwarmResultsResponse: Decodable, Sendable {
+    var results: [WireSwarmResult]
+    var total: Double
+    var offset: Double
+}
+
+struct WireSwarmChange: Decodable, Sendable {
+    var n: Double
+    var task: Double
+    var op: String
+    var target: String?
+    var before: String?
+    var after: String?
+    var editArg: String?
+    var previewUrl: String?
+    var keep: Bool
+    var status: String
+    var error: String?
+    var clash: String?
+}
+
+struct WireSwarmChangesResponse: Decodable, Sendable {
+    var changes: [WireSwarmChange]
+    var total: Double
+    var offset: Double
+}
+
+struct WireSwarmDecideResponse: Decodable, Sendable {
+    var swarm: WireSwarm
+    var changes: [WireSwarmChange]
+}
+
+struct WireSwarmMessage: Decodable, Sendable {
+    var id: Double
+    var swarm: String
+    /// 1-based; null: to every agent
+    var agent: Double?
+    /// up: an agent to its owner; down: to agents
+    var dir: String
+    var kind: String
+    var sender: String
+    var text: String
+    var at: Double
+    var answered: Bool
+}
+
+struct WireSwarmInboxResponse: Decodable, Sendable {
+    var messages: [WireSwarmMessage]
+}
+
+struct WireSwarmSendResponse: Decodable, Sendable {
+    var sent: Bool
+    /// an agent waiting on a question was woken
+    var woke: Bool
+}
+
+struct WireSwarmMessagesResponse: Decodable, Sendable {
+    var messages: [WireSwarmMessage]
+}
+
+struct WireSwarmAgentStepsItem: Decodable, Sendable {
+    var at: Double
+    var text: String
+}
+
+struct WireSwarmAgent: Decodable, Sendable {
+    var swarm: String
+    var agent: Double
+    var status: String
+    var attempts: Double
+    var inTokens: Double
+    var outTokens: Double
+    var usd: Double
+    var startedAt: Double?
+    var endedAt: Double?
+    var error: String?
+    var steps: [WireSwarmAgentStepsItem]
+    var messages: [WireSwarmMessage]
+    /// propose mode: this agent's changes
+    var changes: [WireSwarmChange]
+}
+
+struct WireSwarmBoardResponseGroupsItem: Decodable, Sendable {
+    var value: String
+    var count: Double
+}
+
+struct WireSwarmBoardResponseAgentsItem: Decodable, Sendable {
+    var agent: Double
+    var status: String
+    var outcome: WireSwarmOutcome
+    var error: String?
+}
+
+struct WireMediaRef: Decodable, Sendable {
+    var ref: String
+    var kind: String
+    var previewUrl: String?
+    var openUrl: String?
+    var title: String?
+    var animated: Bool?
+}
+
+struct WireBoardRow: Decodable, Sendable {
+    var agent: Double
+    /// the row's number within its agent, from 1
+    var n: Double
+    var title: String
+    var score: Double?
+    var group: String?
+    /// resolved, at most 4
+    var media: [WireMediaRef]
+    var links: [String]
+}
+
+struct WireSwarmBoardResponse: Decodable, Sendable {
+    var swarm: WireSwarm
+    var total: Double
+    var offset: Double
+    var groups: [WireSwarmBoardResponseGroupsItem]
+    /// every agent, for the strip
+    var agents: [WireSwarmBoardResponseAgentsItem]
+    var rows: [WireBoardRow]
 }
 
 struct ShareCollectionsListResponse: Decodable, Sendable {

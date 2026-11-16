@@ -11,6 +11,7 @@ import { forCall, type OpBase } from "./context";
 import { OpError, type AiFlags, type Op, type OpContext } from "./op";
 import { CONFIRM_TTL_MS, type PendingConfirm, type PendingPort } from "./pending";
 import type { Registry } from "./registry";
+import { withRefs } from "./refs";
 import { argsToInput } from "./typescript";
 import { capture, opEvent } from "../posthog";
 
@@ -49,8 +50,9 @@ function recordAiOp(op: Op, ctx: OpContext, status: number, error: string | null
     const env = ctx.env as { POSTHOG_PROJECT_TOKEN?: string; POSTHOG_HOST?: string };
     if (!env.POSTHOG_PROJECT_TOKEN) return;
     const chat = ctx.chat;
-    const surface = chat?.agent ? "agent" : chat?.mcp ? "mcp" : "chat";
-    void capture(env, ctx.edge.waitUntil, opEvent({ op: op.name, surface, status, ms, error, keyId: ctx.keyId, thread: chat?.threadId ?? null }, ctx.now()));
+    const surface = chat?.swarm ? "swarm" : chat?.agent ? "agent" : chat?.mcp ? "mcp" : "chat";
+    const thread = chat?.swarm ? `swarm:${chat.swarm}` : (chat?.threadId ?? null);
+    void capture(env, ctx.edge.waitUntil, opEvent({ op: op.name, surface, status, ms, error, keyId: ctx.keyId, thread }, ctx.now()));
 }
 
 async function runOpInner(op: Op, ctx: OpContext, input: unknown, seen: (status: number) => void): Promise<unknown> {
@@ -78,8 +80,11 @@ async function runOpInner(op: Op, ctx: OpContext, input: unknown, seen: (status:
     }
     seen(status);
     if (status < 200 || status > 299) {
-        const code = (body as { error?: { code?: unknown } } | null)?.error?.code;
-        throw new OpError(status, typeof code === "string" ? code : "error.api.generic");
+        const e = (body as { error?: { code?: unknown; retry_after?: unknown } } | null)?.error;
+        const err = new OpError(status, typeof e?.code === "string" ? e.code : "error.api.generic");
+        // a Retry-After the op passed on (seconds), for a swarm's retries (section 62.5)
+        if (typeof e?.retry_after === "number") Object.assign(err, { retryAfter: e.retry_after });
+        throw err;
     }
     return op.ai.result ? op.ai.result(body) : body;
 }
@@ -100,6 +105,13 @@ export type ChatToolboxOpts = {
     onCall?: (call: ToolCall) => void;
     // a sub-agent's run (section 43): its id and parent
     agent?: { id: string; parent: string } | null;
+    // a swarm task's run (section 59): only these ops are in its `cobalt` (default: every op the flags allow)
+    allow?: (op: Op) => boolean;
+    // a swarm task's run (section 59): an `ask` op this returns true for runs at once, without a confirm card (the
+    // swarm's approval already covered it: an op in its `writes`, inside its `scope`)
+    preapproved?: (op: Op, input: unknown) => boolean;
+    // a swarm task's run (section 59): the swarm's id, for its PostHog surface
+    swarm?: string;
 };
 
 export type ChatToolbox = {
@@ -130,13 +142,22 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
         // a sub-agent acts as its parent's chat key: the same daily caps and the same studio sessions (section 43.7)
         keyId: chatKeyId(o.agent?.parent ?? o.threadId),
         caller: "chat",
-        chat: { threadId: o.threadId, collect: o.collect, tools: o.legacy, ...(watchJob ? { watchJob } : {}), ...(o.agent ? { agent: o.agent } : {}) },
+        chat: { threadId: o.threadId, collect: o.collect, tools: o.legacy, ...(watchJob ? { watchJob } : {}), ...(o.agent ? { agent: o.agent } : {}), ...(o.swarm ? { swarm: o.swarm } : {}) },
     });
     const tools: ChatTools = {};
     for (const op of registry.toolsFor("chat", o.flags)) {
+        if (o.allow && !o.allow(op)) continue;
         const fn = async (...args: unknown[]) => {
             if (paused) throw new Error("waiting for Harmony to answer the confirm card: end this run now and say in one line what you asked");
-            const parsed = op.input.safeParse(argsToInput(op, args));
+            // links and file names in the fields that name posts become their posts' ids first (section 60)
+            let raw: unknown;
+            try {
+                raw = await withRefs(op, ctx, argsToInput(op, args));
+            } catch (e) {
+                if (e instanceof OpError) throw new Error(`cobalt.${op.callName}: ${e.message}`);
+                throw e;
+            }
+            const parsed = op.input.safeParse(raw);
             if (!parsed.success) throw new Error(zodMessage(op.callName, parsed.error));
             const input = parsed.data;
             let t0 = Date.now();
@@ -146,7 +167,7 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
                 calls.push(c);
                 o.onCall?.(c);
             };
-            if (op.ai.tier === "ask" && (op.ai.asks ? await op.ai.asks(input, ctx) : true)) {
+            if (op.ai.tier === "ask" && !(o.preapproved?.(op, input) ?? false) && (op.ai.asks ? await op.ai.asks(input, ctx) : true)) {
                 if (o.agent) {
                     record({ status: "error", error: "a sub-agent cannot ask Harmony" });
                     throw new Error(`cobalt.${op.callName} needs Harmony's ok, and a sub-agent cannot ask: put what should be done in your report (or cobalt.agents.send("parent", ...)) and the main chat will ask`);
@@ -179,7 +200,8 @@ export function chatToolbox(registry: Registry, base: OpBase, o: ChatToolboxOpts
             } catch (e) {
                 const message = e instanceof OpError ? (e.message === e.code ? `cobalt.${op.callName} failed: ${e.code}` : e.message) : e instanceof Error ? e.message : String(e);
                 record({ status: "error", error: message.slice(0, 300) });
-                if (e instanceof OpError) throw new Error(message);
+                // the op's status and code ride along (a swarm tries a passing failure again, section 62.2)
+                if (e instanceof OpError) throw Object.assign(new Error(message), { status: e.status, code: e.code, retryAfter: (e as { retryAfter?: number }).retryAfter });
                 throw e;
             }
             if (calls.length < CALLS_MAX) {

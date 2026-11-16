@@ -887,6 +887,83 @@ await step("standalone: prefers-color-scheme, reduced motion, injected result (w
     eq(await p3.locator(".lk .t b").innerText(), "injected", "result injected by the host is drawn");
     await p3.close();
 });
+// ---------------------------------------------------------------- the swarm card (swarm_plan, swarm_get)
+await step("swarm: awaiting approval: facts, clamped prompt, one button that opens approve_url, no approve tool", async () => {
+    await open("swarm.awaiting", { width: 390 });
+    eq(await txt(".whead b"), "Rename duplicate emotes", "name");
+    eq(await txt(".whead .pill"), "needs approval", "status pill");
+    const t = await txt(".swk");
+    ok(t.includes("1000 items in 20 tasks") && t.includes("seventv.rename") && t.includes("sets (1)") && t.includes("$0.80 to $2.40") && t.includes("cap $3.00"), `facts: ${t}`);
+    ok(await F().locator(".swt.clamp").count() === 1, "prompt is clamped");
+    await F().getByRole("button", { name: "show all" }).click();
+    eq(await count(".swt.clamp"), 0, "show all opens the prompt");
+    eq(await count(".acts .btn"), 1, "one button");
+    eq(await txt(".acts .btn"), "Approve in capystore", "its label");
+    ok((await txt(".swn")).includes("The agent can't approve it"), "says the agent cannot approve");
+    await shot("swarm-awaiting-390");
+    await F().locator(".acts .btn").click();
+    eq((await hostLinks()).at(-1), "https://cobalt.capybaraharmony.com/swarms/swm-8Kp2xQ", "opens approve_url");
+    ok((await calls()).every((c) => !/approve|apply|decide/.test(c.name)), "no approve or apply tool call");
+});
+await step("swarm: running: batch strip and spent vs cap; refresh calls swarm_get", async () => {
+    await open("swarm.running", { width: 390 });
+    eq(await txt(".whead .pill"), "running", "pill");
+    eq(await count(".swcells i"), 20, "one cell per batch");
+    eq([await count(".swcells .c-done"), await count(".swcells .c-running"), await count(".swcells .c-failed"), await count(".swcells .c-queued")], [7, 5, 1, 7], "cells by status");
+    ok((await txt(".swb")).includes("spent $0.74 of $3.00 cap"), "spent vs cap");
+    eq(await count(".acts .btn.pri"), 0, "nothing to approve");
+    await F().getByRole("button", { name: "refresh" }).click();
+    eq((await lastCall()).name, "swarm_get", "refresh asks swarm_get");
+});
+await step("swarm: done (propose): counts and Review N changes opens approve_url; done (read): reduce summary", async () => {
+    await open("swarm.propose", { width: 390 });
+    ok((await txt(".swk")).includes("137 changes"), "change count");
+    eq(await txt(".acts .btn"), "Review 137 changes", "review button");
+    await F().locator(".acts .btn").click();
+    eq((await hostLinks()).at(-1), "https://cobalt.capybaraharmony.com/swarms/swm-8Kp2xQ", "review opens approve_url");
+    await shot("swarm-done-propose-390");
+    await open("swarm.read", { width: 390 });
+    ok((await txt(".swr")).startsWith("Of 1000 emotes"), "reduce summary");
+    ok((await txt(".swk")).includes("19 done, 1 failed"), "counts");
+    eq(await count(".acts .btn.pri"), 0, "no primary button");
+});
+await step("swarm: failed and stopped show why", async () => {
+    await open("swarm.failed", { width: 390 });
+    ok((await txt(".err")).includes("7TV rejected the session token"), "error shown");
+    eq(await txt(".whead .pill"), "failed", "pill");
+    await open("swarm.stopped", { width: 390 });
+    eq(await txt(".whead .pill"), "stopped", "stopped pill");
+});
+await step("board: agent strip, cards, a card opens, search and chips call swarm_board, more on scroll", async () => {
+    await open("board.results", { width: 680 });
+    eq(await txt(".whead .pill"), "score 62%", "swarm score pill");
+    eq(await count(".bdst .bda"), 3, "one strip cell per agent");
+    ok((await F().locator(".bdst .bda").nth(2).getAttribute("class")).includes("t-bad"), "the failed agent is red");
+    eq(await count(".thumbs .th"), 100, "first page of cards");
+    ok((await txt(".note")).startsWith("100 of 130"), "count note");
+    await F().locator(".thumbs .th").first().click();
+    ok((await txt(".swk")).includes("xmas_emote_0"), "a card opens its detail");
+    await F().locator(".acts .btn").first().click();
+    ok(await F().locator(".thumbs").isVisible(), "back shows the grid");
+    await F().locator(".thumbs .th").last().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    eq(await count(".thumbs .th"), 130, "the next page loads on scroll");
+    const more = (await calls()).filter((c) => c.name === "swarm_board");
+    eq(more.at(-1).arguments.offset, 100, "asked from offset 100");
+    await F().locator(".bdt input[type=search]").fill("xmas_emote_1");
+    await F().locator(".bdt input[type=search]").press("Enter");
+    eq((await lastCall()).arguments.q, "xmas_emote_1", "search calls swarm_board with q");
+    await open("board.results", { width: 390 });
+    await F().locator(".bdt").nth(1).locator("button", { hasText: "snow" }).click();
+    eq((await lastCall()).arguments.group, "snow", "group chip calls swarm_board with group");
+    await open("board.results", { width: 390 });
+    await F().locator(".bdst .bda").first().click();
+    eq((await lastCall()).arguments.agent, 1, "agent cell filters by agent");
+    for (const w of [390, 680]) {
+        await open("board.results", { width: w });
+        await shot(`board-${w}`);
+    }
+});
 // ---------------------------------------------------------------- compact: height budgets on a phone, and the screenshots
 await step("compact: phone height budgets (390 px) and screenshots at 390 and 680", async () => {
     const budget = { "search.grid": 300, "links.list": 230, "collections.grid": 230, "edit.list": 230, "upload.tray": 250, "save.done": 130, "webp.pick": 190, "post.video": 560, "edit.project": 640 };
@@ -899,6 +976,12 @@ await step("compact: phone height budgets (390 px) and screenshots at 390 and 68
         for (const w of [390, 680]) {
             await open(key, { width: w, theme: "dark" });
             await shot(`compact-${key}-${w}`);
+        }
+    }
+    for (const key of ["swarm.awaiting", "swarm.running", "swarm.propose", "swarm.read", "swarm.failed", "swarm.stopped"]) {
+        for (const w of [390, 680]) {
+            await open(key, { width: w });
+            await shot(`swarm-${key.split(".")[1]}-${w}`);
         }
     }
     await open("search.grid", { width: 390, theme: "dark" });

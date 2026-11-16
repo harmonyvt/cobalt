@@ -217,6 +217,40 @@ describe("tools/call", () => {
     });
 });
 
+describe("links where a tool names posts (section 60)", () => {
+    // a webp that was hidden: its bytes went private, it keeps its public name, the hidden row says so
+    const hiddenWebp = () => {
+        db.raw
+            .prepare(
+                `INSERT INTO media_items (id, kind, source, bucket, r2_key, url, name, content_type, bytes, key_id, created_at, visibility, public_key, post_key)
+                 VALUES ('Webp000000000001', 'private', 'webp', 'originals', 'webps/vFhaasY6GA.webp', NULL, 'clip.webp', 'image/webp', 10, 'k', 1, 'private', 'vFhaasY6GA.webp', 'Webp000000000001')`,
+            )
+            .run();
+        db.raw.prepare("INSERT INTO media_hidden (post_key, state, by, rule_id, at) VALUES ('Webp000000000001', 'hidden', 'you', NULL, 1)").run();
+    };
+    it("library_status unhides a hidden post from its media link in one call", async () => {
+        hiddenWebp();
+        const r = await call("library_status", { ids: ["https://media.capybaraharmony.com/vFhaasY6GA.webp"], status: "off" });
+        expect(r.isError).toBeUndefined();
+        expect(textOf(r)).toMatchObject({ status: "off", posts: [{ id: "Webp000000000001" }], failed: [] });
+        expect(db.raw.prepare("SELECT state FROM media_hidden WHERE post_key = 'Webp000000000001'").get()).toEqual({ state: "exempt" });
+    });
+    it("show_post on a hidden post's link names it and the call that unhides it; a link to nothing is an error", async () => {
+        hiddenWebp();
+        const r = await call("show_post", { id: "vFhaasY6GA.webp" });
+        expect(r.isError).toBe(true);
+        expect(r.content[0].text).toMatch(/post Webp000000000001 .*is hidden \(library_status unhides it: ids \["Webp000000000001"\]/);
+        const none = await call("library_status", { ids: ["https://media.capybaraharmony.com/Nothing123.webp"], status: "off" });
+        expect(none.isError).toBe(true);
+        expect(none.content[0].text).toMatch(/nothing in the library matches/);
+    });
+    it("library_status that changes nothing is an error, not a bare success", async () => {
+        const r = await call("library_status", { ids: ["Ab3dE6gH9jK2mN5p"], status: "hidden" });
+        expect(r.isError).toBe(true);
+        expect(r.content[0].text).toMatch(/nothing changed/);
+    });
+});
+
 describe("upload_files + PUT /mcp/upload/<token>", () => {
     const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8]);
     const put = (url: string, data: Uint8Array = PNG, type: string | null = "image/png") =>
@@ -302,13 +336,15 @@ describe("MCP calls to ops that have an ai.args mapping", () => {
         "library.search": { query: "cat", limit: 5 },
         "library.about": { key: "Ab3dE6gH9jK2mN5p" },
         collage: { ids: ["Ab3dE6gH9jK2mN5p"], title: "t", query: "cat" },
+        // section 62.1: look({ media }) as one object
+        look: { media: "https://cdn.7tv.app/emote/01HZX5Q8M3Y9K2B7C4D6E8F0GA/2x.webp" },
     };
 
     it("every op with ai.args takes its own input object as it is (MCP-offered or not)", () => {
         const withMapping = REGISTRY.ops.filter((o) => o.ai.args).map((o) => o.callName).sort();
         expect(withMapping).toEqual(Object.keys(SAMPLES).sort());
         const offered = mcpOps(REGISTRY, { search: true, box: true, mcp: true, agents: true, ytdlp: true }).filter((o) => o.ai.args).map((o) => o.callName).sort();
-        expect(offered).toEqual(["library.about", "library.search"]);
+        expect(offered).toEqual(["library.about", "library.search", "look"]);
         for (const op of REGISTRY.ops.filter((o) => o.ai.args)) {
             const sample = SAMPLES[op.callName];
             expect(op.input.safeParse(sample).success, op.callName).toBe(true);

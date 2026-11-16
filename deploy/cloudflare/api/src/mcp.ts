@@ -9,11 +9,13 @@
 // Free of Cloudflare imports: the tests run it under node.
 import * as z from "zod";
 import { chatTools, type ChatCollect } from "./chat-tools";
-import { lookImages, type LookOpts } from "./look-pictures";
+import { lookImages, lookMediaImages, type LookOpts } from "./look-pictures";
+import { mediaHostsOf } from "./media-refs";
 import { chatKeyId, runOp } from "./registry/ai";
 import { forCall } from "./registry/context";
 import { OpError, type AiFlags, type Op, type OpContext } from "./registry/op";
 import type { Registry } from "./registry/registry";
+import { withRefs } from "./registry/refs";
 import { argsToInput } from "./registry/typescript";
 import { agentsOn } from "./chat-agents";
 import { workbenchOn } from "./workbench-rules";
@@ -151,10 +153,12 @@ export function mcpToolList(registry: Registry, flags: AiFlags): McpTool[] {
 export const INSTRUCTIONS = [
     "capystore is Harmony's media library: videos, images and galleries saved from links or uploaded, with public share links.",
     "Posts are found with search_library (meaning search; with no query it lists the library newest first) and opened with show_post; use the post `id` they return.",
+    "Wherever a tool asks for a post or file id you may pass a capystore link or file name as it is: media.../<name>.<ext>, share.../<name>, share.../g/<id>, share.../p/<key>, a bare name like vFhaasY6GA.webp, or the page it was saved from. Hidden and private posts are found too, so to unhide or change a link the user pasted, call library_status (or the tool) with that link directly. A tool that changed nothing answers an error, never a bare success.",
     "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with save_link. Upload a local file with upload_files, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
     "Make ops (make_*, edits_render, chat_video, convert_to_webp) answer a job: check on it with job_status. Share links: create_share_link; collections and sets group them.",
     "Cropping (make_cropImage for pictures, make_crop for videos): never guess the position or assume the centre. Look at the source with grid: true (a video: frames: true, or make_frames for frames at chosen seconds), read the box off the labelled grid, check it with look's box option before making it, and look at the result after. A moving subject needs a box that covers it in every frame, or several clips with their own crops. Plain crop by default: cutout only for a subject on a plain background, never for banners, bars or text. Then edits_addOverlay to use it in a video.",
     "When offered, agents_spawn starts a helper (another capystore agent with these tools) on one task in the background; follow it with agents_get or job_status on its job, message it with agents_send, read what helpers sent you with agents_inbox.",
+    "To see any media (a 7TV emote id or link, a capystore link, an allowed https image URL), call look with media. Swarms (swarm_plan): when the items are a 7TV set's emotes, use source { call: \"seventv.set\" } (one read gives every name, id and picture) instead of searching for each; emotes_findMany looks up to 20 names in one request; swarm_board shows any swarm's results with their media and scores.",
     "Tools marked destructive delete or change things for good: confirm with the user first.",
     "Some tools show a picture answer (a widget) where the host draws one: search_library, show_post, show_edit, list_collections, list_share_links, convert_to_webp, upload_files, create_share_link and save_link, and after a change the collections_*, links_update, links_private, links_rotate, library_title, library_visibility and library_status tools, and (when offered) box_run, box_pull and box_save as a terminal. Every tool also answers in text, and with structuredContent (the same JSON) where it has one.",
     "The other tools (make_*, edits_*, library_*, links_*...) cover everything else, deletes and edits included.",
@@ -216,7 +220,7 @@ export function mcpInput(op: Op, args: unknown): z.ZodSafeParseResult<unknown> {
 // Run a chat op for an app tool: the same context, argument mapping, checks and runner as a tool call. Throws OpError.
 export async function runChatOp(op: Op, caller: McpCaller, args: unknown): Promise<unknown> {
     const ctx = await threadContext(caller);
-    const parsed = mcpInput(op, args);
+    const parsed = mcpInput(op, await withRefs(op, ctx, args));
     if (!parsed.success) throw new OpError(400, "error.api.bad_request", issuesText(mcpToolName(op.callName), parsed.error));
     return runOp(op, ctx, parsed.data);
 }
@@ -238,12 +242,20 @@ export function structuredOf(value: unknown): Json | undefined {
 // `follow` may build a widget's structuredContent (and the signed preview links for its `_meta`) from the op's answer (src/mcp-app/follow.ts); the text stays the op's.
 export async function callTool(op: Op, caller: McpCaller, args: Json, follow?: (value: unknown, input: unknown) => Promise<{ structured: Json; meta?: Json } | null>): Promise<ToolResult> {
     const ctx = await threadContext(caller);
-    const parsed = mcpInput(op, args);
+    let resolved: unknown;
+    try {
+        // links and file names in the fields that name posts become their posts' ids first (section 60)
+        resolved = await withRefs(op, ctx, args);
+    } catch (e) {
+        return textResult(errorText(mcpToolName(op.callName), e), true);
+    }
+    const parsed = mcpInput(op, resolved);
     if (!parsed.success) return textResult(issuesText(mcpToolName(op.callName), parsed.error), true);
     try {
         if (op.callName === "look") {
-            const l = parsed.data as { ids: string[]; grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number } };
-            return await look(ctx, caller, l.ids, { grid: l.grid === true, frames: l.frames === true, ...(l.box ? { box: l.box } : {}) });
+            const l = parsed.data as { ids?: string[]; media?: string; grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number } };
+            if ((l.ids ?? []).length === 0 && !l.media) return textResult("look: give post ids or media", true);
+            return await look(ctx, caller, l.ids ?? [], { grid: l.grid === true, frames: l.frames === true, ...(l.box ? { box: l.box } : {}) }, l.media);
         }
         // the chat's own runner, so a route op goes through the Durable Object exactly as the chat's does
         const value = (await runOp(op, ctx, parsed.data)) ?? null;
@@ -258,15 +270,12 @@ export async function callTool(op: Op, caller: McpCaller, args: Json, follow?: (
 }
 
 // look: the posts' pictures as MCP images (section 44.3: private ones read from R2, a grid or video frames when asked).
-async function look(ctx: OpContext, caller: McpCaller, ids: string[], o: LookOpts = {}): Promise<ToolResult> {
+async function look(ctx: OpContext, caller: McpCaller, ids: string[], o: LookOpts = {}, media?: string): Promise<ToolResult> {
     const wanted = [...new Set(ids)].slice(0, MCP_LOOK_MAX);
     const env = ctx.env as { ORIGINALS?: unknown; MEDIA?: unknown; IMAGES?: unknown };
     const opts = Object.fromEntries(wanted.map((id) => [id, o]));
-    const imgs = await lookImages(
-        { db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl, originals: env.ORIGINALS as never, media: env.MEDIA as never, images: (env.IMAGES ?? null) as never },
-        wanted,
-        opts,
-    );
+    const lookDeps = { db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl, originals: env.ORIGINALS as never, media: env.MEDIA as never, images: (env.IMAGES ?? null) as never };
+    const imgs = await lookImages(lookDeps, wanted, opts);
     const doFetch = caller.fetch ?? fetch;
     const content: Content[] = [];
     for (const id of wanted) {
@@ -295,6 +304,17 @@ async function look(ctx: OpContext, caller: McpCaller, ids: string[], o: LookOpt
         if (o.frames && !list.some((i) => i.label.startsWith("Frame "))) content.push({ type: "text", text: `Post ${id} has no stored frames (not a video, or not described yet): make_frames saves frames to look at.` });
     }
     if (ids.length > MCP_LOOK_MAX) content.push({ type: "text", text: `Only the first ${MCP_LOOK_MAX} were shown.` });
+    // look({ media }) (section 62.1): an emote, an allowed image link or a capystore ref
+    if (media) {
+        const deps = { ...lookDeps, shareBaseUrl: ctx.shareBaseUrl, hosts: mediaHostsOf(ctx.env as { MEDIA_HOSTS?: string }, ctx), fetch: doFetch };
+        const m = (await lookMediaImages(deps, [media]).catch(() => new Map())).get(media);
+        for (const im of m?.images ?? []) {
+            content.push({ type: "text", text: im.url ? `${im.label} ${im.url}` : im.label });
+            if (im.data) content.push({ type: "image", data: im.data, mimeType: im.mediaType! });
+        }
+        if (m?.note) content.push({ type: "text", text: m.note });
+        if (!m) content.push({ type: "text", text: `${media} could not be looked at.` });
+    }
     return { content };
 }
 

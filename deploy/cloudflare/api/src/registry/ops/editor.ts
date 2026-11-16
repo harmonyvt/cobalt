@@ -78,6 +78,7 @@ export const makeCutoutOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary:
@@ -167,6 +168,7 @@ export const editsAddOverlayOp = defineOp({
     }),
     output: ProjectSchema.extend({ clip: z.string().describe("the new overlay's id"), track: z.number() }),
     ai: {
+        refs: { file: "file" },
         tier: "free",
         only: true,
         summary:
@@ -302,6 +304,7 @@ export const makeCropImageOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary:

@@ -3,8 +3,9 @@ import SwiftUI
 
 // A 7TV set (APP-API-CONTRACT 57.7, mockup `7tv-tab/` "managing a set"), pushed from the 7tv tab (and the studio's old card),
 // or embedded as the Mac's right column (`embedded`: a header with rename, make live and "+ add emotes" instead of the chips).
-// Two chips: "in this set" (a 4-column grid with a name filter and paging; a tap opens the emote sheet; a long press, or
-// "select", picks several for "copy to…" and "remove N") and "add from 7tv" (section 20's search and sorts; + adds under the
+// Two chips: "in this set" (a 4-column grid with a name filter and paging; a tap opens the emote sheet; a long press opens
+// its variants on 7TV, every emote with its own 7TV name, and a tap on one swaps it in (APP-API-CONTRACT 20.2); "select" picks several for "copy to…" and
+// "remove N") and "add from 7tv" (section 20's search and sorts; + adds under the
 // emote's own name, a long press or right click adds with another name, ✓ marks what is already in the set; a name already
 // in the set opens the clash sheet). Rename the set and make it live from the title menu. Every edit changes the grid once
 // 7TV took it; a refusal says 7TV's words on the status line.
@@ -26,6 +27,8 @@ struct SevenTvSetScreen: View {
     @State private var selection: Set<String> = []
     @State private var confirmingRemove = false
     @State private var clash: SevenTvNameClash?
+    @State private var variants: SevenTvVariantsModel?
+    @State private var heldTick = 0
     @State private var working = false
     @State private var doneTick = 0
     @State private var failTick = 0
@@ -60,6 +63,9 @@ struct SevenTvSetScreen: View {
             .sheet(item: $clash) { found in
                 SevenTvClashSheet(emoteSet: emoteSet, clash: found)
             }
+            .sheet(item: $variants) { found in
+                SevenTvVariantsSheet(variants: found, emoteSet: emoteSet)
+            }
             .modifier(SevenTvRenameSetAlert(emoteSet: emoteSet, isPresented: $renaming, draft: $draftName, done: { doneTick += 1 }, failed: { failTick += 1 }))
             .confirmationDialog(
                 Copy.SevenTv.removeManyTitle(selection.count), isPresented: $confirmingRemove, titleVisibility: .visible
@@ -74,6 +80,7 @@ struct SevenTvSetScreen: View {
             .haptic(.error, trigger: failTick)
             .haptic(.selection, trigger: tab)
             .haptic(.selection, trigger: selection.count)
+            .haptic(.impact(weight: .medium), trigger: heldTick)
     }
 
     private var page: some View {
@@ -242,13 +249,18 @@ struct SevenTvSetScreen: View {
         if selection.contains(emote.id) { selection.remove(emote.id) } else { selection.insert(emote.id) }
     }
 
+    /// A long press: the emote's variants on 7TV, looked up by its own name (never the alias it has here). While picking
+    /// several it marks the tile, as a tap does.
     private func hold(_ emote: SevenTvSetItem) {
-        guard emoteSet.can.manageSets else {
-            picked = emote
+        guard !selecting else {
+            tap(emote)
             return
         }
-        selecting = true
-        selection.insert(emote.id)
+        heldTick += 1
+        let library = model.library
+        variants = SevenTvVariantsModel(emote: emote) { name, page in
+            try await library.emoteVariants(name: name, page: page)
+        }
     }
 
     private func startSelecting() {
@@ -443,7 +455,7 @@ private struct SevenTvInSetGrid: View {
 }
 
 /// One emote of the set: its picture, its name here, and "was <7TV name>" when renamed. A tap opens it (or marks it while
-/// picking several); a long press starts picking several.
+/// picking several); a long press shows its variants on 7TV.
 private struct SevenTvSetTile: View {
     let emote: SevenTvSetItem
     let busy: Bool
@@ -495,7 +507,7 @@ private struct SevenTvSetTile: View {
         .accessibilityAddTraits(picked ? [.isButton, .isSelected] : .isButton)
         .accessibilityHint(selecting ? "" : Copy.SevenTv.selectHintA11y)
         .accessibilityAction(.default) { if !busy { tap() } }
-        .accessibilityAction(named: Copy.SevenTv.select) { if !busy { hold() } }
+        .accessibilityAction(named: Copy.SevenTv.variants) { if !busy { hold() } }
     }
 }
 

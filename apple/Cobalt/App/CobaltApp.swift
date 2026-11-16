@@ -105,6 +105,11 @@ struct CobaltApp: App {
         #endif
         // Shortcuts, Siri and Spotlight run in this process, before any scene (CONTRACT-PARALLEL 15.2)
         IntentDependencies.register(model)
+        // The swarm buttons (Live Activity intents, notification actions) call the API with this model's session client;
+        // the system may launch the app in the background just to run one, so this is set before any scene.
+        model.installSwarmIntentHost()
+        SwarmNotifier.registerCategory()
+        SwarmNotifier.shared.start(model)
         #if os(macOS)
         DockBadge.follow(model.queue)
         #endif

@@ -16,6 +16,9 @@ import { hiddenRows } from "../../hidden-store";
 import { effectiveVisibility } from "../../visibility";
 import { budgetPort, dailyCap } from "../budget";
 import { AGENT_JOB_REGEX, agentJobState, agentRow, isMissingTable } from "../../chat-agents";
+// swarm.ts is loaded only when a swarm job is waited on: a static import pulls in chat.ts and so the registry, whose
+// editor ops read this module's exports (ProjectSchema) while it is still loading (an import cycle the bundle trips on).
+const SWARM_JOB_REGEX = /^swarm:([A-Za-z0-9]{16})$/;
 import { defineOp, ok, OpError, type OpContext, type OpReply, capThreadOf } from "../op";
 
 export const CHAT_DAILY_RENDERS_DEFAULT = 10;
@@ -270,6 +273,12 @@ export const JobSchema = z
         activity: z.string().nullable().optional().describe("agent jobs while running: the call it made last"),
         result: z.string().optional().describe("agent jobs that ended: its report"),
         post_ids: z.array(z.string()).optional().describe("agent jobs that ended: the posts it showed"),
+        // a swarm's job, swarm:<id> (section 59)
+        swarm: z.string().optional().describe("swarm jobs: the swarm's id (its result is a summary; swarm.results has the rest)"),
+        asks: z
+            .array(z.object({ id: z.number(), agent: z.number(), text: z.string() }))
+            .optional()
+            .describe("swarm jobs while running: questions from its agents waiting for an answer (answer with swarm.send)"),
     })
     .meta({ id: "Job" });
 type Job = z.infer<typeof JobSchema>;
@@ -446,6 +455,30 @@ async function waitAgent(ctx: OpContext, id: string, deadline: number): Promise<
     }
 }
 
+// A swarm (section 59): the key that planned it (or, in the chat, its thread) may wait on it. Read from D1 every 2 s.
+async function waitSwarm(ctx: OpContext, id: string, deadline: number): Promise<Job> {
+    const owner = ctx.chat?.mcp?.clientKeyId ?? ctx.keyId;
+    // the service and Harmony's signed-in sessions see every swarm (as swarm.get does); anyone else only their own
+    let all = ctx.caller === "service";
+    if (!all && !ctx.chat && ctx.caller === "key" && ctx.keyId) {
+        const k = await ctx.db.prepare("SELECT kind FROM api_keys WHERE id = ?1").bind(ctx.keyId).first<{ kind: string }>();
+        all = k?.kind === "session";
+    }
+    const { cellsOf, isMissingTable: isMissingSwarmTable, openAsks, swarmJobState, swarmRow } = await import("../../swarm");
+    for (;;) {
+        const row = await swarmRow(ctx.db, id).catch((e) => (isMissingSwarmTable(e) ? null : Promise.reject(e)));
+        if (!row || (!all && row.key_id !== owner)) throw stop("jobs.wait", `swarm:${id} is not one of your swarms`);
+        const cells = await cellsOf(ctx.db, id);
+        const asks = cells.some((c) => c.status === "waiting") ? await openAsks(ctx.db, id) : [];
+        const state = swarmJobState(row, cells, asks) as Job;
+        if (state.status !== "queued" && state.status !== "running") return state;
+        // an agent is waiting on a question: the caller hears it now (it is the one who can answer), not at the deadline
+        if (asks.length > 0) return state;
+        if (remaining(ctx, deadline) <= 0) return state;
+        await ctx.edge.sleep(Math.min(2000, Math.max(0, deadline - ctx.now())));
+    }
+}
+
 // A job's state after waiting up to `seconds` (0: right now). The chat's job watcher (chat-jobs.ts) reads it too.
 export async function waitJob(ctx: OpContext, job: string, seconds: number): Promise<Job> {
     const deadline = ctx.now() + seconds * 1000;
@@ -455,6 +488,8 @@ export async function waitJob(ctx: OpContext, job: string, seconds: number): Pro
     if (edit) return waitEdit(ctx, edit[1]!, deadline);
     const agent = AGENT_JOB_REGEX.exec(job);
     if (agent) return waitAgent(ctx, agent[1]!, deadline);
+    const swarm = SWARM_JOB_REGEX.exec(job);
+    if (swarm) return waitSwarm(ctx, swarm[1]!, deadline);
     const open = /^open:([A-Za-z0-9]{22}):([A-Za-z0-9_-]{1,4000})$/.exec(job);
     if (open) {
         let plan: Plan;
@@ -512,6 +547,7 @@ export const makeWebpOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: "An animated webp (silent, loops) of 0.5 to 10 s of a video or gif, optionally cropped. Returns a job: hand it to jobs.onDone.",
@@ -543,6 +579,7 @@ export const makeStillOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: "An animated webp of one photo (looks still), so Discord lets people favourite it. Returns a job.",
@@ -605,6 +642,7 @@ export const makeSlideshowOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "post" },
         tier: "free",
         only: true,
         summary: "A slideshow of a gallery's items (2 to 20). Only for galleries saved in the last 7 days. Returns a job.",
@@ -643,6 +681,7 @@ export const makeGalleryImageOp = defineOp({
     }),
     output: JobSchema,
     ai: {
+        refs: { id: "post" },
         tier: "free",
         only: true,
         summary: "One jpeg of a gallery's photos (2 to 20) side by side or in a grid. Only for galleries saved in the last 7 days. Returns a job.",
@@ -821,6 +860,7 @@ export const makeTrimOp = defineOp({
     input: z.object({ id: Id, start: z.number().min(0).describe("seconds"), end: z.number().gt(0).describe("seconds"), ...ClipOpts }),
     output: OneClipJob,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: "A new mp4 of part of a video (made by the editor). Returns a job and the edit project's id.",
@@ -844,6 +884,7 @@ export const makeCropOp = defineOp({
     }),
     output: OneClipJob,
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: "A new mp4 of a video cropped to part of the picture (and trimmed if start/end are given), one fixed box for the whole clip. Look at its frames with a grid and check the box with look({ box }) first; never guess the centre. Returns a job and the edit project's id. Pictures: make.cropImage.",

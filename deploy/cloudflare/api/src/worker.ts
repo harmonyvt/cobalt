@@ -126,6 +126,18 @@ export interface WorkerEnv {
     CHAT_AGENTS?: DurableObjectNamespace;
     // How many sub-agents one chat may start per UTC day (default 20, "0" turns sub-agents off).
     CHAT_DAILY_AGENTS?: string;
+    // Agent swarms (section 59): the Swarm Durable Object namespace (one object per swarm, its tasks run in its alarm).
+    // Absent (or no ANTHROPIC_API_KEY): swarm.plan still stores plans, swarm.approve answers 503 error.swarm.off.
+    SWARMS?: DurableObjectNamespace;
+    // Section 62.5: the SevenTvGate Durable Object namespace (one object, "gate"), the pace of every 7TV API call.
+    SEVENTV_GATE?: DurableObjectNamespace;
+    // Section 62.1: the hosts an https media ref may name (comma separated); default cdn.7tv.app and the house hosts.
+    MEDIA_HOSTS?: string;
+    // The most one swarm's dollar cap may be (default 10), and the dollars all swarms may spend per UTC day (default 5).
+    SWARM_MAX_USD?: string;
+    SWARM_DAILY_USD?: string;
+    // How long a swarm agent waits for an answer to its question, in ms (section 61.2; default 10 minutes, for tests).
+    SWARM_ASK_WAIT_MS?: string;
     // "1": every request's D1 round trips are counted and one JSON line per request is logged (src/d1-timing.ts).
     // Anything else: DB is the plain binding and nothing is logged.
     D1_TIMING?: string;

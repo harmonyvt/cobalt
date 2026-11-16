@@ -9,6 +9,7 @@ import { picturesOf } from "./chat-tools";
 import { decodePng, encodePng, isPng, pngSize, type Rgba } from "./cutout-core";
 import type { ImagesPort } from "./cutout";
 import { drawBox, drawGrid, type CropBox } from "./image-crop-core";
+import { isMedia, mediaPosts, resolveMedia } from "./media-refs";
 
 export type LookOpts = { grid?: boolean; frames?: boolean; box?: CropBox };
 type Marks = { grid: boolean; box: CropBox | null };
@@ -166,5 +167,118 @@ export function lookBlocks(id: string, imgs: LookImage[] | undefined, wantedFram
         content.push(im.url ? { type: "image", source: { type: "url", url: im.url } } : { type: "image", source: { type: "base64", media_type: im.mediaType, data: im.data } });
     }
     if (wantedFrames && !imgs.some((i) => i.label.startsWith("Frame "))) content.push({ type: "text", text: `Post ${id} has no stored frames (not a video, or not described yet): cobalt.make.frames(id, { count }) saves frames to look at.` });
+    return content;
+}
+
+// ---- look({ media }) (APP-API-CONTRACT.md section 62.1) -------------------------------------------------------------------
+
+export type MediaLookDeps = LookDeps & { shareBaseUrl?: string | undefined; hosts: string[]; fetch?: typeof fetch };
+export type MediaLook = { images: LookImage[]; note?: string };
+
+export const MEDIA_FETCH_MS = 10_000;
+export const MEDIA_FETCH_MAX_BYTES = 10 * 1024 * 1024;
+
+// A picture fetched from an allowlisted URL (an emote's CDN picture, an image link) and made ready for the model: an
+// animated one becomes its first frame through Images. null when it cannot be fetched or prepared.
+async function fetchPicture(d: MediaLookDeps, url: string, label: string): Promise<LookImage | null> {
+    const f = d.fetch ?? fetch;
+    const deadline = Date.now() + MEDIA_FETCH_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((r) => (timer = setTimeout(() => r(null), MEDIA_FETCH_MS)));
+    try {
+        // no redirects: only the allowlisted URL itself is fetched (a 3xx is no picture)
+        const res = await Promise.race([f(url, { headers: { accept: "image/*" }, redirect: "manual" }), timeout]);
+        if (!res) return null;
+        const type = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+        const declared = Number(res.headers.get("content-length") ?? 0);
+        if (!res.ok || res.status !== 200 || (res.url && res.url !== url) || !type.startsWith("image/") || declared > MEDIA_FETCH_MAX_BYTES || !res.body) {
+            await res.body?.cancel().catch(() => {});
+            return null;
+        }
+        // the body is read in chunks under the same clock, and dropped past the byte cap
+        const bytes = await Promise.race([readCapped(res.body, MEDIA_FETCH_MAX_BYTES, deadline), timeout]);
+        if (!bytes) return null;
+        const p = await prepare(d, bytes, type, { grid: false, box: null });
+        return p ? { label, data: toBase64(p.data), mediaType: p.mediaType } : null;
+    } catch {
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// A body read to its end, or null when it is longer than `max` bytes or the deadline passes (the stream is cancelled).
+export async function readCapped(body: ReadableStream<Uint8Array>, max: number, deadline: number): Promise<Uint8Array | null> {
+    const reader = body.getReader();
+    const parts: Uint8Array[] = [];
+    let n = 0;
+    try {
+        for (;;) {
+            if (Date.now() > deadline) {
+                await reader.cancel().catch(() => {});
+                return null;
+            }
+            const { done, value } = await reader.read();
+            if (done) break;
+            n += value.byteLength;
+            if (n > max) {
+                await reader.cancel().catch(() => {});
+                return null;
+            }
+            parts.push(value);
+        }
+    } finally {
+        reader.releaseLock();
+    }
+    const out = new Uint8Array(n);
+    let at = 0;
+    for (const p of parts) {
+        out.set(p, at);
+        at += p.byteLength;
+    }
+    return out;
+}
+
+/** What look({ media }) shows for each ref: a capystore post's picture (the frame path, private ones too), an emote's or
+ * an image link's picture fetched directly (falling back to the URL), or a note why there is none. */
+export async function lookMediaImages(d: MediaLookDeps, refs: string[], opts: LookOpts = {}): Promise<Map<string, MediaLook>> {
+    const bases = { mediaBaseUrl: d.mediaBaseUrl, shareBaseUrl: d.shareBaseUrl, hosts: d.hosts };
+    const out = new Map<string, MediaLook>();
+    if (refs.length === 0) return out;
+    const answers = await resolveMedia(d.db, refs, bases);
+    const posts = await mediaPosts(d.db, refs, bases);
+    const postIds = [...new Set([...posts.values()])];
+    const pictures = postIds.length > 0 ? await lookImages(d, postIds, Object.fromEntries(postIds.map((p) => [p, opts]))) : new Map<string, LookImage[]>();
+    for (const a of answers) {
+        if (!isMedia(a)) {
+            out.set(a.ref, { images: [], note: `${a.ref}: ${a.error.replace("error.media.", "").replace(/_/g, " ")}` });
+            continue;
+        }
+        const label = `Picture of ${a.kind} ${a.ref}${a.title ? ` (${a.title})` : ""}${a.kind === "emote" && a.preview_url ? ` (${a.preview_url})` : ""}:`;
+        if (a.kind === "post" || a.kind === "file") {
+            const pid = posts.get(a.ref);
+            const list = (pid ? pictures.get(pid) : undefined) ?? [];
+            out.set(a.ref, list.length > 0 ? { images: list.map((im, i) => (i === 0 ? { ...im, label } : im)) } : { images: [], note: `${a.ref} has no picture to look at.` });
+            continue;
+        }
+        if (!a.preview_url) {
+            out.set(a.ref, { images: [], note: `${a.ref} is a video link outside capystore: there is no frame to show (save it first, then look at the post).` });
+            continue;
+        }
+        const img = await fetchPicture(d, a.preview_url, label);
+        out.set(a.ref, { images: [img ?? { label, url: a.preview_url }] });
+    }
+    return out;
+}
+
+/** look({ media }) as the Messages API's content blocks. */
+export function lookMediaBlocks(ref: string, m: MediaLook | undefined): any[] {
+    if (!m) return [{ type: "text", text: `${ref} could not be looked at.` }];
+    const content: any[] = [];
+    for (const im of m.images) {
+        content.push({ type: "text", text: im.label });
+        content.push(im.url ? { type: "image", source: { type: "url", url: im.url } } : { type: "image", source: { type: "base64", media_type: im.mediaType, data: im.data } });
+    }
+    if (m.note) content.push({ type: "text", text: m.note });
     return content;
 }

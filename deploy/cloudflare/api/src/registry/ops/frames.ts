@@ -82,6 +82,7 @@ export const makeFramesOp = defineOp({
     }),
     output: z.object({ frames: z.array(FrameSchema) }),
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: `Save frames of a video as pictures (new private pngs in the library, at most ${FRAMES_MAX}, up to ${FRAME_MAX_SIDE} px a side), cut by ffmpeg in the box (~10 s to wake). Then look() at them (grid: true to aim a crop) and edit them like any picture: make.cropImage, make.cutout, edits.addOverlay. To only glance at a video, look(ids, { frames: true }) is cheaper.`,

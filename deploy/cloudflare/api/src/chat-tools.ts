@@ -199,6 +199,8 @@ export type ChatCollect = {
     look: string[];
     // look(ids, { grid, frames }) per post id (section 44.3)
     lookOpts?: Record<string, { grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number } }>;
+    // look({ media }) (section 62.1): media refs to show, as given (resolved when the pictures are made)
+    lookMedia?: string[];
     show: string[];
     collage?: { title: string | null; query: string | null; ids: string[] } | null;
     ranked?: Ranked | null;
@@ -317,7 +319,9 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
         },
         async post(id: unknown) {
             if (typeof id !== "string") throw new Error("post(id) needs a post id string");
-            const p = (await everything()).find((x) => x.record.id === id);
+            const posts = await everything();
+            // a post id, or one of its files' ids
+            const p = posts.find((x) => x.record.id === id) ?? posts.find((x) => x.rows.some((f) => f.id === id));
             if (!p) throw new Error(`no post with id ${id}`);
             const share = d.shareBaseUrl ? withSlash(d.shareBaseUrl) : null;
             // section 36: a file's own private link, its page and its direct file (share.../p/<key>/1.<ext>)
@@ -346,8 +350,13 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                 }),
             };
         },
-        async look(ids: unknown, opts?: { grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number } }) {
-            const ok = await known(idList(ids));
+        async look(ids: unknown, opts?: { grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number }; media?: string }) {
+            const media = typeof opts?.media === "string" ? opts.media.trim() : "";
+            if (media) {
+                const list = (collect.lookMedia ??= []);
+                if (!list.includes(media) && collect.look.length + list.length < LOOK_MAX) list.push(media);
+            }
+            const ok = ids === undefined || ids === null ? [] : await known(idList(ids));
             for (const i of ok) {
                 if (!collect.look.includes(i) && collect.look.length < LOOK_MAX) collect.look.push(i);
                 if (collect.look.includes(i) && (opts?.grid || opts?.frames || opts?.box)) {
@@ -356,7 +365,7 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
                     collect.lookOpts[i] = { ...(cur.grid || opts.grid ? { grid: true } : {}), ...(cur.frames || opts.frames ? { frames: true } : {}), ...(box ? { box } : {}) };
                 }
             }
-            return collect.look.length;
+            return collect.look.length + (collect.lookMedia?.length ?? 0);
         },
         async show(ids: unknown) {
             const ok = await known(idList(ids));

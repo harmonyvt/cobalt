@@ -6,6 +6,7 @@ import { insertMediaItem } from "./library";
 import type { StudioReply } from "./studio";
 import { getRow, itemShape } from "./visibility";
 import { mintName } from "./webp";
+import { retryAfterSeconds, type SevenTvGate } from "./seventv-gate";
 
 const GQL = "https://7tv.io/v4/gql";
 const CDN_HOST = "cdn.7tv.app";
@@ -35,6 +36,10 @@ const FIELDS = "id defaultName deleted flags { animated defaultZeroWidth private
 // An empty query (null) is "browse everything" in 7TV's v4 search.
 const SEARCH = `query($query: String, $sort: Sort!, $page: Int!, $perPage: Int!) {
   emotes { search(query: $query, sort: $sort, page: $page, perPage: $perPage) {
+    pageCount items { ${FIELDS} } } } }`;
+// Variants (section 20.2): 7TV's own exact-name filter on the emote's default name (not a set's alias).
+const SEARCH_EXACT = `query($query: String, $sort: Sort!, $page: Int!, $perPage: Int!) {
+  emotes { search(query: $query, sort: $sort, filters: { exactMatch: true }, page: $page, perPage: $perPage) {
     pageCount items { ${FIELDS} } } } }`;
 
 const GLOBAL = `query($query: String, $page: Int!, $perPage: Int!) {
@@ -131,20 +136,51 @@ function readEmote(raw: unknown): EmoteHit | null {
     return { id: o.id, name, animated: flags.animated === true, images };
 }
 
-async function gql(fetchImpl: typeof fetch, query: string, variables: Record<string, unknown>): Promise<unknown> {
-    const res = await fetchImpl(GQL, {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ query, variables }),
-        signal: AbortSignal.timeout(20_000),
-    });
-    if (!res.ok) throw new Error(`7tv ${res.status}`);
+// A 7TV answer that was not an answer: its HTTP status (0: no answer) and Retry-After seconds.
+class GqlFailure extends Error {
+    constructor(
+        readonly status: number,
+        readonly retryAfter: number | null,
+    ) {
+        super(`7tv ${status}`);
+    }
+}
+
+// The last answer's GraphQL errors, for the callers that cache (a partial answer is never kept): gql() answers data only.
+const partialAnswers = new WeakSet<object>();
+const isPartial = (data: unknown) => typeof data === "object" && data !== null && partialAnswers.has(data);
+
+async function gql(fetchImpl: typeof fetch, query: string, variables: Record<string, unknown>, gate?: SevenTvGate | null, now: () => number = Date.now): Promise<unknown> {
+    await gate?.slot("read");
+    let res: Response;
+    try {
+        res = await fetchImpl(GQL, {
+            method: "POST",
+            headers: { "content-type": "application/json", accept: "application/json" },
+            body: JSON.stringify({ query, variables }),
+            signal: AbortSignal.timeout(20_000),
+        });
+    } catch {
+        throw new GqlFailure(0, null);
+    }
+    if (res.status === 429) {
+        await gate?.slow();
+        throw new GqlFailure(429, retryAfterSeconds(res.headers.get("retry-after"), now()));
+    }
+    if (!res.ok) throw new GqlFailure(res.status, null);
     const body = (await res.json()) as { data?: unknown; errors?: unknown };
     if (!body.data || (Array.isArray(body.errors) && body.errors.length > 0 && body.data == null)) {
-        throw new Error("7tv graphql");
+        throw new GqlFailure(502, null);
     }
+    if (Array.isArray(body.errors) && body.errors.length > 0 && typeof body.data === "object" && body.data !== null) partialAnswers.add(body.data);
     return body.data;
 }
+
+// A failed search as the routes answer it: a 429 keeps its own code and Retry-After (section 62.5).
+const failed = (e: unknown): StudioReply =>
+    e instanceof GqlFailure && e.status === 429
+        ? { status: 429, body: { status: "error", error: { code: "error.emote.rate_limited", ...(e.retryAfter !== null ? { retry_after: e.retryAfter } : {}) } } }
+        : err(502, "error.emote.unavailable");
 
 async function savedIds(db: D1Database, ids: string[]): Promise<Map<string, { id: string; url: string | null }>> {
     const out = new Map<string, { id: string; url: string | null }>();
@@ -178,6 +214,78 @@ function shaped(row: NonNullable<Awaited<ReturnType<typeof getRow>>>, emoteId: s
     return { ...itemShape(row), emote_id: emoteId };
 }
 
+// ---- search (section 20.1), its 24 h cache and the batch (section 62.5) -----------------------------------------------
+
+// One search hit as it is cached (no library fields: those are filled in on every answer).
+type FoundEmote = { id: string; name: string; animated: boolean; preview_url: string; file_url: string; width: number; height: number };
+type FoundPage = { items: FoundEmote[]; has_more: boolean };
+
+// The Workers Cache API's shape (caches.default), or a fake in the tests.
+export type EmoteCache = { match(key: Request): Promise<Response | undefined>; put(key: Request, res: Response): Promise<void> };
+export const EMOTE_CACHE_S = 24 * 60 * 60;
+// an answer with no emotes is kept only briefly: a new upload by that name shows up soon
+export const EMOTE_CACHE_EMPTY_S = 10 * 60;
+export const FIND_MANY_MAX = 20;
+
+const cacheOf = (d: Pick<AppDeps, "emoteCache">): EmoteCache | null => {
+    if (d.emoteCache !== undefined) return d.emoteCache;
+    const c = (globalThis as { caches?: { default?: EmoteCache } }).caches?.default;
+    return c ?? null;
+};
+const normQuery = (q: string) => q.trim().toLowerCase().replace(/\s+/g, " ");
+const cacheKey = (query: string, sort: EmoteSort, page: number, exact = false) =>
+    new Request(
+        `https://emote-cache.internal/find?${new URLSearchParams({ q: normQuery(query), sort, page: String(page), ...(exact ? { exact: "1" } : {}) })}`,
+    );
+
+async function cached(d: Pick<AppDeps, "emoteCache">, query: string, sort: EmoteSort, page: number, exact = false): Promise<FoundPage | null> {
+    const c = cacheOf(d);
+    if (!c) return null;
+    try {
+        const hit = await c.match(cacheKey(query, sort, page, exact));
+        return hit ? ((await hit.json()) as FoundPage) : null;
+    } catch {
+        return null;
+    }
+}
+
+async function remember(d: Pick<AppDeps, "emoteCache">, query: string, sort: EmoteSort, page: number, found: FoundPage, exact = false): Promise<void> {
+    const c = cacheOf(d);
+    if (!c) return;
+    try {
+        const ttl = found.items.length > 0 ? EMOTE_CACHE_S : EMOTE_CACHE_EMPTY_S;
+        await c.put(cacheKey(query, sort, page, exact), new Response(JSON.stringify(found), { headers: { "content-type": "application/json", "cache-control": `public, max-age=${ttl}` } }));
+    } catch {
+        // a cache that cannot keep it: the next search asks 7TV again
+    }
+}
+
+// 7TV's search answer (or the global set's) as the hits the app can use.
+function foundOf(found: { pageCount?: unknown; items?: unknown } | undefined, sort: EmoteSort, page: number): FoundPage {
+    const rawItems = Array.isArray(found?.items) ? found.items : [];
+    const itemsRaw = sort === "global" ? rawItems.map((i) => (i as { emote?: unknown })?.emote) : rawItems;
+    const pageCount = typeof found?.pageCount === "number" ? found.pageCount : 0;
+    const items: FoundEmote[] = [];
+    for (const hit of itemsRaw.map(readEmote).filter((h): h is EmoteHit => h !== null)) {
+        const preview = previewWebp(hit.images, hit.animated);
+        const file = pickWebp(hit.images, hit.animated);
+        if (!preview || !cdnHost(preview.url) || !file || !cdnHost(file.url)) continue;
+        items.push({ id: hit.id, name: hit.name, animated: hit.animated, preview_url: preview.url, file_url: file.url, width: file.width, height: file.height });
+    }
+    return { items, has_more: rawItems.length > 0 && page < Math.min(pageCount, MAX_PAGE) };
+}
+
+const searchVars = (query: string, sort: EmoteSort, page: number) =>
+    sort === "global" ? { query: query || null, page, perPage: PER_PAGE } : { query: query || null, sort: { sortBy: EMOTE_SORTS[sort], order: "DESCENDING" }, page, perPage: PER_PAGE };
+const foundIn = (data: unknown, sort: EmoteSort) =>
+    sort === "global" ? (data as { emoteSets?: { global?: { emotes?: { pageCount?: unknown; items?: unknown } } } })?.emoteSets?.global?.emotes : (data as { emotes?: { search?: { pageCount?: unknown; items?: unknown } } })?.emotes?.search;
+
+// The library fields (already saved?) on every answer, fresh.
+async function withLibrary(d: AppDeps, items: FoundEmote[]) {
+    const saved = await savedIds(d.db, items.map((h) => h.id));
+    return items.map((h) => ({ ...h, library_id: saved.get(h.id)?.id ?? null, library_url: saved.get(h.id)?.url ?? null }));
+}
+
 export async function searchEmotes(
     d: AppDeps,
     q: URLSearchParams,
@@ -192,55 +300,91 @@ export async function searchEmotes(
     const pageRaw = q.get("page");
     const page = pageRaw === null ? 1 : Number(pageRaw);
     if (!Number.isInteger(page) || page < 1 || page > MAX_PAGE) return err(400, "error.emote.query");
+    // exact=1 (section 20.2): only emotes whose own 7TV name is the query (any case), a name required
+    const exactRaw = q.get("exact");
+    if (exactRaw !== null && exactRaw !== "1" && exactRaw !== "0") return err(400, "error.emote.query");
+    const exact = exactRaw === "1";
+    if (exact && query.length < 1) return err(400, "error.emote.query");
 
-    let data: unknown;
+    let found = await cached(d, query, sort, page, exact);
+    const hit = found !== null;
+    if (!found) {
+        try {
+            const text = sort === "global" ? GLOBAL : exact ? SEARCH_EXACT : SEARCH;
+            const data = await gql(fetchImpl, text, searchVars(query, sort, page), d.sevenTvGate, d.now);
+            const raw = foundIn(data, sort);
+            found = foundOf(raw, sort, page);
+            if (exact) {
+                // 7TV's filter matches the name as a token; keep only the same whole name (case aside)
+                const want = query.toLowerCase();
+                found = { ...found, items: found.items.filter((h) => h.name.toLowerCase() === want) };
+            }
+            // a partial answer (GraphQL errors) or a missing search is answered but never cached
+            if (raw && !isPartial(data)) await remember(d, query, sort, page, found, exact);
+        } catch (e) {
+            return failed(e);
+        }
+    }
+    let items;
     try {
-        data =
-            sort === "global"
-                ? await gql(fetchImpl, GLOBAL, { query: query || null, page, perPage: PER_PAGE })
-                : await gql(fetchImpl, SEARCH, {
-                      query: query || null,
-                      sort: { sortBy: EMOTE_SORTS[sort], order: "DESCENDING" },
-                      page,
-                      perPage: PER_PAGE,
-                  });
+        items = await withLibrary(d, found.items);
     } catch {
         return err(502, "error.emote.unavailable");
     }
-    type Found = { pageCount?: unknown; items?: unknown };
-    const found: Found | undefined =
-        sort === "global"
-            ? (data as { emoteSets?: { global?: { emotes?: Found } } })?.emoteSets?.global?.emotes
-            : (data as { emotes?: { search?: Found } })?.emotes?.search;
-    const rawItems = Array.isArray(found?.items) ? found.items : [];
-    const itemsRaw = sort === "global" ? rawItems.map((i) => (i as { emote?: unknown })?.emote) : rawItems;
-    const pageCount = typeof found?.pageCount === "number" ? found.pageCount : 0;
-    const hits = itemsRaw.map(readEmote).filter((h): h is EmoteHit => h !== null);
-    let saved = new Map<string, { id: string; url: string | null }>();
-    try {
-        saved = await savedIds(d.db, hits.map((h) => h.id));
-    } catch {
-        return err(502, "error.emote.unavailable");
+    return { status: 200, body: { items, sort, page, has_more: found.has_more, ...(exact ? { exact: true } : {}), ...(hit ? { cached: true } : {}) } };
+}
+
+// Several names in one 7TV request (section 62.5): one aliased search per name not in the cache, first page only.
+export async function findManyEmotes(d: AppDeps, queries: string[], sortRaw: string | undefined, fetchImpl: typeof fetch = fetch): Promise<StudioReply> {
+    if (sortRaw !== undefined && !(EMOTE_SORT_KEYS as string[]).includes(sortRaw)) return err(400, "error.emote.query");
+    const sort: EmoteSort = (sortRaw as EmoteSort | undefined) ?? "top";
+    const list = queries.map((x) => x.trim());
+    if (list.length < 1 || list.length > FIND_MANY_MAX || list.some((x) => x.length < 1 || x.length > 64)) return err(400, "error.emote.query");
+    const found = new Map<string, { page: FoundPage; cached: boolean }>();
+    for (const x of new Set(list.map(normQuery))) {
+        const c = await cached(d, x, sort, 1);
+        if (c) found.set(x, { page: c, cached: true });
     }
-    const items = [];
-    for (const hit of hits) {
-        const preview = previewWebp(hit.images, hit.animated);
-        const file = pickWebp(hit.images, hit.animated);
-        if (!preview || !cdnHost(preview.url) || !file || !cdnHost(file.url)) continue;
-        items.push({
-            id: hit.id,
-            name: hit.name,
-            animated: hit.animated,
-            preview_url: preview.url,
-            file_url: file.url,
-            width: file.width,
-            height: file.height,
-            library_id: saved.get(hit.id)?.id ?? null,
-            library_url: saved.get(hit.id)?.url ?? null,
+    const missing = [...new Set(list.map(normQuery))].filter((x) => !found.has(x));
+    if (missing.length > 0) {
+        const vars: Record<string, unknown> = { perPage: PER_PAGE, page: 1 };
+        const defs = ["$perPage: Int!", "$page: Int!"];
+        if (sort !== "global") {
+            vars.sort = { sortBy: EMOTE_SORTS[sort], order: "DESCENDING" };
+            defs.push("$sort: Sort!");
+        }
+        const parts = missing.map((x, i) => {
+            vars[`q${i}`] = x;
+            defs.push(`$q${i}: String`);
+            return sort === "global"
+                ? `s${i}: emoteSets { global { emotes(query: $q${i}, page: $page, perPage: $perPage) { pageCount items { emote { ${FIELDS} } } } } }`
+                : `s${i}: emotes { search(query: $q${i}, sort: $sort, page: $page, perPage: $perPage) { pageCount items { ${FIELDS} } } }`;
         });
+        let data: unknown;
+        try {
+            data = await gql(fetchImpl, `query(${defs.join(", ")}) { ${parts.join(" ")} }`, vars, d.sevenTvGate, d.now);
+        } catch (e) {
+            return failed(e);
+        }
+        for (const [i, x] of missing.entries()) {
+            const one = (data as Record<string, unknown>)?.[`s${i}`];
+            const raw = one ? foundIn(sort === "global" ? { emoteSets: one } : { emotes: one }, sort) : undefined;
+            const page = foundOf(raw, sort, 1);
+            found.set(x, { page, cached: false });
+            // an alias that came back null (its search failed) or any GraphQL error: not cached
+            if (raw && !isPartial(data)) await remember(d, x, sort, 1, page);
+        }
     }
-    const hasMore = rawItems.length > 0 && page < Math.min(pageCount, MAX_PAGE);
-    return { status: 200, body: { items, sort, page, has_more: hasMore } };
+    try {
+        const results = [];
+        for (const x of list) {
+            const f = found.get(normQuery(x))!;
+            results.push({ q: x, emotes: await withLibrary(d, f.page.items), cached: f.cached });
+        }
+        return { status: 200, body: { sort, results } };
+    } catch {
+        return err(502, "error.emote.unavailable");
+    }
 }
 
 export async function saveEmote(
@@ -268,9 +412,9 @@ export async function saveEmote(
 
     let data: unknown;
     try {
-        data = await gql(fetchImpl, ONE, { id });
-    } catch {
-        return err(502, "error.emote.unavailable");
+        data = await gql(fetchImpl, ONE, { id }, d.sevenTvGate, d.now);
+    } catch (e) {
+        return failed(e);
     }
     const hit = readEmote((data as { emotes?: { emote?: unknown } })?.emotes?.emote);
     const chosen = hit ? pickWebp(hit.images, hit.animated) : null;

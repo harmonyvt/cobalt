@@ -1,5 +1,5 @@
 // Builds the MCP app widgets (MCP-APP-CONTRACT.md section 5): inlines src/mcp-app/widgets/ into one self-contained HTML
-// page that holds all nine views, and writes src/mcp-app/widgets.generated.ts (WIDGETS, one entry per view, the page
+// page that holds all ten views, and writes src/mcp-app/widgets.generated.ts (WIDGETS, one entry per view, the page
 // kept once as a string). `--check` exits 1 when the generated file is stale.
 //   node scripts/build-widgets.mjs [--check]
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -12,7 +12,7 @@ const src = join(root, "src/mcp-app/widgets");
 const out = join(root, "src/mcp-app/widgets.generated.ts");
 
 // the order is the scope order: helpers, bridge, views, then the main file that draws and starts
-const JS = ["util.js", "bridge.js", "term.js", "views/search.js", "views/post.js", "views/edit.js", "views/collections.js", "views/links.js", "views/webp.js", "views/upload.js", "views/save.js", "views/terminal.js", "main.js"];
+const JS = ["util.js", "bridge.js", "term.js", "views/search.js", "views/post.js", "views/edit.js", "views/collections.js", "views/links.js", "views/webp.js", "views/upload.js", "views/save.js", "views/terminal.js", "views/swarm.js", "views/board.js", "main.js"];
 const TITLES = {
     search: "capystore: search",
     post: "capystore: post",
@@ -23,6 +23,8 @@ const TITLES = {
     upload: "capystore: upload",
     save: "capystore: save",
     terminal: "capystore: box terminal",
+    swarm: "capystore: swarm",
+    board: "capystore: swarm results",
 };
 
 const read = (f) => readFileSync(join(src, f), "utf8");
