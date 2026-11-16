@@ -10,6 +10,8 @@ import { decodePng, encodePng, isPng, pngSize, type Rgba } from "./cutout-core";
 import type { ImagesPort } from "./cutout";
 import { drawBox, drawGrid, type CropBox } from "./image-crop-core";
 import { isMedia, mediaPosts, resolveMedia } from "./media-refs";
+import { emoteFrames, emoteInfos, frameStrip } from "./emote-frames";
+import type { SevenTvGate } from "./seventv-gate";
 
 export type LookOpts = { grid?: boolean; frames?: boolean; box?: CropBox };
 type Marks = { grid: boolean; box: CropBox | null };
@@ -172,7 +174,9 @@ export function lookBlocks(id: string, imgs: LookImage[] | undefined, wantedFram
 
 // ---- look({ media }) (APP-API-CONTRACT.md section 62.1) -------------------------------------------------------------------
 
-export type MediaLookDeps = LookDeps & { shareBaseUrl?: string | undefined; hosts: string[]; fetch?: typeof fetch };
+export type MediaLookDeps = LookDeps & { shareBaseUrl?: string | undefined; hosts: string[]; fetch?: typeof fetch; gate?: SevenTvGate | null; now?: () => number };
+/** Frames look shows of an animated emote (section 63.3), in one strip. */
+export const LOOK_EMOTE_FRAMES = 6;
 export type MediaLook = { images: LookImage[]; note?: string };
 
 export const MEDIA_FETCH_MS = 10_000;
@@ -241,7 +245,7 @@ export async function readCapped(body: ReadableStream<Uint8Array>, max: number, 
 
 /** What look({ media }) shows for each ref: a capystore post's picture (the frame path, private ones too), an emote's or
  * an image link's picture fetched directly (falling back to the URL), or a note why there is none. */
-export async function lookMediaImages(d: MediaLookDeps, refs: string[], opts: LookOpts = {}): Promise<Map<string, MediaLook>> {
+export async function lookMediaImages(d: MediaLookDeps, refs: string[], opts: LookOpts = {}, perRef: Record<string, LookOpts> = {}): Promise<Map<string, MediaLook>> {
     const bases = { mediaBaseUrl: d.mediaBaseUrl, shareBaseUrl: d.shareBaseUrl, hosts: d.hosts };
     const out = new Map<string, MediaLook>();
     if (refs.length === 0) return out;
@@ -265,10 +269,32 @@ export async function lookMediaImages(d: MediaLookDeps, refs: string[], opts: Lo
             out.set(a.ref, { images: [], note: `${a.ref} is a video link outside capystore: there is no frame to show (save it first, then look at the post).` });
             continue;
         }
+        if (a.kind === "emote" && (perRef[a.ref] ?? opts).frames) {
+            const strip = await emoteStrip(d, a.preview_url, a.ref).catch(() => null);
+            if (strip) {
+                out.set(a.ref, strip);
+                continue;
+            }
+        }
         const img = await fetchPicture(d, a.preview_url, label);
         out.set(a.ref, { images: [img ?? { label, url: a.preview_url }] });
     }
     return out;
+}
+
+// An emote's frames (section 63.3): its GIF decoded here, LOOK_EMOTE_FRAMES frames spread across it in one strip. null
+// when it is not an emote this can read (the caller shows the plain picture instead).
+async function emoteStrip(d: MediaLookDeps, previewUrl: string, ref: string): Promise<MediaLook | null> {
+    const id = /\/emote\/([0-9A-Za-z]{20,32})\//.exec(previewUrl)?.[1];
+    if (!id) return null;
+    const fd = { fetch: d.fetch, gate: d.gate ?? null, now: d.now ?? Date.now };
+    const info = (await emoteInfos(fd, [id])).get(id);
+    if (!info) return null;
+    const f = await emoteFrames(fd, info, info.animated ? LOOK_EMOTE_FRAMES : 1, 4);
+    if (f.frames.length === 0) return { images: [], note: `${ref}: no frames (${f.note ?? "nothing to decode"})` };
+    const png = await encodePng(frameStrip(f, 128));
+    const label = `Frames of 7TV emote ${info.name} (${id}), ${f.count} frame${f.count === 1 ? "" : "s"} in all${info.animated ? `, showing ${f.at.map((i) => i + 1).join(", ")}` : ", a still emote"}, left to right:`;
+    return { images: [{ label, data: toBase64(png), mediaType: "image/png" }] };
 }
 
 /** look({ media }) as the Messages API's content blocks. */

@@ -200,7 +200,7 @@ export const lookOp = defineOp({
             .optional()
             .describe("one media ref to look at: a capystore link or id, a 7TV emote id or link, or an https image URL on the allowlist"),
         grid: z.boolean().optional().describe("draw lines every 0.1 of the width and height, to read off a crop box for make.cropImage"),
-        frames: z.boolean().optional().describe("a video: also up to 3 frames spread across it, not only its poster"),
+        frames: z.boolean().optional().describe("a video: also up to 3 frames spread across it, not only its poster; a 7TV emote (media): 6 frames spread across its animation in one strip, with its frame count"),
         box: z
             .object({ x: z.number().min(0).lt(1), y: z.number().min(0).lt(1), w: z.number().gt(0).max(1), h: z.number().gt(0).max(1) })
             .optional()

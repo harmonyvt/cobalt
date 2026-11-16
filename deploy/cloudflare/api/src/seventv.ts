@@ -944,3 +944,339 @@ export async function sevenTvEmote(d: SevenTvDeps, emoteId: string): Promise<Stu
         });
     });
 }
+
+// ---- many emotes into one set, and cloning a set (section 63.4) ----------------------------------------------------------
+
+/** Adds sent to 7TV in one request (top-level aliased mutations run one after another, each with its own error). */
+export const ADD_BATCH = 10;
+/** The most emotes one call adds; more is a second call (what is already in the set is skipped). */
+export const ADD_MANY_MAX = 1000;
+/** A call stops starting new batches after this long and answers what is left. */
+export const ADD_MANY_BUDGET_MS = 100_000;
+
+type AddItem = { emote_id: string; alias: string | null };
+type AddFailure = AddItem & { code: string; message?: string };
+
+// One GraphQL request that may partly fail: its data and its errors, as they came. Throws SevenTvError only when the
+// whole request failed (no answer, 401, 429, 5xx).
+async function gqlParts(d: SevenTvDeps, token: string, query: string, variables: Record<string, unknown>): Promise<{ data: Record<string, unknown> | null; errors: GqlError[] }> {
+    const f = d.fetch ?? fetch;
+    await d.gate?.slot("write");
+    let res: Response;
+    try {
+        res = await f(SEVENTV_GQL, {
+            method: "POST",
+            headers: { "content-type": "application/json", accept: "application/json", authorization: `Bearer ${token}` },
+            body: JSON.stringify({ query, variables }),
+            signal: AbortSignal.timeout(30_000),
+        });
+    } catch {
+        throw new SevenTvError(fail(502, "error.seventv.unavailable"));
+    }
+    if (res.status === 401) throw new SevenTvError(fail(409, "error.seventv.relink"), true);
+    if (res.status === 429) {
+        await d.gate?.slow();
+        throw new SevenTvError(rateLimited(res, d.now()));
+    }
+    let body: { data?: Record<string, unknown> | null; errors?: (GqlError & { path?: unknown[] })[] };
+    try {
+        body = (await res.json()) as typeof body;
+    } catch {
+        throw new SevenTvError(fail(502, "error.seventv.unavailable"));
+    }
+    if (res.status >= 500 && !body.data) throw new SevenTvError(fail(502, "error.seventv.unavailable"));
+    return { data: body.data ?? null, errors: Array.isArray(body.errors) ? body.errors : [] };
+}
+
+/** Every emote of a set (all pages): its emote id and alias. */
+async function setContents(d: SevenTvDeps, token: string, setId: string): Promise<{ set: { id: string; name: string; capacity: number | null; ownerId: string | null }; emotes: RawSetEmote[] }> {
+    const emotes: RawSetEmote[] = [];
+    let info: { id: string; name: string; capacity: number | null; ownerId: string | null } | null = null;
+    for (let page = 1; page <= 50; page++) {
+        type Data = { emoteSets: { emoteSet: { id: string; name: string; capacity: number | null; ownerId: string | null; emotes: { pageCount: number; items: RawSetEmote[] } } | null } };
+        const s = (await gql<Data>(d, token, SET, { id: setId, q: null, page, perPage: SET_PAGE })).emoteSets?.emoteSet;
+        if (!s) throw new SevenTvError(fail(404, "error.seventv.not_found", `no emote set ${setId}`));
+        info ??= { id: s.id, name: s.name, capacity: s.capacity ?? null, ownerId: s.ownerId };
+        emotes.push(...(s.emotes.items ?? []));
+        if (page >= (s.emotes.pageCount ?? 0)) break;
+    }
+    return { set: info!, emotes };
+}
+
+export type AddManyOptions = { override_conflicts?: boolean; dry_run?: boolean; budgetMs?: number; sleep?: (ms: number) => Promise<void> };
+
+const errAlias = (e: { path?: unknown[] }) => (Array.isArray(e.path) && typeof e.path[0] === "string" ? e.path[0] : null);
+const codeOf = (r: StudioReply) => (r.body as { error: { code: string } }).error.code;
+const msgOf = (r: StudioReply) => (r.body as { message?: string }).message;
+
+/**
+ * Many emotes into one set in one call (section 63.4): the set is read first (what is already there under the same alias
+ * is skipped, so a call can simply be repeated), its capacity checked, then the adds go 10 to a request. A refusal of
+ * the whole account (LACKING_PRIVILEGES) stops at the first batch; a rate limit waits and retries that batch's misses.
+ */
+export async function sevenTvAddMany(d: SevenTvDeps, setId: string, items: AddItem[], o: AddManyOptions = {}): Promise<StudioReply> {
+    if (!SEVENTV_ID.test(setId)) return fail(404, "error.seventv.not_found");
+    if (items.length < 1 || items.length > ADD_MANY_MAX) return fail(400, "error.seventv.bad", `1 to ${ADD_MANY_MAX} emotes a call`);
+    for (const it of items) {
+        if (!SEVENTV_ID.test(it.emote_id) || (it.alias !== null && !goodAlias(it.alias))) return fail(400, "error.seventv.bad", `bad emote ${it.emote_id}${it.alias ? ` (${it.alias})` : ""}`);
+    }
+    const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const started = Date.now();
+    const budget = o.budgetMs ?? ADD_MANY_BUDGET_MS;
+    return withToken(d, async (token) => {
+        const before = await setContents(d, token, setId);
+        const have = new Map(before.emotes.map((e) => [(e.alias ?? "").toLowerCase(), e.emote?.id ?? e.id]));
+        const skipped: (AddItem & { why: string })[] = [];
+        const todo: AddItem[] = [];
+        const seen = new Set<string>();
+        for (const it of items) {
+            const name = (it.alias ?? "").toLowerCase();
+            const key = `${it.emote_id}:${name}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            if (it.alias !== null && have.get(name) === it.emote_id) skipped.push({ ...it, why: "already in the set under that name" });
+            else if (it.alias === null && before.emotes.some((e) => (e.emote?.id ?? e.id) === it.emote_id)) skipped.push({ ...it, why: "already in the set" });
+            else todo.push(it);
+        }
+        const cap = before.set.capacity;
+        const room = cap === null ? Infinity : cap - before.emotes.length;
+        const summary = { set_id: setId, set_name: before.set.name, capacity: cap, count_before: before.emotes.length };
+        // an add over a name already there replaces it (override_conflicts): it takes no new room
+        const replacing = o.override_conflicts ? todo.filter((it) => it.alias !== null && have.has(it.alias.toLowerCase())).length : 0;
+        if (todo.length - replacing > room) {
+            return fail(409, "error.seventv.set_full", `set ${before.set.name} has room for ${Math.max(0, room)} more (${before.emotes.length} of ${cap}); this call adds ${todo.length - replacing}`);
+        }
+        if (o.dry_run) return success({ ...summary, dry_run: true, would_add: todo, skipped, added: [], failed: [], remaining: [] });
+
+        const added: AddItem[] = [];
+        const failed: AddFailure[] = [];
+        let queue = todo.slice();
+        let stopped: string | null = null;
+        let waits = 0;
+        const resent = new Set<string>();
+        while (queue.length > 0) {
+            if (Date.now() - started > budget) {
+                stopped = "time: call again with the same list to add the rest (what is in already is skipped)";
+                break;
+            }
+            const batch = queue.slice(0, ADD_BATCH);
+            const vars: Record<string, unknown> = { set: setId, over: o.override_conflicts === true ? true : null };
+            const defs = ["$set: Id!", "$over: Boolean"];
+            const parts = batch.map((it, k) => {
+                vars[`e${k}`] = { emoteId: it.emote_id, ...(it.alias ? { alias: it.alias } : {}) };
+                defs.push(`$e${k}: EmoteSetEmoteId!`);
+                return `a${k}: emoteSets { emoteSet(id: $set) { addEmote(id: $e${k}, overrideConflicts: $over) { id } } }`;
+            });
+            let res;
+            try {
+                res = await gqlParts(d, token, `mutation(${defs.join(", ")}) { ${parts.join(" ")} }`, vars);
+            } catch (e) {
+                if (e instanceof SevenTvError && codeOf(e.reply) === "error.seventv.rate_limited" && waits < 4) {
+                    waits++;
+                    const after = Number((e.reply.body as { error: { retry_after?: number } }).error.retry_after ?? 0);
+                    await sleep(Math.min(30_000, Math.max(2_000 * waits, after * 1000)));
+                    continue;
+                }
+                throw e;
+            }
+            const byAlias = new Map<string, GqlError>();
+            for (const er of res.errors) {
+                const a = errAlias(er as { path?: unknown[] });
+                if (a && !byAlias.has(a)) byAlias.set(a, er);
+            }
+            // errors with no path (a whole-request refusal) apply to every add of the batch
+            const whole = res.errors.find((er) => !errAlias(er as { path?: unknown[] })) ?? null;
+            const retry: AddItem[] = [];
+            // an add counts only when its own answer came back: one failed add nulls the whole answer (live 7TV:
+            // data null, an error for that alias alone), so the rest of the batch is unknown until the set is read again
+            const unsure: AddItem[] = [];
+            batch.forEach((it, k) => {
+                const er = byAlias.get(`a${k}`) ?? whole;
+                if (!er && res.data?.[`a${k}`]) {
+                    added.push(it);
+                    return;
+                }
+                if (!er) {
+                    unsure.push(it);
+                    return;
+                }
+                const r = errorFor(er);
+                if (codeOf(r) === "error.seventv.rate_limited") retry.push(it);
+                else failed.push({ ...it, code: codeOf(r), ...(msgOf(r) ? { message: msgOf(r) } : {}) });
+            });
+            if (unsure.length > 0) {
+                const now = await setContents(d, token, setId);
+                const inSet = (it: AddItem) => now.emotes.some((e) => (e.emote?.id ?? e.id) === it.emote_id && (it.alias === null || (e.alias ?? "").toLowerCase() === it.alias.toLowerCase()));
+                for (const it of unsure) {
+                    const key = `${it.emote_id}:${(it.alias ?? "").toLowerCase()}`;
+                    if (inSet(it)) added.push(it);
+                    else if (!resent.has(key)) {
+                        resent.add(key);
+                        retry.push(it);
+                    } else failed.push({ ...it, code: "error.seventv.rejected", message: "7TV did not add it and gave no reason (another add in its batch failed)" });
+                }
+            }
+            queue = [...retry, ...queue.slice(batch.length)];
+            // a set the account may not edit refuses every add: no point sending the rest
+            const refused = failed.find((f) => f.code === "error.seventv.forbidden" || f.code === "error.seventv.relink");
+            if (refused) {
+                stopped = `7TV refused the account: ${refused.message ?? refused.code} (seventv_permissions shows what it may do)`;
+                break;
+            }
+            const limited = retry.some((it) => !unsure.includes(it));
+            if (limited) {
+                if (waits >= 4) {
+                    stopped = "7TV kept rate limiting: call again in a minute with the same list";
+                    break;
+                }
+                waits++;
+                await sleep(2_000 * waits);
+            }
+        }
+        return success({
+            ...summary,
+            count_after: before.emotes.length + added.length,
+            added,
+            skipped,
+            failed,
+            remaining: stopped ? queue : [],
+            ...(stopped ? { stopped } : {}),
+        });
+    });
+}
+
+export type CloneInput = {
+    from_set_id: string;
+    to_set_id: string;
+    swap?: { alias: string; emote_id: string }[];
+    skip?: string[];
+    only?: string[];
+};
+
+/** The list a clone adds: every emote of the source set under its alias, with the swaps put in (section 63.4). */
+export async function sevenTvClonePlan(d: SevenTvDeps, input: CloneInput): Promise<StudioReply | { items: AddItem[]; swapped: number; unknown_swaps: string[]; from: { id: string; name: string; count: number } }> {
+    if (!SEVENTV_ID.test(input.from_set_id) || !SEVENTV_ID.test(input.to_set_id)) return fail(404, "error.seventv.not_found");
+    if (input.from_set_id === input.to_set_id) return fail(400, "error.seventv.bad", "from and to are the same set");
+    const s = await session(d);
+    if (isReply(s)) return s;
+    let src;
+    try {
+        src = await setContents(d, s.token, input.from_set_id);
+    } catch (e) {
+        if (e instanceof SevenTvError) return e.reply;
+        throw e;
+    }
+    const swaps = new Map((input.swap ?? []).map((w) => [w.alias.toLowerCase(), w.emote_id]));
+    const skip = new Set((input.skip ?? []).map((a) => a.toLowerCase()));
+    const only = input.only ? new Set(input.only.map((a) => a.toLowerCase())) : null;
+    const used = new Set<string>();
+    let swapped = 0;
+    const items: AddItem[] = [];
+    for (const e of src.emotes) {
+        const alias = e.alias;
+        const k = alias.toLowerCase();
+        if (skip.has(k) || (only && !only.has(k))) continue;
+        const swap = swaps.get(k);
+        if (swap) {
+            used.add(k);
+            swapped++;
+        }
+        const id = swap ?? e.emote?.id ?? e.id;
+        // the alias is kept even when it is the emote's own name: the new set reads the same in chat
+        items.push({ emote_id: id, alias });
+    }
+    return { items, swapped, unknown_swaps: [...swaps.keys()].filter((k) => !used.has(k)), from: { id: src.set.id, name: src.set.name, count: src.emotes.length } };
+}
+
+// ---- what the linked account may do, per channel (section 63.5) -----------------------------------------------------------
+
+const PERMS = `query { users { me { id ${CONN} style { activeEmoteSetId }
+  permissions { emoteSetLimit emoteSetCapacity emote { upload } }
+  ownedEmoteSets { id kind }
+  editorFor { state userId permissions { superAdmin emoteSet { admin manage create } emote { admin manage create } user { admin manageProfile } }
+    user { id ${CONN} style { activeEmoteSetId } ownedEmoteSets { id kind } } } } } }`;
+
+type PermEditor = {
+    state: string;
+    userId: string;
+    permissions: { superAdmin: boolean; emoteSet: { admin?: boolean; manage: boolean; create: boolean }; emote?: { admin?: boolean; manage?: boolean; create?: boolean }; user: { admin?: boolean; manageProfile: boolean } };
+    user: (MeUser & { ownedEmoteSets?: { id: string; kind: string }[] }) | null;
+};
+type PermMe = MeUser & {
+    permissions?: { emoteSetLimit?: number | null; emoteSetCapacity?: number | null; emote?: { upload?: boolean } } | null;
+    ownedEmoteSets?: { id: string; kind: string }[];
+    editorFor: PermEditor[];
+};
+
+const normalSets = (s: { kind: string }[] | undefined) => (s ?? []).filter((x) => x.kind === "NORMAL").length;
+
+/**
+ * GET /7tv/permissions (section 63.5): for each channel the account can reach, what it may do there and, when it may
+ * not, why, in the words of 7TV's own checks (apps/api/src/http/v4/gql/mutations/emote_set): adding, removing and
+ * renaming need the editor's emote-set "manage", a new set needs "create" and room under the channel's set limit, making
+ * a set live needs "manage profile". A channel's own set limit is private to it: only its set count is shown.
+ */
+export async function sevenTvPermissions(d: SevenTvDeps, channelId: string | null): Promise<StudioReply> {
+    return withToken(d, async (token) => {
+        const me = (await gql<{ users: { me: PermMe | null } }>(d, token, PERMS)).users?.me;
+        if (!me) return fail(409, "error.seventv.relink");
+        const limit = me.permissions?.emoteSetLimit ?? null;
+        const capacity = me.permissions?.emoteSetCapacity ?? null;
+        const ownSets = normalSets(me.ownedEmoteSets);
+        const ownBlockers: string[] = [];
+        if (capacity !== null && capacity <= 0) ownBlockers.push("create_sets: your account's set capacity is 0");
+        if (limit !== null && ownSets >= limit) ownBlockers.push(`create_sets: you have ${ownSets} sets, your limit is ${limit}: delete one first`);
+        const own = {
+            channel_id: me.id,
+            name: nameOf(me),
+            you: true,
+            editor_state: null,
+            active_set_id: me.style?.activeEmoteSetId ?? null,
+            sets: ownSets,
+            set_limit: limit,
+            can: {
+                add_remove_rename: true,
+                create_sets: ownBlockers.length === 0,
+                make_live: true,
+                upload_emotes: me.permissions?.emote?.upload !== false,
+            },
+            blockers: [...ownBlockers, ...(me.permissions?.emote?.upload === false ? ["upload_emotes: 7TV does not let this account upload emotes"] : [])],
+            editor_permissions: null,
+        };
+        const others = (me.editorFor ?? [])
+            .filter((e) => e.user && e.user.id !== me.id)
+            .map((e) => {
+                const p = e.permissions;
+                const accepted = e.state === "ACCEPTED";
+                const all = p.superAdmin === true;
+                const manage = accepted && (all || p.emoteSet.admin === true || p.emoteSet.manage);
+                const create = accepted && (all || p.emoteSet.admin === true || p.emoteSet.create);
+                const live = accepted && (all || p.user.admin === true || p.user.manageProfile);
+                const sets = normalSets(e.user!.ownedEmoteSets);
+                const blockers: string[] = [];
+                if (!accepted) blockers.push(`everything: the editor invite is ${e.state.toLowerCase()}, not accepted`);
+                else {
+                    if (!manage) blockers.push("add_remove_rename: the channel did not give you emote-set \"manage\"");
+                    if (!create) blockers.push(`create_sets: the channel did not give you emote-set "create" (LACKING_PRIVILEGES): ask them to make the set, or to tick "create" for you`);
+                    if (!live) blockers.push("make_live: the channel did not give you \"manage profile\"");
+                }
+                return {
+                    channel_id: e.user!.id,
+                    name: nameOf(e.user!),
+                    you: false,
+                    editor_state: e.state,
+                    active_set_id: e.user!.style?.activeEmoteSetId ?? null,
+                    sets,
+                    set_limit: null,
+                    can: { add_remove_rename: manage, create_sets: create, make_live: live, upload_emotes: false },
+                    blockers: create ? [...blockers, `create_sets: 7TV also refuses once the channel is at its own set limit (private to it; it has ${sets} sets)`] : blockers,
+                    editor_permissions: p,
+                };
+            })
+            .sort((a, b) => a.name.localeCompare(b.name, "en", { sensitivity: "base" }));
+        const channels = [own, ...others];
+        const picked = channelId ? channels.filter((c) => c.channel_id === channelId) : channels;
+        if (channelId && picked.length === 0) return fail(404, "error.seventv.not_found", "the linked account is not an editor of that channel");
+        return success({ account: { id: me.id, name: nameOf(me), set_limit: limit, set_capacity: capacity }, channels: picked });
+    });
+}

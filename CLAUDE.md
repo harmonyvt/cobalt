@@ -135,6 +135,10 @@ the files and a real run before anything is called done.
   never changes an answer); the token is a public-safe text binding. The apps use `posthog-ios` (the only third-party
   package, app target only, `apple/Cobalt/App/Analytics.swift`): replay on iPhone/iPad with every media view wearing
   `.mediaMask()`; a new view that draws media must wear it too. Read it through the claude.ai PostHog connector.
+- Emote-variant tools (`APP-API-CONTRACT.md` section 63): `compare.canvas`, `emotes.variants`, `seventv.addMany`/`cloneSet`
+  (one approval for a list), `seventv.permissions`, `swarm.export`, `media.export`. 7TV emote frames are decoded from
+  7TV's GIFs in the Worker (`src/gif.ts`, `src/emote-frames.ts`, drawing in `src/canvas-draw.ts`), never the box. MCP
+  files come back as one-hour `GET /mcp/download/<token>` links (`src/mcp-export.ts`, R2 originals `exports/`).
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.

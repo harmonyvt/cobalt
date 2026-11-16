@@ -24,6 +24,10 @@ import {
     EMOTE_FIT_PATH,
     sevenTvUploads,
     sevenTvOwned,
+    sevenTvAddMany,
+    sevenTvClonePlan,
+    sevenTvPermissions,
+    ADD_MANY_MAX,
 } from "../../seventv";
 import { gateOf } from "../../seventv-gate";
 import type { StudioReply } from "../../studio";
@@ -353,6 +357,7 @@ const MESSAGES: Record<string, string> = {
     "error.seventv.too_large": "7TV would drop this picture",
     "error.seventv.fit_failed": "the picture could not be resized for 7TV",
     "error.seventv.busy": "the media helper is busy; try again in a minute",
+    "error.seventv.set_full": "the set has no room for that many",
     "error.seventv.bad": "a 7TV id is 20-32 letters or digits; names are 1-100 characters, an emote's name has no spaces",
 };
 
@@ -626,4 +631,145 @@ const ownedOp = defineOp({
     handler: (ctx) => strip(sevenTvOwned(deps(ctx))),
 });
 
-export const SEVENTV_OPS = [...ROUTE_OPS, statusOp, setsOp, setOp, addOp, removeOp, renameOp, makeLiveOp, createSetOp, renameSetOp, uploadOp, emoteOp, uploadsOp, ownedOp];
+// ---- section 63.4-63.5: many adds with one approval, cloning a set, and what the account may do ----------------------------
+
+const AddItemShape = z.object({ emote_id: z.string(), alias: z.string().nullable() });
+const AddManyShape = z
+    .object({
+        set_id: z.string(),
+        set_name: z.string(),
+        capacity: z.number().nullable(),
+        count_before: z.number(),
+        count_after: z.number().optional(),
+        dry_run: z.literal(true).optional(),
+        would_add: z.array(AddItemShape).optional().describe("dry_run: what a real call would add"),
+        added: z.array(AddItemShape),
+        skipped: z.array(AddItemShape.extend({ why: z.string() })).describe("already in the set: a repeated call skips what went in before"),
+        failed: z.array(AddItemShape.extend({ code: z.string(), message: z.string().optional() })),
+        remaining: z.array(AddItemShape).describe("not tried because the call stopped (see stopped): call again with the same list"),
+        stopped: z.string().optional(),
+    })
+    .meta({ id: "SevenTvAddMany" });
+const ManyItem = z.object({ emote_id: EmoteId, alias: Alias.optional().describe("its name in the set, when different from the emote's own") });
+
+const addManyOp = defineOp({
+    name: "seventv.addMany",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({
+        set_id: SetId,
+        emotes: z.array(ManyItem).min(1).max(ADD_MANY_MAX).describe(`the emotes to add, 1 to ${ADD_MANY_MAX}`),
+        override_conflicts: z.boolean().optional().describe("an alias already in the set is replaced by the new emote"),
+        dry_run: z.boolean().optional().describe("only answer what would be added and skipped (no approval needed)"),
+    }),
+    output: AddManyShape,
+    ai: {
+        tier: "ask",
+        only: true,
+        summary:
+            "Add many emotes to one 7TV set with ONE approval (instead of seventv.add per emote). Reads the set first: what is already in under that alias is skipped (so the same call can be repeated to finish), a set too full is refused up front, a refused account (LACKING_PRIVILEGES) stops at the first batch, rate limits wait and retry. Answers added / skipped / failed / remaining. dry_run: true previews. Asks Harmony first.",
+        params: ["set_id", "emotes"],
+        options: true,
+        preview: async (_ctx, input) => ({
+            summary: `${input.dry_run ? "preview adding" : "add"} ${input.emotes.length} 7TV emote${input.emotes.length === 1 ? "" : "s"} to set ${input.set_id}${input.override_conflicts ? ", replacing names already there" : ""}`,
+            effect: { set_id: input.set_id, count: input.emotes.length, first: input.emotes.slice(0, 8).map((e) => e.alias ?? e.emote_id) },
+        }),
+    },
+    handler: (ctx, input) =>
+        strip(
+            sevenTvAddMany(
+                deps(ctx),
+                input.set_id,
+                input.emotes.map((e) => ({ emote_id: e.emote_id, alias: e.alias ?? null })),
+                { ...(input.override_conflicts ? { override_conflicts: true } : {}), ...(input.dry_run ? { dry_run: true } : {}) },
+            ),
+        ),
+});
+
+const cloneSetOp = defineOp({
+    name: "seventv.cloneSet",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({
+        from_set_id: SetId.describe("the set to copy (e.g. the live set)"),
+        to_set_id: SetId.describe("the set to fill (make it first, or ask the channel to)"),
+        swap: z.array(z.object({ alias: z.string().trim().min(1).max(100), emote_id: EmoteId })).max(ADD_MANY_MAX).optional().describe("aliases of the source set to fill with another emote (e.g. its festive version); the alias stays"),
+        skip: z.array(z.string().trim().min(1).max(100)).max(ADD_MANY_MAX).optional().describe("aliases to leave out"),
+        only: z.array(z.string().trim().min(1).max(100)).max(ADD_MANY_MAX).optional().describe("copy only these aliases"),
+        dry_run: z.boolean().optional().describe("only answer the plan"),
+    }),
+    output: AddManyShape.extend({
+        from: z.object({ id: z.string(), name: z.string(), count: z.number() }),
+        swapped: z.number(),
+        unknown_swaps: z.array(z.string()).describe("swap aliases that are not in the source set (nothing was done with them)"),
+    }),
+    ai: {
+        tier: "ask",
+        only: true,
+        summary:
+            "Copy a 7TV set into another with ONE approval: every emote keeps its alias, swap: [{ alias, emote_id }] puts another emote under an alias (a seasonal version), skip/only pick aliases. Runs like seventv.addMany (skips what is already there, so it can be repeated). dry_run: true answers the plan first. Never touches the source set. Asks Harmony first.",
+        params: ["from_set_id", "to_set_id"],
+        options: true,
+        preview: async (_ctx, input) => ({
+            summary: `${input.dry_run ? "preview copying" : "copy"} 7TV set ${input.from_set_id} into ${input.to_set_id}${input.swap?.length ? ` with ${input.swap.length} swap${input.swap.length === 1 ? "" : "s"}` : ""}`,
+            effect: { from_set_id: input.from_set_id, to_set_id: input.to_set_id, swaps: input.swap?.length ?? 0, ...(input.skip?.length ? { skip: input.skip.length } : {}), ...(input.only?.length ? { only: input.only.length } : {}) },
+        }),
+    },
+    handler: async (ctx, input) => {
+        const plan = await sevenTvClonePlan(deps(ctx), input);
+        if ("status" in plan) {
+            await run(Promise.resolve(plan));
+            throw new OpError(502, "error.api.generic");
+        }
+        if (plan.items.length === 0) throw new OpError(400, "error.seventv.bad", "seventv.cloneSet: nothing to copy (the source set is empty, or skip/only left nothing)");
+        const body = await run<Record<string, unknown>>(sevenTvAddMany(deps(ctx), input.to_set_id, plan.items, input.dry_run ? { dry_run: true } : {}));
+        const { status: _s, ...rest } = body;
+        return ok({ ...rest, from: plan.from, swapped: plan.swapped, unknown_swaps: plan.unknown_swaps });
+    },
+});
+
+const PermChannel = z.object({
+    channel_id: z.string(),
+    name: z.string(),
+    you: z.boolean(),
+    editor_state: z.string().nullable(),
+    active_set_id: z.string().nullable(),
+    sets: z.number().describe("the channel's emote sets"),
+    set_limit: z.number().nullable().describe("its most sets (known for your own channel only)"),
+    can: z.object({
+        add_remove_rename: z.boolean(),
+        create_sets: z.boolean(),
+        make_live: z.boolean(),
+        upload_emotes: z.boolean().describe("uploads always go to your own account: true on your own channel only"),
+    }),
+    blockers: z.array(z.string()).describe("what 7TV will refuse and why, before you try"),
+    editor_permissions: z.unknown().nullable(),
+});
+
+const permissionsOp = defineOp({
+    name: "seventv.permissions",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z.object({ channel: ChannelRef.optional().describe("one channel (default: every channel the account can reach)") }),
+    output: z.object({
+        account: z.object({ id: z.string(), name: z.string(), set_limit: z.number().nullable(), set_capacity: z.number().nullable() }),
+        channels: z.array(PermChannel),
+    }),
+    ai: {
+        tier: "free",
+        only: true,
+        summary:
+            "Check before a 7TV job what the linked account may do on each channel: add/remove/rename emotes, create sets, make a set live, upload, each with the reason when it may not (the LACKING_PRIVILEGES cases, e.g. no \"create\" right on someone else's channel, or a channel at its set limit).",
+        params: [],
+        options: true,
+    },
+    handler: async (ctx, input) => {
+        const ch = input.channel ? await channelOf(ctx, input.channel) : null;
+        return strip(sevenTvPermissions(deps(ctx), ch?.id ?? null));
+    },
+});
+
+export const SEVENTV_OPS = [...ROUTE_OPS, statusOp, setsOp, setOp, addOp, removeOp, renameOp, makeLiveOp, createSetOp, renameSetOp, uploadOp, emoteOp, uploadsOp, ownedOp, addManyOp, cloneSetOp, permissionsOp];

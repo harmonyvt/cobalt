@@ -1847,7 +1847,7 @@ async function attemptTask(d: SwarmRunDeps, row: SwarmRow, spec: Spec, task: Tas
                 const media = (collect.lookMedia ?? []).slice(0, 4);
                 if (media.length > 0 && d.look) {
                     const deps = { ...d.look, shareBaseUrl: base.shareBaseUrl, hosts: mediaHostsOf(base.env as { MEDIA_HOSTS?: string }, base) };
-                    const imgs = await lookMediaImages(deps, media).catch(() => new Map());
+                    const imgs = await lookMediaImages(deps, media, {}, Object.fromEntries((collect.lookMediaFrames ?? []).map((r) => [r, { frames: true }]))).catch(() => new Map());
                     for (const ref of media) content.push(...lookMediaBlocks(ref, imgs.get(ref)));
                 }
                 results.push({ type: "tool_result", tool_use_id: u.id, ...(out.error !== undefined ? { is_error: true } : {}), content });

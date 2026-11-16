@@ -28,6 +28,7 @@ import {
 import { background } from "../../background";
 import { previewRefusal, PREVIEW_CORS, PREVIEW_TOKEN_REGEX, servePreview, verifyPreviewToken } from "../../mcp-preview";
 import { logRequest } from "../../request-log";
+import { DOWNLOAD_TOKEN_REGEX, verifyDownloadToken } from "../../mcp-export";
 import { chatKeyId } from "../ai";
 import { defineOp, ok, OpError, type OpContext } from "../op";
 
@@ -268,6 +269,49 @@ export const mcpUploadOp = defineOp({
     },
 });
 
+// GET /mcp/download/<token> (section 63.6): a file an MCP tool exported (swarm results, pictures). The token is the
+// credential; its client key (or private link) must still be live and the mode must still be the way in.
+export const mcpDownloadOp = defineOp({
+    name: "mcp.download",
+    route: { method: "GET", path: "/mcp/download/:token", params: { token: DOWNLOAD_TOKEN_REGEX } },
+    auth: "capability",
+    runs: "worker",
+    cors: false,
+    noStore: true,
+    raw: true,
+    input: NoInput,
+    http: none,
+    ai: { tier: "hidden", summary: "A file an MCP tool exported (GET /mcp/download/<token>), for one hour." },
+    handler: async (ctx) => {
+        const claims = await verifyDownloadToken(ctx.env.COBALT_API_KEY, ctx.params.token!, ctx.now());
+        if (!claims) return uploadJson(401, errBody("error.mcp.download_link"));
+        let live: boolean;
+        try {
+            const mode = await mcpMode(ctx.db);
+            if (claims.k.startsWith("link:")) live = mode === "private" && (await linkLive(ctx.db, claims.k.slice(5)));
+            else
+                live =
+                    mode === "public" &&
+                    (await ctx.db.prepare("SELECT id FROM api_keys WHERE id = ?1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?2)").bind(claims.k, ctx.now()).first<{ id: string }>()) !== null;
+        } catch {
+            return uploadJson(503, errBody("error.api.generic"));
+        }
+        if (!live) return uploadJson(401, errBody("error.api.auth.key.invalid"));
+        const obj = await (ctx.env.ORIGINALS as unknown as R2Bucket).get(claims.f).catch(() => null);
+        if (!obj) return uploadJson(404, errBody("error.mcp.download_gone"));
+        return new Response(obj.body, {
+            status: 200,
+            headers: {
+                ...UPLOAD_CORS,
+                "content-type": obj.httpMetadata?.contentType ?? "application/octet-stream",
+                "content-length": String(obj.size),
+                "content-disposition": `attachment; filename="${claims.n}"`,
+                "cache-control": "no-store",
+            },
+        });
+    },
+});
+
 // OPTIONS /mcp/upload/<token>: the preflight of a widget's PUT, from any origin. The registry hands it to this op only
 // when it carries Access-Control-Request-Method (any other OPTIONS stays with the gate).
 export const mcpUploadPreflightOp = defineOp({
@@ -490,6 +534,7 @@ export const MCP_OPS = [
     mcpLinkEndOp,
     mcpUploadOp,
     mcpUploadPreflightOp,
+    mcpDownloadOp,
     mcpMediaOp,
     mcpMediaPosterOp,
     uploadBeginOp,

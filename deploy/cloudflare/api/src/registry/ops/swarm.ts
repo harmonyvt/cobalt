@@ -3,6 +3,7 @@
 // device session; never a client key, never the chat or the MCP). The rules, the D1 side and the runner are in
 // src/swarm.ts; a swarm's tasks run in its Swarm Durable Object (src/swarm-do.ts).
 import * as z from "zod";
+import { writeExport } from "../../mcp-export";
 import { mintCollectionId } from "../../share-collections";
 import {
     trackSwarm,
@@ -940,6 +941,53 @@ export const swarmBoardOp = defineOp({
     },
 });
 
+// Section 63.6: a swarm's whole outcome as one JSON file to download (the board view is cut to fit; swarm.results pages).
+export const swarmExportOp = defineOp({
+    name: "swarm.export",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: IdInput,
+    output: z.object({
+        url: z.string().describe("GET it within an hour (curl -o); no header needed"),
+        file: z.string(),
+        bytes: z.number(),
+        expires_at: z.string(),
+        curl: z.string(),
+        tasks: z.number(),
+        changes: z.number(),
+    }),
+    ai: {
+        tier: "free",
+        only: true,
+        summary:
+            "A swarm's FULL outcome as one JSON file to download: the swarm, every task's result (uncut), its items, outcome and cost, and every proposed change. Answers a one-hour link and a ready curl -o command. Use it instead of re-typing a board or paging swarm.results.",
+        params: ["id"],
+        when: (f) => f.mcp === true,
+    },
+    handler: async (ctx, input) => {
+        const mcp = ctx.chat?.mcp;
+        if (!ctx.chat || !mcp) throw new OpError(404, "error.mcp.only", "swarm.export: only the MCP server can call this");
+        const row = await mustSee(ctx, input.id);
+        const tasks = (await ctx.db.prepare("SELECT * FROM swarm_tasks WHERE swarm = ?1 ORDER BY idx").bind(input.id).all<TaskRow>()).results ?? [];
+        const changes = (await ctx.db.prepare("SELECT * FROM swarm_changes WHERE swarm = ?1 ORDER BY task, n").bind(input.id).all<ChangeRow>().catch(() => ({ results: [] as ChangeRow[] }))).results ?? [];
+        const asks = await asksByTask(ctx.db, input.id);
+        const body = {
+            exported_at: new Date(ctx.now()).toISOString(),
+            swarm: await shapeOf(ctx.db, ctx.registry, row, webOrigin(ctx)),
+            results: tasks.map((t) => resultShape(t, asks.get(t.idx) ?? 0)),
+            changes: changes.map(changeShape),
+        };
+        const link = await writeExport(
+            { bucket: ctx.env.ORIGINALS as never, secret: ctx.env.COBALT_API_KEY, now: ctx.now, origin: mcp.origin, clientKeyId: mcp.clientKeyId },
+            `swarm-${row.id}.json`,
+            JSON.stringify(body, null, 1),
+            "application/json",
+        );
+        return ok({ ...link, tasks: tasks.length, changes: changes.length });
+    },
+});
+
 export const SWARM_OPS = [
     swarmPlanOp,
     swarmListOp,
@@ -957,4 +1005,5 @@ export const SWARM_OPS = [
     swarmMessagesOp,
     swarmAgentOp,
     swarmBoardOp,
+    swarmExportOp,
 ];

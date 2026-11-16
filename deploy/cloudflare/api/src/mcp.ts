@@ -10,6 +10,7 @@
 import * as z from "zod";
 import { chatTools, type ChatCollect } from "./chat-tools";
 import { lookImages, lookMediaImages, type LookOpts } from "./look-pictures";
+import { gateOf } from "./seventv-gate";
 import { mediaHostsOf } from "./media-refs";
 import { chatKeyId, runOp } from "./registry/ai";
 import { forCall } from "./registry/context";
@@ -112,7 +113,7 @@ const toolSpelling = (text: string, names: Set<string>) =>
 function describeOp(op: Op, callNames: Set<string>): string {
     let text = op.ai.summary.replace(/\n/g, " ");
     if (op.callName === "look")
-        text = `See these posts' pictures (poster or image, private ones too), returned as images. grid: labelled lines every 0.1 to read off a crop box; box: draws a crop you are about to make so you can check it; frames: up to 3 frames across a video. Max ${MCP_LOOK_MAX} per call.`;
+        text = `See these posts' pictures (poster or image, private ones too), returned as images. grid: labelled lines every 0.1 to read off a crop box; box: draws a crop you are about to make so you can check it; frames: up to 3 frames across a video, or 6 across an animated 7TV emote's loop (media). Max ${MCP_LOOK_MAX} per call.`;
     for (const [from, to] of SAY_INSTEAD) text = text.replace(from, to);
     text = toolSpelling(text, callNames);
     if (op.ai.tier === "ask") text += ` ${ASK_NOTE}`;
@@ -158,7 +159,8 @@ export const INSTRUCTIONS = [
     "Make ops (make_*, edits_render, chat_video, convert_to_webp) answer a job: check on it with job_status. Share links: create_share_link; collections and sets group them.",
     "Cropping (make_cropImage for pictures, make_crop for videos): never guess the position or assume the centre. Look at the source with grid: true (a video: frames: true, or make_frames for frames at chosen seconds), read the box off the labelled grid, check it with look's box option before making it, and look at the result after. A moving subject needs a box that covers it in every frame, or several clips with their own crops. Plain crop by default: cutout only for a subject on a plain background, never for banners, bars or text. Then edits_addOverlay to use it in a video.",
     "When offered, agents_spawn starts a helper (another capystore agent with these tools) on one task in the background; follow it with agents_get or job_status on its job, message it with agents_send, read what helpers sent you with agents_inbox.",
-    "To see any media (a 7TV emote id or link, a capystore link, an allowed https image URL), call look with media. Swarms (swarm_plan): when the items are a 7TV set's emotes, use source { call: \"seventv.set\" } (one read gives every name, id and picture) instead of searching for each; emotes_findMany looks up to 20 names in one request; swarm_board shows any swarm's results with their media and scores.",
+    "To see any media (a 7TV emote id or link, a capystore link, an allowed https image URL), call look with media. Swarms (swarm_plan): when the items are a 7TV set's emotes, use source { call: \"seventv.set\" } (one read gives every name, id and picture) instead of searching for each; emotes_findMany looks up to 20 names in one request; swarm_board shows any swarm's results with their media and scores, swarm_export saves them all as a JSON file.",
+    "7TV emote work: emotes_variants finds every same-name and seasonal upload of an emote across all result pages; compare_canvas draws (original, variant) pairs as canvases with frames from each animation (look with frames: true shows one emote's frames); seventv_permissions says what the account may do on each channel before you plan writes; seventv_addMany and seventv_cloneSet add a whole list (or copy a set with swaps) with one approval. media_export turns refs into data: URIs or a sprite to embed in artifacts. Files come back as a one-hour link with a ready curl line.",
     "Tools marked destructive delete or change things for good: confirm with the user first.",
     "Some tools show a picture answer (a widget) where the host draws one: search_library, show_post, show_edit, list_collections, list_share_links, convert_to_webp, upload_files, create_share_link and save_link, and after a change the collections_*, links_update, links_private, links_rotate, library_title, library_visibility and library_status tools, and (when offered) box_run, box_pull and box_save as a terminal. Every tool also answers in text, and with structuredContent (the same JSON) where it has one.",
     "The other tools (make_*, edits_*, library_*, links_*...) cover everything else, deletes and edits included.",
@@ -306,8 +308,8 @@ async function look(ctx: OpContext, caller: McpCaller, ids: string[], o: LookOpt
     if (ids.length > MCP_LOOK_MAX) content.push({ type: "text", text: `Only the first ${MCP_LOOK_MAX} were shown.` });
     // look({ media }) (section 62.1): an emote, an allowed image link or a capystore ref
     if (media) {
-        const deps = { ...lookDeps, shareBaseUrl: ctx.shareBaseUrl, hosts: mediaHostsOf(ctx.env as { MEDIA_HOSTS?: string }, ctx), fetch: doFetch };
-        const m = (await lookMediaImages(deps, [media]).catch(() => new Map())).get(media);
+        const deps = { ...lookDeps, shareBaseUrl: ctx.shareBaseUrl, hosts: mediaHostsOf(ctx.env as { MEDIA_HOSTS?: string }, ctx), fetch: doFetch, gate: gateOf(ctx.env), now: ctx.now };
+        const m = (await lookMediaImages(deps, [media], { ...(o.frames ? { frames: true } : {}) }).catch(() => new Map())).get(media);
         for (const im of m?.images ?? []) {
             content.push({ type: "text", text: im.url ? `${im.label} ${im.url}` : im.label });
             if (im.data) content.push({ type: "image", data: im.data, mimeType: im.mediaType! });
