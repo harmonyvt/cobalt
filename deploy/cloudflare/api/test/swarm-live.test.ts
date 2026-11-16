@@ -109,6 +109,29 @@ describe("the service", () => {
         expect(w.apple.pushes).toHaveLength(1);
     });
 
+    it("starts on the iPhone even when the iPad opened the app more recently (seen live 2026-11-16)", async () => {
+        addSwarm();
+        set("UPDATE api_keys SET platform = 'ios' WHERE id = 'key-phone'");
+        set("UPDATE api_keys SET platform = 'ipados' WHERE id = 'key-mac'");
+        const w = world();
+        await w.storage.put(`${JOB_START_PREFIX}key-phone`, { token: "aa".repeat(40), env: "production", updatedAt: T0 - 240_000 });
+        await w.storage.put(`${JOB_START_PREFIX}key-mac`, { token: "bb".repeat(40), env: "production", updatedAt: T0 - 1000 });
+        expect(await w.service.start(ID)).toEqual({ started: true });
+        expect(w.apple.pushes.map((p) => p.token)).toEqual(["aa".repeat(40)]);
+        expect(await w.rec()).toMatchObject({ keyId: "key-phone" });
+    });
+
+    it("with no iPhone, the newest device still gets it", async () => {
+        addSwarm();
+        set("UPDATE api_keys SET platform = 'ipados' WHERE id = 'key-mac'");
+        set("UPDATE api_keys SET platform = 'macos' WHERE id = 'k'");
+        const w = world();
+        await w.storage.put(`${JOB_START_PREFIX}k`, { token: "aa".repeat(40), env: "production", updatedAt: T0 - 240_000 });
+        await w.storage.put(`${JOB_START_PREFIX}key-mac`, { token: "bb".repeat(40), env: "production", updatedAt: T0 - 1000 });
+        expect(await w.service.start(ID)).toEqual({ started: true });
+        expect(w.apple.pushes.map((p) => p.token)).toEqual(["bb".repeat(40)]);
+    });
+
     it("starts nothing without APNs, without a start token, or for a swarm that is not waiting", async () => {
         addSwarm();
         expect(await world({ configured: false }).service.start(ID)).toEqual({ started: false, reason: "not_configured" });

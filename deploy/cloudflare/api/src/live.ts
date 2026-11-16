@@ -64,6 +64,30 @@ export const JOB_START_PREFIX = "live:jobstart:";
 // the one the app refreshed last, so it is the phone in use.
 export const LIVE_AGENT_MAX_DEVICES = 1;
 
+// The island's device among the start tokens (newest first): the iPhone. "Newest" alone picked whichever device opened
+// the app last, so an iPad opened a minute before a swarm plan took the island and the phone showed nothing (seen live
+// 2026-11-16). A device session's `platform` says which is which: "ios" first, then keys with no platform (an old client
+// key on a phone), then the rest (iPad, Mac); newest first within each. Any D1 trouble keeps the newest-first order.
+export async function phoneFirst<T extends { keyId: string }>(db: D1Database, devices: T[]): Promise<T[]> {
+    if (devices.length < 2) return devices;
+    let platform = new Map<string, string | null>();
+    try {
+        const ids = devices.map((d) => d.keyId).slice(0, 50);
+        const rows = await db
+            .prepare(`SELECT id, platform FROM api_keys WHERE id IN (${ids.map((_, i) => `?${i + 1}`).join(", ")})`)
+            .bind(...ids)
+            .all<{ id: string; platform: string | null }>();
+        platform = new Map((rows.results ?? []).map((r) => [r.id, r.platform]));
+    } catch {
+        return devices;
+    }
+    const rank = (keyId: string) => {
+        const p = platform.get(keyId) ?? null;
+        return p === "ios" ? 0 : p === null ? 1 : 2;
+    };
+    return devices.map((d, i) => ({ d, i })).sort((a, b) => rank(a.d.keyId) - rank(b.d.keyId) || a.i - b.i).map(({ d }) => d);
+}
+
 export const STALE_S = 120;
 export const STALE_READY_S = 30 * 60;
 // How long a finished island stays on the Lock Screen (the Dynamic Island lets go at once). Short on purpose: a card
@@ -1018,13 +1042,13 @@ export class LiveService implements LiveHooks {
             ...(await this.d.storage.list<StartToken>({ prefix: "live:start:" })).entries(),
             ...(await this.d.storage.list<StartToken>({ prefix: JOB_START_PREFIX })).entries(),
         ];
-        const devices = starts
+        const newest = starts
             .map(([k, t]) => ({ keyId: k.slice(k.startsWith(JOB_START_PREFIX) ? JOB_START_PREFIX.length : "live:start:".length), t }))
             .filter(({ keyId, t }) => !keyId.startsWith("chat:") && now - t.updatedAt < LIVE_START_TOKEN_TTL_MS)
             .sort((a, b) => b.t.updatedAt - a.t.updatedAt)
             // the same token under two keys is one device, and a key with both token kinds is one device too
-            .filter((d, i, all) => all.findIndex((x) => x.t.token === d.t.token || x.keyId === d.keyId) === i)
-            .slice(0, LIVE_AGENT_MAX_DEVICES);
+            .filter((d, i, all) => all.findIndex((x) => x.t.token === d.t.token || x.keyId === d.keyId) === i);
+        const devices = (await phoneFirst(this.d.db, newest)).slice(0, LIVE_AGENT_MAX_DEVICES);
         const making = o.kind === "make";
         const state: LiveState = making
             ? { stage: "rendering", rail: RAIL.rendering!, since: secs(now), waking: false, packing: false }

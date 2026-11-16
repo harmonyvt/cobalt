@@ -1181,7 +1181,9 @@ asked for an activity and none appeared, app open or closed. The server now push
 - **Which device.** `LiveService.startAgent`: the one key whose start token was refreshed most recently within 60 days,
   never a `chat:` key (`LIVE_AGENT_MAX_DEVICES` = 1; the same token under two keys counts once). One phone can hold start
   tokens under several keys (an old key and its current session), and starting one per key put two islands on one screen
-  (2026-11-13). The run is held by that key; the session's owner check of 8.2 is skipped for this server-made
+  (2026-11-13). The iPhone comes first (`phoneFirst` in live.ts, also the swarm island of 61.5): a key whose device
+  session has `platform` "ios", then keys with no platform, then the rest (iPad, Mac), newest first within each; newest
+  alone gave the island to an iPad opened a minute before a swarm plan (2026-11-16). The run is held by that key; the session's owner check of 8.2 is skipped for this server-made
   registration only. The app reports the update token as for any push-started activity, with whatever key it uses now:
   an agent run moves to the reporting key (any key but a `chat:` one) instead of answering 404, which had left the
   island stuck on its first state.

@@ -17,7 +17,7 @@
 import type { ApnsClient, ApnsPush, Environment } from "./apns";
 import { KEY_ID_HEADER } from "./headers";
 import { JOB_ATTRIBUTES_TYPE, JOB_STALE_S, asJobPayload, canonicalJob, isJobTerminal, jobOfSwarm, swarmEndsAtOnce, type Job, type JobState, type SwarmLiveInput } from "./job-live";
-import { JOB_START_PREFIX, LIVE_AGENT_MAX_DEVICES, LIVE_START_TOKEN_TTL_MS, TOKEN_REGEX, type StartToken } from "./live";
+import { JOB_START_PREFIX, LIVE_AGENT_MAX_DEVICES, LIVE_START_TOKEN_TTL_MS, TOKEN_REGEX, phoneFirst, type StartToken } from "./live";
 import type { KV } from "./webp";
 
 export const SWARM_LIVE_PREFIX = "live:swarm:";
@@ -218,14 +218,14 @@ export class SwarmLiveService {
         }
     }
 
-    // The device: the job start token refreshed most recently in 60 days, never a chat key (as agent jobs, 8.11). Only the
-    // job type can draw a swarm, so the old type's tokens are not used.
+    // The device: the iPhone's job start token, else the one refreshed most recently, in 60 days, never a chat key (as
+    // agent jobs, 8.11, `phoneFirst`). Only the job type can draw a swarm, so the old type's tokens are not used.
     private async device(now: number): Promise<{ keyId: string; t: StartToken } | null> {
-        const list = [...(await this.d.storage.list<StartToken>({ prefix: JOB_START_PREFIX })).entries()]
+        const newest = [...(await this.d.storage.list<StartToken>({ prefix: JOB_START_PREFIX })).entries()]
             .map(([k, t]) => ({ keyId: k.slice(JOB_START_PREFIX.length), t }))
             .filter(({ keyId, t }) => !keyId.startsWith("chat:") && now - t.updatedAt < LIVE_START_TOKEN_TTL_MS)
-            .sort((a, b) => b.t.updatedAt - a.t.updatedAt)
-            .slice(0, LIVE_AGENT_MAX_DEVICES);
+            .sort((a, b) => b.t.updatedAt - a.t.updatedAt);
+        const list = (await phoneFirst(this.d.db, newest)).slice(0, LIVE_AGENT_MAX_DEVICES);
         return list[0] ?? null;
     }
 
