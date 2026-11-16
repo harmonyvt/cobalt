@@ -37,6 +37,10 @@ const FIELDS = "id defaultName deleted flags { animated defaultZeroWidth private
 const SEARCH = `query($query: String, $sort: Sort!, $page: Int!, $perPage: Int!) {
   emotes { search(query: $query, sort: $sort, page: $page, perPage: $perPage) {
     pageCount items { ${FIELDS} } } } }`;
+// Variants (section 20.2): 7TV's own exact-name filter on the emote's default name (not a set's alias).
+const SEARCH_EXACT = `query($query: String, $sort: Sort!, $page: Int!, $perPage: Int!) {
+  emotes { search(query: $query, sort: $sort, filters: { exactMatch: true }, page: $page, perPage: $perPage) {
+    pageCount items { ${FIELDS} } } } }`;
 
 const GLOBAL = `query($query: String, $page: Int!, $perPage: Int!) {
   emoteSets { global { emotes(query: $query, page: $page, perPage: $perPage) {
@@ -229,26 +233,28 @@ const cacheOf = (d: Pick<AppDeps, "emoteCache">): EmoteCache | null => {
     return c ?? null;
 };
 const normQuery = (q: string) => q.trim().toLowerCase().replace(/\s+/g, " ");
-const cacheKey = (query: string, sort: EmoteSort, page: number) =>
-    new Request(`https://emote-cache.internal/find?${new URLSearchParams({ q: normQuery(query), sort, page: String(page) })}`);
+const cacheKey = (query: string, sort: EmoteSort, page: number, exact = false) =>
+    new Request(
+        `https://emote-cache.internal/find?${new URLSearchParams({ q: normQuery(query), sort, page: String(page), ...(exact ? { exact: "1" } : {}) })}`,
+    );
 
-async function cached(d: Pick<AppDeps, "emoteCache">, query: string, sort: EmoteSort, page: number): Promise<FoundPage | null> {
+async function cached(d: Pick<AppDeps, "emoteCache">, query: string, sort: EmoteSort, page: number, exact = false): Promise<FoundPage | null> {
     const c = cacheOf(d);
     if (!c) return null;
     try {
-        const hit = await c.match(cacheKey(query, sort, page));
+        const hit = await c.match(cacheKey(query, sort, page, exact));
         return hit ? ((await hit.json()) as FoundPage) : null;
     } catch {
         return null;
     }
 }
 
-async function remember(d: Pick<AppDeps, "emoteCache">, query: string, sort: EmoteSort, page: number, found: FoundPage): Promise<void> {
+async function remember(d: Pick<AppDeps, "emoteCache">, query: string, sort: EmoteSort, page: number, found: FoundPage, exact = false): Promise<void> {
     const c = cacheOf(d);
     if (!c) return;
     try {
         const ttl = found.items.length > 0 ? EMOTE_CACHE_S : EMOTE_CACHE_EMPTY_S;
-        await c.put(cacheKey(query, sort, page), new Response(JSON.stringify(found), { headers: { "content-type": "application/json", "cache-control": `public, max-age=${ttl}` } }));
+        await c.put(cacheKey(query, sort, page, exact), new Response(JSON.stringify(found), { headers: { "content-type": "application/json", "cache-control": `public, max-age=${ttl}` } }));
     } catch {
         // a cache that cannot keep it: the next search asks 7TV again
     }
@@ -294,16 +300,27 @@ export async function searchEmotes(
     const pageRaw = q.get("page");
     const page = pageRaw === null ? 1 : Number(pageRaw);
     if (!Number.isInteger(page) || page < 1 || page > MAX_PAGE) return err(400, "error.emote.query");
+    // exact=1 (section 20.2): only emotes whose own 7TV name is the query (any case), a name required
+    const exactRaw = q.get("exact");
+    if (exactRaw !== null && exactRaw !== "1" && exactRaw !== "0") return err(400, "error.emote.query");
+    const exact = exactRaw === "1";
+    if (exact && query.length < 1) return err(400, "error.emote.query");
 
-    let found = await cached(d, query, sort, page);
+    let found = await cached(d, query, sort, page, exact);
     const hit = found !== null;
     if (!found) {
         try {
-            const data = await gql(fetchImpl, sort === "global" ? GLOBAL : SEARCH, searchVars(query, sort, page), d.sevenTvGate, d.now);
+            const text = sort === "global" ? GLOBAL : exact ? SEARCH_EXACT : SEARCH;
+            const data = await gql(fetchImpl, text, searchVars(query, sort, page), d.sevenTvGate, d.now);
             const raw = foundIn(data, sort);
             found = foundOf(raw, sort, page);
+            if (exact) {
+                // 7TV's filter matches the name as a token; keep only the same whole name (case aside)
+                const want = query.toLowerCase();
+                found = { ...found, items: found.items.filter((h) => h.name.toLowerCase() === want) };
+            }
             // a partial answer (GraphQL errors) or a missing search is answered but never cached
-            if (raw && !isPartial(data)) await remember(d, query, sort, page, found);
+            if (raw && !isPartial(data)) await remember(d, query, sort, page, found, exact);
         } catch (e) {
             return failed(e);
         }
@@ -314,7 +331,7 @@ export async function searchEmotes(
     } catch {
         return err(502, "error.emote.unavailable");
     }
-    return { status: 200, body: { items, sort, page, has_more: found.has_more, ...(hit ? { cached: true } : {}) } };
+    return { status: 200, body: { items, sort, page, has_more: found.has_more, ...(exact ? { exact: true } : {}), ...(hit ? { cached: true } : {}) } };
 }
 
 // Several names in one 7TV request (section 62.5): one aliased search per name not in the cache, first page only.

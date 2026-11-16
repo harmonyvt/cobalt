@@ -63,3 +63,17 @@ public struct SavedEmote: Sendable, Equatable, Decodable {
         case emoteID = "emoteId"
     }
 }
+
+/// Variants of an emote (APP-API-CONTRACT 20.2): every 7TV emote whose own name (never a set's alias) is the same, case
+/// aside. The server filters with `exact=1`; the app filters again so a server without it still answers right.
+public enum EmoteVariants {
+    /// `catJAM` and `CATJAM` are the same name; `catJAM2` is not.
+    public static func sameName(_ a: String, _ b: String) -> Bool {
+        a.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == b.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// The hits named `name`, in their order.
+    public static func keep(_ items: [EmoteHit], name: String) -> [EmoteHit] {
+        items.filter { sameName($0.name, name) }
+    }
+}

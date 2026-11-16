@@ -2691,6 +2691,26 @@ the same chips (default trending this week) through the web Worker's `/api/libra
 
 No migration. Deploy the API Worker before the web Worker and the app.
 
+### 20.2 Variants of an emote (addendum, 2026-11-16; owner: "hold press on emotes in a set, and it shows a sheet with all their variants on 7TV ... the emotes with the same title ... not the renamed version, like the alias, but the actual emote itself")
+
+`GET /emotes` also takes `exact=1` (`0` or no key: as before; anything else 400 `error.emote.query`). With it `q` is
+required (1..64) and the answer holds only emotes whose own 7TV name (`defaultName`) is `q`, ignoring case: `catJAM` finds
+`catJAM` and `CATJAM` but not `catJAM2`. A set's alias never takes part: clients send the emote's own name (the set
+item's `name`, not its `alias`).
+
+- 7TV call: v4 `emotes.search(query, sort, filters: { exactMatch: true }, page, perPage)` (7TV filters on
+  `default_name`); the Worker then drops any name that is not the whole query, so a page can hold fewer than 24 (even
+  none while `has_more` is true: ask the next page). `sort` works as in 20.1 (`global` has no 7TV filter, only the
+  Worker's). Cached apart from the plain search (the cache key carries `exact`).
+- 200 is 20.1's body plus `"exact": true`.
+
+Clients: in a 7TV set (the 7tv tab or the studio's set screen) a long press on an emote opens "variants": every emote
+on 7TV with that emote's own name, most used first (`sort=top`), the one in the set marked, the next page at the last
+tile; a tap on a variant opens it on 7tv.app. "select" (several emotes at once) moved to its button only. A server
+without `exact` ignores the key; the app keeps only the same name itself, so it still works, just with more pages.
+
+No migration. Deploy the API Worker; the app works against either.
+
 ## 21. Library search (addendum, built 2026-10-17; owner: "have a cloudflare worker embed our media for searching", hosted on a private Hugging Face Space, `capybaraharmony/cobalt-embed`)
 
 One vector per library post, made by Google's EmbeddingGemma 2 (text and image encoders) on a private Hugging Face Space (`deploy/huggingface/embed`, its README has the Space contract), stored in D1 `media_embeddings` (migration `0010_search.sql`) and searched by the API Worker (`src/embed.ts`). A post is embedded from `title: <custom title, else the lead file's name> | text: <its file names · the link's host and path>` plus its poster when the poster is on `media.capybaraharmony.com`, so a query finds a post by the words in it or by what its poster shows. Vectors are 256 numbers (Matryoshka truncation, L2-normalized).
@@ -6538,7 +6558,8 @@ live one marked, each with **open** and (when `can.make_live`) **make live**; **
 **Set screen:** two chips, "in this set" (a 4-column emote grid with a name filter, paging) and "add from 7tv" (section
 20's search grid and sorts; `+` adds under its own name, a long press/right click adds with another name; emotes
 already in the set show ✓). Tapping an emote in the set opens a small sheet: rename (alias), copy to another set of the
-same channel, remove (asks first). Set rename from the screen's title menu. Edits update the grid in place on success,
+same channel, remove (asks first). A long press on an emote in the set opens its variants (section 20.2). Set rename
+from the screen's title menu. Edits update the grid in place on success,
 and a 7TV refusal shows its message.
 `GET /capabilities` gains `features.seventv: true` (always on; the card itself says when it is not linked).
 

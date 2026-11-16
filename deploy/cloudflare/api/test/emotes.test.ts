@@ -189,6 +189,46 @@ describe("GET /emotes", () => {
         expect(sent[0].variables).toEqual({ query: null, page: 1, perPage: 24 });
     });
 
+    it("exact=1 asks 7TV for the exact name and keeps only that whole name, any case (variants, 20.2)", async () => {
+        const { d } = world();
+        const OTHER = "01AAAAAAAAAAAAAAAAAAAAAAAA";
+        const LONGER = "01BBBBBBBBBBBBBBBBBBBBBBBB";
+        const sent: { query: string; variables: Record<string, unknown> }[] = [];
+        const fetchImpl = async (_url: unknown, init?: RequestInit) => {
+            sent.push(JSON.parse(String(init?.body)));
+            return jsonRes({
+                data: {
+                    emotes: {
+                        search: {
+                            pageCount: 2,
+                            items: [emote(), emote({ id: OTHER, defaultName: "CATJAM" }), emote({ id: LONGER, defaultName: "catJAM2" })],
+                        },
+                    },
+                },
+            });
+        };
+        const r = await searchEmotes(d, new URLSearchParams("q=catJAM&sort=top&exact=1"), fetchImpl as typeof fetch);
+        expect(r.status).toBe(200);
+        expect(r.body).toMatchObject({ sort: "top", page: 1, has_more: true, exact: true });
+        expect((r.body as { items: { id: string }[] }).items.map((i) => i.id)).toEqual([CAT, OTHER]);
+        expect(sent[0].query).toContain("exactMatch: true");
+        expect(sent[0].variables).toMatchObject({ query: "catJAM", sort: { sortBy: "TOP_ALL_TIME" } });
+
+        // kept apart from the plain search's cache: the plain one still asks 7TV and keeps catJAM2
+        const plain = await searchEmotes(d, new URLSearchParams("q=catJAM&sort=top"), fetchImpl as typeof fetch);
+        expect((plain.body as { items: unknown[] }).items).toHaveLength(3);
+        expect(sent).toHaveLength(2);
+        expect(sent[1].query).not.toContain("exactMatch");
+
+        for (const bad of ["sort=top&exact=1", "q=cat&sort=top&exact=yes"]) {
+            expect(await searchEmotes(d, new URLSearchParams(bad), fetchImpl as typeof fetch)).toMatchObject({
+                status: 400,
+                body: { error: { code: "error.emote.query" } },
+            });
+        }
+        expect(sent).toHaveLength(2);
+    });
+
     it("is 502 when 7TV does not answer", async () => {
         const { d } = world();
         const r = await searchEmotes(d, new URLSearchParams("q=cat"), async () => {
