@@ -1127,23 +1127,41 @@ struct SevenTvManageModelTests {
         let main = try #require(app.sevenTv.sets(of: own.id).first)
         let set = app.sevenTv.openSet(main.id, channelID: own.id)
         await set.load()
+        let preview = try #require(app.ctx.client as? PreviewClient)
         let count = set.info?.count
         let jam = try #require(set.emote(aliased: "catJAM"))
         let at = try #require(set.all.firstIndex { $0.id == jam.id })
 
-        // the same name: the word in chat stays, the place in the grid too, the count does not move
+        // remove the held one, then add the new one under its alias, without override_conflicts (7TV's doesn't free a name)
         let other = outsider(7, name: "CATJAM")
+        let before = preview.sevenTvState.calls.count
         try await set.swap(jam, for: other)
+        let calls = Array(preview.sevenTvState.calls.dropFirst(before))
+        #expect(calls == ["DELETE emote \(jam.emoteID)", "POST emote \(other.id)"])
+        // the word in chat stays, the place in the grid too, the count does not move
         #expect(set.all[at].emoteID == other.id && set.all[at].alias == "catJAM" && set.all[at].renamed)
         #expect(!set.all.contains { $0.id == jam.id })
         #expect(set.info?.count == count)
 
         // picking the held one changes nothing and asks nothing
-        let preview = try #require(app.ctx.client as? PreviewClient)
-        let calls = preview.sevenTvState.calls.count
+        let quiet = preview.sevenTvState.calls.count
         try await set.swap(set.all[at], for: other)
-        #expect(preview.sevenTvState.calls.count == calls)
-        #expect(set.all[at].emoteID == other.id)
+        #expect(preview.sevenTvState.calls.count == quiet)
+
+        // 7TV refuses the new one: the held one goes back, the grid and count are as they were
+        let now = set.all[at]
+        let refused = EmoteHit(
+            id: "01FZZREFUSED0000000000000", name: "catJAM", animated: false,
+            previewURL: PreviewData.sevenTvCDN("01FZZREFUSED0000000000000", "2x"), fileURL: PreviewData.sevenTvCDN("01FZZREFUSED0000000000000", "4x"))
+        let tried = preview.sevenTvState.calls.count
+        await #expect(throws: SevenTvError.self) { try await set.swap(now, for: refused) }
+        #expect(Array(preview.sevenTvState.calls.dropFirst(tried))
+            == ["DELETE emote \(other.id)", "POST emote \(refused.id)", "POST emote \(other.id)"])
+        #expect(set.all[at] == now && set.info?.count == count)
+        let fresh = app.sevenTv.openSet(main.id, channelID: own.id)
+        await fresh.load()
+        #expect(fresh.emote(aliased: "catJAM")?.emoteID == other.id, "put back in 7TV's set too")
+        #expect(set.busy.isEmpty)
     }
 
     @Test func copiesGoUnderTheAliasAndAClashInTheOtherSetIsAnswered() async throws {
