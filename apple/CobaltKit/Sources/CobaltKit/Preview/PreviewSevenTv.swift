@@ -313,6 +313,8 @@ final class PreviewSevenTvState: Sendable {
             let own = known.map { names[$0] } ?? s.uploads[emoteID]?.name ?? s.madeOnSite[emoteID]?.name ?? "emote"
             let name = alias ?? own
             guard SevenTvRule.cleanAlias(name) != nil else { throw SevenTvError.rejected("that name won't work") }
+            // an emote id with "REFUSED" in it is one 7TV won't add (a swap that has to put the held emote back)
+            guard !emoteID.contains("REFUSED") else { throw SevenTvError.rejected("7tv won't add this emote") }
             var set = s.sets[channelID]![i]
             if let clash = set.emotes.firstIndex(where: { $0.alias == name }) {
                 guard overrideConflicts else {
@@ -546,7 +548,7 @@ extension PreviewClient: SevenTvClient {
     }
 
     public func addSevenTvEmote(setID: String, emoteID: String, alias: String?, overrideConflicts: Bool) async throws -> SevenTvEmoteChange {
-        try await sevenTvReady("POST emote \(emoteID)")
+        try await sevenTvReady("POST emote \(emoteID)" + (overrideConflicts ? " override" : ""))
         return try sevenTvState.add(setID: setID, emoteID: emoteID, alias: alias, overrideConflicts: overrideConflicts, now: clock.now())
     }
 

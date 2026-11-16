@@ -73,15 +73,17 @@ private struct LoadedSevenTv<Content: View>: View {
 }
 #Preview("7tv set · variants (held, renamed)", traits: .fixedLayout(width: 390, height: 600)) {
     PreviewHost(.happy, tab: .stage) { model in
-        SevenTvVariantsSheet(
-            variants: SevenTvVariantsModel(
+        LoadedSevenTv(model: model) { model, route in
+            SevenTvVariantsSheet(
+                variants: SevenTvVariantsModel(
                 emote: SevenTvSetItem(
                     emoteID: "01F6MQ33FG000FFJ97ZB8MWV52", alias: "vibe", name: "catJAM", animated: true,
                     previewURL: URL(string: "https://cdn.7tv.app/emote/01F6MQ33FG000FFJ97ZB8MWV52/2x.webp"), fileURL: nil)
             ) { name, page in
                 try await model.library.emoteVariants(name: name, page: page)
             },
-            memberIDs: ["01F6MQ33FG000FFJ97ZB8MWV52", "01PREVIEWVARIANT000000002"])
+                emoteSet: model.sevenTv.openSet(route.setID, channelID: route.channelID))
+        }
     }
 }
 #Preview("7tv · link sheet", traits: .fixedLayout(width: 390, height: 760)) {

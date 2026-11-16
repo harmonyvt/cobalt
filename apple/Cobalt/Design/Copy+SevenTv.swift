@@ -366,6 +366,11 @@ extension Copy {
             return parts.joined(separator: ", ")
         }
         static let variantHintA11y = "opens it on 7tv"
+        static let variantsSwapHint = "most used first · tap one to swap it in"
+        static let variantSwapHintA11y = "swaps it in for the one you held, under the same name"
+        static func swapped(_ name: String, as alias: String) -> String {
+            name == alias ? "swapped in another \(name)" : "swapped in \(name) as \(alias)"
+        }
         static let pickA11y = "pick"
 
         // MARK: the emote sheet

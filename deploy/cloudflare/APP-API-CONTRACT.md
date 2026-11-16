@@ -2709,6 +2709,14 @@ on 7TV with that emote's own name, most used first (`sort=top`), the one in the 
 tile; a tap on a variant opens it on 7tv.app. "select" (several emotes at once) moved to its button only. A server
 without `exact` ignores the key; the app keeps only the same name itself, so it still works, just with more pages.
 
+Swap (2026-11-16; owner: "After I hold press the emote I select should swap out the one in the set"): with the right to
+edit the set, a tap on a variant swaps it in for the held emote in two calls, because 7TV's `override_conflicts` does not
+free a taken name (it only flags the new entry; the name check still answers 409): `DELETE /7tv/sets/:id/emotes/:emote`
+for the held one, then `POST /7tv/sets/:id/emotes` with the variant's id and the held emote's alias, no override. The word
+in chat stays, the place in the grid too, the count does not move, and the sheet closes. If 7TV refuses the add, the app
+adds the held one back under its alias (best effort) and shows the refusal. Without the right a tap still opens it on 7tv.app; "open on 7tv" is in every
+tile's menu. No server change.
+
 No migration. Deploy the API Worker; the app works against either.
 
 ## 21. Library search (addendum, built 2026-10-17; owner: "have a cloudflare worker embed our media for searching", hosted on a private Hugging Face Space, `capybaraharmony/cobalt-embed`)

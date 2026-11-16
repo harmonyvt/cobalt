@@ -225,6 +225,40 @@ public final class SevenTvSetModel {
         }
     }
 
+    /// Swaps `held` out for another emote (a variant from section 20.2): the new one goes in under the held one's alias, so
+    /// the word in chat stays the same, and takes its place in the grid; the count stays. Two 7TV calls, since 7TV's
+    /// `override_conflicts` does not free a taken name: remove the held one, then add the new one under its alias. When
+    /// the add is refused the held one is put back (best effort) and the add's refusal is thrown, the grid unchanged; if
+    /// even that fails the held one leaves the grid, as it left the set. Picking the held emote itself changes nothing.
+    public func swap(_ held: SevenTvSetItem, for hit: EmoteHit) async throws {
+        guard hit.id != held.emoteID, !busy.contains(hit.id) else { return }
+        busy.insert(hit.id)
+        defer { busy.remove(hit.id) }
+        try await write(held.emoteID) {
+            let client = try self.store.setClient()
+            _ = try await client.removeSevenTvEmote(setID: self.setID, emoteID: held.emoteID, alias: held.alias)
+            let change: SevenTvEmoteChange
+            do {
+                change = try await client.addSevenTvEmote(
+                    setID: self.setID, emoteID: hit.id, alias: held.alias, overrideConflicts: false)
+            } catch {
+                do {
+                    _ = try await client.addSevenTvEmote(
+                        setID: self.setID, emoteID: held.emoteID, alias: held.alias, overrideConflicts: false)
+                } catch {
+                    self.drop(held)
+                    self.changeCount(by: -1)
+                }
+                throw error
+            }
+            let next = SevenTvSetItem(
+                emoteID: hit.id, alias: change.alias ?? held.alias, name: hit.name, animated: hit.animated,
+                previewURL: hit.previewURL, fileURL: hit.fileURL, addedAt: self.store.now())
+            self.all = self.all.map { $0.id == held.id ? next : $0 }
+            self.matches = self.matches.map { $0.id == held.id ? next : $0 }
+        }
+    }
+
     /// Copies the emote, under the alias it has here, into another set of the same channel. A name the other set already
     /// has answers its clash (nothing changed); nil once copied.
     @discardableResult

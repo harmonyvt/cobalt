@@ -3,18 +3,22 @@ import SwiftUI
 
 // "variants" (APP-API-CONTRACT 20.2): a long press on an emote of a set opens every emote on 7TV with that emote's own name
 // (its 7TV name, never the alias it has in this set), most used first. The held one says "this one", another that is already
-// in the set wears ✓, and the next page loads at the last tile. A tap opens that emote on 7tv.app. Read-only: nothing here
-// changes the set.
+// in the set wears ✓, and the next page loads at the last tile. A tap on another one swaps it in for the held one, under the
+// held one's alias (the word in chat stays), then the sheet closes. Without the right to edit the set a tap opens it on
+// 7tv.app instead; "open on 7tv" is in every tile's menu either way.
 
 struct SevenTvVariantsSheet: View {
     let variants: SevenTvVariantsModel
-    /// The emote ids in the set, for ✓.
-    let memberIDs: Set<String>
+    let emoteSet: SevenTvSetModel
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.openURL) private var openURL
+    @Environment(\.shell) private var shell
     @State private var openTick = 0
+    @State private var swapping: String?
+    @State private var doneTick = 0
+    @State private var failTick = 0
 
     private var emote: SevenTvSetItem { variants.emote }
 
@@ -36,6 +40,34 @@ struct SevenTvVariantsSheet: View {
         .background(CobaltColor.bg)
         .task { if variants.state != .loaded { await variants.load() } }
         .haptic(.selection, trigger: openTick)
+        .haptic(.success, trigger: doneTick)
+        .haptic(.error, trigger: failTick)
+    }
+
+    private var canSwap: Bool { emoteSet.can.manageSets }
+
+    private func pick(_ hit: EmoteHit) {
+        guard canSwap else { return open(hit) }
+        guard hit.id != emote.emoteID, swapping == nil else { return }
+        swapping = hit.id
+        Task {
+            do {
+                try await emoteSet.swap(emote, for: hit)
+                swapping = nil
+                shell.showStatus(Copy.SevenTv.swapped(hit.name, as: emote.alias))
+                doneTick += 1
+                dismiss()
+            } catch {
+                swapping = nil
+                shell.showStatus(Copy.SevenTv.message(for: error))
+                failTick += 1
+            }
+        }
+    }
+
+    private func open(_ hit: EmoteHit) {
+        openTick += 1
+        openURL(SevenTvEmoteRule.pageURL(hit.id))
     }
 
     private var header: some View {
@@ -86,7 +118,7 @@ struct SevenTvVariantsSheet: View {
                     .font(CobaltType.caption)
                     .foregroundStyle(CobaltColor.text)
                     .contentTransition(.numericText())
-                Text(Copy.SevenTv.variantsHint)
+                Text(canSwap ? Copy.SevenTv.variantsSwapHint : Copy.SevenTv.variantsHint)
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(CobaltColor.caption)
             }
@@ -99,11 +131,9 @@ struct SevenTvVariantsSheet: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 12)], spacing: 12) {
                 ForEach(variants.items) { hit in
                     SevenTvVariantTile(
-                        hit: hit, held: hit.id == emote.emoteID, inSet: memberIDs.contains(hit.id)
-                    ) {
-                        openTick += 1
-                        openURL(SevenTvEmoteRule.pageURL(hit.id))
-                    }
+                        hit: hit, held: hit.id == emote.emoteID, inSet: emoteSet.memberIDs.contains(hit.id),
+                        swaps: canSwap, swapping: swapping == hit.id, dimmed: swapping != nil && swapping != hit.id,
+                        pick: { pick(hit) }, open: { open(hit) })
                     .onAppear {
                         if hit.id == variants.items.last?.id { Task { await variants.loadMore() } }
                     }
@@ -123,10 +153,15 @@ private struct SevenTvVariantTile: View {
     let hit: EmoteHit
     let held: Bool
     let inSet: Bool
+    /// A tap swaps it in (else it opens on 7tv.app).
+    let swaps: Bool
+    let swapping: Bool
+    let dimmed: Bool
+    let pick: () -> Void
     let open: () -> Void
 
     var body: some View {
-        Button(action: open) {
+        Button(action: pick) {
             VStack(spacing: 4) {
                 ZStack(alignment: .topTrailing) {
                     EmotePicture(url: hit.previewURL, animated: hit.animated)
@@ -138,6 +173,10 @@ private struct SevenTvVariantTile: View {
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .strokeBorder(held ? CobaltColor.focus : Color.clear, lineWidth: 2)
                         }
+                    if swapping {
+                        ProgressView().controlSize(.small)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                     if inSet && !held {
                         Image(systemName: Symbol.SevenTv.inSet)
                             .font(.system(size: 11, weight: .bold))
@@ -155,7 +194,13 @@ private struct SevenTvVariantTile: View {
             }
         }
         .buttonStyle(.plain)
+        .opacity(dimmed ? 0.45 : 1)
+        .disabled(dimmed)
+        .contextMenu {
+            Button(Copy.SevenTv.openOn7tv, systemImage: Symbol.SevenTv.website, action: open)
+        }
         .accessibilityLabel(Copy.SevenTv.variantA11y(hit.name, held: held, inSet: inSet, animated: hit.animated))
-        .accessibilityHint(Copy.SevenTv.variantHintA11y)
+        .accessibilityHint(swaps && !held ? Copy.SevenTv.variantSwapHintA11y : Copy.SevenTv.variantHintA11y)
+        .accessibilityAction(named: Copy.SevenTv.openOn7tv, open)
     }
 }
