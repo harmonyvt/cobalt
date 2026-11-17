@@ -77,7 +77,10 @@ async function signIn(ext: Ext, fetchImpl: typeof fetch): Promise<unknown> {
     if (signingIn) return signingIn;
     signingIn = (async () => {
         const redirectUri = ext.identity?.getRedirectURL?.() ?? null;
-        const launch = ext.identity?.launchWebAuthFlow ? (url: string) => ext.identity!.launchWebAuthFlow({ url, interactive: true }) : null;
+        // Always the tab + poll sign-in. launchWebAuthFlow's window does not finish in every Chromium build
+        // (Helium, other forks), and a hung window looks like a dead button. A normal tab carries the browser's
+        // own Access cookie and works in every browser; the popup shows the match code meanwhile.
+        const launch = null;
         const result = await runSignIn({
             fetch: fetchImpl,
             ua: navigator.userAgent,

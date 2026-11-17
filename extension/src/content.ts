@@ -38,6 +38,33 @@ export function start(site: SiteId, scan: Scan): void {
     const buttons = new Set<Button>();
     let enabled = true;
     let signedIn = true;
+    let observer: MutationObserver | undefined;
+    let tick = 0;
+    let retired = false;
+
+    // After the extension is reloaded or updated, this script keeps running on the open page but can no
+    // longer reach the background ("Extension context invalidated"). Stop quietly and tell the user.
+    const retire = () => {
+        if (retired) return;
+        retired = true;
+        observer?.disconnect();
+        window.clearInterval(tick);
+        for (const b of buttons) {
+            paint(b, "sleeping");
+            b.button.title = "Capystore was updated: reload this page";
+            b.button.setAttribute("aria-label", b.button.title);
+        }
+    };
+    const send = async (message: unknown): Promise<unknown> => {
+        if (retired) return undefined;
+        try {
+            if (!ext.runtime.id) throw new Error("Extension context invalidated.");
+            return await ext.runtime.sendMessage(message);
+        } catch (e) {
+            if (!ext.runtime.id || /context invalidated/i.test(String(e))) retire();
+            return undefined;
+        }
+    };
 
     const sheet = document.createElement("style");
     // Shrink to the button. A flex or grid parent (a card, <main>, a results row) would otherwise stretch this into a full-width bar.
@@ -103,14 +130,28 @@ export function start(site: SiteId, scan: Scan): void {
     const onClick = async (record: Button) => {
         if (record.state === "saving") return;
         if (!signedIn) {
-            paint(record, "sleeping");
-            await ext.runtime.sendMessage({ type: "sign-in" });
-            const auth = (await ext.runtime.sendMessage({ type: "auth-state" })) as { signedIn?: boolean } | undefined;
+            // Ask the background first: the popup may have signed in since this page loaded.
+            const before = (await send({ type: "auth-state" })) as { signedIn?: boolean } | undefined;
+            signedIn = before?.signedIn === true;
+        }
+        if (!signedIn) {
+            // Visible while the approve tab is open, so a click never looks like nothing happened.
+            paint(record, "saving");
+            record.button.title = "Signing in to Capystore: approve it in the tab that opened";
+            record.button.setAttribute("aria-label", record.button.title);
+            const res = (await send({ type: "sign-in" })) as { ok?: boolean; message?: string } | undefined;
+            const auth = (await send({ type: "auth-state" })) as { signedIn?: boolean } | undefined;
             signedIn = auth?.signedIn === true;
-            if (!signedIn) return;
+            if (!signedIn) {
+                paint(record, "error");
+                const why = res?.message ?? "Sign-in did not finish.";
+                record.button.title = `${why} Click to try again.`;
+                record.button.setAttribute("aria-label", record.button.title);
+                return;
+            }
         }
         paint(record, "saving");
-        const res = (await ext.runtime.sendMessage({ type: "save", url: record.url, site })) as { state?: string } | undefined;
+        const res = (await send({ type: "save", url: record.url, site })) as { state?: string } | undefined;
         if (res?.state === "signed-out") {
             signedIn = false;
             paint(record, "sleeping");
@@ -124,7 +165,7 @@ export function start(site: SiteId, scan: Scan): void {
     };
 
     const scanNow = async () => {
-        const sites = (await ext.runtime.sendMessage({ type: "get-sites" })) as Record<string, boolean> | undefined;
+        const sites = (await send({ type: "get-sites" })) as Record<string, boolean> | undefined;
         enabled = !sites || sites[site] !== false;
         if (!enabled) {
             for (const b of buttons) b.button.getRootNode() instanceof ShadowRoot && (b.button.getRootNode() as ShadowRoot).host.remove();
@@ -145,10 +186,11 @@ export function start(site: SiteId, scan: Scan): void {
         window.clearTimeout(timer);
         timer = window.setTimeout(() => void scanNow(), 150);
     };
-    new MutationObserver((records) => {
+    observer = new MutationObserver((records) => {
         if (records.every((r) => r.target instanceof Element && r.target.closest(`.${HOST}`))) return;
         schedule();
-    }).observe(document.documentElement, { childList: true, subtree: true });
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
     document.addEventListener("yt-navigate-finish", schedule);
     window.addEventListener("popstate", schedule);
 
@@ -157,22 +199,32 @@ export function start(site: SiteId, scan: Scan): void {
         if (msg?.type !== "save-update" || !msg.url || !msg.state) return;
         for (const b of buttons) if (b.url === msg.url) paint(b, msg.state);
     });
-    ext.storage.onChanged.addListener((_changes, area) => {
-        if (area === "local") schedule();
+    ext.storage.onChanged.addListener((changes, area) => {
+        if (area !== "local") return;
+        if ("session" in changes) {
+            // Signed in or out from the popup (or another tab): wake or put every button to sleep.
+            signedIn = changes.session?.newValue != null;
+            for (const b of buttons) {
+                if (signedIn && b.state === "sleeping") paint(b, "idle");
+                else if (!signedIn && b.state === "idle") paint(b, "sleeping");
+            }
+        }
+        schedule();
     });
 
     void (async () => {
-        const auth = (await ext.runtime.sendMessage({ type: "auth-state" })) as { signedIn?: boolean } | undefined;
+        const auth = (await send({ type: "auth-state" })) as { signedIn?: boolean } | undefined;
         signedIn = auth?.signedIn === true;
         for (const b of buttons) if (!signedIn && b.state === "idle") paint(b, "sleeping");
         await scanNow();
     })();
 
-    window.setInterval(() => {
+    tick = window.setInterval(() => {
         for (const b of buttons) {
             if (b.state !== "saving" && b.state !== "sleeping") continue;
-            void ext.runtime.sendMessage({ type: "status", url: b.url }).then((res) => {
-                const raw = (res as { state?: string } | undefined)?.state;
+            void send({ type: "status", url: b.url }).then((res) => {
+                const raw = (res as { state?: string; signedIn?: boolean } | undefined)?.state;
+                if (typeof (res as { signedIn?: boolean } | undefined)?.signedIn === "boolean") signedIn = (res as { signedIn: boolean }).signedIn;
                 if (raw === "signed-out") signedIn = false;
                 const state = raw === "offline" || raw === "signed-out" ? "sleeping" : raw;
                 if (state === "idle" || state === "saving" || state === "saved" || state === "error" || state === "sleeping") paint(b, state);

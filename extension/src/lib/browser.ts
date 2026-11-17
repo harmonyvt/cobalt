@@ -10,6 +10,8 @@ export type StorageArea = {
 
 export type Ext = {
     runtime: {
+        /** Undefined once the extension was reloaded or removed under a running content script. */
+        id?: string;
         getURL(path: string): string;
         sendMessage(message: unknown): Promise<unknown>;
         openOptionsPage?(): Promise<void>;
