@@ -13,11 +13,21 @@ const RECENT_MAX = 20;
 const loops = new Set<string>();
 let offline = false;
 let signingIn: Promise<unknown> | null = null;
+// The match code of a polled sign-in in progress (signin.ts matchCode), shown in the popup.
+let pairing: string | null = null;
 
 type Job = { id: string; url: string; studioUrl: string; site: SiteId; tabId?: number };
 
 export function wire(ext: Ext, fetchImpl: typeof fetch = fetch): void {
-    ext.runtime.onMessage.addListener((message, sender) => handle(ext, fetchImpl, message, sender?.tab?.id));
+    // Answer through sendResponse and return true: the form every Chromium (Helium, older Chrome) and Safari
+    // accept. A listener that only returns a Promise answers undefined on Chromium builds without that support.
+    ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        handle(ext, fetchImpl, message, sender?.tab?.id).then(
+            (reply) => sendResponse?.(reply),
+            () => sendResponse?.(undefined),
+        );
+        return true;
+    });
     ext.alarms?.onAlarm.addListener((alarm) => {
         if (alarm.name === "capystore-saves") void resume(ext, fetchImpl);
     });
@@ -60,7 +70,7 @@ async function handle(ext: Ext, fetchImpl: typeof fetch, message: unknown, tabId
 async function authView(ext: Ext) {
     const view = publicAuth(await session(ext), offline);
     const jobs = await recent(ext);
-    return { ...view, saving: jobs.some((j) => j.status === "saving"), recent: jobs };
+    return { ...view, saving: jobs.some((j) => j.status === "saving"), recent: jobs, pairing };
 }
 
 async function signIn(ext: Ext, fetchImpl: typeof fetch): Promise<unknown> {
@@ -76,6 +86,9 @@ async function signIn(ext: Ext, fetchImpl: typeof fetch): Promise<unknown> {
             openTab: async (url) => {
                 await ext.tabs.create({ url });
             },
+            onCode: (code) => {
+                pairing = code;
+            },
         });
         if (!result.ok) return { ok: false, message: result.message, ...publicAuth(await session(ext), offline) };
         const stored: StoredSession = { key: result.key, id: result.id, device: result.device };
@@ -84,6 +97,7 @@ async function signIn(ext: Ext, fetchImpl: typeof fetch): Promise<unknown> {
         return { ok: true, ...publicAuth(stored, false) };
     })().finally(() => {
         signingIn = null;
+        pairing = null;
     });
     return signingIn;
 }

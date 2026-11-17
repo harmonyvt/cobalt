@@ -14,7 +14,7 @@ export default defineConfig({
 		assets: {
 			notFoundHandling: "404-page",
 			// Only the key-management API, the Access sign-in (/api/auth, section 42), the extension approve page
-			// (/connect/extension, section 64), the MCP switch (/api/mcp), the cobalt studio page, the library
+			// (/connect/extension, section 65), the MCP switch (/api/mcp), the cobalt studio page, the library
 			// (page + /api/library), the telemetry logs (page + /api/logs) and the swarm approval/review pages
 			// (page + /api/swarms) run the Worker; everything else is served straight from the static assets.
 			runWorkerFirst: [

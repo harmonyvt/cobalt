@@ -187,7 +187,7 @@ export const PATHS: string[] = [
     "/mcp/media/bad",
     // added with accounts (section 42): device sessions and the owner's keys
     "/auth/exchange",
-    // browser extension sign-in (section 64): Safari polls; Chrome trades the code at /auth/exchange
+    // browser extension sign-in (section 65): Safari polls; Chrome trades the code at /auth/exchange
     "/auth/extension/begin",
     "/auth/extension/poll",
     "/auth/extension/other",

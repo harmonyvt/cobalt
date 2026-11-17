@@ -5,7 +5,7 @@ import { wire } from "../src/background";
 import type { Ext, StorageArea } from "../src/lib/browser";
 import { relocateHost, scanInstagram, scanTwitch, scanX, scanYouTube } from "../src/lib/find";
 import { createSave, followSave, pollSave } from "../src/lib/save";
-import { chromeApproveUrl, parseRedirect, pkceChallenge, prefersWebAuthFlow, runSignIn, safariApproveUrl } from "../src/lib/signin";
+import { chromeApproveUrl, matchCode, parseRedirect, pkceChallenge, prefersWebAuthFlow, runSignIn, safariApproveUrl } from "../src/lib/signin";
 import { popupView, publicAuth, spriteCss } from "../src/lib/view";
 import { canonicalInstagram, canonicalTwitch, canonicalX, canonicalYouTube } from "../src/lib/urls";
 
@@ -17,6 +17,15 @@ function page(url: string, html: string): Document {
     const window = new Window({ url });
     window.document.body.innerHTML = html;
     return window.document as unknown as Document;
+}
+
+
+type Listener = (message: unknown, sender: { tab?: { id?: number } }, sendResponse?: (reply: unknown) => void) => unknown;
+// The background answers through sendResponse (and returns true), the way Chromium and Safari both accept.
+function ask(fn: Listener, message: unknown, sender: { tab?: { id?: number } }): Promise<unknown> {
+    return new Promise((resolve) => {
+        expect(fn(message, sender, resolve)).toBe(true);
+    });
 }
 
 describe("canonical post URLs", () => {
@@ -314,6 +323,12 @@ describe("sign-in", () => {
         expect(calls).toEqual(["https://api.capybaraharmony.com/auth/exchange"]);
     });
 
+    it("the match code is the same one the approve page computes", async () => {
+        // Same vector as deploy/cloudflare/web/test/connect.test.ts.
+        expect(await matchCode("u".repeat(43))).toBe("TLY7-BN5Z");
+        expect(await matchCode("capystore_user_code_fixture_000000000000000")).toBe("785C-3223");
+    });
+
     it("a mismatched state is not exchanged", async () => {
         let fetched = false;
         const result = await runSignIn({
@@ -334,11 +349,14 @@ describe("sign-in", () => {
         let t = 1_000;
         const opened: string[] = [];
         let polls = 0;
+        const codes: (string | null)[] = [];
         const result = await runSignIn({
             ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Safari/605.1.15",
             redirectUri: null,
             launch: null,
+            onCode: (code) => codes.push(code),
             openTab: async (url) => {
+                expect(codes).toEqual(["TLY7-BN5Z"]);
                 opened.push(url);
             },
             now: () => t,
@@ -388,7 +406,7 @@ describe("the background worker", () => {
                 for (const k of typeof keys === "string" ? [keys] : keys) delete data[k];
             },
         };
-        let listener: (message: unknown, sender: { tab?: { id?: number } }) => Promise<unknown> = async () => ({});
+        let listener: Listener = () => true;
         const ext = {
             runtime: { getURL: (p: string) => p, sendMessage: async () => ({}), onMessage: { addListener(fn: typeof listener) { listener = fn; } } },
             storage: { local: area, onChanged: { addListener() {} } },
@@ -399,7 +417,7 @@ describe("the background worker", () => {
             return Response.json({ status: "ready", id: "sid" });
         };
         wire(ext, fetchImpl as typeof fetch);
-        const reply = await listener({ type: "save", url: "https://x.com/capy/status/1", site: "x" }, { tab: { id: 7 } });
+        const reply = await ask(listener, { type: "save", url: "https://x.com/capy/status/1", site: "x" }, { tab: { id: 7 } });
         expect(reply).toMatchObject({ state: "saving", url: "https://x.com/capy/status/1" });
         expect(JSON.stringify(reply)).not.toContain(KEY);
         expect(publicAuth({ key: KEY, id: "sess", device: "Browser extension – Chrome on Mac" }, false)).toEqual({
@@ -407,7 +425,7 @@ describe("the background worker", () => {
             offline: false,
             device: "Browser extension – Chrome on Mac",
         });
-        const auth = await listener({ type: "auth-state" }, {});
+        const auth = await ask(listener, { type: "auth-state" }, {});
         expect(JSON.stringify(auth)).not.toContain(KEY);
         expect(auth).toMatchObject({ signedIn: true, device: "Browser extension – Chrome on Mac" });
     });
@@ -422,14 +440,14 @@ describe("the background worker", () => {
             async set(items) { Object.assign(data, items); },
             async remove(keys) { for (const k of typeof keys === "string" ? [keys] : keys) delete data[k]; },
         };
-        let listener: (message: unknown, sender: { tab?: { id?: number } }) => Promise<unknown> = async () => ({});
+        let listener: Listener = () => true;
         const ext = {
             runtime: { getURL: (p: string) => p, sendMessage: async () => ({}), onMessage: { addListener(fn: typeof listener) { listener = fn; } } },
             storage: { local: area, onChanged: { addListener() {} } },
             tabs: { async create() { return {}; }, async sendMessage() { return {}; } },
         } as Ext;
         wire(ext, (async () => Response.json({ error: { code: "error.api.auth.key.invalid" } }, { status: 401 })) as typeof fetch);
-        const reply = await listener({ type: "save", url: "https://x.com/capy/status/1", site: "x" }, {});
+        const reply = await ask(listener, { type: "save", url: "https://x.com/capy/status/1", site: "x" }, {});
         expect(reply).toEqual({ state: "signed-out" });
         expect(data.session).toBeUndefined();
     });

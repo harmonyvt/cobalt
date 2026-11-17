@@ -1,4 +1,4 @@
-// d1/migrations/0045_extension_pairings.sql (section 64.2): one new table. Renumbered from
+// d1/migrations/0045_extension_pairings.sql (section 65.2): one new table. Renumbered from
 // 0039_extension_pairings.sql, which production already applied on 2026-11-12, so a second apply is a no-op.
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";

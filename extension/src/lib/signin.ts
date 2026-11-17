@@ -30,6 +30,17 @@ export async function pkceChallenge(verifier: string): Promise<string> {
     return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+// A short code both the popup and the approve page show for a polled sign-in, so a link someone else
+// started (and sent you) does not match what this browser's extension shows. SHA-256 of the user code,
+// first 8 bytes, 5 bits each, from an alphabet without 0/O/1/I. The web Worker computes the same (connect.ts).
+const MATCH_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+export async function matchCode(userCode: string): Promise<string> {
+    const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(userCode)));
+    let s = "";
+    for (let i = 0; i < 8; i++) s += MATCH_ALPHABET[d[i]! & 31];
+    return `${s.slice(0, 4)}-${s.slice(4)}`;
+}
+
 export function chromeApproveUrl(opts: { challenge: string; state: string; redirectUri: string }): string {
     const u = new URL(`${WEB_ORIGIN}/connect/extension`);
     u.searchParams.set("challenge", opts.challenge);
@@ -64,6 +75,7 @@ export async function runSignIn(opts: {
     redirectUri: string | null;
     launch: ((url: string) => Promise<string>) | null;
     openTab: (url: string) => Promise<void>;
+    onCode?: (code: string | null) => void;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
 }): Promise<SignInResult> {
@@ -90,6 +102,7 @@ export async function runSignIn(opts: {
     const expires = typeof began.body.expires_at === "number" ? began.body.expires_at : now() + 5 * 60 * 1000;
     const interval = typeof began.body.interval === "number" ? began.body.interval : 2;
     if (typeof deviceCode !== "string" || typeof userCode !== "string") return { ok: false, message: "Couldn't start sign-in." };
+    opts.onCode?.(await matchCode(userCode));
     await opts.openTab(safariApproveUrl(userCode));
     while (now() < expires) {
         await sleep(Math.max(1, interval) * 1000);

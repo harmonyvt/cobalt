@@ -1,4 +1,4 @@
-// /connect/extension (APP-API-CONTRACT.md section 64): the approve page. GET shows a form; POST approves.
+// /connect/extension (APP-API-CONTRACT.md section 65): the approve page. GET shows a form; POST approves.
 import { createHash } from "node:crypto";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
@@ -169,7 +169,11 @@ describe("POST /connect/extension", () => {
             .run("d".repeat(64), hash, CHALLENGE, STATE, NOW, NOW + 300_000);
         const get = await call(`/connect/extension?user_code=${USER_CODE}`, { ua: CHROME_MAC });
         expect(get.status).toBe(200);
-        expect(await get.text()).toContain(`value="${USER_CODE}"`);
+        const shown = await get.text();
+        expect(shown).toContain(`value="${USER_CODE}"`);
+        // Same vector as extension/test/extension.test.ts: the popup shows this code too.
+        expect(shown).toContain("TLY7-BN5Z");
+        expect(shown).toContain("Never approve a link someone sent you");
         const post = await call("/connect/extension", { method: "POST", body: `user_code=${USER_CODE}`, ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Safari/605.1.15" });
         expect(post.status).toBe(200);
         const text = await post.text();

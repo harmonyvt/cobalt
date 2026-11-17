@@ -1700,7 +1700,7 @@ new fields (and the app then learns it from the missing capability flag). `GET /
   (so the stored record, its 24 h life and its owner check are identical), which means an instant save is already announced when it
   finishes. It is validated even when the bridge is off; with the bridge off (`features.notify_bridge: false`) it is then ignored:
   nothing stored, nothing sent. A failure to store it never fails the save (the app's own poll still tells the owner).
-- **`origin`** (optional): `"share"` (a share sheet's save) and `"extension"` (a browser extension's save, section 64)
+- **`origin`** (optional): `"share"` (a share sheet's save) and `"extension"` (a browser extension's save, section 65)
   are accepted; any other value, any other type is `400 error.studio.invalid_params`, nothing created.
   `"extension"` does **none** of the three things below: it is not listed by `GET /studio/recent`, a busy studio still
   answers `429` unless the caller also sends `queue: true`, and the create uses the ordinary kick budget.
@@ -6459,7 +6459,7 @@ credential) and has an `OPTIONS` preflight, so a widget can upload from its sand
 The full contract (files, seams, wire shapes, tools, widgets, what a host sees, checks) is `MCP-APP-CONTRACT.md`; setup in
 each host, local tools and the prompt set are in `MCP-APP.md`.
 
-## 57. 7TV accounts: link once, then manage emote sets (addendum, 2026-11-12; owner: "I want to be able to use 7tv api to link a 7tv account manage my channels i can edit search emotes, edit collections etc please", then "Build please"; plan and mockup in the project files `7tv-manage/`. Numbering: when this was written, 55 and 56 were claimed by the open browser-extension and stage-music PRs. Main has since used 55 for the MCP app; the extension is section 64 and migration 0045, and stage music remains 56 and migration 0041. This section stayed 57, migration 0040)
+## 57. 7TV accounts: link once, then manage emote sets (addendum, 2026-11-12; owner: "I want to be able to use 7tv api to link a 7tv account manage my channels i can edit search emotes, edit collections etc please", then "Build please"; plan and mockup in the project files `7tv-manage/`. Numbering: when this was written, 55 and 56 were claimed by the open browser-extension and stage-music PRs. Main has since used 55 for the MCP app; the extension is section 65 and migration 0045, and stage music remains 56 and migration 0041. This section stayed 57, migration 0040)
 
 The owner links one 7TV account. The Worker then reads and edits the emote sets of that account's own channel and of
 every channel that made it an editor. Everything goes through 7TV's v4 GraphQL (`POST https://7tv.io/v4/gql`, the
@@ -7320,14 +7320,14 @@ counts no model turns and costs no money; the estimate is unchanged. The approve
   prefetch shows its progress and resumes where it stopped after the tick's deadline. The approve page row reads "Looks
   up each item with <call> first (no model, no cost)".
 
-## 64. Browser extension: sign in on an approve page, then save with `origin: "extension"` (addendum, 2026-11-12. Numbering: main ends at section 62; 55 is the MCP app, 56 is the open stage-music PR and 63 is the open emote-variant tools branch, so this is 64. Migration: main has 0040 and 0042–0044, and 0041 is stage music, so this is 0045.)
+## 65. Browser extension: sign in on an approve page, then save with `origin: "extension"` (addendum, 2026-11-12. Numbering: main ends at section 62; 55 is the MCP app, 56 is the open stage-music PR and 63 is the open emote-variant tools branch, so this is 65 (64 is the open several-swarms PR #180). Migration: main has 0040 and 0042–0044, and 0041 is stage music, so this is 0045.)
 
 The Save to Capystore extension (a sideloaded Manifest V3 WebExtension, `extension/`) saves a post with
 `POST /studio` and polls `GET /studio/<id>`, the same calls as the share sheet. It never sends the person's site
 cookies and it never calls the API from a content script: the background worker calls `api.capybaraharmony.com`
 with `credentials: "omit"`. CORS stays locked to the web origin. There is no pasted API key.
 
-### 64.1 What the session is
+### 65.1 What the session is
 
 A normal device session (section 42): `kind = 'session'`, token shape of a client key, 90-day sliding expiry, at most
 50, listed by `GET /auth/sessions`, revoked by `DELETE /auth/sessions/<id>` or `POST /auth/signout`. A 401
@@ -7341,7 +7341,7 @@ Sessions are not permission-scoped. The share extension's session is a full key 
 a check on every route. The extension session is distinguishable by `platform` and `device`, and it can be revoked
 on its own. Signing out of it does not sign out the web app or the Apple apps.
 
-### 64.2 D1 (migration `0045_extension_pairings.sql`)
+### 65.2 D1 (migration `0045_extension_pairings.sql`)
 
 Safari cannot complete `chrome.identity.launchWebAuthFlow`, so it polls a pairing row. Chrome's redirect sign-in
 does not use the table; it reuses `auth_handoffs` from migration 0026. Until `extension_pairings` exists,
@@ -7372,7 +7372,7 @@ The owner applies it (do not apply it from the agent that added the file):
 
 `cd deploy/cloudflare/web && npx cf d1 migrations apply 42f18bb0-837a-47f7-b1e2-606eb705ab6c --dir ../d1/migrations`
 
-### 64.3 Chrome: approve, then the existing exchange
+### 65.3 Chrome: approve, then the existing exchange
 
 1. The extension makes a `verifier` (32 bytes, base64url) and a `state` (16+ bytes, base64url) and opens, with
    `chrome.identity.launchWebAuthFlow`:
@@ -7386,7 +7386,7 @@ The owner applies it (do not apply it from the agent that added the file):
    only as a hash, 2 minutes.
 4. The extension checks `state` and calls `POST /auth/exchange` (42.3) with `{ code, verifier }`. No `old_key`.
 
-### 64.4 Safari: a code the extension polls
+### 65.4 Safari: a code the extension polls
 
 1. `POST /auth/extension/begin` (open, no CORS, no-store) body `{ challenge, state }` → 201
    `{ status: "pending", device_code, user_code, expires_at, interval }`. Both codes are 32 random bytes,
@@ -7396,6 +7396,11 @@ The owner applies it (do not apply it from the agent that added the file):
 2. The extension opens a normal tab (so Access's cookie is sent by the browser, not by the extension) on
    `/connect/extension?user_code=<user_code>`. GET shows the same Approve form. An unknown, expired or used code is
    a 400 page.
+   The form also shows a **match code** and says to approve only a sign-in you just started: SHA-256 of the
+   user code, its first 8 bytes taken 5 bits each from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, as `XXXX-XXXX`. The
+   extension's popup shows the same code while it polls (`matchCode` in `extension/src/lib/signin.ts` and
+   `web/src/connect.ts`; both tests pin `"u" * 43` → `TLY7-BN5Z`). Anyone can call begin, so without it a link
+   someone else started and sent to the owner would look the same as the owner's own.
 3. Approve sets `approved_at`, `email` and `device` on that row. The page says to close the tab. It does not
    receive a token.
 4. `POST /auth/extension/poll` (open, no CORS) body `{ device_code, verifier, state }`. Not approved yet: 202
@@ -7407,13 +7412,13 @@ The owner applies it (do not apply it from the agent that added the file):
 The extension uses the poll path whenever `launchWebAuthFlow` is missing or the browser is Safari, and falls back
 to it if the redirect flow throws.
 
-### 64.5 Saving
+### 65.5 Saving
 
 `POST /studio` with `origin: "extension"` (and `queue: true`, so a busy studio waits instead of answering 429).
 The session is not remembered for `GET /studio/recent` (that list stays share-sheet saves only). The extension
 keeps its own recent list and polls `GET /studio/<id>` until `status` is `ready` or `error`.
 
-### 64.6 Where it shows
+### 65.6 Where it shows
 
 `GET /auth/sessions` includes the row. The web app's Settings → Account draws it with the browser icon. The Apple
 app's account screen draws it with the puzzle-piece symbol (`AccountPlatform.extension`). Signing out there revokes

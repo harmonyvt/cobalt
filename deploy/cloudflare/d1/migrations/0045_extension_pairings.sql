@@ -1,4 +1,4 @@
--- Browser extension sign-in (APP-API-CONTRACT.md section 64).
+-- Browser extension sign-in (APP-API-CONTRACT.md section 65).
 -- A pending PKCE pairing for Safari (and any browser that cannot complete a redirect).
 -- The device code and the user code are stored only as SHA-256. The session token is never
 -- stored here: POST /auth/extension/poll mints it once the owner has approved on /connect/extension.

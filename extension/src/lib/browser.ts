@@ -14,7 +14,9 @@ export type Ext = {
         sendMessage(message: unknown): Promise<unknown>;
         openOptionsPage?(): Promise<void>;
         onMessage: {
-            addListener(fn: (message: unknown, sender: { tab?: { id?: number } }) => Promise<unknown> | unknown): void;
+            addListener(
+                fn: (message: unknown, sender: { tab?: { id?: number } }, sendResponse?: (reply: unknown) => void) => boolean | Promise<unknown> | unknown,
+            ): void;
         };
     };
     storage: {

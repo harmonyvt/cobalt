@@ -57,6 +57,7 @@ async function init(api: NonNullable<ReturnType<typeof getExt>>) {
             device?: string | null;
             saving?: boolean;
             recent?: RecentSave[];
+            pairing?: string | null;
         };
         draw({
             signedIn: bag?.signedIn === true,
@@ -65,6 +66,13 @@ async function init(api: NonNullable<ReturnType<typeof getExt>>) {
             saving: bag?.saving === true,
             recent: Array.isArray(bag?.recent) ? bag.recent : [],
         });
+        if (typeof bag?.pairing === "string") {
+            heading.textContent = "Waiting for approval";
+            detail.textContent = `Approve only if the Capystore page shows ${bag.pairing}.`;
+            capy.className = "capy saving";
+            signIn.hidden = true;
+            setTimeout(() => void refresh(), 2000);
+        }
     };
 
     signIn.addEventListener("click", () => {

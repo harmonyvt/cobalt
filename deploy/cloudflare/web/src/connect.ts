@@ -1,4 +1,4 @@
-// /connect/extension: the browser extension's approve page (APP-API-CONTRACT.md section 64).
+// /connect/extension: the browser extension's approve page (APP-API-CONTRACT.md section 65).
 // Access sits in front of this hostname; the Worker still verifies the Access JWT before anything touches D1,
 // the same check as /api/auth. GET only shows a form. POST is the only request that approves.
 //
@@ -50,7 +50,7 @@ const page = (status: number, title: string, body: string) =>
             `<style>body{font-family:-apple-system,system-ui,sans-serif;background:#141414;color:#f4f1ea;margin:0}` +
             `main{max-width:28rem;margin:4rem auto;padding:0 1.25rem}h1{font-size:1.35rem;font-weight:650;letter-spacing:-.02em}` +
             `p{line-height:1.45;color:#d9d3c7}.card{background:#221f1c;border-radius:14px;padding:.9rem 1rem;margin:1.25rem 0}` +
-            `.name{font-weight:650}button{appearance:none;border:0;background:#f4f1ea;color:#1a1614;font:inherit;font-weight:650;border-radius:999px;padding:.7rem 1.2rem;cursor:pointer}` +
+            `.name{font-weight:650}.match{font:650 1.6rem/1.2 ui-monospace,Menlo,monospace;letter-spacing:.08em}button{appearance:none;border:0;background:#f4f1ea;color:#1a1614;font:inherit;font-weight:650;border-radius:999px;padding:.7rem 1.2rem;cursor:pointer}` +
             `a{color:#f4f1ea}</style></head><body><main><h1>${esc(title)}</h1>${body}</main></body></html>`,
         {
             status,
@@ -65,13 +65,27 @@ const page = (status: number, title: string, body: string) =>
         },
     );
 
+// The code the extension's popup shows for a polled sign-in (extension/src/lib/signin.ts matchCode): SHA-256
+// of the user code, first 8 bytes, 5 bits each. A link someone else started shows a code your popup does not.
+const MATCH_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+export async function matchCode(userCode: string): Promise<string> {
+    const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(userCode)));
+    let s = "";
+    for (let i = 0; i < 8; i++) s += MATCH_ALPHABET[d[i]! & 31];
+    return `${s.slice(0, 4)}-${s.slice(4)}`;
+}
+
 const hidden = (name: string, value: string) => `<input type="hidden" name="${esc(name)}" value="${esc(value)}">`;
 
-const consent = (device: string, fields: string) =>
+const consent = (device: string, fields: string, match?: string) =>
     page(
         200,
         "Save to Capystore",
         `<p>This browser is asking to save posts to your library.</p>` +
+            `<p><strong>Only approve if you just clicked Sign in in the Save to Capystore extension.</strong> Never approve a link someone sent you.</p>` +
+            (match
+                ? `<div class="card"><p>The extension's popup shows a code. Approve only if it is</p><div class="name match">${esc(match)}</div></div>`
+                : "") +
             `<div class="card"><div class="name">${esc(device)}</div><p>A device session. You can sign it out later in Settings, under Account.</p></div>` +
             `<form method="post" action="/connect/extension">${fields}<button type="submit">Approve</button></form>` +
             `<p>The extension does not read this site's cookies. Approving gives it its own session, and nothing else.</p>`,
@@ -135,7 +149,7 @@ async function show(q: URLSearchParams, request: Request, env: Env, _email: stri
             return page(400, "this sign-in has expired", "<p>Start again from the Save to Capystore extension.</p>");
         }
         if (row.approved_at) return page(200, "already approved", `<p>This sign-in is already approved. You can close this tab.</p><p><a href="/library">Open the library</a></p>`);
-        return consent(device, hidden("user_code", mode.userCode));
+        return consent(device, hidden("user_code", mode.userCode), await matchCode(mode.userCode));
     }
     return consent(device, hidden("challenge", mode.challenge) + hidden("state", mode.state) + hidden("redirect_uri", mode.redirect.toString()));
 }

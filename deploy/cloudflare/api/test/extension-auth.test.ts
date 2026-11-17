@@ -1,4 +1,4 @@
-// Browser extension sign-in (APP-API-CONTRACT.md section 64): POST /auth/extension/begin and /poll, and the
+// Browser extension sign-in (APP-API-CONTRACT.md section 65): POST /auth/extension/begin and /poll, and the
 // Chrome redirect traded at the existing POST /auth/exchange. Real Worker entry, real SQL, every migration.
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";

@@ -54,7 +54,7 @@ public struct AccountSession: Sendable, Equatable, Identifiable, Decodable {
 
 /// Where a session was signed in.
 public enum AccountPlatform: String, Sendable, Equatable, CaseIterable {
-    case ios, ipados, mac, web, extension
+    case ios, ipados, mac, web, `extension`
 }
 
 /// One key for tools (`<key>` in 42.5): the client keys made on the web, and the keys pasted into apps before accounts.

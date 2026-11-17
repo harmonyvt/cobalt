@@ -2053,7 +2053,7 @@ export class StudioService {
         }
         const wantsPublic = publicFlag === true;
         // `origin: "share"` (section 14): a share sheet's background save.
-        // `origin: "extension"` (section 64): a browser extension's save. Accepted, then treated as an
+        // `origin: "extension"` (section 65): a browser extension's save. Accepted, then treated as an
         // ordinary save: not remembered for GET /studio/recent, not queued unless `queue` is set, and
         // not on the short share kick. Anything else is refused.
         if (originField !== undefined && originField !== null && originField !== "share" && originField !== "extension") {
