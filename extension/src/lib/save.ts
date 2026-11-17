@@ -1,5 +1,5 @@
 // POST /studio and GET /studio/<id>, from the background worker only. credentials: "omit" so a site
-// cookie is never sent. origin "extension" is not listed in GET /studio/recent (section 55).
+// cookie is never sent. origin "extension" is not listed in GET /studio/recent (section 64).
 
 export const API_ORIGIN = "https://api.capybaraharmony.com";
 export const WEB_ORIGIN = "https://cobalt.capybaraharmony.com";

@@ -72,9 +72,18 @@ extension Copy {
         static let notShared = "not shared"
         static let sharedChip = "shared"
         static func shareChip(_ title: String, count: Int) -> String { "\(title) \(count)" }
+        // the one links menu chip at the end of the kind chips (replaced the second chip row, 2026-11-15)
+        static let shareMenuName = "filter by links"                          // the chip's name (VoiceOver, Mac hover)
+        static let shareEverything = "everything"
+        static let setsSection = "sets"
+        /// A row of the menu: `not shared · 679`, `Lia Share 30 · 4`.
+        static func menuRow(_ title: String, _ count: Int) -> String { "\(title) · \(count)" }
 
         // what is already shared: the shelves over the mosaic and the tiles' badges
         static let recentLinks = "recent links"
+        static let loadingA11y = "loading the library"                         // VoiceOver on the skeleton rows
+        static let shelfLinks = "links"                                        // the shelf's tabs: links · edits · collections
+        static let shelfFold = "fold shelf", shelfUnfold = "show shelf"
         static let seeAllLinks = "see all"
         static let collectionsShelf = "collections"
         static let copyLinkHint = "copies the link"

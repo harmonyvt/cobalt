@@ -14,6 +14,7 @@ import { background } from "../../background";
 import { describeBody, logRequest, normalizeUrlField, type BodyInfo } from "../../request-log";
 import { stageBaseFrom, twitchConfigFrom } from "../../stage";
 import { ingestTelemetry } from "../../telemetry";
+import { capture, postHogConfig, SESSION_HEADER, telemetryEvents } from "../../posthog";
 import { deleteSwitchedWebp } from "../../visibility";
 import type { ContainerStub } from "../../deps";
 import { defineOp, type OpContext } from "../op";
@@ -102,6 +103,11 @@ export const capabilitiesOp = defineOp({
             // section 49: the yt-dlp box
             !!env.YTDLP,
         );
+        // section 58: the PostHog project for the apps' SDK, to keyed callers only (a client key D1 accepted)
+        const ph = postHogConfig(env);
+        if (ph && auth === "key" && r.status === 200 && (r.body as { key?: unknown } | null)?.key === "valid") {
+            return { status: r.status, body: { ...(r.body as Record<string, unknown>), posthog: { token: ph.token, host: ph.host } } };
+        }
         return { status: r.status, body: r.body };
     },
 });
@@ -119,7 +125,18 @@ export const telemetryOp = defineOp({
     http: none,
     ai: { tier: "hidden", summary: "Crash and log telemetry (POST /telemetry)." },
     handler: async (ctx) => {
-        const r = await ingestTelemetry({ db: ctx.db, originals: ctx.env.ORIGINALS, now: ctx.now }, ctx.request!, ctx.keyId!);
+        const session = ctx.request!.headers.get(SESSION_HEADER);
+        const r = await ingestTelemetry(
+            {
+                db: ctx.db,
+                originals: ctx.env.ORIGINALS,
+                now: ctx.now,
+                // section 58: warn/error lines and crashes also go to PostHog, after the answer
+                onStored: (b) => void capture(ctx.env, ctx.edge.waitUntil, telemetryEvents(b, session)),
+            },
+            ctx.request!,
+            ctx.keyId!,
+        );
         return { status: r.status, body: r.body, headers: r.headers };
     },
 });

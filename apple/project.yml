@@ -23,7 +23,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: "7.9"
+    MARKETING_VERSION: "8.23"
     CURRENT_PROJECT_VERSION: "26"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
@@ -32,6 +32,11 @@ packages:
     path: CobaltKit
   SyncGlowKit:
     path: SyncGlowKit
+  # PostHog (APP-API-CONTRACT 58): the app's only third-party package (owner's OK, 2026-11-14). The app target only;
+  # the extensions never link it. Used through Cobalt/App/Analytics.swift and Cobalt/Shared/MediaMask.swift.
+  PostHog:
+    url: https://github.com/PostHog/posthog-ios
+    from: "3.97.1"
 
 targets:
   Cobalt:
@@ -42,6 +47,7 @@ targets:
     dependencies:
       - package: CobaltKit
       - package: SyncGlowKit
+      - package: PostHog
       - sdk: Metal.framework
       - sdk: MetalKit.framework
       - target: CobaltShare
@@ -82,6 +88,9 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UILaunchScreen: {}
+        # ProMotion iPhones: animations and the frame monitor (FrameMonitor.swift) may run above 60 Hz. Without it
+        # Core Animation caps the app's own animations at 60 on iPhone (iPad needs no key).
+        CADisableMinimumFrameDurationOnPhone: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -103,11 +112,29 @@ targets:
         # is `<bundle id>.run.*`; the launch handler registers the wildcard (ContinuedProcessing.swift).
         BGTaskSchedulerPermittedIdentifiers:
           - com.capybaraharmony.cobalt.run.*
+        # Mac: "save to capystore" in the right-click Services menu of every app (QuickSave.swift), on selected text
+        # that holds a link and on video, image and sound files. NSPortName is the executable's name. Ignored on iOS.
+        NSServices:
+          - NSMenuItem:
+              default: save link to capystore
+            NSMessage: saveToCapystore
+            NSPortName: cobalt
+            NSSendTypes: [public.utf8-plain-text, NSStringPboardType, public.url, NSURLPboardType]
+            NSRequiredContext:
+              NSTextContent: URL
+          - NSMenuItem:
+              default: save to capystore
+            NSMessage: saveToCapystore
+            NSPortName: cobalt
+            NSSendFileTypes: [public.movie, public.image, public.audio]
+            NSRequiredContext: {}
     settings:
       base:
         PRODUCT_NAME: cobalt
         PRODUCT_MODULE_NAME: Cobalt
         PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt
+        # MediaMask.swift masks with PostHog only here: `canImport(PostHog)` is also true in the extensions, which do not link it
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) COBALT_POSTHOG"
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -162,6 +189,9 @@ targets:
     sources:
       - path: CobaltWidgets
       - path: Cobalt/Design
+      # The swarm buttons (Approve/Apply/Decline/Stop): `Button(intent:)` needs the types here, and the system runs them in
+      # the app's process, so the app target (which has all of `Cobalt`) compiles the same file.
+      - path: Cobalt/Intents/SwarmLiveIntents.swift
       # Plex Mono: registered through UIAppFonts below; the views fall back to the system
       # monospaced font when the files are missing.
       - path: Cobalt/Resources/Fonts

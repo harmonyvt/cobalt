@@ -1699,6 +1699,20 @@ describe("live hooks (what the studio tells the live service)", () => {
     const renders = (seen: Seen[]) => seen.filter((x) => x.at === "render").map((x) => (x as any).e);
     const kinds = (seen: Seen[]) => seen.map((x) => `${x.at}:${(x as any).e.kind}${(x as any).e.progress ? `:${(x as any).e.progress.step}` : ""}`);
 
+    describe("agent and MCP jobs (8.11)", () => {
+        it("a save by a `chat:` key asks for an agent island with the link's service and post id; a device's save does not", async () => {
+            const s = setup();
+            const agent: unknown[] = [];
+            const { live } = fakeLive({ startAgent: async (sid, o) => void agent.push({ sid, ...o }) });
+            const st = s.make({ live });
+            const { id } = asBody(await st.create("chat:t1", body({ url: LINK, title: "a cat" })));
+            expect(agent).toEqual([{ sid: id, kind: "save", service: "x", ref: "2105237035271258436", title: "a cat" }]);
+            agent.length = 0;
+            await st.create(KEY_ID, body({ url: LINK }));
+            expect(agent).toEqual([]);
+        });
+    });
+
     describe("saves", () => {
         it("starting -> fetching -> storing -> ready: fetching, saving (bytes of the copy, the clip's title and length), then nothing for `ready`", async () => {
             const s = setup();

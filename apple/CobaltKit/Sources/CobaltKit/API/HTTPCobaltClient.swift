@@ -21,6 +21,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     /// Studio uploads go through the system's background session when set (the iOS app); nil sends them on
     /// `urlSession` (the Mac, extensions, tests).
     let backgroundUploads: BackgroundUploads?
+    /// The kept 7TV answers (57.13): the device's folder, or nothing under test; a test sets its own.
+    var answers: SevenTvAnswerCache = .standard
 
     public init(
         baseURL: URL, apiKey: @escaping @Sendable () -> String?, session: URLSession = .shared,
@@ -63,6 +65,11 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         }
         if let idempotencyKey {
             req.setValue(idempotencyKey, forHTTPHeaderField: SyncContract.idempotencyHeader)
+        }
+        // APP-API-CONTRACT 58: this server's own requests say which app and which PostHog session sent them, so the
+        // server's events land inside the session's replay. Never sent to other hosts.
+        if url.host?.lowercased() == baseURL.host?.lowercased() {
+            for (name, value) in AnalyticsContext.headers() { req.setValue(value, forHTTPHeaderField: name) }
         }
         return req
     }
@@ -248,6 +255,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
             var shareBaseUrl: String?
             var key: String?
             var keyName: String?
+            struct PostHog: Decodable { var token: String?; var host: String? }
+            var posthog: PostHog?
         }
         guard let w = try? CobaltJSON.decoder().decode(Wire.self, from: data), w.server == "cobalt-cloudflare" else {
             return nil
@@ -326,6 +335,10 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.names = (f?.names ?? false) && caps.search
         caps.ytdlp = f?.ytdlp ?? false
         caps.postFrame = f?.postFrame ?? false
+        if let ph = w.posthog, let token = ph.token?.trimmingCharacters(in: .whitespaces), !token.isEmpty,
+           let host = ph.host.flatMap(URL.init(string:)), host.scheme == "https" {
+            caps.postHog = PostHogProject(token: token, host: host)
+        }
         return caps
     }
 
@@ -594,7 +607,10 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
 
     public func searchEmotes(query: String) async throws -> [EmoteHit] {
         let req = try makeRequest("GET", "/emotes", query: [("q", query)], keyed: true)
-        return try await sendJSON(EmoteListWire.self, req).items
+        let hits = try await sendJSON(EmoteListWire.self, req).items
+        // the whole answer onto the device, not only the tiles on screen (57.13)
+        await EmoteCache.shared.prefetch(hits.map(\.previewURL))
+        return hits
     }
 
     public func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage {
@@ -603,7 +619,19 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         if !q.isEmpty { params.insert(("q", q), at: 0) }
         let req = try makeRequest("GET", "/emotes", query: params, keyed: true)
         let wire = try await sendJSON(EmotePageWire.self, req)
+        await EmoteCache.shared.prefetch(wire.items.map(\.previewURL))
         return EmotePage(items: wire.items, page: wire.page ?? page, hasMore: wire.hasMore ?? false)
+    }
+
+    /// `exact=1` (20.2); a server without it ignores the key, and the page is filtered here either way.
+    public func emoteVariants(name: String, page: Int) async throws -> EmotePage {
+        let q = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
+        let params: [(String, String)] = [("q", q), ("sort", EmoteSort.top.rawValue), ("page", String(max(1, page))), ("exact", "1")]
+        let req = try makeRequest("GET", "/emotes", query: params, keyed: true)
+        let wire = try await sendJSON(EmotePageWire.self, req)
+        let items = EmoteVariants.keep(wire.items, name: q)
+        await EmoteCache.shared.prefetch(items.map(\.previewURL))
+        return EmotePage(items: items, page: wire.page ?? page, hasMore: wire.hasMore ?? false)
     }
 
     public func saveEmote(id: String) async throws -> SavedEmote {
@@ -1325,28 +1353,37 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
 
     // MARK: - Live Activities (APP-API-CONTRACT section 8; all keyed)
 
+    /// `PUT /live/start-token` with `"type": "job"`: the push-to-start token of the job island
+    /// (`CobaltJobActivityAttributes`, APP-API-CONTRACT 8.13). The server keeps it beside the old type's token and uses it
+    /// for every push-to-start of this key: share sheet saves, agent jobs and chat replies. This build registers no other.
     public func registerLiveStartToken(_ token: String, environment: LiveEnvironment) async throws {
         let req = try makeRequest("PUT", "/live/start-token", keyed: true)
-        let body = Self.jsonBody(["token": token, "environment": environment.rawValue])
+        let body = Self.jsonBody(["token": token, "environment": environment.rawValue, "type": "job"])
         try await sendEmpty(req, body: body)
     }
 
     // MARK: chat reply activities (APP-API-CONTRACT 27.9)
 
-    /// `PUT /live/chat-start-token`: this device's push-to-start token for chat reply activities.
+    /// `PUT /live/chat-start-token`: this device's push-to-start token for the old chat activity type. No longer called by
+    /// the app (8.13): the job start token (`registerLiveStartToken`) wins for chat replies on a key that has both.
     public func registerChatLiveStartToken(_ token: String, environment: LiveEnvironment) async throws {
         let req = try makeRequest("PUT", "/live/chat-start-token", keyed: true)
         try await sendEmpty(req, body: Self.jsonBody(["token": token, "environment": environment.rawValue]))
     }
 
-    /// `PUT /live/chats/<thread>`: the update token of a chat activity the server push-started on this device.
-    public func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment) async throws {
+    /// `PUT /live/chats/<thread>` with `"type": "job"`: the update token of a chat reply's job activity (this phone's own,
+    /// or one the server push-started here), so the server pushes `JobLiveState` to it. `job: false` leaves the type out:
+    /// an old-type activity the server push-started (changeover release).
+    public func putChatLiveToken(threadID: String, token: String, environment: LiveEnvironment, job: Bool) async throws {
         let req = try makeRequest("PUT", "/live/chats/\(Self.encode(threadID))", keyed: true)
-        try await sendEmpty(req, body: Self.jsonBody(["token": token, "environment": environment.rawValue]))
+        var body = ["token": token, "environment": environment.rawValue]
+        if job { body["type"] = "job" }
+        try await sendEmpty(req, body: Self.jsonBody(body))
     }
 
     public func registerLiveRun(_ r: LiveRunRegistration) async throws -> LiveRunReply {
-        let req = try makeRequest("PUT", "/live/runs/\(Self.runPath(r.run))", keyed: true)
+        let path = r.runName.map(Self.encode) ?? Self.runPath(r.run)
+        let req = try makeRequest("PUT", "/live/runs/\(path)", keyed: true)
         let wire = try await sendJSON(LiveRunWire.self, req, body: try r.requestBody())
         return LiveRunReply(pushing: wire.pushing ?? false, started: wire.started ?? false, reason: wire.reason)
     }

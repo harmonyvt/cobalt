@@ -9,6 +9,8 @@ enum Symbol {
     static let save = "arrow.down.circle"
     static let library = "photo.on.rectangle.angled"
     static let settings = "gearshape"
+    /// iPhone's "more" tab.
+    static let moreTab = "ellipsis"
     static let menuBar = "menubar.rectangle"
 
     // actions

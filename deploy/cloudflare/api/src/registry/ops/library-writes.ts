@@ -337,7 +337,7 @@ export const SaveResult = z
         files: z.number().nullable(),
         public: z.boolean().nullable(),
         error: z.string().nullable().describe('why it failed, e.g. "error.studio.fetch_failed"'),
-        saves_left_today: z.number(),
+        saves_left_today: z.number().nullable().describe("saves the in-app chat may still start today; null when there is no daily cap (MCP)"),
     })
     .meta({ id: "SaveResult" });
 
@@ -355,11 +355,14 @@ export type ChatSaveInput = {
 export async function chatSave(ctx: OpContext, input: ChatSaveInput): Promise<OpReply> {
     chatOnly(ctx);
     const keyId = ctx.keyId!;
-    const cap = dailySaves(ctx.env);
+    // MCP calls have no daily save cap (section 33.7): the count is not even read
+    const cap = ctx.chat?.mcp ? null : dailySaves(ctx.env);
     const since = ctx.now() - DAY_MS;
     const used =
-        (await ctx.db.prepare("SELECT COUNT(*) AS n FROM studio_sessions WHERE key_id = ?1 AND created_at > ?2").bind(keyId, since).first<{ n: number }>())?.n ?? 0;
-    if (used >= cap) {
+        cap === null
+            ? 0
+            : ((await ctx.db.prepare("SELECT COUNT(*) AS n FROM studio_sessions WHERE key_id = ?1 AND created_at > ?2").bind(keyId, since).first<{ n: number }>())?.n ?? 0);
+    if (cap !== null && used >= cap) {
         throw new OpError(429, "error.chat.save_cap", `this thread already saved ${used} links today (the cap is ${cap}); tell Harmony to save it in the app or try tomorrow`);
     }
     const body: Record<string, unknown> = { url: input.url.trim(), queue: true };
@@ -384,7 +387,7 @@ export async function chatSave(ctx: OpContext, input: ChatSaveInput): Promise<Op
         left -= SAVE_POLL_S;
         if (left <= 0 || ctx.now() >= deadline) break;
     }
-    const left = Math.max(0, cap - used - 1);
+    const left = cap === null ? null : Math.max(0, cap - used - 1);
     const st = session?.status;
     if (st === "ready") {
         const [post] = await loadPosts({ db: ctx.db, mediaBaseUrl: ctx.mediaBaseUrl }, [sid]);
@@ -441,7 +444,7 @@ export const librarySaveOp = defineOp({
     ai: {
         tier: "free",
         only: true,
-        summary: `Save a link into the library, like pasting it in the app. Waits for the save (up to ${SAVE_WAIT_MAX_S} s) and returns the new post's id.\nAt most ${CHAT_DAILY_SAVES} saves per thread a day. Only save what Harmony asked for.`,
+        summary: `Save a link into the library, like pasting it in the app. Waits for the save (up to ${SAVE_WAIT_MAX_S} s) and returns the new post's id.\nThe in-app chat may save at most ${CHAT_DAILY_SAVES} a day per thread (the MCP has no daily cap). Only save what Harmony asked for.`,
         params: ["url"],
         options: true,
     },
@@ -456,7 +459,7 @@ export const libraryTitleOp = defineOp({
     cors: false,
     input: z.object({ id: PostId, title: z.string().max(80).nullable().describe("1..80 characters; null clears it") }),
     output: z.object({ post_id: z.string(), title: z.string().nullable() }),
-    ai: { tier: "free", only: true, summary: "Set a post's title (null goes back to the original name).", params: ["id", "title"] },
+    ai: { refs: { id: "post" }, tier: "free", only: true, summary: "Set a post's title (null goes back to the original name).", params: ["id", "title"] },
     handler: async (ctx, input) => {
         chatOnly(ctx);
         const { files } = await onePost(ctx, input.id);
@@ -492,6 +495,7 @@ export const libraryVisibilityOp = defineOp({
     input: z.object({ ids: PostIds, public: z.boolean().describe("true: give them public links; false: make them private") }),
     output: z.object({ public: z.boolean(), changed: z.number(), posts: z.array(z.object({ id: z.string(), links: z.array(z.string()) })) }),
     ai: {
+        refs: { ids: "posts" },
         tier: "ask",
         only: true,
         summary:
@@ -545,6 +549,7 @@ export const libraryDeleteOp = defineOp({
     input: z.object({ ids: PostIds }),
     output: z.object({ deleted: z.array(z.string()), files: z.number() }),
     ai: {
+        refs: { ids: "posts" },
         tier: "ask",
         only: true,
         summary: "Delete whole posts and every file of them, public links included. Several posts go on one card.",
@@ -592,6 +597,7 @@ export const libraryDeleteFileOp = defineOp({
     input: z.object({ id: z.string().regex(ITEM_ID_REGEX, "a file id (16 letters/digits, from library.post's files)") }),
     output: z.object({ deleted: z.string() }),
     ai: {
+        refs: { id: "file" },
         tier: "ask",
         only: true,
         summary: "Delete one file of a post: a gallery item or a made file (a crop, export, slideshow). The post's last item can't go this way: delete the post.",

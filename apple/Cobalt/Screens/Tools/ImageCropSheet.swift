@@ -22,6 +22,12 @@ struct ImageCropAction {
     let run: @MainActor (ImageCropSpec, CGImage?) async throws -> Void
 }
 
+/// Where a crop sheet's box starts instead of the whole picture: locked to `aspect`, at `box` (fractions of the picture).
+struct ImageCropStart {
+    var aspect: ImageCropModel.Aspect
+    var box: ImageCropRect?
+}
+
 struct ImageCropSheet: View {
     /// The picture's name, under the title.
     let name: String
@@ -30,6 +36,10 @@ struct ImageCropSheet: View {
     /// The server can make this crop itself (the argument: `remove background` is on).
     let serverCan: @MainActor (Bool) -> Bool
     var note: String = Copy.Editor.cropNote
+    /// The aspect chips this sheet offers; the other crop sheets keep the standard six.
+    var aspects: [ImageCropModel.Aspect] = ImageCropModel.Aspect.standard
+    /// Where the box starts (the whole picture, free, when nil).
+    var start: ImageCropStart?
     let primary: ImageCropAction
     var secondary: ImageCropAction?
     let close: () -> Void
@@ -188,7 +198,7 @@ struct ImageCropSheet: View {
 
     @ViewBuilder
     private func chips(_ model: ImageCropModel) -> some View {
-        ForEach(ImageCropModel.Aspect.allCases) { aspect in
+        ForEach(aspects) { aspect in
             ImageCropChip(title: aspect.label, selected: model.aspect == aspect) { model.choose(aspect) }
                 .disabled(working != nil)
         }
@@ -277,7 +287,9 @@ struct ImageCropSheet: View {
             original = ImageCropPicture(picture)
             small = ImageCropPicture(preview)
             shown = small
-            model = ImageCropModel(source: CGSize(width: picture.width, height: picture.height))
+            let made = ImageCropModel(source: CGSize(width: picture.width, height: picture.height))
+            if let start { made.begin(start) }
+            model = made
             loadFailed = false
         } catch {
             loadFailed = true

@@ -136,6 +136,10 @@ export type AppDeps = {
     purge?: PurgeFn;
     // https://<share host>/ of the rich link pages (section 22); absent = not configured.
     shareBaseUrl?: string;
+    // Section 62.5: the shared pace of every 7TV API call, and the 24 h cache of emote searches (default: the Workers
+    // Cache API when there is one).
+    sevenTvGate?: import("./seventv-gate").SevenTvGate | null;
+    emoteCache?: import("./emotes").EmoteCache | null;
     // The request's waitUntil, for work that must not hold the answer (src/background.ts). Absent in tests and in the
     // Durable Objects: the work is then awaited.
     waitUntil?: (p: Promise<unknown>) => void;
@@ -370,6 +374,9 @@ export async function capabilities(
                 // GET/PATCH /library/items/<id>/post-details, POST /library/items/<id>/post-frame: a saved video inside a
                 // drawn card of its post (APP-API-CONTRACT.md section 52): the editor on and migration 0036 applied
                 post_frame: editor === true && postFrame,
+                // /7tv*: a linked 7TV account's emote sets (APP-API-CONTRACT.md section 57); the card says when it is not
+                // linked, and the routes answer 503 until migration 0040 is applied
+                seventv: true,
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
                 edit_live_push: editor === true && livePush === true,
                 // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)

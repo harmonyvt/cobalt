@@ -104,6 +104,9 @@ extension Copy {
         static func heroA11y(_ name: String, evicted: Bool) -> String {
             evicted ? "\(name), not on this \(Copy.device)" : name
         }
+        /// A video hero whose clip would not start: under the retry button, and what VoiceOver says of it.
+        static let heroCannotPlay = "couldn't play"
+        static let heroRetryA11y = "couldn't play the video. try again"
         /// The hero's full-screen button, and its way back.
         static let fullScreen = "full screen"
         static let exitFullScreen = "exit full screen"

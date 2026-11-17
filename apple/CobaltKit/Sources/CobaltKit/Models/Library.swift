@@ -145,11 +145,12 @@ extension LibraryFile {
     }
 }
 
-/// Any JSON value, for the one field the wire leaves open (`made_spec`).
-enum JSONValue: Codable, Equatable {
+/// Any JSON value, for the fields the wire leaves open (`made_spec`, a swarm's items and results). Public since the swarm
+/// models carry it (`Swarms/SwarmModels.swift` adds the readers).
+public enum JSONValue: Codable, Hashable, Sendable {
     case null, bool(Bool), number(Double), string(String), array([JSONValue]), dictionary([String: JSONValue])
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() { self = .null }
         else if let v = try? c.decode(Bool.self) { self = .bool(v) }
@@ -159,7 +160,7 @@ enum JSONValue: Codable, Equatable {
         else { self = .dictionary(try c.decode([String: JSONValue].self)) }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         switch self {
         case .null: try c.encodeNil()

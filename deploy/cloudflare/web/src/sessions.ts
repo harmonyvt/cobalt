@@ -6,7 +6,7 @@ import { hashKey } from "./keys";
 export const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const MAX_SESSIONS = 50;
 export const MAX_DEVICE_LENGTH = 40;
-// `extension` is a browser extension (section 55): the same kind of session, named for the browser.
+// `extension` is a browser extension (section 64): the same kind of session, named for the browser.
 export const PLATFORMS = ["ios", "ipados", "mac", "web", "extension"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
@@ -107,7 +107,7 @@ const OS_LABEL: Record<string, string> = {
     linux: "Linux",
 };
 
-// The device name of a browser-extension session (section 55): "Browser extension – Chrome on Mac".
+// The device name of a browser-extension session (section 64): "Browser extension – Chrome on Mac".
 // The approve page's own User-Agent decides it. The extension does not get to choose the name.
 export function extensionDeviceName(ua: string | null): string {
     const base = deviceFromUserAgent(ua);

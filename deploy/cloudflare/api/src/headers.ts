@@ -12,8 +12,11 @@
 export const PORT_HEADER = "cf-container-target-port";
 export const KEY_ID_HEADER = "x-cobalt-key-id";
 export const SERVICE_HEADER = "x-cobalt-service";
+//  - x-cobalt-agent-live: set by the chat's make ops (registry/ops/make.ts) on a studio make they start, so the
+//    Durable Object push-starts a Live Activity for it (APP-API-CONTRACT.md 8.11).
+export const AGENT_LIVE_HEADER = "x-cobalt-agent-live";
 
-export const STRIPPED_FROM_CLIENT = [PORT_HEADER, KEY_ID_HEADER, SERVICE_HEADER] as const;
+export const STRIPPED_FROM_CLIENT = [PORT_HEADER, KEY_ID_HEADER, SERVICE_HEADER, AGENT_LIVE_HEADER] as const;
 
 // Headers.delete() is case-insensitive and removes every value of the name.
 export function stripInternalHeaders(headers: Headers): Headers {

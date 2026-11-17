@@ -71,7 +71,7 @@ public protocol CobaltClient: Sendable {
     /// that `MediaTitle.clean` already accepted.
     func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult
     // Live Activities (APP-API-CONTRACT section 8; keyed; the server never wakes its container for these)
-    func registerLiveStartToken(_ token: String, environment: LiveEnvironment) async throws   // PUT /live/start-token
+    func registerLiveStartToken(_ token: String, environment: LiveEnvironment) async throws   // PUT /live/start-token (type: job)
     func registerLiveRun(_ r: LiveRunRegistration) async throws -> LiveRunReply                // PUT /live/runs/<run>
     func relayLiveState(run: UUID, _ state: LiveContentState) async throws                     // POST /live/runs/<run>/state
     func endLiveRun(_ run: UUID) async throws                                                  // DELETE /live/runs/<run>
@@ -116,6 +116,9 @@ public protocol CobaltClient: Sendable {
     func searchEmotes(query: String) async throws -> [EmoteHit]
     /// `GET /emotes?q=&sort=&page=` (section 20.1): browse a sort, with or without a name.
     func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage
+    /// `GET /emotes?q=<name>&sort=top&page=&exact=1` (section 20.2): one page of the emotes on 7TV with this own name, most
+    /// used first. Defaulted below to `browseEmotes` filtered to the name, so older fakes compile.
+    func emoteVariants(name: String, page: Int) async throws -> EmotePage
     /// `POST /emotes` `{id}`. The first save is new; the same id again is the same file.
     func saveEmote(id: String) async throws -> SavedEmote
     /// `GET /library/search?q=&limit=&v=` (APP-API-CONTRACT 21; keyed; only when `features.search`): the posts best
@@ -347,6 +350,38 @@ public protocol CobaltClient: Sendable {
     func previewSearchName(_ request: SearchNamePreviewRequest) async throws -> SearchNamePreview
     /// `GET /library/names/post?key=`: the enabled names the post carries or is marked for, best first.
     func searchNames(forPost postKey: String) async throws -> [PostName]
+    // Swarms (APP-API-CONTRACT 59.6, 61.3, 61.4; keyed). The owner calls (approve, decline, decide, apply) answer only to this
+    // device's session (or the service); a client key gets `SwarmError.ownerOnly`. Defaulted below (`.unsupported`).
+    /// `GET /swarms`: newest first, at most 50.
+    func swarms() async throws -> [Swarm]
+    /// `GET /swarms/<id>`.
+    func swarm(id: String) async throws -> Swarm
+    /// `GET /swarms/<id>/agents/<n>` (n from 1).
+    func swarmAgent(id: String, agent: Int) async throws -> SwarmAgent
+    /// `GET /swarms/<id>/changes?offset&limit` (limit at most 200).
+    func swarmChanges(id: String, offset: Int, limit: Int) async throws -> SwarmChangePage
+    /// `GET /swarms/<id>/messages` (`?agent=` when given): oldest first, at most 200; does not mark them read.
+    func swarmMessages(id: String, agent: Int?) async throws -> [SwarmMessage]
+    /// `POST /swarms/<id>/approve` `{spec_hash}`.
+    func approveSwarm(id: String, hash: String) async throws -> Swarm
+    /// `POST /swarms/<id>/decline`.
+    func declineSwarm(id: String) async throws -> Swarm
+    /// `POST /swarms/<id>/stop`.
+    func stopSwarm(id: String) async throws -> Swarm
+    /// `POST /swarms/<id>/retry`: failed or skipped tasks run again after a new approval.
+    func retrySwarm(id: String) async throws -> Swarm
+    /// `POST /swarms/<id>/changes` `{changes: [{n, keep?, after?}]}` (1...500): the swarm and the changes named.
+    func decideSwarm(id: String, changes: [SwarmDecision]) async throws -> SwarmDecided
+    /// `POST /swarms/<id>/apply` `{spec_hash, skip_clashes?, count?}`. `count` is how many changes the caller expects to apply
+    /// (the number its button shows); a different number is `409 error.swarm.count_mismatch`. nil is not sent.
+    func applySwarm(id: String, hash: String, skipClashes: Bool, count: Int?) async throws -> Swarm
+    /// `POST /swarms/<id>/messages` `{to, text}`.
+    func sendSwarm(id: String, to: SwarmRecipient, text: String) async throws -> SwarmSent
+    /// `GET /swarms/<id>/board?q&agent&status&group&sort&offset&limit` (62.4; limit at most 200): one page of the results
+    /// board, every agent, and the groups.
+    func swarmBoard(
+        id: String, query: String?, agent: Int?, status: String?, group: String?, sort: BoardSort, offset: Int, limit: Int
+    ) async throws -> SwarmBoard
 }
 
 extension CobaltClient {
@@ -415,6 +450,10 @@ extension CobaltClient {
     public func searchEmotes(query: String) async throws -> [EmoteHit] { throw PipelineFailure.unsupported }
     public func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage {
         throw PipelineFailure.unsupported
+    }
+    public func emoteVariants(name: String, page: Int) async throws -> EmotePage {
+        let found = try await browseEmotes(query: name, sort: .top, page: page)
+        return EmotePage(items: EmoteVariants.keep(found.items, name: name), page: found.page, hasMore: found.hasMore)
     }
     public func saveEmote(id: String) async throws -> SavedEmote { throw PipelineFailure.unsupported }
     public func librarySearch(query: String, limit: Int, version: Int?) async throws -> LibrarySearchResult {
@@ -515,6 +554,21 @@ extension CobaltClient {
         throw PipelineFailure.unsupported
     }
     public func searchNames(forPost postKey: String) async throws -> [PostName] { throw PipelineFailure.unsupported }
+    public func swarms() async throws -> [Swarm] { throw PipelineFailure.unsupported }
+    public func swarm(id: String) async throws -> Swarm { throw PipelineFailure.unsupported }
+    public func swarmAgent(id: String, agent: Int) async throws -> SwarmAgent { throw PipelineFailure.unsupported }
+    public func swarmChanges(id: String, offset: Int, limit: Int) async throws -> SwarmChangePage { throw PipelineFailure.unsupported }
+    public func swarmMessages(id: String, agent: Int?) async throws -> [SwarmMessage] { throw PipelineFailure.unsupported }
+    public func approveSwarm(id: String, hash: String) async throws -> Swarm { throw PipelineFailure.unsupported }
+    public func declineSwarm(id: String) async throws -> Swarm { throw PipelineFailure.unsupported }
+    public func stopSwarm(id: String) async throws -> Swarm { throw PipelineFailure.unsupported }
+    public func retrySwarm(id: String) async throws -> Swarm { throw PipelineFailure.unsupported }
+    public func decideSwarm(id: String, changes: [SwarmDecision]) async throws -> SwarmDecided { throw PipelineFailure.unsupported }
+    public func applySwarm(id: String, hash: String, skipClashes: Bool, count: Int?) async throws -> Swarm { throw PipelineFailure.unsupported }
+    public func sendSwarm(id: String, to: SwarmRecipient, text: String) async throws -> SwarmSent { throw PipelineFailure.unsupported }
+    public func swarmBoard(
+        id: String, query: String?, agent: Int?, status: String?, group: String?, sort: BoardSort, offset: Int, limit: Int
+    ) async throws -> SwarmBoard { throw PipelineFailure.unsupported }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
 }

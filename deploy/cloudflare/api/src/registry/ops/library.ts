@@ -7,7 +7,7 @@ import { LIBRARY_MAX_LIMIT, loadPosts, RANK_MAX, SEARCH_MAX } from "../../chat-t
 import { libraryAbout, libraryAboutSet } from "../../about";
 import { USER_TAGS_MAX } from "../../about-store";
 import { libraryMap, librarySearch } from "../../embed";
-import { transcriptOf, TranscriptNotFound } from "../../transcripts";
+import { timecode, transcriptOf, TranscriptNotFound } from "../../transcripts";
 import { WITHIN_POSTS_MAX } from "../../within";
 import { queueSnapshot } from "../../queue";
 import { defineOp, ok, OpError, type OpContext } from "../op";
@@ -175,6 +175,7 @@ export const libraryPostOp = defineOp({
         }),
     ),
     ai: {
+        refs: { id: "post" },
         tier: "free",
         only: true,
         summary: "One post with its files (public url and share_url when public; private_url and private_file_url, its direct file, when it has its own private link).",
@@ -190,7 +191,14 @@ export const lookOp = defineOp({
     runs: "worker",
     cors: false,
     input: z.object({
-        ids: Ids,
+        ids: Ids.optional().describe("posts to look at; may be left out when media is given"),
+        media: z
+            .string()
+            .trim()
+            .min(1)
+            .max(2048)
+            .optional()
+            .describe("one media ref to look at: a capystore link or id, a 7TV emote id or link, or an https image URL on the allowlist"),
         grid: z.boolean().optional().describe("draw lines every 0.1 of the width and height, to read off a crop box for make.cropImage"),
         frames: z.boolean().optional().describe("a video: also up to 3 frames spread across it, not only its poster"),
         box: z
@@ -200,14 +208,30 @@ export const lookOp = defineOp({
     }),
     output: z.number(),
     ai: {
+        refs: { ids: "posts" },
         tier: "free",
         only: true,
-        summary: "You get to SEE these posts' pictures (poster or image, private ones too) after this code returns. Max 4 per reply. Returns how many are queued.",
+        summary:
+            "You get to SEE these posts' pictures (poster or image, private ones too) after this code returns; or any media with look({ media }) (a 7TV emote id or link, a capystore link, an allowed https image URL). Max 4 per reply. Returns how many are queued.",
         params: ["ids"],
         options: true,
+        // look(ids, opts), or look({ media }) / look({ ids, ... }) with one object
+        args: ([ids, opts]) =>
+            ids && typeof ids === "object" && !Array.isArray(ids)
+                ? ids
+                : { ...(ids !== undefined && ids !== null ? { ids } : {}), ...(opts && typeof opts === "object" && !Array.isArray(opts) ? opts : {}) },
     },
-    handler: async (ctx, input) =>
-        ok(await tools(ctx).look!(input.ids, { ...(input.grid ? { grid: true } : {}), ...(input.frames ? { frames: true } : {}), ...(input.box ? { box: input.box } : {}) })),
+    handler: async (ctx, input) => {
+        if ((input.ids ?? []).length === 0 && !input.media) throw new OpError(400, "error.look.nothing", "look: give post ids or media");
+        return ok(
+            await tools(ctx).look!(input.ids ?? [], {
+                ...(input.grid ? { grid: true } : {}),
+                ...(input.frames ? { frames: true } : {}),
+                ...(input.box ? { box: input.box } : {}),
+                ...(input.media ? { media: input.media } : {}),
+            }),
+        );
+    },
 });
 
 export const showOp = defineOp({
@@ -218,6 +242,7 @@ export const showOp = defineOp({
     input: z.object({ ids: Ids }),
     output: z.array(z.string()),
     ai: {
+        refs: { ids: "posts" },
         tier: "free",
         only: true,
         summary: "Show these posts to Harmony as thumbnails under your reply (max 12 per reply). Returns the ids accepted.",
@@ -238,6 +263,7 @@ export const collageOp = defineOp({
     }),
     output: z.number(),
     ai: {
+        refs: { ids: "posts" },
         tier: "free",
         only: true,
         summary:
@@ -356,6 +382,7 @@ export const libraryAboutOp = defineOp({
     input: z.object({ key: z.string().min(1).max(2048).describe("the post id") }),
     output: AboutBody,
     ai: {
+        refs: { key: "post" },
         tier: "free",
         summary: "What a post is about: its description, tags and sound tags, what is said in it, the words its vector reads closest to, its nearest posts.",
         params: ["key"],
@@ -387,6 +414,7 @@ export const libraryAboutSetOp = defineOp({
     }),
     output: AboutBody,
     ai: {
+        refs: { key: "post" },
         tier: "ask",
         summary: "Replace a post's tags with Harmony's own (null goes back to the written ones). Only when Harmony asks.",
         params: ["key", "tags"],
@@ -454,13 +482,24 @@ export const libraryTranscriptOp = defineOp({
     output: TranscriptBody,
     http: (ctx) => ({ key: ctx.query.get("key") ?? "", from: seconds(ctx.query.get("from")), to: seconds(ctx.query.get("to")) }),
     ai: {
+        refs: { key: "post" },
         tier: "free",
-        summary: "What is said in a video, line by line with times in seconds (from/to: only that part). state says why there are no lines.",
+        summary:
+            "What is said in a video, line by line with times (start/end in seconds, timecode: the start as m:ss to cite; from/to: only that part). state says why there are no lines.",
         params: ["key"],
         options: true,
+        // every line also carries `timecode`, its start as a timecode ("1:23"), so an answer can cite the moment as is
         result: (body: unknown) => {
-            const { status: _s, ...rest } = (body ?? {}) as Record<string, unknown>;
-            return rest;
+            const { status: _s, lines, ...rest } = (body ?? {}) as Record<string, unknown>;
+            return {
+                ...rest,
+                lines: Array.isArray(lines)
+                    ? lines.map((l) => {
+                          const line = (l ?? {}) as Record<string, unknown>;
+                          return typeof line.start === "number" ? { timecode: timecode(line.start), ...line } : line;
+                      })
+                    : lines,
+            };
         },
     },
     handler: async (ctx, input) => {

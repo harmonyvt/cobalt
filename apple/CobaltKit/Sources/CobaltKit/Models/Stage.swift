@@ -8,8 +8,8 @@ import Foundation
 // MARK: - rules
 
 public enum StageRule {
-    /// "how crazy": tiles on screen at once.
-    public static let densityRange = 5...100
+    /// "how crazy": tiles on screen at once. 0 = no scatter: only the spotlight, summons and chaos show.
+    public static let densityRange = 0...100
     /// "tile life": seconds a tile stays (a video may stay longer while "play videos through" is on).
     public static let tileSecondsRange = 3...120
     public static let tileScaleRange: ClosedRange<Double> = 0.5...1.6
@@ -446,7 +446,7 @@ extension StageRedemption: Decodable {
 public struct StageSettings: Sendable, Equatable {
     public var onAir: Bool
     public var pool: StagePool
-    /// "how crazy": tiles on screen, 5...100.
+    /// "how crazy": tiles on screen, 0...100 (0 = no scatter).
     public var density: Int
     /// "tile life": seconds, 3...120.
     public var tileSeconds: Int

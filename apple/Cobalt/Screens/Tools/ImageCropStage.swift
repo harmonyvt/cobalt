@@ -14,7 +14,10 @@ struct ImageCropStage: View {
     /// The picture as shown (already turned and flipped), any size with the shown picture's shape.
     let image: CGImage
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         GeometryReader { geo in
             let fit = FrameCropStage.fit(model.display, in: geo.size)
             ZStack {

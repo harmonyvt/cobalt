@@ -1,7 +1,7 @@
 import CobaltKit
 import SwiftUI
 
-// "how crazy" (5...100 tiles on screen) and "tile life" (3...120 s each), the "play videos through" and "unmute all videos"
+// "how crazy" (0...100 tiles on screen, "redeems only" at 0) and "tile life" (3...120 s each), the "play videos through" and "unmute all videos"
 // switches, then a "more" fold with the tile size, the spotlight's time, how many videos may play at once and the auto
 // spotlight. A slider shows its value at once; the store sends the latest values 300 ms after the last move (last write wins),
 // so a drag is one request. A switch is sent at once and put back if the server refuses it.

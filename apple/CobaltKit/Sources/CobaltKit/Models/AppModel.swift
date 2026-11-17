@@ -2,21 +2,24 @@ import Foundation
 import Observation
 import UserNotifications
 
-/// The tabs, in the order they show. `queue` is everything cobalt is doing (apple/CONTRACT.md section 12).
-/// `links` lists the gallery share links (APP-API-CONTRACT 24) and shows only with `features.share_sets`; `chat` holds the
-/// threads with Claude about the library (APP-API-CONTRACT 27) and shows only with `features.chat`; `stage` is the "studio"
-/// tab, the stream canvas and the viewer store (APP-API-CONTRACT 30), after chat, and shows only with `features.stage`.
+/// The tabs, in the order they show: save, library, links, 7tv, studio, chat, names, (queue), settings. `queue` is everything
+/// cobalt is doing (apple/CONTRACT.md section 12). `links` lists the gallery share links (APP-API-CONTRACT 24) and shows
+/// only with `features.share_sets`; `sevenTv` is the "7tv" tab (APP-API-CONTRACT 57.7: sets, search, upload), right after links,
+/// and shows only with `features.stage`; `stage` is the "studio" tab, the stream canvas and the viewer store
+/// (APP-API-CONTRACT 30), after 7tv, on the same rule; `chat` holds the threads with Claude about the library
+/// (APP-API-CONTRACT 27), after the studio, and shows only with `features.chat`. iPhone shows the first four of these
+/// (the queue is a sheet there) and a "more" tab for the rest.
 public enum AppTab: String, Sendable, CaseIterable {
-    case save, library, links, chat, stage, names, queue, settings
+    case save, library, links, sevenTv, stage, chat, swarms, names, queue, settings
 
     /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
     /// chat needs `features.chat`, the studio needs `features.stage`, search names need `features.names` (48.6).
     public func isAvailable(with caps: Capabilities) -> Bool {
         switch self {
-        case .library: return caps.library
+        case .library, .swarms: return caps.library
         case .links: return caps.shareSets
         case .chat: return caps.chat
-        case .stage: return caps.stage
+        case .stage, .sevenTv: return caps.stage
         case .names: return caps.names
         case .save, .queue, .settings: return true
         }
@@ -108,12 +111,16 @@ public final class AppModel {
     public let chat: ChatStore
     /// Stage, the studio tab (APP-API-CONTRACT 30). Idle until `load()`.
     public let stage: StageStore
+    /// Swarms (APP-API-CONTRACT 59, 61, 62; the swarms tab, "more" on iPhone). Idle until `loadList()`.
+    public let swarms: SwarmStore
     /// The auto-hide rules (APP-API-CONTRACT 37; settings › hidden). Idle until `load()`.
     public let hiddenRules: HiddenRulesModel
     /// Search names (APP-API-CONTRACT 48; library › names). Idle until `load()`.
     public let searchNames: SearchNamesModel
     /// Settings › account (APP-API-CONTRACT 42): who is signed in, the devices and the keys for tools. Idle until `refresh()`.
     public let account: AccountStore
+    /// 7TV accounts (APP-API-CONTRACT 57; the 7tv tab): the linked account, its channels, their sets and the uploads.
+    public let sevenTv: SevenTvStore
     /// The video editor (APP-API-CONTRACT 31): the projects, this key's renders and the open project. Idle until `refresh()`.
     public let editor: EditorStore
     /// Post frames (APP-API-CONTRACT 52): the details of the posts asked about and the framed copies being watched.
@@ -147,7 +154,10 @@ public final class AppModel {
     /// What the focus screens read: the focused job's pipeline, or an idle one when nothing is focused. A run started
     /// on it by hand becomes the focused job at once.
     public var pipeline: Pipeline { queue.focused?.pipeline ?? queue.idlePipeline }
-    public var selectedTab: AppTab = .save
+    public var selectedTab: AppTab = .save { didSet { tabSets &+= 1 } }
+    /// How many times `selectedTab` was written, even to the value it had: iPhone's "more" tab reads it to push a
+    /// screen when something asks for the tab that is already the selected one (a deep link while "more" shows its list).
+    public private(set) var tabSets = 0
     /// iPhone and iPad: the queue is a sheet over the shell (opened from a toolbar button), not a tab. Use `showQueue()`
     /// to open it from anywhere; the shell presents the sheet while this is true. The Mac keeps the queue as a tab and
     /// never sets this.
@@ -162,6 +172,13 @@ public final class AppModel {
     /// (the Hark summary, APP-API-CONTRACT 17.8) used to set it; it now opens the queue tab (apple/CONTRACT.md 12).
     public var requestedJobs = false
 
+    /// The library's rows and kind counts as the views read them (`libraryRows`, `LibraryView.swift`): built off the main
+    /// thread whenever an input changes and assigned here only when they changed. The only observed part of the engine.
+    var libraryRowsSnapshot = LibraryRowsSnapshot.empty
+    /// The rows engine's bookkeeping: what was built, the build in flight, its generation.
+    @ObservationIgnored var libraryRowsEngine = LibraryRowsEngine()
+    /// `visibleStoredMedia`'s memo (not observed: the inputs it reads are).
+    @ObservationIgnored var visibleMediaMemo: VisibleMediaMemo?
     /// Live Activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
     @ObservationIgnored var liveManager: LiveActivityManager?
     /// The editor's render activities (iOS only; nil on the Mac, in previews and in tests unless one is injected).
@@ -216,12 +233,14 @@ public final class AppModel {
         self.shareSets = ShareSetStore(context: context)
         self.chat = ChatStore(context: context)
         self.stage = StageStore(context: context)
+        self.swarms = SwarmStore(context: context)
         self.editor = EditorStore(context: context)
         self.postFrames = PostFrameStore(context: context)
         self.skyMap = SkyMapModel(context: context)
         self.hiddenRules = HiddenRulesModel(context: context, library: library)
         self.searchNames = SearchNamesModel(context: context, library: library)
         self.account = AccountStore(context: context)
+        self.sevenTv = SevenTvStore(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
         let jobQueue = JobQueue(
@@ -341,18 +360,19 @@ public final class AppModel {
         // a gallery found by the foreground (a build with no app group) is followed as a job, not downloaded as one file
         fetcher.adoptGallery = { [unowned model] id, link in model.queue.adoptSharedGallery(session: id, link: link) }
         #if os(iOS) && canImport(ActivityKit)
-        // First thing at launch, before any run: the push-to-start token observer (CONTRACT-LIVE.md 2.5).
-        let manager = LiveActivityManager(context: ctx, adapter: ActivityKitAdapter(), environment: LiveEnvironment.current)
+        // First thing at launch, before any run: the push-to-start token observer (CONTRACT-LIVE.md 2.5). Every activity
+        // is the job island (CONTRACT-JOBLIVE.md 5): one ActivityKit type, one adapter per manager picking its kinds.
+        let manager = LiveActivityManager(context: ctx, adapter: ActivityKitJobAdapter.saves(), environment: LiveEnvironment.current)
         ctx.live = manager
         model.liveManager = manager
         manager.start()
         model.editLive = EditLiveManager(
-            adapter: ActivityKitEditAdapter(), environment: LiveEnvironment.current,
+            adapter: ActivityKitJobAdapter.edits(), environment: LiveEnvironment.current,
             capabilities: { [unowned model] in model.capabilities },
             client: { [unowned ctx] in ctx.client as? any EditorClient },
             now: { [unowned ctx] in ctx.clock.now() })
         let chatLive = ChatLiveManager(
-            adapter: ActivityKitChatAdapter(), now: { [unowned ctx] in ctx.clock.now() },
+            adapter: ActivityKitJobAdapter.chats(), now: { [unowned ctx] in ctx.clock.now() },
             isAppActive: { [unowned ctx] in ctx.background.activity.isActive },
             environment: LiveEnvironment.current,
             capabilities: { [unowned model] in model.capabilities },
@@ -364,7 +384,7 @@ public final class AppModel {
         // The owner leaves mid-run: the system keeps the app working on it (`BGContinuedProcessingTask`),
         // and the server speaks for it through the notify bridge if that task is refused or expires.
         let continued = ContinuedProcessing(context: ctx, scheduler: SystemContinuedScheduler(), home: { [unowned model] in model.pipeline })
-        continued.liveActivityCovers = { ActivityKitAdapter.activitiesAllowed }
+        continued.liveActivityCovers = { ActivityKitJobAdapter.activitiesAllowed }
         continued.register()
         ctx.continued = continued
         model.continuedProcessing = continued
@@ -430,13 +450,13 @@ public final class AppModel {
         if selectedTab == .links, !caps.shareSets, caps.kind != .unreachable { selectedTab = .save }
         if selectedTab == .chat, !caps.chat, caps.kind != .unreachable { selectedTab = .save }
         if selectedTab == .stage, !caps.stage, caps.kind != .unreachable { selectedTab = .save }
+        if selectedTab == .swarms, !caps.library, caps.kind != .unreachable { selectedTab = .save }
         if !caps.hidden, library.showingHidden { library.showingHidden = false }       // `features.hidden` went: the album closes
         liveManager?.capabilitiesChanged()
         unifiedQueue.capabilitiesChanged()            // `features.queue` came or went: poll, or stop
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
         editor.capabilitiesChanged()                  // `features.editor` went: close the editor
         if let editLive { Task { await editLive.capabilitiesChanged() } }
-        if let chatLive = chat.live { Task { await chatLive.capabilitiesChanged() } }
     }
 
     func markKeyInvalid() {
@@ -470,12 +490,14 @@ public final class AppModel {
         shareSets.reset()
         chat.reset()
         stage.reset()
+        swarms.reset()
         editor.reset()
         postFrames.reset()
         skyMap.reset()
         hiddenRules.reset()
         searchNames.reset()
         account.reset()
+        sevenTv.reset()
     }
 
     // MARK: - Links, handoffs

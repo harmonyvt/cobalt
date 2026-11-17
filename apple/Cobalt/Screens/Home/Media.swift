@@ -2,7 +2,6 @@ import AVFoundation
 import CobaltKit
 import ImageIO
 import SwiftUI
-import Synchronization
 
 #if canImport(UIKit)
 import UIKit
@@ -14,75 +13,41 @@ import AppKit
 // Media plumbing for the orbit and the library previews: still images, animated webps, and the
 // pool of looping players. Everything is muted and short.
 
-/// A CGImage moved between threads once and never touched again.
-struct ImageBox: @unchecked Sendable {
-    let image: CGImage
-    init(_ image: CGImage) { self.image = image }
-}
+// `ImageBox` (a CGImage moved between threads once) lives in CobaltKit with `MediaPipeline` (8.17), so the extensions'
+// emotes and the app's pictures share one type and one cache.
 
-/// Posters and other stills, decoded off the main thread at thumbnail size and cached. Flipbook frames
+/// Posters and other stills from files on disk, decoded off the main thread at thumbnail size through `MediaPipeline`
+/// and its shared cache. Not an actor: several posters decode at once instead of one after another. Flipbook frames
 /// have their own cache (`FlipbookLoader`), so cycling through them never evicts a poster.
-actor ImageLoader {
+final class ImageLoader: Sendable {
     static let shared = ImageLoader()
-    /// Bounded: 64 posters at most.
-    private let cache: NSCache<NSURL, ImageHolder> = {
-        let c = NSCache<NSURL, ImageHolder>()
-        c.countLimit = 64
-        return c
-    }()
-
-    private final class ImageHolder: Sendable {
-        let box: ImageBox
-        init(_ box: ImageBox) { self.box = box }
-    }
 
     #if DEBUG
     /// `-previewGalleryImages` swaps a file under a decoded picture: forget what was decoded of it.
-    func evict(_ url: URL) { cache.removeObject(forKey: url as NSURL) }
+    func evict(_ url: URL, maxPixel: Int = 360) async {
+        MediaPipeline.memory.remove(forKey: MediaPipeline.key("f", url, maxPixel: maxPixel))
+    }
     #endif
 
-    func image(for url: URL, maxPixel: Int = 360) -> ImageBox? {
-        if let hit = cache.object(forKey: url as NSURL) { return hit.box }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        let box = ImageBox(image)
-        cache.setObject(ImageHolder(box), forKey: url as NSURL)
-        return box
+    /// Runs on the global executor (a nonisolated async method), never on the caller's main actor.
+    func image(for url: URL, maxPixel: Int = 360) async -> ImageBox? {
+        MediaPipeline.still(file: url, maxPixel: maxPixel)
     }
 }
 
-/// The flipbook frames of the orbit's two inner bands, decoded off the main thread at thumbnail size
-/// into a cache of its own, bounded by decoded bytes (about 12 MB: roughly 200 frames of 160 px).
+/// The flipbook frames of the orbit's two inner bands, decoded off the main thread at thumbnail size through
+/// `MediaPipeline` into a cache of its own, bounded by decoded bytes (about 12 MB: roughly 200 frames of 160 px).
 actor FlipbookLoader {
     static let shared = FlipbookLoader()
-    private let cache: NSCache<NSURL, FrameHolder> = {
-        let c = NSCache<NSURL, FrameHolder>()
-        c.totalCostLimit = 12 * 1024 * 1024
-        c.countLimit = 400
-        return c
-    }()
-
-    private final class FrameHolder: Sendable {
-        let box: ImageBox
-        init(_ box: ImageBox) { self.box = box }
-    }
+    private let cache = MediaMemoryCache(costLimit: 12 * 1024 * 1024, countLimit: 400)
 
     func frame(for url: URL, maxPixel: Int = 160) -> ImageBox? {
-        if let hit = cache.object(forKey: url as NSURL) { return hit.box }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        let box = ImageBox(image)
-        cache.setObject(FrameHolder(box), forKey: url as NSURL, cost: max(1, image.bytesPerRow * image.height))
+        let key = MediaPipeline.key("b", url, maxPixel: maxPixel)
+        if let hit = cache.image(forKey: key) { return hit }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let box = MediaPipeline.thumbnail(of: source, maxPixel: maxPixel)
+        else { return nil }
+        cache.store(box, forKey: key)
         return box
     }
 }
@@ -91,31 +56,45 @@ actor FlipbookLoader {
 /// previews, the focused planet while muted) is `.ambient`, so it mixes with whatever the owner is
 /// listening to and never interrupts it. Only a planet the owner has unmuted takes `.playback`, and
 /// muting, closing or switching to the webp gives the session back.
+///
+/// The session calls are made on one serial queue, never the main thread: `setActive` waits on the media server, and
+/// deactivating while a player still had its audio running held the main thread long enough to freeze the app on the
+/// way back from a video (owner, 2026-11-11). The queue keeps the calls in the order they were asked for.
 @MainActor
 enum AudioPolicy {
+    #if os(iOS)
+    private nonisolated static let queue = DispatchQueue(label: "com.capybaraharmony.cobalt.audio-session", qos: .userInitiated)
+    #endif
+
     /// Ambient, mixing: called whenever a player is created.
     static func ambient() {
         #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        if session.category != .ambient { try? session.setCategory(.ambient, mode: .default) }
+        queue.async {
+            let session = AVAudioSession.sharedInstance()
+            if session.category != .ambient { try? session.setCategory(.ambient, mode: .default) }
+        }
         #endif
     }
 
     /// The owner unmuted a planet: it plays through the silent switch and takes the audio focus.
     static func playback() {
         #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback)
-        try? session.setActive(true)
+        queue.async {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, mode: .moviePlayback)
+            try? session.setActive(true)
+        }
         #endif
     }
 
-    /// Back to ambient, and tell whoever was interrupted that they may resume.
+    /// Back to ambient, and tell whoever was interrupted that they may resume. Callers pause their player first.
     static func release() {
         #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.ambient, mode: .default)
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        queue.async {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.ambient, mode: .default)
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        }
         #endif
     }
 }
@@ -137,7 +116,10 @@ struct StillImage: View {
     private var generation: Int { 0 }
     #endif
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Color.clear
             .overlay {
                 if let image {
@@ -159,59 +141,28 @@ struct StillImage: View {
 
 // MARK: - animated webp
 
-private final class StopFlag: Sendable {
-    private let flag = Mutex(false)
-    func stop() { flag.withLock { $0 = true } }
-    var isStopped: Bool { flag.withLock { $0 } }
-}
-
-/// ImageIO's animation callbacks arrive on its own queue, so this lives outside any actor.
-private enum AnimationDriver {
-    static func play(url: URL, stop: StopFlag, onFrame: @escaping @Sendable (ImageBox) -> Void) -> Bool {
-        let status = CGAnimateImageAtURLWithBlock(url as CFURL, nil) { _, image, halt in
-            if stop.isStopped { halt.pointee = true; return }
-            onFrame(ImageBox(image))
-        }
-        return status == noErr
-    }
-
-    static func play(data: Data, stop: StopFlag, onFrame: @escaping @Sendable (ImageBox) -> Void) -> Bool {
-        let status = CGAnimateImageDataWithBlock(data as CFData, nil) { _, image, halt in
-            if stop.isStopped { halt.pointee = true; return }
-            onFrame(ImageBox(image))
-        }
-        return status == noErr
-    }
-}
-
 @MainActor @Observable
 private final class AnimatedImageModel {
     var image: ImageBox?
     var failed = false
-    @ObservationIgnored private var stopFlag: StopFlag?
+    @ObservationIgnored private var animation: MediaAnimation?
 
     /// Set once a frame has been drawn. A still underneath can then leave: an emote's frames are
     /// transparent, so a poster left under them reads as a second, frozen copy.
     var hasFrame = false
 
-    func play(file url: URL) {
+    /// Frames come from `MediaPipeline`, shrunk to `maxPixel` off the main thread and one at a time (8.17): this only
+    /// assigns them. 8.16 handed every frame over at full size.
+    func play(file url: URL, maxPixel: Int) {
         stop()
-        let flag = StopFlag()
-        stopFlag = flag
-        let ok = AnimationDriver.play(url: url, stop: flag) { [weak self] frame in
-            Task { @MainActor in self?.show(frame) }
-        }
-        failed = !ok
+        animation = MediaAnimation.play(file: url, maxPixel: maxPixel) { [weak self] frame in self?.show(frame) }
+        failed = animation == nil
     }
 
-    func play(data: Data) {
+    func play(data: Data, maxPixel: Int) {
         stop()
-        let flag = StopFlag()
-        stopFlag = flag
-        let ok = AnimationDriver.play(data: data, stop: flag) { [weak self] frame in
-            Task { @MainActor in self?.show(frame) }
-        }
-        failed = !ok
+        animation = MediaAnimation.play(data: data, maxPixel: maxPixel) { [weak self] frame in self?.show(frame) }
+        failed = animation == nil
     }
 
     private func show(_ frame: ImageBox) {
@@ -220,8 +171,8 @@ private final class AnimatedImageModel {
     }
 
     func stop() {
-        stopFlag?.stop()
-        stopFlag = nil
+        animation?.stop()
+        animation = nil
     }
 }
 
@@ -235,9 +186,15 @@ struct AnimatedImageView: View {
     let source: Source
     /// Set once the first frame is up, so a poster underneath can leave.
     var started: Binding<Bool>? = nil
+    /// Frames are shrunk to this on their long side: enough for the full-screen viewer on any screen the app runs on,
+    /// and far less than a texture the size of a tall webp for every frame.
+    var maxPixel: Int = 1_400
     @State private var model = AnimatedImageModel()
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Color.clear
             .overlay {
                 if let image = model.image {
@@ -251,20 +208,20 @@ struct AnimatedImageView: View {
             .task(id: source) {
                 switch source {
                 case .file(let url):
-                    model.play(file: url)
+                    model.play(file: url, maxPixel: maxPixel)
                     #if DEBUG
                     // Evidence runs (`-previewWebp`) swap the preview's one-pixel placeholder for a real file a
                     // moment after it lands: look again until it decodes.
                     var tries = 0
                     while model.failed, tries < 30, !Task.isCancelled {
                         try? await Task.sleep(for: .milliseconds(100))
-                        model.play(file: url)
+                        model.play(file: url, maxPixel: maxPixel)
                         tries += 1
                     }
                     #endif
                 case .remote(let url):
                     guard let (data, _) = try? await URLSession.shared.data(from: url), !Task.isCancelled else { return }
-                    model.play(data: data)
+                    model.play(data: data, maxPixel: maxPixel)
                 }
             }
             .onDisappear { model.stop() }
@@ -422,7 +379,10 @@ struct LoopingPlayerView: View {
     var span: ClosedRange<Double>?
     @State private var holder = LoopHolder()
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Group {
             if let player = holder.player { PlayerSurface(player: player) } else { Color.clear }
         }

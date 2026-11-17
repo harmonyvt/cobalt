@@ -100,10 +100,11 @@ struct LibraryTile: View, Equatable {
             .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting, removing: $removing))
             .offlineRemoveConfirm($removing, model: controller.model)
             .zoomSource(id: row.id, in: zoom)
-            .onScrollVisibilityChange(threshold: 0.8) { visible in
-                guard animationURL != nil else { return }
+            // only a tile that can move watches its visibility: every tile doing so cost each one a tracker as it
+            // scrolled in (8.15, scroll jitter)
+            .modifier(TileVisibilityWatch(active: animationURL != nil) { visible in
                 budget.setVisible(row.id, visible ? AnimationBudget.Candidate(y: centerY, remote: isRemote) : nil)
-            }
+            })
             .onAppear { if nearEnd { controller.loadMoreIfNeeded() } }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
@@ -258,7 +259,7 @@ private struct LitRing: View {
     }
 }
 
-/// A grey tile of the skeleton (the first load): static, no shimmer.
+/// A grey tile of the skeleton (the first load). The mosaic draws one shimmer over all of them (`skeletonShimmer`).
 struct LibraryGhostTile: View {
     let size: CGSize
     let index: Int
@@ -313,5 +314,20 @@ struct SharedTileBadges: View {
             }
         }
         .fixedSize()
+    }
+}
+
+/// `onScrollVisibilityChange` (80 % visible) on the tiles that need it, nothing on the rest. `active` is fixed for a
+/// row (whether its face plays as a webp), so the two branches never swap under a tile.
+private struct TileVisibilityWatch: ViewModifier {
+    let active: Bool
+    let changed: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        if active {
+            content.onScrollVisibilityChange(threshold: 0.8, changed)
+        } else {
+            content
+        }
     }
 }

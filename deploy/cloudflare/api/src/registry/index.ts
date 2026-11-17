@@ -22,7 +22,9 @@ import { MCP_OPS } from "./ops/mcp";
 import { NAMES_OPS } from "./ops/names";
 import { PRIVATE_OPS } from "./ops/private";
 import { SHARE_OPS } from "./ops/share";
+import { SEVENTV_OPS } from "./ops/seventv";
 import { STAGE_OPS } from "./ops/stage";
+import { SWARM_OPS } from "./ops/swarm";
 import { SYSTEM_OPS } from "./ops/system";
 import { Registry } from "./registry";
 import { toolTypesFor } from "./typescript";
@@ -38,6 +40,7 @@ export const REGISTRY = new Registry([
     ...MAKE_OPS,
     ...CHAT_VIDEO_OPS,
     ...AGENT_OPS,
+    ...SWARM_OPS,
     ...EDITOR_OPS,
     ...POST_FRAME_OPS,
     ...SHARE_OPS,
@@ -45,6 +48,7 @@ export const REGISTRY = new Registry([
     ...HIDDEN_OPS,
     ...NAMES_OPS,
     ...STAGE_OPS,
+    ...SEVENTV_OPS,
     ...BOX_OPS,
     ...YTDLP_OPS,
     ...FRAME_OPS,

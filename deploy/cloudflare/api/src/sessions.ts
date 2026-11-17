@@ -9,7 +9,7 @@ import { hashKey, SESSION_TTL_MS } from "./keys";
 // At most this many active sessions: minting one more revokes the least recently used (42.2).
 export const MAX_SESSIONS = 50;
 export const MAX_DEVICE_LENGTH = 40;
-// `extension` is a browser extension (section 55): the same kind of session, named for the browser.
+// `extension` is a browser extension (section 64): the same kind of session, named for the browser.
 export const PLATFORMS = ["ios", "ipados", "mac", "web", "extension"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 

@@ -3,13 +3,16 @@
 // the client's key; none wakes the container, reads a body here or writes request_log (a relay arrives about once a
 // second). Client keys only: the library service gets 404 (one key per device). No CORS: the app sends no Origin.
 //
-// The Worker's own paths under these prefixes (/live/chats/<thread>/state, /live/edits/<rid>/push) are not ops, so the
+// The Worker's own paths under these prefixes (/live/chats/<thread>/state, /live/edits/<rid>/push,
+// /live/swarms/<id>/start|push) are not ops, so the
 // internet gets 404 for them.
 import * as z from "zod";
 import { EDIT_RENDER_ID_REGEX, STUDIO_SID_REGEX, THREAD_ID_REGEX } from "../../gate";
 import { defineOp, type HttpMethod } from "../op";
 
-export const LIVE_RUN_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// A save's run is a UUID; the app also registers a swarm island's update token as run `swarm:<swarm id>` (section 61.5),
+// which the swarm live store answers (swarm-live.ts), not the run store.
+export const LIVE_RUN_REGEX = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|swarm:[A-Za-z0-9]{16})$/;
 
 const toDurableObject = (name: string, method: HttpMethod, path: string, summary: string, params?: Record<string, RegExp>) =>
     defineOp({
@@ -38,6 +41,8 @@ export const LIVE_OPS = [
     toDurableObject("live.chat", "PUT", "/live/chats/:thread", "A push-started chat activity's token.", { thread: THREAD_ID_REGEX }),
     // section 32: editor render activities
     ...both("live.edit", "/live/edits/:rid", "An editor render's activity token.", { rid: EDIT_RENDER_ID_REGEX }),
+    // section 61.5: a push-started swarm activity's token
+    ...both("live.swarm", "/live/swarms/:id", "A push-started swarm activity's token.", { id: /^[A-Za-z0-9]{16}$/ }),
     // section 9: the Hark opt-in for one save (the Durable Object checks the owner), and 17.6: the line's summary
     ...both("studio.notify", "/studio/:sid/notify", "Hark when this save is done.", { sid: STUDIO_SID_REGEX }),
     ...both("studio.line.notify", "/studio/line/notify", "Hark when the line is done."),

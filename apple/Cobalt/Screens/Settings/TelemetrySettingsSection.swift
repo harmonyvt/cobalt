@@ -24,6 +24,14 @@ struct TelemetrySettingsSection: View {
                 })) {
                 Label(Copy.Telemetry.toggle, systemImage: Symbol.Telemetry.toggle)
             }
+            #if os(iOS)
+            // PostHog session replay (APP-API-CONTRACT 58): only while logs are sent and the server names a project
+            if settings.sendTelemetry, model.capabilities.postHog != nil {
+                Toggle(isOn: Binding(get: { settings.recordSessions }, set: { settings.recordSessions = $0 })) {
+                    Label(Copy.Telemetry.recordSessions, systemImage: Symbol.Telemetry.recordSessions)
+                }
+            }
+            #endif
             Button(sending ? Copy.Telemetry.sending : Copy.Telemetry.sendNow, systemImage: Symbol.Telemetry.sendNow) { send() }
                 .disabled(sending || model.telemetry == nil)
             if let result {
@@ -39,7 +47,7 @@ struct TelemetrySettingsSection: View {
         } header: {
             Text(Copy.Telemetry.group).font(CobaltType.caption).textCase(nil)
         } footer: {
-            Text(Copy.Telemetry.footer(host: host)).font(CobaltType.captionSmall).lineSpacing(2)
+            Text(Copy.Telemetry.footer(host: host, postHog: model.capabilities.postHog != nil)).font(CobaltType.captionSmall).lineSpacing(2)
         }
         .task { await refreshWaiting() }
     }

@@ -191,7 +191,15 @@ struct AppShell: View {
                 #if DEBUG
                 DebugHooks.log("AppShell .task")
                 #endif
+                #if os(iOS)
+                TouchProbe.install()                         // also feeds the frame monitor its touches
+                #else
+                FrameMonitor.install()
+                #endif
+                model.warmLibraryRows()                      // the library's rows are built off the main thread from the start
                 await model.foreground()
+                // the "swarms" badge: what waits for the owner is known before the tab is opened
+                if model.visibleTabs.contains(.swarms) { await model.swarms.loadList() }
             }
             .onChange(of: scenePhase) { _, phase in
                 #if DEBUG
@@ -202,6 +210,11 @@ struct AppShell: View {
                 // the queue tab polls the server only while the app is in front (apple/CONTRACT.md 12)
                 model.unifiedQueue.setForeground(phase == .active)
                 guard phase == .active else { return }
+                #if os(iOS)
+                // where taps really land (the library freeze hunt, owner 2026-11-14)
+                TouchProbe.install()
+                #endif
+                Task { if model.visibleTabs.contains(.swarms) { await model.swarms.loadList() } }
                 Task {
                     await model.foreground()                 // shares the launch task's run when they overlap
                     await model.store.backfillPreviewFrames()
@@ -315,58 +328,35 @@ struct AppShell: View {
                 }
                 #endif
                 .modifier(MoveOverPresenter(model: model))
+                // PostHog (APP-API-CONTRACT 58): each tab the owner opens is a `$screen`, so a replay reads by tab
+                .onChange(of: model.selectedTab, initial: true) {
+                    Analytics.screen(model.selectedTab.rawValue)
+                    Breadcrumbs.add("tab.\(model.selectedTab.rawValue)")
+                }
         }
     }
 
     @ViewBuilder
     private var navigation: some View {
         #if os(iOS)
-        TabView(selection: $model.selectedTab) {
-            Tab(Copy.tab(.save), systemImage: icon(for: .save), value: AppTab.save) {
-                NavigationStack { HomeScreen(model: model, tier: tier) }
-                    .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
-            }
-            if model.capabilities.library {
-                Tab(Copy.tab(.library), systemImage: icon(for: .library), value: AppTab.library) {
-                    // One branch at every width: the screen brings its own navigation stack, so a width change (a
-                    // rotation, a split view) never replaces it and its selection, scroll and controller survive.
-                    LibraryScreen(model: model, tier: tier)
-                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                // iPhone: four tabs and our own "more" (one stack), never the system More (see `PhoneTabs`)
+                PhoneTabs(model: model, tabs: model.visibleTabs.filter { $0 != .queue }, glowSuppressed: tabGlowSuppressed) { tab in
+                    tabScreen(tab)
                 }
-            }
-            // the gallery share links made from the library's select mode (APP-API-CONTRACT 24)
-            if model.capabilities.shareSets {
-                Tab(Copy.tab(.links), systemImage: icon(for: .links), value: AppTab.links) {
-                    NavigationStack { LinksScreen(model: model) }
-                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
+            } else {
+                TabView(selection: $model.selectedTab) {
+                    // the order is `AppTab`'s; the queue is not a tab here: it is a sheet opened from the toolbar button on
+                    // save, library, links and chat (apple/CONTRACT.md 12; `AppModel.showQueue()`)
+                    ForEach(model.visibleTabs.filter { $0 != .queue }, id: \.self) { tab in
+                        Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
+                            tabRoot(tab)
+                                .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
+                        }
+                        .badge(tab == .swarms ? model.swarms.waitingCount : 0)
+                    }
                 }
-            }
-            // threads with Claude about the library (APP-API-CONTRACT 27)
-            if model.capabilities.chat {
-                Tab(Copy.tab(.chat), systemImage: icon(for: .chat), value: AppTab.chat) {
-                    NavigationStack { ChatScreen(model: model, tier: tier) }
-                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
-                }
-            }
-            // the stream canvas, its store and Twitch channel points (APP-API-CONTRACT 30); "studio" on screen
-            if model.capabilities.stage {
-                Tab(Copy.tab(.stage), systemImage: icon(for: .stage), value: AppTab.stage) {
-                    NavigationStack { StageScreen(model: model, tier: tier) }
-                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
-                }
-            }
-            // the words taught to search (APP-API-CONTRACT 48.6); with six tabs iPhone puts it under "more"
-            if model.capabilities.names {
-                Tab(Copy.tab(.names), systemImage: icon(for: .names), value: AppTab.names) {
-                    NavigationStack { NamesScreen(model: model) }
-                        .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
-                }
-            }
-            // the queue is not a tab here: it is a sheet opened from the toolbar button on save, library, links and chat
-            // (apple/CONTRACT.md 12; `AppModel.showQueue()`)
-            Tab(Copy.tab(.settings), systemImage: icon(for: .settings), value: AppTab.settings) {
-                NavigationStack { SettingsScreen(model: model) }
-                    .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
             }
         }
         .tabViewStyle(.sidebarAdaptable)
@@ -380,7 +370,7 @@ struct AppShell: View {
                 ForEach(model.visibleTabs.filter { $0 != .settings }, id: \.self) { tab in
                     Label(Copy.tab(tab), systemImage: icon(for: tab))
                         .font(Font.cobalt(13, .regular, relativeTo: .body))
-                        .badge(tab == .queue ? model.unifiedQueue.badgeCount : 0)
+                        .badge(tab == .queue ? model.unifiedQueue.badgeCount : tab == .swarms ? model.swarms.waitingCount : 0)
                         .tag(tab)
                 }
             }
@@ -393,7 +383,9 @@ struct AppShell: View {
                 case .library: LibraryScreen(model: model, tier: tier)
                 case .links: NavigationStack { LinksScreen(model: model) }
                 case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
+                case .swarms: NavigationStack { SwarmsScreen(model: model, tier: tier) }
                 case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
+                case .sevenTv: NavigationStack { SevenTvScreen(model: model, tier: tier) }
                 case .names: NavigationStack { NamesScreen(model: model) }
                 case .queue: NavigationStack { QueueScreen(model: model) }
                 case .settings: SettingsScreen(model: model)
@@ -406,6 +398,35 @@ struct AppShell: View {
     }
 
     #if os(iOS)
+    /// A tab's screen with no navigation stack around it.
+    @ViewBuilder
+    private func tabScreen(_ tab: AppTab) -> some View {
+        switch tab {
+        case .save: HomeScreen(model: model, tier: tier)
+        // the screen brings its own navigation stack, so a width change (a rotation, a split view) never replaces it and its
+        // selection, scroll and controller survive
+        case .library: LibraryScreen(model: model, tier: tier)
+        case .links: LinksScreen(model: model)
+        case .chat: ChatScreen(model: model, tier: tier)
+        case .swarms: SwarmsScreen(model: model, tier: tier)
+        case .stage: StageScreen(model: model, tier: tier)
+        case .sevenTv: SevenTvScreen(model: model, tier: tier)
+        case .names: NamesScreen(model: model)
+        case .queue: QueueScreen(model: model)
+        case .settings: SettingsScreen(model: model)
+        }
+    }
+
+    /// A tab's screen in the stack of its own (the iPad's tabs).
+    @ViewBuilder
+    private func tabRoot(_ tab: AppTab) -> some View {
+        if tab == .library {
+            tabScreen(tab)
+        } else {
+            NavigationStack { tabScreen(tab) }
+        }
+    }
+
     /// A tab's band steps aside while the queue sheet or the editor cover draws one of its own, so two
     /// Metal views are never drawing in this window at once.
     private var tabGlowSuppressed: Bool {
@@ -451,7 +472,7 @@ struct AppShell: View {
 
     private func makeActions() -> ShellActions {
         ShellActions(
-            paste: { handle(Pasteboard.contents(), via: .circle, dropped: false) },
+            paste: { Task { handle(await Pasteboard.contentsOffMain(), via: .circle, dropped: false) } },
             chooseFile: { showImporter = true },
             choosePhotos: { showPhotos = true },
             trimNewWebp: { post in
@@ -520,7 +541,7 @@ struct AppShell: View {
         #if os(iOS)
         VStack {
             if #unavailable(iOS 27.0) {
-                Button(Copy.pasteA11y, systemImage: Symbol.paste) { handle(Pasteboard.contents(), via: .paste, dropped: false) }
+                Button(Copy.pasteA11y, systemImage: Symbol.paste) { Task { handle(await Pasteboard.contentsOffMain(), via: .paste, dropped: false) } }
                     .keyboardShortcut("v", modifiers: .command)
             }
             Button(Copy.trimNewWebp, systemImage: Symbol.trim) { trimSelected(model) }.keyboardShortcut("t", modifiers: .command)
@@ -696,7 +717,9 @@ func icon(for tab: AppTab) -> String {
     case .library: return Symbol.library
     case .links: return Symbol.links
     case .chat: return Symbol.chat
+    case .swarms: return Symbol.Swarms.tab
     case .stage: return Symbol.stage
+    case .sevenTv: return Symbol.SevenTv.tab
     case .names: return Symbol.Names.menu
     case .queue: return Symbol.queue
     case .settings: return Symbol.settings
@@ -732,6 +755,9 @@ private struct QueueShellPreview: View {
 }
 #Preview("shell · studio tab") {
     PreviewHost(.happy, tab: .stage) { AppShell(model: $0) }
+}
+#Preview("shell · 7tv tab") {
+    PreviewHost(.happy, tab: .sevenTv) { AppShell(model: $0) }
 }
 #Preview("shell · queue sheet") {
     PreviewHost(.happy, tab: .queue) { AppShell(model: $0) }

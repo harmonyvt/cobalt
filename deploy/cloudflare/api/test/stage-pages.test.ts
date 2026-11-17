@@ -422,7 +422,7 @@ describe("livePage spotlight (videos only, no caption bar)", () => {
         return el;
     }
 
-    async function boot(pool: any[], spotlight: any = null) {
+    async function boot(pool: any[], spotlight: any = null, stage: Record<string, unknown> = {}) {
         const els = new Map<string, any>();
         for (const id of ["stage", "tiles", "spot", "spmedia", "spimg", "spvid", "spwho", "sppin", "sptitle", "spcap", "chaosrow", "chaostext", "toast", "tl1", "tl2", "hint"]) {
             els.set(id, node());
@@ -455,7 +455,7 @@ describe("livePage spotlight (videos only, no caption bar)", () => {
                 headers: { get: () => "" },
                 json: async () => ({
                     status: "success",
-                    stage: { on_air: true, spotlight_auto: true, density: 5, tile_seconds: 10, sound: true, store_hint: true, store_url: "https://studio.capybaraharmony.com/store" },
+                    stage: { on_air: true, spotlight_auto: true, density: 5, tile_seconds: 10, sound: true, store_hint: true, store_url: "https://studio.capybaraharmony.com/store", ...stage },
                     pool,
                     spotlight,
                     now: Date.now(),
@@ -486,6 +486,19 @@ describe("livePage spotlight (videos only, no caption bar)", () => {
         const pictures = await boot([image]);
         expect(pictures.els.get("spot").style.display).not.toBe("block");
         expect(pictures.els.get("spvid").src ?? "").toBe("");
+    });
+
+    it("density 0 with auto spotlight off shows nothing until a redeem, then the summon", async () => {
+        const shown = (els: Map<string, any>) => els.get("tiles").children.filter((c: any) => c.style.display === "block").length;
+        const scatter = await boot([image, video], null, { density: 5, spotlight_auto: false });
+        expect(shown(scatter.els)).toBe(5);
+        const quiet = await boot([image, video], null, { density: 0, spotlight_auto: false });
+        expect(shown(quiet.els)).toBe(0);
+        expect(quiet.els.get("spot").style.display).not.toBe("block");
+        quiet.sockets[0]!.onmessage?.({ data: JSON.stringify({ type: "summon", spotlight: { item: video, by: "ann", action: "summon", at: Date.now() }, toast: null }) });
+        expect(quiet.els.get("spot").style.display).toBe("block");
+        expect(quiet.els.get("spvid").src).toBe(video.url);
+        expect(shown(quiet.els)).toBe(0);
     });
 
     it("ignores an image summon and still shows a redemption toast", async () => {

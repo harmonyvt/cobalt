@@ -1,4 +1,4 @@
-// /connect/extension (APP-API-CONTRACT.md section 55): the approve page. GET shows a form; POST approves.
+// /connect/extension (APP-API-CONTRACT.md section 64): the approve page. GET shows a form; POST approves.
 import { createHash } from "node:crypto";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";

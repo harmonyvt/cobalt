@@ -50,28 +50,40 @@ func recordingClient(
 
 // MARK: - ActivityKit, faked
 
+/// A fake job activity (`JobActivityHandle`): it records what the manager wrote, as the island would show it.
 @MainActor
-final class FakeLiveHandle: LiveActivityHandle {
-    let attributes: LiveRunAttributes
+final class FakeLiveHandle: JobActivityHandle {
+    let attributes: JobLiveAttributes
     let activityID = UUID().uuidString
-    var state: LiveContentState
+    var state: JobLiveState
     var staleDate: Date?
     var ended = false
-    private(set) var updates: [(state: LiveContentState, at: Date, staleDate: Date?)] = []
-    private(set) var endCalls: [(state: LiveContentState, dismissAt: Date?)] = []
+    private(set) var updates: [(state: JobLiveState, at: Date, staleDate: Date?)] = []
+    /// Every end, with the state it ended showing (its own when the manager passed none).
+    private(set) var endCalls: [(state: JobLiveState, dismissAt: Date?)] = []
     private(set) var token: String?
     private var continuations: [AsyncStream<String>.Continuation] = []
     let clock: @MainActor () -> Date
 
-    init(attributes: LiveRunAttributes, state: LiveContentState, staleDate: Date? = nil, clock: @escaping @MainActor () -> Date = { Date() }) {
-        self.attributes = attributes
-        self.state = state
+    init(job: JobLiveJob, staleDate: Date? = nil, clock: @escaping @MainActor () -> Date = { Date() }) {
+        self.attributes = job.attributes
+        self.state = job.state
         self.staleDate = staleDate
         self.clock = clock
     }
 
+    /// A save's activity as the server (or an older test) would start it: the run's attributes and content, in job words.
+    convenience init(
+        attributes: LiveRunAttributes, state: LiveContentState, agent: JobLiveAgent? = nil, staleDate: Date? = nil,
+        clock: @escaping @MainActor () -> Date = { Date() }
+    ) {
+        self.init(job: JobLive.job(save: state, attributes: attributes, agent: agent), staleDate: staleDate, clock: clock)
+    }
+
+    /// The run, render or thread it shows.
+    var run: String { attributes.id }
     var isEnded: Bool { ended }
-    var end: (state: LiveContentState, dismissAt: Date?)? { endCalls.last }
+    var end: (state: JobLiveState, dismissAt: Date?)? { endCalls.last }
     func isFresh(at now: Date) -> Bool { !ended && (staleDate.map { $0 > now } ?? false) }
 
     func pushTokens() -> AsyncStream<String> {
@@ -86,27 +98,78 @@ final class FakeLiveHandle: LiveActivityHandle {
         for c in continuations { c.yield(t) }
     }
 
-    func update(_ state: LiveContentState, staleDate: Date?) async {
+    func update(_ state: JobLiveState, staleDate: Date?) async {
         guard !ended else { return }
         updates.append((state, clock(), staleDate))
         self.state = state
         self.staleDate = staleDate
     }
 
-    func end(_ state: LiveContentState, dismissAt: Date?) async {
-        endCalls.append((state, dismissAt))
-        self.state = state
+    func end(_ state: JobLiveState?, dismissAt: Date?) async {
+        let final = state ?? self.state
+        endCalls.append((final, dismissAt))
+        self.state = final
         ended = true
+    }
+}
+
+/// A fake old-type activity (`OldLiveActivity`): from an older build, or push-started by the server with an old start
+/// token (changeover release). `suspends`: its end really waits, as ActivityKit's does.
+@MainActor
+final class FakeOldActivity: OldLiveActivity {
+    let id: String
+    var staleDate: Date?
+    var saveRun: (attributes: LiveRunAttributes, state: LiveContentState)?
+    var suspends = false
+    private(set) var ended = false
+    private(set) var endCount = 0
+    private(set) var token: String?
+    private var continuations: [AsyncStream<String>.Continuation] = []
+
+    init(id: String, staleDate: Date?, saveRun: (attributes: LiveRunAttributes, state: LiveContentState)? = nil) {
+        self.id = id
+        self.staleDate = staleDate
+        self.saveRun = saveRun
+    }
+
+    var isEnded: Bool { ended }
+    func isFresh(at now: Date) -> Bool { !ended && (staleDate.map { $0 > now } ?? false) }
+    func endNow() async {
+        if suspends { for _ in 0..<5 { await Task.yield() } }
+        ended = true
+        endCount += 1
+    }
+
+    func pushTokens() -> AsyncStream<String> {
+        let (stream, continuation) = AsyncStream.makeStream(of: String.self)
+        continuations.append(continuation)
+        if let token { continuation.yield(token) }
+        return stream
+    }
+
+    func sendToken(_ t: String) {
+        token = t
+        for c in continuations { c.yield(t) }
     }
 }
 
 enum FakeActivityError: Error { case visibility }
 
+/// One `Activity.request` the manager made.
+struct FakeRequest {
+    let job: JobLiveJob
+    let staleDate: Date
+    let push: Bool
+    var attributes: JobLiveAttributes { job.attributes }
+    var state: JobLiveState { job.state }
+}
+
 @MainActor
 final class FakeLiveAdapter: LiveActivityAdapter {
     var isAvailable = true
     var handles: [FakeLiveHandle] = []
-    private(set) var requests: [(attributes: LiveRunAttributes, state: LiveContentState, staleDate: Date, push: Bool)] = []
+    var old: [FakeOldActivity] = []
+    private(set) var requests: [FakeRequest] = []
     var requestError: (any Error)?
     /// ActivityKit refuses `Activity.request` from the background (the system says "visibility"): flip to `false` to
     /// make the fake do the same. Every try is counted, refused ones too.
@@ -115,18 +178,18 @@ final class FakeLiveAdapter: LiveActivityAdapter {
     var currentStartToken: String?
     var clock: @MainActor () -> Date = { Date() }
     private var startContinuations: [AsyncStream<String>.Continuation] = []
-    private var activityContinuations: [AsyncStream<any LiveActivityHandle>.Continuation] = []
+    private var activityContinuations: [AsyncStream<any JobActivityHandle>.Continuation] = []
+    private var oldContinuations: [AsyncStream<any OldLiveActivity>.Continuation] = []
 
-    var activities: [any LiveActivityHandle] { handles }
+    var activities: [any JobActivityHandle] { handles }
+    var oldActivities: [any OldLiveActivity] { old }
 
-    func request(
-        _ attributes: LiveRunAttributes, state: LiveContentState, staleDate: Date, push: Bool
-    ) throws -> any LiveActivityHandle {
+    func request(_ job: JobLiveJob, staleDate: Date, push: Bool) throws -> any JobActivityHandle {
         requestAttempts += 1
         if !inForeground { throw FakeActivityError.visibility }
         if let requestError { throw requestError }
-        requests.append((attributes, state, staleDate, push))
-        let handle = FakeLiveHandle(attributes: attributes, state: state, staleDate: staleDate, clock: clock)
+        requests.append(FakeRequest(job: job, staleDate: staleDate, push: push))
+        let handle = FakeLiveHandle(job: job, staleDate: staleDate, clock: clock)
         handles.append(handle)
         return handle
     }
@@ -142,16 +205,51 @@ final class FakeLiveAdapter: LiveActivityAdapter {
         for c in startContinuations { c.yield(t) }
     }
 
-    func newActivities() -> AsyncStream<any LiveActivityHandle> {
-        let (stream, continuation) = AsyncStream.makeStream(of: (any LiveActivityHandle).self)
+    func newActivities() -> AsyncStream<any JobActivityHandle> {
+        let (stream, continuation) = AsyncStream.makeStream(of: (any JobActivityHandle).self)
         activityContinuations.append(continuation)
         return stream
     }
 
-    /// The system push-started an activity (a share-sheet run).
+    /// The system push-started an activity (a share-sheet run, an agent job).
     func systemStarts(_ handle: FakeLiveHandle) {
         handles.append(handle)
         for c in activityContinuations { c.yield(handle) }
+    }
+
+    func newOldActivities() -> AsyncStream<any OldLiveActivity> {
+        let (stream, continuation) = AsyncStream.makeStream(of: (any OldLiveActivity).self)
+        oldContinuations.append(continuation)
+        return stream
+    }
+
+    /// The system push-started an old-type activity (a key with no job start token yet).
+    func systemStartsOld(_ a: FakeOldActivity) {
+        old.append(a)
+        for c in oldContinuations { c.yield(a) }
+    }
+}
+
+// MARK: - reading job states in the old tests' terms
+
+extension JobLiveState {
+    /// The save stage a job state shows, read back from its words (`JobLive.job(save:)`): the step it is on while it works,
+    /// "ready to trim" while it waits, done and failed at the end. Lets the tests keep asserting the same moments
+    /// ("it read frames, then waited for the trim") in the new shape.
+    var stage: LiveContentState.Stage {
+        switch phase {
+        case .done: return .done
+        case .failed, .lost: return .failed
+        case .waiting: return headline == "ready to trim" ? .ready : .fetching
+        case .working, .quiet:
+            switch step < steps.count ? steps[step] : "" {
+            case "upload": return .uploading
+            case "store": return .saving
+            case "read": return .reading
+            case "make": return .rendering
+            default: return .fetching
+            }
+        }
     }
 }
 

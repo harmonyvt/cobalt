@@ -1,3 +1,4 @@
+import CobaltKit
 import SwiftUI
 
 /// A library file's poster, filling its frame, over a flat colour that stands in until it loads (and for good when the server
@@ -10,7 +11,10 @@ struct EditorPoster: View {
     var maxPixel: Int = 320
     @State private var image: ImageBox?
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         fallback
             .overlay {
                 if let image {

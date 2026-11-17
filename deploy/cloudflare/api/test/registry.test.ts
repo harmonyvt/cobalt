@@ -291,6 +291,8 @@ describe("defineOp and the registry", () => {
             "jobs.wait",
             "jobs.onDone",
             "chat.video",
+            // section 59: agent swarms (approve, decline, decide and apply are Harmony's own, hidden)
+            "swarm.plan", "swarm.list", "swarm.get", "swarm.results", "swarm.changes", "swarm.stop", "swarm.retry", "swarm.inbox", "swarm.send", "swarm.messages", "swarm.agent", "swarm.board",
             "make.cutout",
             "edits.addOverlay",
             // section 44.2
@@ -308,7 +310,10 @@ describe("defineOp and the registry", () => {
             "names.preview",
             "names.set",
             "names.delete",
-            "stage.get", "stage.set", "stage.store", "stage.pool", "stage.items", "stage.action", "emotes.find", "emotes.save",
+            "stage.get", "stage.set", "stage.store", "stage.pool", "stage.items", "stage.action", "emotes.find", "emotes.findMany", "emotes.save",
+            "seventv.status", "seventv.sets", "seventv.set", "seventv.add", "seventv.remove", "seventv.rename", "seventv.makeLive", "seventv.createSet", "seventv.renameSet", "seventv.uploadEmote", "seventv.emote",
+            "seventv.uploads",
+            "seventv.owned",
             "test.wipe",
             "test.echo",
             "test.do",
@@ -388,7 +393,7 @@ describe("the model's cobalt API", () => {
         expect(TOOL_TYPES).toContain("rank(hits: (string | {");
         // (hidden: section 37.6)
         expect(TOOL_TYPES).toContain("post(id: string): Promise<Post & {\n      files: PostFile[];\n      hidden?: true; //");
-        expect(TOOL_TYPES).toContain("look(ids: string[], opts?: {");
+        expect(TOOL_TYPES).toContain("look(ids?: string[], opts?: {");
         expect(TOOL_TYPES).toContain("collage(ids: string[], opts?: { title?: string; query?: string }): Promise<number>;");
         expect(TOOL_TYPES).toContain("limit?: number; // default 100, max 1000");
         expect(toolTypes(false)).not.toContain("search(");

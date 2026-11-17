@@ -82,6 +82,8 @@ export type TelemetryDeps = {
     originals: Pick<OriginalsBucket, "put" | "delete">;
     now: () => number;
     limiter?: RateLimiter;
+    // called with each stored batch (the PostHog mirror, section 58); never awaited by the answer
+    onStored?: (batch: Batch) => void;
 };
 
 export type TelemetryReply = {
@@ -107,7 +109,7 @@ type Crash = {
     payload: Record<string, unknown> | null;
     events: TelemetryEvent[];
 };
-type Batch = { app: AppInfo; install: string; events: TelemetryEvent[]; crashes: Crash[] };
+export type Batch = { app: AppInfo; install: string; events: TelemetryEvent[]; crashes: Crash[] };
 
 const err = (status: number, code: string, headers?: Record<string, string>): TelemetryReply => ({
     status,
@@ -393,6 +395,11 @@ export async function ingestTelemetry(d: TelemetryDeps, request: Request, keyId:
         // never the batch.
         console.error("[telemetry] store failed", e instanceof Error ? e.name : "error");
         return err(503, "error.telemetry.unavailable");
+    }
+    try {
+        d.onStored?.(batch);
+    } catch {
+        // the mirror never costs a batch
     }
     return {
         status: 202,

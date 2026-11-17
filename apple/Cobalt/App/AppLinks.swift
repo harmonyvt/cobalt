@@ -11,17 +11,20 @@ import AppKit
 /// Where every `cobalt-apple://` link ends up: `job/<uuid>[?session=<sid>]` and `session/<sid>` (a
 /// notification tap, the Live Activity's tap, the share sheet's "open in cobalt", the Hark
 /// notification once the server sends its link: `AppModel.openRunLink`, CONTRACT-SHARE-QUICK.md),
-/// `open`, `library`, `jobs` (the Hark summary: the tray), and `copy?url=<https link>` (the Live Activity's "copy link": an activity cannot
+/// `swarm/<id>[/review|/results]` (a swarm's screen: `SwarmRoute`), `open`, `library`, `jobs` (the Hark summary: the tray), and `copy?url=<https link>` (the Live Activity's "copy link": an activity cannot
 /// write to the pasteboard itself, so the link goes to the pasteboard, only if it is a web link, and
-/// the app opens on the save tab). Everything but `copy` is the model's.
+/// the app opens on the save tab), and `7tv-link?token=` (the 7TV bookmarklet: `AppModel.openSevenTvLink`). Everything but
+/// `copy` is the model's.
 @MainActor
 func handleAppLink(_ url: URL, model: AppModel) {
     #if DEBUG
-    DebugHooks.log("handleAppLink \(url.absoluteString)")
+    DebugHooks.log("handleAppLink \(SevenTvLink.redacted(url))")      // a 7tv-link carries a 7TV login: never logged
     defer { DebugHooks.log("handleAppLink done: \(DebugHooks.describe(model))") }
     #endif
     // the sign-in's return (APP-API-CONTRACT 42.3) belongs to the Access sheet; never navigate on it
     if AccountAuth.isCallback(url) { return }
+    // the 7TV bookmarklet (APP-API-CONTRACT 57.1): `7tv-link?token=` links the account; the studio tab's 7TV card says how it went
+    if model.openSevenTvLink(url) { return }
     if url.scheme?.lowercased() == "cobalt-apple", url.host(percentEncoded: false)?.lowercased() == "copy",
        let link = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
            .first(where: { $0.name == "url" })?.value,
@@ -40,6 +43,13 @@ func handleAppLink(_ url: URL, model: AppModel) {
     // always on screen; the iPhone's pill opens its cards. Not a run link, so `openRunLink` never sees it.
     if url.scheme?.lowercased() == "cobalt-apple", url.host(percentEncoded: false)?.lowercased() == "jobs" {
         model.open(url)
+        return
+    }
+    // A swarm (CONTRACT-SWARMS 2): `swarm/<id>`, `swarm/<id>/review`, `swarm/<id>/results` (the Live Activity's tap and
+    // "check first", a Mac notification). The swarms screen navigates to the route and clears it.
+    if let route = SwarmRoute(url: url) {
+        model.selectedTab = .swarms
+        model.swarms.route = route
         return
     }
     if model.openRunLink(url) {
@@ -115,7 +125,7 @@ final class LinkInbox {
         guard let handler else {
             pending.append(url)
             #if DEBUG
-            DebugHooks.log("link inbox: no handler yet, kept \(url.absoluteString)")
+            DebugHooks.log("link inbox: no handler yet, kept \(SevenTvLink.redacted(url))")
             #endif
             return
         }
@@ -143,7 +153,16 @@ final class CobaltAppDelegate: NSObject, UNUserNotificationCenterDelegate {
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse
     ) async {
         // `userInfo["url"]` is the link `Notifications.url(forJob:)` put there.
-        let raw = response.notification.request.content.userInfo["url"] as? String
+        let userInfo = response.notification.request.content.userInfo
+        let raw = userInfo["url"] as? String
+        // The two buttons on a swarm that waits (`SwarmNotifier`): approve asks Touch ID first, decline sends. Not a tap.
+        let action = response.actionIdentifier
+        if action == SwarmNotice.approveAction || action == SwarmNotice.declineAction {
+            if let swarm = SwarmNotice.decode(userInfo: userInfo) {
+                await SwarmNotifier.answer(approve: action == SwarmNotice.approveAction, swarm: swarm.swarm, hash: swarm.hash)
+            }
+            return
+        }
         await MainActor.run {
             #if DEBUG
             DebugHooks.log("notification tap url=\(raw ?? "nil")")
@@ -168,6 +187,13 @@ extension CobaltAppDelegate: NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Before the first window: a tap that launches the app is delivered right after this.
         UNUserNotificationCenter.current().delegate = self
+    }
+
+    /// The right-click service ("save to capystore"). Here, not later: a service that launched the app is delivered
+    /// as soon as launching ends.
+    @MainActor
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        QuickSave.registerService()
     }
 
     /// Closing the main window quits the app (one `Window` scene), except while the studio wallpaper is on

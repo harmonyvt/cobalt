@@ -52,24 +52,36 @@ public enum LiveStatus: Sendable, Equatable {
 /// The client's side of one run, as `PUT /live/runs/<run>` takes it (APP-API-CONTRACT.md 8.2).
 public struct LiveRunRegistration: Sendable, Equatable {
     public var run: UUID
+    /// The run's id in the path when it is not a UUID: a swarm's activity is `swarm:<id>` (APP-API-CONTRACT 61.5). `run` is
+    /// then `LiveRunRegistration.swarmPlaceholder` and nothing reads it.
+    public var runName: String?
     public var environment: LiveEnvironment
     public var updateToken: String?      // lowercase hex
     public var session: String?
     public var start: Bool               // true: the server push-starts the activity (share sheet)
     public var attributes: LiveRunAttributes
     public var state: LiveContentState
+    /// The activity is the job island (APP-API-CONTRACT 8.13): the body says `"type": "job"` and the server pushes
+    /// `JobLiveState`. False: today's payloads (the share sheet's start, which lets the server pick by the start token
+    /// the key has).
+    public var job: Bool
+
+    /// The `run` of a registration whose path is a `runName`.
+    public static let swarmPlaceholder = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
 
     public init(
         run: UUID, environment: LiveEnvironment, updateToken: String?, session: String?, start: Bool,
-        attributes: LiveRunAttributes, state: LiveContentState
+        attributes: LiveRunAttributes, state: LiveContentState, job: Bool = false, runName: String? = nil
     ) {
         self.run = run
+        self.runName = runName
         self.environment = environment
         self.updateToken = updateToken
         self.session = session
         self.start = start
         self.attributes = attributes
         self.state = state
+        self.job = job
     }
 }
 
@@ -115,7 +127,7 @@ public struct LiveSelftest: Sendable, Equatable {
 extension LiveRunRegistration {
     /// The `PUT /live/runs/<run>` body: snake_case outside; `attributes` and `state` keep the Swift
     /// property names because the server forwards them to APNs verbatim. `update_token` and
-    /// `session` are written as explicit nulls when unknown.
+    /// `session` are written as explicit nulls when unknown. `type` is `"job"` for a job activity and left out otherwise.
     func requestBody() throws -> Data {
         struct Body: Encodable {
             var environment: String
@@ -124,9 +136,10 @@ extension LiveRunRegistration {
             var start: Bool
             var attributes: LiveRunAttributes
             var state: LiveContentState
+            var type: String?
 
             enum CodingKeys: String, CodingKey {
-                case environment, session, start, attributes, state
+                case environment, session, start, attributes, state, type
                 case updateToken = "update_token"
             }
 
@@ -138,10 +151,11 @@ extension LiveRunRegistration {
                 try c.encode(start, forKey: .start)
                 try c.encode(attributes, forKey: .attributes)
                 try c.encode(state, forKey: .state)
+                try c.encodeIfPresent(type, forKey: .type)
             }
         }
         return try JSONEncoder().encode(Body(
             environment: environment.rawValue, updateToken: updateToken, session: session, start: start,
-            attributes: attributes, state: state))
+            attributes: attributes, state: state, type: job ? "job" : nil))
     }
 }

@@ -120,8 +120,8 @@ describe("the private link", () => {
         const link = await turnOnPrivate();
         const init = await post(link, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", clientInfo: { name: "claude-ai", version: "1" } } });
         expect(((await init.json()) as any).result.serverInfo.name).toBe("capystore");
-        const list = await post(link, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "upload_begin", arguments: {} } });
-        const up = JSON.parse(((await list.json()) as any).result.content[0].text);
+        const list = await post(link, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "upload_files", arguments: {} } });
+        const up = ((await list.json()) as any).result.structuredContent.uploads[0];
         expect(up.upload_url).toMatch(`${API}/mcp/upload/`);
         const payload = JSON.parse(Buffer.from(new URL(up.upload_url).pathname.split("/").pop()!.split(".")[0]!, "base64url").toString());
         expect(payload.t).toBe(await mcpThreadId(MCP_LINK_THREAD_KEY));
@@ -199,8 +199,8 @@ describe("upload links follow the mode", () => {
     const put = (url: string) =>
         send(new Request(url, { method: "PUT", headers: { "content-type": "image/png", "content-length": String(PNG.byteLength) }, body: PNG as unknown as BodyInit }));
     const begin = async (url: string, headers: Record<string, string> = {}) => {
-        const res = await post(url, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "upload_begin", arguments: {} } }, headers);
-        return JSON.parse(((await res.json()) as any).result.content[0].text).upload_url as string;
+        const res = await post(url, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "upload_files", arguments: {} } }, headers);
+        return ((await res.json()) as any).result.structuredContent.uploads[0].upload_url as string;
     };
     it("a link's upload works while it is live, and stops when it is rotated", async () => {
         const link = await turnOnPrivate();

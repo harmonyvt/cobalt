@@ -12,7 +12,10 @@ private struct FrameCell: View {
     let lit: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Color.clear
             .overlay {
                 if let frame {

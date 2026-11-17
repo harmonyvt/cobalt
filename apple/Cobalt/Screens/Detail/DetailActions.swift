@@ -108,6 +108,7 @@ struct DetailActions: View {
         .haptic(.success, trigger: controller.copiedID, enabled: haptics) { $0 != nil }
         .haptic(.error, trigger: controller.notice, enabled: haptics) { $0 != nil }
         .frame(maxWidth: .infinity)
+        .sevenTvUploadReady(model, file: rendition.file)  // 7TV upload (57.9)
         .accessibilityElement(children: .contain)
     }
 
@@ -186,7 +187,10 @@ struct DetailActions: View {
 
     /// The secondary row: one icon circle per choice (icon-first controls); each one's name shows on a long press.
     private func secondaryRow(_ items: [Choice]) -> some View {
-        IconRow { ForEach(items, id: \.self) { secondary($0) } }
+        IconRow {
+            ForEach(items, id: \.self) { secondary($0) }
+            SevenTvUploadIcon(model: model, file: rendition.file, title: item.titleText)  // 7TV upload (57.9)
+        }
     }
 
     @ViewBuilder

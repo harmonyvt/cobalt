@@ -57,6 +57,7 @@ struct ShareRelayTests {
         #expect(first.attributes == LiveRunAttributes(
             run: rig.core.jobID, input: "link", service: "x", ref: "2105435404002562056", origin: "share"))
         #expect(first.state.stage == .fetching)
+        #expect(rig.log.runs.allSatisfy { !$0.job }, "the server picks the type by the start token the key has (8.13)")
         #expect(rig.log.runs.dropFirst().allSatisfy { !$0.start }, "a start is asked for once")
         await rig.drive { rig.pipeline.state == .ready }
         #expect(rig.log.runs.last?.session == rig.pipeline.sessionID, "the server needs the session to map its events")

@@ -9,7 +9,9 @@
         "library:build": "node scripts/build-library.mjs",
         "library:check": "node scripts/build-library.mjs --check",
         "logs:build": "node scripts/build-logs.mjs",
-        "logs:check": "node scripts/build-logs.mjs --check"
+        "logs:check": "node scripts/build-logs.mjs --check",
+        "swarms:build": "node scripts/build-swarms.mjs",
+        "swarms:check": "node scripts/build-swarms.mjs --check"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "^5.20260929.1",

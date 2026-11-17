@@ -1,4 +1,4 @@
-// /connect/extension: the browser extension's approve page (APP-API-CONTRACT.md section 55).
+// /connect/extension: the browser extension's approve page (APP-API-CONTRACT.md section 64).
 // Access sits in front of this hostname; the Worker still verifies the Access JWT before anything touches D1,
 // the same check as /api/auth. GET only shows a form. POST is the only request that approves.
 //

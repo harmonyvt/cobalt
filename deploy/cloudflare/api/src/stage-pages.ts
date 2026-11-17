@@ -168,7 +168,7 @@ const LIVE_JS = String.raw`
     return w > 0 && h > 0 ? w / h : 1;
   }
   function effDensity() {
-    return chaosUntil > now() ? MAX_SLOTS : clamp(Math.round(num(cfg.density, 30)), 5, MAX_SLOTS);
+    return chaosUntil > now() ? MAX_SLOTS : clamp(Math.round(num(cfg.density, 30)), 0, MAX_SLOTS);
   }
 
   // ---- the scatter ---------------------------------------------------------------------------------------------
@@ -482,7 +482,7 @@ const LIVE_JS = String.raw`
   function schedule() {
     clearTimeout(tickT);
     if (stopped) return;
-    var ms = Math.max(80, tileLife() / effDensity());
+    var ms = Math.max(80, tileLife() / Math.max(1, effDensity()));
     tickT = setTimeout(function () { tick(); schedule(); }, ms);
   }
   function shuffle() {

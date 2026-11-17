@@ -755,7 +755,10 @@ private struct MenuBarThumb: View {
     /// Nil fills the width (the recent grid). A number is a fixed square.
     var size: CGFloat?
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         ZStack(alignment: .bottomLeading) {
             CobaltColor.frameTop
             if let url {

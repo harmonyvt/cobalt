@@ -128,6 +128,33 @@ struct LiveStateBuilderTests {
     }
 }
 
+// MARK: - The job island's timings (APP-API-CONTRACT 8.12, 8.13)
+
+struct JobLiveTimesTests {
+    @MainActor
+    @Test func dismissalByPhaseAndLink() {
+        func state(_ phase: JobLiveState.Phase, link: String? = nil) -> JobLiveState {
+            JobLiveState(phase: phase, steps: ["download", "store"], step: 2, headline: "x", since: 1, link: link)
+        }
+        #expect(JobLiveTimes.dismissal(of: state(.done)) == 60)
+        #expect(JobLiveTimes.dismissal(of: state(.done, link: "https://media.capybaraharmony.com/a.webp")) == 120)
+        #expect(JobLiveTimes.dismissal(of: state(.failed)) == 300)
+        #expect(JobLiveTimes.dismissal(of: state(.lost)) == 300)
+        #expect(JobLiveTimes.staleSeconds == 180 && LiveActivityManager.staleSeconds == 180)
+        #expect(EditLiveManager.dismissDone == 120 && ChatLiveManager.dismissDone == 60)
+    }
+
+    @Test func aPushStartedJobsAttributesSplitBackIntoServiceAndRef() {
+        let run = UUID()
+        let save = LiveRunAttributes(pushStarted: JobLiveAttributes(id: "x", kind: "save", title: "twitch · Kind · Stupid"), run: run)
+        #expect(save.input == "link" && save.service == "twitch" && save.ref == "Kind · Stupid" && save.origin == "share")
+        let upload = LiveRunAttributes(pushStarted: JobLiveAttributes(id: "x", kind: "upload", title: "IMG_0412.mov"), run: run)
+        #expect(upload.input == "file" && upload.service == "file" && upload.ref == "IMG_0412.mov")
+        let bare = LiveRunAttributes(pushStarted: JobLiveAttributes(id: "x", kind: "make", title: "twitch"), run: run)
+        #expect(bare.service == "twitch" && bare.ref == "" && bare.run == run.uuidString.lowercased())
+    }
+}
+
 // MARK: - The manager (CONTRACT-LIVE.md 2.1, 2.5, 2.6) on a fake ActivityKit
 
 @MainActor
@@ -181,8 +208,8 @@ struct LiveRig {
         await drive { if case .done = self.pipeline.state { true } else { false } }
     }
 
-    /// The stages the activity showed: the request's content, every update, the end.
-    func stages(of handle: FakeLiveHandle, request: LiveContentState? = nil) -> [LiveContentState.Stage] {
+    /// The stages the activity showed (read from its job words): the request's content, every update, the end.
+    func stages(of handle: FakeLiveHandle, request: JobLiveState? = nil) -> [LiveContentState.Stage] {
         var out: [LiveContentState.Stage] = []
         if let request { out.append(request.stage) }
         out += handle.updates.map(\.state.stage)
@@ -198,26 +225,29 @@ struct LiveRig {
 @MainActor
 @Suite(.serialized)
 struct LiveManagerLocalModeTests {
-    @Test func everyStageIsWrittenLocallyAndDoneEndsWithAFifteenMinuteDismissal() async throws {
+    @Test func everyStageIsWrittenLocallyAsAJobAndAWebpEndsWithATwoMinuteDismissal() async throws {
         let rig = LiveRig(push: false)                                    // plain: no push from this server
         await rig.runToDone()
         #expect(isDone(rig.pipeline))
         #expect(rig.adapter.requests.count == 1)
         let request = try #require(rig.adapter.requests.first)
         #expect(!request.push, "local mode asks for no push token")
-        #expect(request.attributes.input == "link" && request.attributes.service == "x")
-        #expect(request.attributes.ref == "2105435404002562056" && request.attributes.origin == "app")
-        #expect(request.attributes.run == rig.pipeline.liveRunID.uuidString.lowercased())
-        #expect(request.state.stage == .fetching)
-        #expect(request.staleDate.timeIntervalSince(rig.h.clock.epoch) >= 119)
+        // the job island's attributes, from the run's (CONTRACT-JOBLIVE.md 2)
+        #expect(request.attributes.kind == "save" && request.attributes.title == "x · 2105435404002562056")
+        #expect(!request.attributes.agent && request.attributes.open == nil, "the app's own run opens capystore")
+        #expect(request.attributes.id == rig.pipeline.liveRunID.uuidString.lowercased())
+        #expect(request.state.stage == .fetching && request.state.steps == ["download", "store"])
+        #expect(request.state.headline == "downloading from x")
+        #expect(request.staleDate.timeIntervalSince(rig.h.clock.epoch) >= 179, "last change + 180 s (JOB_STALE_S)")
 
         let handle = try #require(rig.handle)
         let stages = rig.stages(of: handle, request: request.state)
         #expect(isSubsequence(["fetching", "saving", "reading", "ready", "rendering", "done"], of: stages.map(\.rawValue)), "\(stages)")
         let end = try #require(handle.end)
-        #expect(end.state.stage == .done && end.state.resultURL != nil)
+        #expect(end.state.phase == .done && end.state.headline == "webp ready" && end.state.link != nil)
+        #expect(end.state.steps == ["download", "store", "make"] && end.state.step == 3)
         let dismiss = try #require(end.dismissAt)
-        #expect(abs(dismiss.timeIntervalSince(rig.h.clock.now()) - 900) < 30)
+        #expect(abs(dismiss.timeIntervalSince(rig.h.clock.now()) - 120) < 1, "done with a link to copy: 120 s")
         #expect(handle.endCalls.count == 1)
         #expect(rig.log.runs.isEmpty && rig.log.startTokens.isEmpty, "a server without push is never asked to register")
     }
@@ -227,14 +257,22 @@ struct LiveManagerLocalModeTests {
         await rig.runToDone()
         let handle = try #require(rig.handle)
         let request = try #require(rig.adapter.requests.first)
-        // when the manager sent each write: its stale date is that moment plus 120 s (1800 s for ready)
-        var writes: [(LiveContentState, Date)] = [(request.state, rig.h.clock.epoch)]
+        // when the manager sent each write: its stale date is that moment plus 180 s (1800 s for ready)
+        var writes: [(JobLiveState, Date)] = [(request.state, rig.h.clock.epoch)]
         writes += handle.updates.map { u in
-            (u.state, u.staleDate!.addingTimeInterval(u.state.stage == .ready ? -1800 : -120))
+            (u.state, u.staleDate!.addingTimeInterval(u.state.stage == .ready ? -1800 : -180))
+        }
+        // only the counters moved: the same step and words, another detail, fraction or compact
+        func onlyCounters(_ a: JobLiveState, _ b: JobLiveState) -> Bool {
+            var probe = b
+            probe.detail = a.detail
+            probe.fraction = a.fraction
+            probe.compact = a.compact
+            return probe == a
         }
         var checked = 0
         for (a, b) in zip(writes, writes.dropFirst()) {
-            if LiveActivityManager.onlyCounters(differ: a.0, b.0), a.0.stage == b.0.stage {
+            if onlyCounters(a.0, b.0) {
                 #expect(b.1.timeIntervalSince(a.1) >= 0.99, "counter writes \(a.0.stage) are closer than 1 s: \(a) -> \(b)")
                 checked += 1
             }
@@ -256,7 +294,9 @@ struct LiveManagerLocalModeTests {
         await rig.drive { if case .failed = rig.pipeline.state { true } else { false } }
         let handle = try #require(rig.handle)
         let end = try #require(handle.end)
-        #expect(end.state.stage == .failed && end.state.failure == "renderLost" && end.state.rail == 3)
+        #expect(end.state.phase == .failed && end.state.headline == "couldn't make the webp")
+        #expect(end.state.steps[end.state.step] == "make", "the step that failed stays current")
+        #expect(end.state.detail == "the server lost this job. try again.")
         let dismiss = try #require(end.dismissAt)
         #expect(abs(dismiss.timeIntervalSince(rig.h.clock.now()) - 300) < 30)
     }
@@ -281,8 +321,8 @@ struct LiveManagerLocalModeTests {
         let ended = try #require(first.end)
         #expect(ended.dismissAt == nil, "immediate")
         #expect(rig.adapter.requests.count == 2)
-        #expect(rig.adapter.handles.last?.attributes.ref == "Dd7P496wolG")
-        #expect(rig.adapter.requests[0].attributes.run != rig.adapter.requests[1].attributes.run)
+        #expect(rig.adapter.handles.last?.attributes.title == "instagram · Dd7P496wolG")
+        #expect(rig.adapter.requests[0].attributes.id != rig.adapter.requests[1].attributes.id)
     }
 
     @Test func aFinishedActivityKeepsItsDismissalWhenTheNextRunBegins() async throws {
@@ -354,8 +394,8 @@ struct LiveManagerLocalModeTests {
         rig.pipeline.start(file: file)
         await rig.settle()
         let request = try #require(rig.adapter.requests.first)
-        #expect(request.attributes.input == "file" && request.attributes.service == "file" && request.attributes.ref == "IMG_0412.mov")
-        #expect(request.state.stage == .uploading && request.state.title == "IMG_0412")
+        #expect(request.attributes.kind == "upload" && request.attributes.title == "IMG_0412.mov")
+        #expect(request.state.stage == .uploading && request.state.headline == "uploading" && request.state.steps == ["upload", "store"])
     }
 
     @Test func theBackgroundGraceIsHeldOnlyWhileWorkIsInFlightInLocalMode() async throws {
@@ -394,7 +434,8 @@ struct LiveManagerPushModeTests {
         let registrations = rig.log.runs
         #expect(!registrations.isEmpty)
         #expect(registrations.allSatisfy { $0.updateToken == hexToken && !$0.start && $0.environment == .sandbox })
-        #expect(registrations.allSatisfy { $0.attributes == rig.adapter.requests[0].attributes })
+        #expect(registrations.allSatisfy { $0.job }, "every registration says type: job (8.13)")
+        #expect(registrations.allSatisfy { $0.attributes.run == rig.adapter.requests[0].attributes.id && $0.attributes.service == "x" })
 
         await rig.drive { rig.pipeline.state == .ready }
         rig.pipeline.makeWebp()
@@ -406,6 +447,7 @@ struct LiveManagerPushModeTests {
         #expect(written.contains(.reading) && written.contains(.ready))
         let end = try #require(handle.end)
         #expect(end.state.stage == .done, "the app ends with the same content the server pushes")
+        #expect(end.state.headline == "webp ready" && end.state.link != nil)
         #expect(registrations.last?.session == nil || registrations.last?.session == rig.pipeline.sessionID)
         #expect(rig.log.runs.last?.session == rig.pipeline.sessionID, "the server needs the session to map its events")
     }
@@ -610,7 +652,11 @@ struct LiveManagerLaunchTests {
         let r = try #require(rig.log.runs.first)
         #expect(rig.log.runs.count == 1)
         #expect(r.run == run && r.updateToken == hexToken && !r.start && r.session == "PrEvIeWsession00000007")
-        #expect(r.attributes == started.attributes && r.state == started.state && r.environment == .sandbox)
+        #expect(r.job && r.environment == .sandbox, "a job activity's token registers with type: job")
+        // the server holds the run: the body only passes its checks; the state is the job's real stage ("saving", a server
+        // step, so it replaces nothing the server has)
+        #expect(r.attributes == LiveRunAttributes(run: run, input: "link", service: "x", ref: "2105435404002562056", origin: "share"))
+        #expect(r.state.stage == .saving && r.state.since == started.state.since)
         // reading the same activity again on a foreground does not register it twice
         rig.manager.foreground()
         await rig.settle()
@@ -650,6 +696,107 @@ struct LiveManagerLaunchTests {
         #expect(pastStale.ended)
         #expect(!fresh.ended && !inFlight.ended && !own.ended)
         #expect(finished.endCalls.isEmpty)
+    }
+
+    @Test func anAgentsPushStartedJobIsAdoptedAndItsTokenRegisteredAsAJob() async throws {
+        // an agent's make, push-started with the job start token (8.11, 8.13): the app knows nothing of the run
+        let rig = LiveRig(push: true, environment: .sandbox)
+        rig.manager.start(observeLifecycle: false)
+        await rig.h.settle()
+        let run = UUID()
+        var rendering = LiveContentState(stage: .rendering, rail: 3, since: 1_790_000_000)
+        rendering.framesDone = 3
+        rendering.framesTotal = 150
+        let started = FakeLiveHandle(
+            attributes: LiveRunAttributes(run: run, input: "link", service: "twitch", ref: "KindStupidClip", origin: "share"),
+            state: rendering, agent: .make, staleDate: rig.h.clock.now().addingTimeInterval(180), clock: { rig.h.clock.now() })
+        #expect(started.attributes.kind == "make" && started.attributes.agent)
+        rig.adapter.systemStarts(started)
+        await rig.h.settle()
+        started.sendToken(hexToken)
+        await rig.settle()
+        let r = try #require(rig.log.runs.first)
+        #expect(r.run == run && r.updateToken == hexToken && r.job)
+        #expect(r.attributes.service == "twitch" && r.attributes.ref == "KindStupidClip" && r.attributes.input == "link")
+        #expect(r.state.stage == .fetching, "no job on this device says otherwise")
+        #expect(!started.ended && started.updates.isEmpty, "the server writes it: the app only hands over the token")
+    }
+
+    @Test func aReRegisteredPushStartedRunSaysTheStageItsJobIsAt() async throws {
+        // a share-sheet save waiting for its trim: if the server lost the run, the body it makes it again from must not say
+        // "downloading"
+        let rig = LiveRig(push: true, environment: .sandbox)
+        let run = UUID()
+        rig.h.ctx.jobs.upsert(SharedJob(
+            id: run, origin: .shareExtension, link: URL(string: shortLink), sessionID: "PrEvIeWsession00000007",
+            media: nil, trim: nil, stage: .ready, wantsTrim: true, pickedUp: false, updatedAt: rig.h.clock.now()))
+        rig.manager.start(observeLifecycle: false)
+        await rig.h.settle()
+        let started = pushStarted(run: run, clock: rig.h)
+        rig.adapter.systemStarts(started)
+        await rig.h.settle()
+        started.sendToken(hexToken)
+        await rig.settle()
+        let r = try #require(rig.log.runs.first)
+        #expect(r.state.stage == .ready && r.state.rail == 2 && r.job)
+        #expect(LiveActivityManager.registrationState(.rendering(job: "j"), since: 1).stage == .rendering)
+        #expect(LiveActivityManager.registrationState(.failed(code: "x"), since: 1).stage == .fetching)
+        #expect(LiveActivityManager.registrationState(nil, since: 1).stage == .fetching)
+    }
+
+    @Test func anOldTypeActivityTheServerStartedHandsItsTokenToTheOldRoute() async throws {
+        // the first share after the update, before this build ran: the server only had the old start token
+        let rig = LiveRig(push: true, environment: .sandbox)
+        let now = rig.h.clock.now()
+        // one already on screen at launch (fresh), one started while the app runs
+        let onScreenRun = UUID()
+        let onScreen = FakeOldActivity(
+            id: onScreenRun.uuidString.lowercased(), staleDate: now.addingTimeInterval(100),
+            saveRun: (LiveRunAttributes(run: onScreenRun, input: "link", service: "x", ref: "1", origin: "share"), LiveContentState.samples["fetching_waking"]!))
+        rig.adapter.old = [onScreen]
+        rig.manager.start(observeLifecycle: false)
+        await rig.h.settle()
+        let run = UUID()
+        let attributes = LiveRunAttributes(run: run, input: "link", service: "instagram", ref: "Dd7P496wolG", origin: "share")
+        let saving = LiveContentState.samples["saving_storing"]!
+        let started = FakeOldActivity(id: run.uuidString.lowercased(), staleDate: now.addingTimeInterval(120), saveRun: (attributes, saving))
+        rig.adapter.systemStartsOld(started)
+        await rig.h.settle()
+        started.sendToken(hexToken)
+        onScreen.sendToken(String(repeating: "cd", count: 32))
+        await rig.settle()
+        #expect(rig.log.runs.count == 2)
+        let r = try #require(rig.log.runs.first { $0.run == run })
+        #expect(!r.job, "the old type: the server must push the old shape")
+        #expect(r.updateToken == hexToken && r.attributes == attributes && r.state == saving && !r.start)
+        #expect(rig.log.runs.contains { $0.run == onScreenRun && !$0.job })
+        #expect(!started.isEnded && !onScreen.isEnded, "the server writes and ends them")
+        // the same token is not sent twice
+        rig.manager.foreground()
+        await rig.settle()
+        #expect(rig.log.runs.count == 2)
+    }
+
+    @Test func oldTypeActivitiesNobodyWritesEndAndOneOfARunTheAppShowsGivesWay() async throws {
+        let rig = LiveRig(push: false)
+        let now = rig.h.clock.now()
+        let stale = FakeOldActivity(id: UUID().uuidString.lowercased(), staleDate: now.addingTimeInterval(-5))
+        let undated = FakeOldActivity(id: UUID().uuidString.lowercased(), staleDate: nil)
+        let fresh = FakeOldActivity(id: UUID().uuidString.lowercased(), staleDate: now.addingTimeInterval(100))
+        rig.adapter.old = [stale, undated, fresh]
+        rig.manager.start(observeLifecycle: false)
+        await rig.settle()
+        #expect(stale.isEnded && undated.isEnded, "nobody writes them any more")
+        #expect(!fresh.isEnded, "the server still writes it (registered before the update) and ends it itself")
+        // the app shows a run with an old activity on screen: the job activity replaces it
+        let runID = UUID()
+        let mine = FakeOldActivity(id: runID.uuidString.lowercased(), staleDate: now.addingTimeInterval(100))
+        rig.adapter.old.append(mine)
+        rig.pipeline.nextLiveRunID = runID              // the run the old activity shows (a queue job's id works this way)
+        rig.pipeline.start(link: URL(string: shortLink)!)
+        await rig.settle()
+        #expect(rig.adapter.requests.count == 1 && rig.adapter.requests[0].attributes.id == runID.uuidString.lowercased())
+        #expect(mine.isEnded && mine.endCount == 1 && !fresh.isEnded, "one island per job")
     }
 
     @Test func aRunAdoptsTheActivityThatAlreadyCarriesItsRunId() async throws {

@@ -451,7 +451,7 @@ describe("cobalt.box in a chat reply", () => {
         expect(toolTypes(true)).not.toContain("box: {");
         const on = toolTypes(true, REGISTRY, true);
         expect(on).toContain("  box: {\n");
-        expect(on).toContain("run(cmd: string, opts?: {\n      timeoutS?: number; // default 60, max 120\n    }): Promise<{ code: number; stdout: string; stderr: string; timed_out: boolean }>;");
+        expect(on).toContain("run(cmd: string, opts?: {\n      timeoutS?: number; // default 60, max 120\n    }): Promise<{ code: number; stdout: string; stderr: string; timed_out: boolean; ms: number }>;");
         expect(on).toMatch(/save\(path: string, opts\?: \{/);
         expect(systemPrompt(0, true, on)).toContain("cobalt.box is a real Linux box");
         expect(systemPrompt(0, true, toolTypes(true))).not.toContain("cobalt.box");
@@ -474,7 +474,7 @@ describe("cobalt.box in a chat reply", () => {
             },
             (s) => {
                 const r = lastResult(s);
-                expect(r.result.r).toEqual({ code: 0, stdout: "clip.download\n", stderr: "warn\n", timed_out: false });
+                expect(r.result.r).toEqual({ code: 0, stdout: "clip.download\n", stderr: "warn\n", timed_out: false, ms: expect.any(Number) });
                 expect(r.result.s).toEqual({ post_id: expect.any(String), kind: "video", bytes: mp4.length, processing: true, public_url: null });
                 return say("saved it (=^･ω･^=)");
             },

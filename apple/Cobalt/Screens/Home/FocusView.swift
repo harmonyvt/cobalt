@@ -1359,7 +1359,10 @@ struct HeroPlanet: View, @preconcurrency Animatable {
         .clipped()
     }
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         let bezel = Self.bezel * CGFloat(chrome)
         let width = CGFloat(pose.w), height = CGFloat(pose.h)
         let inner = CGSize(width: max(1, width - 2 * bezel), height: max(1, height - 2 * bezel))

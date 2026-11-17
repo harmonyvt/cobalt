@@ -169,6 +169,8 @@ export const PATHS: string[] = [
     `/live/edits/${ID20}/push`,
     `/live/runs/${RUN}`,
     `/live/runs/${RUN}/state`,
+    `/live/runs/swarm:${ID16}`,
+    `/live/runs/swarm:bad`,
     "/live/chat-start-token",
     `/live/chats/${ID16}`,
     `/live/chats/${ID16}/state`,
@@ -178,9 +180,13 @@ export const PATHS: string[] = [
     "/mcp",
     `/mcp/upload/eyJrIjoia2V5LTEiLCJ0IjoiQUFBQUFBQUFBQUFBQUFBQSIsImUiOjF9.${"A".repeat(43)}`,
     "/mcp/upload/bad",
+    // signed previews for the MCP app's widgets (MCP-APP-CONTRACT.md section 9)
+    `/mcp/media/eyJrIjoia2V5LTEiLCJpIjoiQUFBQUFBQUFBQUFBQUFBQSIsImUiOjF9.${"A".repeat(43)}`,
+    `/mcp/media/eyJrIjoia2V5LTEiLCJpIjoiQUFBQUFBQUFBQUFBQUFBQSIsImUiOjF9.${"A".repeat(43)}/poster`,
+    "/mcp/media/bad",
     // added with accounts (section 42): device sessions and the owner's keys
     "/auth/exchange",
-    // browser extension sign-in (section 55): Safari polls; Chrome trades the code at /auth/exchange
+    // browser extension sign-in (section 64): Safari polls; Chrome trades the code at /auth/exchange
     "/auth/extension/begin",
     "/auth/extension/poll",
     "/auth/extension/other",
@@ -194,6 +200,30 @@ export const PATHS: string[] = [
     "/auth/keys/0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a99",
     "/auth/keys/bad",
     "/auth/other",
+    // added with agent swarms (section 59): plan and list, one swarm, its pages, the agent's and Harmony's actions
+    "/swarms",
+    `/swarms/${ID16}`,
+    `/swarms/${ID16}/results`,
+    `/swarms/${ID16}/results?offset=0&limit=100`,
+    `/swarms/${ID16}/board`,
+    `/swarms/${ID16}/board?q=cat&sort=score&limit=201`,
+    `/swarms/${ID16}/changes`,
+    `/swarms/${ID16}/stop`,
+    `/swarms/${ID16}/retry`,
+    `/swarms/${ID16}/approve`,
+    `/swarms/${ID16}/decline`,
+    `/swarms/${ID16}/apply`,
+    `/swarms/${ID16}/other`,
+    "/swarms/bad",
+    // added with agents that talk to their owner (section 61): the inbox, messages, one agent, the swarm island's token
+    "/swarms/inbox",
+    `/swarms/${ID16}/messages`,
+    `/swarms/${ID16}/messages?agent=1&after=0`,
+    `/swarms/${ID16}/agents/1`,
+    `/swarms/${ID16}/agents/0`,
+    `/live/swarms/${ID16}`,
+    `/live/swarms/${ID16}/push`,
+    "/live/swarms/bad",
     "/nope",
 ];
 

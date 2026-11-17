@@ -79,7 +79,92 @@ final class LibraryController {
     let fold = LibraryBarFold()
 
     /// The phone's pushed detail.
-    var opened: OpenedMedia?
+    var opened: OpenedMedia? {
+        didSet {
+            guard opened?.id != oldValue?.id else { return }
+            if opened != nil {
+                Breadcrumbs.add("detail.open")
+                Analytics.screen("library.detail")
+            } else {
+                Breadcrumbs.add("detail.close")
+                if model.selectedTab == .library { Analytics.screen("library") }
+                checkStackSoon()
+            }
+        }
+    }
+
+    // MARK: the stuck zoom back (owner, 2026-11-14)
+
+    /// Bumped to rebuild the phone's navigation stack from scratch.
+    private(set) var stackID = 0
+    #if os(iOS)
+    /// A plain view inside the library's own content: in a window whenever the grid really is on screen.
+    @ObservationIgnored weak var anchor: UIView?
+    #endif
+    @ObservationIgnored private var stackCheck: Task<Void, Never>?
+
+    /// iOS 26's zoom back from a playing video, after an edge swipe, can finish with the library's view left out of the
+    /// navigation controller: SwiftUI reports the pop done (the grid "appears", `opened` is nil) while the screen keeps
+    /// the transition's last picture and the detail's bar, and no tap reaches the grid (8.13 tap probe: taps land on an
+    /// empty `UIViewControllerWrapperView`). A moment after the grid should be back, if its anchor has no window while
+    /// the library tab is showing, the stack is rebuilt.
+    func checkStackSoon() {
+        #if os(iOS)
+        // the second net: a tap on an empty wrapper. Set here, by the controller the screen really keeps (the screen's
+        // init makes throwaway ones)
+        TouchProbe.emptyWrapperTapped = { [weak self] in self?.emptyWrapperTapped() }
+        stackCheck?.cancel()
+        stackCheck = Task { [weak self] in
+            // twice, at 0.9 s and 2.5 s: a long frame during the zoom back (8.15 saw 970 ms) can push the first look to
+            // before the transition has really ended
+            for wait in [900, 1600] {
+                try? await Task.sleep(for: .milliseconds(wait))
+                guard !Task.isCancelled, let self else { return }
+                guard self.opened == nil, self.model.selectedTab == .library, let anchor = self.anchor else { return }
+                if !Self.gridReachable(anchor) {
+                    self.unstick("check")
+                    return
+                }
+            }
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    /// Whether a tap in the middle of the grid would reach it. 8.15 showed the stuck state with the anchor still in a
+    /// window (so `window == nil` alone missed it): taps went to an empty `UIViewControllerWrapperView` instead. So: the
+    /// anchor must sit inside a view controller's wrapper, and a hit test at its centre must land inside that same
+    /// view controller's view.
+    static func gridReachable(_ anchor: UIView) -> Bool {
+        guard let window = anchor.window else { return false }
+        // a sheet or alert over the library takes the centre's taps on purpose: never rebuild under one
+        if window.rootViewController?.presentedViewController != nil { return true }
+        var root: UIView? = anchor
+        while let view = root, let parent = view.superview, !Self.isWrapper(parent) { root = parent }
+        guard let root, root.superview.map(Self.isWrapper) == true else { return false }
+        let centre = anchor.convert(CGPoint(x: anchor.bounds.midX, y: anchor.bounds.midY), to: window)
+        guard let hit = window.hitTest(centre, with: nil) else { return false }
+        return hit.isDescendant(of: root)
+    }
+
+    private static func isWrapper(_ view: UIView) -> Bool {
+        String(describing: type(of: view)) == "UIViewControllerWrapperView"
+    }
+
+    /// A tap landed on an empty view controller wrapper (`TouchProbe`): on the library, with no detail open, that is
+    /// the stuck zoom back. One dead tap, then the grid is back.
+    func emptyWrapperTapped() {
+        guard opened == nil, model.selectedTab == .library else { return }
+        if let anchor, Self.gridReachable(anchor) { return }
+        unstick("tap")
+    }
+
+    private func unstick(_ how: String) {
+        Breadcrumbs.add("library.unstuck", ["how": .string(how)])
+        stackID += 1
+    }
+    #endif
+
     /// The row the inspector shows (iPad, Mac).
     var selection: String?
     /// The inspector's open state (remembered per device once the owner or the width decides).

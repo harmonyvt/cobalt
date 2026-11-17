@@ -184,6 +184,11 @@ export default defineConfig({
 			// post and writes its title (never over one the owner set), from the 15-minute cron. OPENROUTER_API_KEY is a
 			// SECRET from ~/.config/cobalt/secrets.json; missing or empty turns titles off. AI_TITLES "0" also turns them off.
 			OPENROUTER_API_KEY: bindings.secret(),
+			// PostHog (APP-API-CONTRACT.md section 58): the capystore project's token on US cloud (project 735568). A
+			// write-only project token, safe to ship (PostHog puts it in every client); the apps get it from GET
+			// /capabilities. Empty turns every PostHog event off, server and app.
+			POSTHOG_PROJECT_TOKEN: bindings.text("phc_tPNtVxe59nkXC9qPnNJJZFBySbL7j8ZoLnR2CuzXTy3F"),
+			POSTHOG_HOST: bindings.text("https://us.i.posthog.com"),
 			AI_TITLE_MODEL: bindings.text("minimax/minimax-m3.1-flash"),
 			AI_TITLES: bindings.text("1"),
 			// Chat (APP-API-CONTRACT.md section 27): the model (same key as the captions), and the Worker
@@ -218,6 +223,10 @@ export default defineConfig({
 			CHAT_DAILY_SAVES: bindings.text("20"),
 			// Sub-agents (APP-API-CONTRACT.md section 43): how many one chat thread may start per UTC day; "0" turns them off.
 			CHAT_DAILY_AGENTS: bindings.text("20"),
+			// Agent swarms (APP-API-CONTRACT.md section 59): the most one swarm's dollar cap may be, and the dollars all swarms
+			// together may spend per UTC day (Haiku tokens only; a swarm stops when either is reached).
+			SWARM_MAX_USD: bindings.text("10"),
+			SWARM_DAILY_USD: bindings.text("5"),
 			// Stage (APP-API-CONTRACT.md section 30): https://<stage host>/ , one of `domains` above; empty turns the stage
 			// off (every /stage* route is a 404, `features.stage` false). The three Twitch values are SECRETS from
 			// ~/.config/cobalt/secrets.json (`cf deploy` refuses while a declared one is missing; empty is fine and
@@ -295,6 +304,18 @@ export default defineConfig({
 				worker: "cobalt-api",
 				exportName: "ChatAgent",
 			}),
+			// Agent swarms (src/swarm-do.ts, APP-API-CONTRACT.md section 59): one object per swarm runs its approved Haiku
+			// tasks and its apply step in its alarm. Needs D1 migration 0043.
+			SWARMS: bindings.durableObject({
+				worker: "cobalt-api",
+				exportName: "Swarm",
+			}),
+			// One pace for every 7TV API call (src/seventv-gate.ts, APP-API-CONTRACT.md section 62.5): one object, "gate",
+			// 5 reads and 1 write a second, half for a minute after a 429. Without it nothing waits. No secret, no migration.
+			SEVENTV_GATE: bindings.durableObject({
+				worker: "cobalt-api",
+				exportName: "SevenTvGate",
+			}),
 		},
 		exports: {
 			CobaltContainer: exports.durableObject({
@@ -317,6 +338,8 @@ export default defineConfig({
 			}),
 			ChatJobs: exports.durableObject({ storage: "sqlite" }),
 			ChatAgent: exports.durableObject({ storage: "sqlite" }),
+			Swarm: exports.durableObject({ storage: "sqlite" }),
+			SevenTvGate: exports.durableObject({ storage: "sqlite" }),
 		},
 	},
 	containers: [cobaltContainer, editContainer, workbenchContainer, ytdlpContainer],

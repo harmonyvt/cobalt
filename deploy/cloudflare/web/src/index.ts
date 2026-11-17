@@ -4,13 +4,14 @@ import { handleKeys, type Env } from "./keys";
 import { handleLibrary } from "./library";
 import { handleLogs } from "./logs";
 import { handleMcp } from "./mcp";
+import { handleSwarms } from "./swarms";
 import { handleStudio } from "./studio";
 
 export type { Env };
 
-// `assets.runWorkerFirst` routes only /api/keys(/*), /api/auth(/*), /api/mcp(/*), /connect/extension,
-// /studio(/*), /library(/*), /api/library(/*), /logs and /api/logs(/*) here; every other request is answered
-// by the static assets without invoking this Worker.
+// `assets.runWorkerFirst` routes only /api/keys(/*), /api/auth(/*), /connect(/*), /api/mcp(/*), /studio(/*),
+// /library(/*), /api/library(/*), /logs, /api/logs(/*), /swarms(/*) and /api/swarms(/*) here; every other
+// request is answered by the static assets without invoking this Worker.
 // The fallthrough below is a safety net in case that routing is ever widened.
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
@@ -40,6 +41,9 @@ export default {
         }
         if (pathname === "/logs" || pathname === "/api/logs" || pathname.startsWith("/api/logs/")) {
             return handleLogs(request, env);
+        }
+        if (pathname === "/swarms" || pathname.startsWith("/swarms/") || pathname === "/api/swarms" || pathname.startsWith("/api/swarms/")) {
+            return handleSwarms(request, env);
         }
         return env.ASSETS.fetch(request);
     },

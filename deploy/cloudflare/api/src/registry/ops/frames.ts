@@ -82,6 +82,7 @@ export const makeFramesOp = defineOp({
     }),
     output: z.object({ frames: z.array(FrameSchema) }),
     ai: {
+        refs: { id: "file" },
         tier: "free",
         only: true,
         summary: `Save frames of a video as pictures (new private pngs in the library, at most ${FRAMES_MAX}, up to ${FRAME_MAX_SIDE} px a side), cut by ffmpeg in the box (~10 s to wake). Then look() at them (grid: true to aim a crop) and edit them like any picture: make.cropImage, make.cutout, edits.addOverlay. To only glance at a video, look(ids, { frames: true }) is cheaper.`,
@@ -101,7 +102,7 @@ export const makeFramesOp = defineOp({
 
         const cap = rendersCap(ctx);
         const budget = budgetPort(ctx.container);
-        if (!(await budget.take(thread, "renders", cap))) {
+        if (cap !== null && !(await budget.take(thread, "renders", cap))) {
             throw new OpError(429, "error.chat.render_cap", `cobalt.${call}: this chat already made ${cap} files today, the most it may make in a day. Tell Harmony it can make more tomorrow.`);
         }
         try {
@@ -147,7 +148,7 @@ export const makeFramesOp = defineOp({
             if (frames.length === 0) throw stop("no frame came out (are the times inside the video?)");
             return ok({ frames });
         } catch (e) {
-            await budget.refund(thread, "renders").catch(() => {});
+            if (cap !== null) await budget.refund(thread, "renders").catch(() => {});
             throw e;
         }
     },

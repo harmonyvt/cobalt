@@ -23,13 +23,17 @@ enum Copy {
     // MARK: tabs and shell
 
     static let appName = "capystore"
+    /// iPhone's last tab: a list of the tabs that did not fit in the bar.
+    static let more = "more"
     static func tab(_ tab: AppTab) -> String {
         switch tab {
         case .save: return "save"
         case .library: return "library"
         case .links: return Links.title
         case .chat: return Chat.title
+        case .swarms: return Swarms.title
         case .stage: return Stage.title
+        case .sevenTv: return SevenTv.title
         case .names: return Names.tabTitle
         case .queue: return "queue"
         case .settings: return "settings"

@@ -11,7 +11,14 @@ import Observation
 final class ImageCropModel {
     enum Aspect: String, CaseIterable, Identifiable {
         case free, original, square, portrait, story, wide
+        /// Only "upload to 7tv" offers these (`ImageCropSheet.sevenTv`): 7TV keeps shapes up to 3:1.
+        case twoToOne, threeToOne
         var id: String { rawValue }
+
+        /// The chips every crop sheet has.
+        static let standard: [Aspect] = [.free, .original, .square, .portrait, .story, .wide]
+        /// The standard chips and 2:1 and 3:1: the 7TV upload's crop sheet.
+        static let sevenTv: [Aspect] = standard + [.twoToOne, .threeToOne]
 
         var label: String {
             switch self {
@@ -21,6 +28,8 @@ final class ImageCropModel {
             case .portrait: return "4:5"
             case .story: return "9:16"
             case .wide: return "16:9"
+            case .twoToOne: return "2:1"
+            case .threeToOne: return "3:1"
             }
         }
 
@@ -32,6 +41,8 @@ final class ImageCropModel {
             case .portrait: return 4.0 / 5.0
             case .story: return 9.0 / 16.0
             case .wide: return 16.0 / 9.0
+            case .twoToOne: return 2
+            case .threeToOne: return 3
             }
         }
     }
@@ -86,6 +97,16 @@ final class ImageCropModel {
     var canMake: Bool { output != nil && spec.changesSomething }
 
     // MARK: changing it
+
+    /// Starts the box where the caller wants it: locked to `start.aspect` and, when given, at `start.box` (fractions of the
+    /// picture; the picture is unturned here). Called once, right after the picture loaded.
+    func begin(_ start: ImageCropStart) {
+        aspect = start.aspect
+        if let box = start.box {
+            let r = pixels(box)
+            if r.width >= 1, r.height >= 1 { rect = r }
+        }
+    }
 
     func choose(_ new: Aspect) {
         guard new != aspect else { return }

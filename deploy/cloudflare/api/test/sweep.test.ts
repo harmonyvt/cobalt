@@ -286,6 +286,21 @@ describe("the live end retries", () => {
         await runSweep(f.d, async () => ({ pending: 0 }), undefined, withRetry(null).live);
         expect(f.scheduled).toEqual([]);
     });
+    it("an open island with nothing else pending: back when it would go quiet, at most a minute away", async () => {
+        const quiet = (ms: number | null): SweepLive => ({ hasActiveRuns: async () => false, cleanup: async () => {}, watchQuiet: async () => ({ nextInMs: ms }) });
+        for (const [ms, want] of [[600_000, 60], [30_000, 30], [200, 1]] as const) {
+            const f = fixture();
+            await runSweep(f.d, async () => ({ pending: 0 }), undefined, quiet(ms));
+            expect(f.scheduled, `${ms} ms`).toEqual([want]);
+        }
+        const f = fixture();
+        await runSweep(f.d, async () => ({ pending: 0 }), undefined, quiet(null));
+        expect(f.scheduled).toEqual([]);
+        // pending work keeps its own cadence
+        const g = fixture();
+        await runSweep(g.d, async () => ({ pending: 1 }), undefined, quiet(600_000));
+        expect(g.scheduled).toEqual([5]);
+    });
     it("a pending retry never slows the 2 s live cadence, and a pending job never delays a retry", async () => {
         const f = fixture();
         const live: SweepLive = { hasActiveRuns: async () => true, cleanup: async () => {}, retryEnds: async () => ({ nextInMs: 4000 }) };

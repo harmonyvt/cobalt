@@ -18,6 +18,28 @@ Two owner features (settled, not reopened):
   **5 GB** by default (owner-adjustable). When a new file arrives at the cap, the oldest offline
   data goes first. Settings shows usage, the limit, and a clear button.
 
+**Status note 2026-11-13: the activity type, content, rail and timings below are superseded by `CONTRACT-JOBLIVE.md`
+(server half: `APP-API-CONTRACT.md` 8.12 and 8.13).** One type, `CobaltJobActivityAttributes` with `JobLiveState`, now
+shows saves, uploads, makes, editor renders and chat replies. This file stays as the record of how Live Activities began;
+each place it is overtaken carries a "2026-11-13" note that says what replaced what. Summary:
+
+- **Type and content.** `CobaltActivityAttributes` with `LiveContentState` is replaced by `CobaltJobActivityAttributes`
+  with `JobLiveState` (`phase`, named `steps`, `headline`, `detail`, `fraction`, `compact`, `since`, `result`, `link`,
+  `rows`). The server writes every word; the widget only draws. `LiveContentState` is still what the pipeline builds and
+  what the app relays for device stages, and the app turns it into a `JobLiveState` before each write.
+- **Rail.** The fixed four-cell rail (fetch|upload, save, read, webp) becomes named steps, as many as the job really has
+  (1 to 5), for example download, store, publish.
+- **Dismissal.** Done after 60 s (120 s when there is a link to copy); failed and lost after 300 s. This replaces "15
+  minutes done, 5 minutes failed".
+- **Stale.** Last change + 180 s (the card then reads "still working, no news for 3 min"), except "ready to trim"
+  (stage `ready`), which stays 30 minutes. This replaces the 120 s stale date.
+- **Registrations** send `type: "job"` (`PUT /live/start-token`, `PUT /live/runs/<run>`, `PUT /live/edits/<rid>`,
+  `PUT /live/chats/<thread>`). The server pushes `JobLiveState` only to a run that registered with it.
+- **Old types.** `CobaltActivityAttributes`, `CobaltEditActivityAttributes` and `CobaltChatActivityAttributes` are only
+  ended now, never written: an old-type activity from an older build is ended when its stale date has passed, or when the
+  app is about to show the same job with a job activity. Their three widgets stay registered for one release (for
+  activities already on screen) and are then deleted.
+
 Sequencing (Fable, 2026-10-02): the HIG pass and the confirmed review fixes are being built now
 by their own UI and CORE lanes. **Nothing in this file re-assigns those fixes.** The Live and
 storage lanes below start only after that wave has landed and passed its gates, because they
@@ -41,7 +63,8 @@ Marked **(owner)** when the owner settled it, **(lane)** when made here and open
 4. **(lane) Content-state times are unix seconds as `Double`**, not `Date`. ActivityKit decodes
    the pushed `content-state` with a default `JSONDecoder`, whose `Date` is seconds since 2001;
    a plain number avoids that trap on both sides.
-5. **(lane) Done dismisses after 15 minutes, failed after 5.** Terminal pushes carry a short
+5. **(lane) Done dismisses after 15 minutes, failed after 5.** *(Superseded 2026-11-13: done 60 s, or 120 s with a link;
+   failed and lost 300 s. `CONTRACT-JOBLIVE.md` 3.)* Terminal pushes carry a short
    alert (lights the Lock Screen and expands the island once), no sound.
 6. **(lane) Push environment is detected on the device** (the provisioning profile's
    `aps-environment`), and the server retries once on the other APNs host when Apple answers
@@ -110,6 +133,12 @@ from the same server answer (the parity fixture in 2.4 proves it), and a termina
 be overwritten by an older update.
 
 ### 2.2 The shared types (CobaltKit, `Sources/CobaltKit/Live/`, pinned)
+
+> **2026-11-13: superseded by `CONTRACT-JOBLIVE.md` section 2.** The activity type is now `CobaltJobActivityAttributes`
+> (`id`, `kind`, `title`, `agent`, `open`) and its content is `JobLiveState`, which has named `steps` and a `step` index
+> in place of `rail` (0...3). `LiveContentState` below is still the pipeline's own state and the shape the app relays for
+> device stages (`relayState`, unchanged); it is no longer what ActivityKit shows. The `CobaltActivityAttributes` type
+> is only ended, never written.
 
 `LiveContentState` and `LiveRunAttributes` compile on every platform (the macOS `swift test` run
 covers them). `CobaltActivityAttributes` is iOS only. The JSON keys are the Swift property names
@@ -271,6 +300,12 @@ from the matching server event. The gate runs `cmp` on the two files.
 
 Internal types; UI sees only `AppModel.liveStatus`, the shared types and the widget.
 
+> **2026-11-13:** the manager now requests `Activity<CobaltJobActivityAttributes>`, observes that type's push-to-start
+> token and registers it with `type: "job"`; it no longer registers the old type's token. Stale dates are last change +
+> 180 s (30 minutes for `ready`), not 120 s. An ended state is dismissed after 60 s (120 s with a link) when done, 300 s
+> when failed or lost, not 15 min / 5 min. Several jobs at once write `JobLive.many` rows (CONTRACT-PARALLEL.md
+> section 6). Old-type activities are only ended. The bullets below describe the original design.
+
 - **Start-token observation first.** `AppModel.live()` starts, before anything else, a task over
   `Activity<CobaltActivityAttributes>.pushToStartTokenUpdates` and also reads the current
   `pushToStartToken` on every foreground, registering any token it has not sent for this
@@ -316,10 +351,16 @@ Internal types; UI sees only `AppModel.liveStatus`, the shared types and the wid
 | unsigned build, simulator (`LiveEnvironment.current == nil`) | local mode; `Activity.request(pushType: nil)`; the Dynamic Island still shows in the iPhone 17 Pro simulator, so the widget is verifiable there |
 | Live Activities off in iOS Settings | nothing is requested; Settings says "off in ios settings" |
 | reply `pushing: false` (server's last APNs attempt failed for a non-token reason) | that run switches to local mode |
-| push-started activity whose update token never reaches the app | it shows its start state, turns stale after 120 s ("waiting for cobalt…"), and the next foreground ends it. Plan B in 6 |
+| push-started activity whose update token never reaches the app | it shows its start state, turns stale after 120 s (2026-11-13: 180 s, `CONTRACT-JOBLIVE.md` 3) ("waiting for cobalt…"), and the next foreground ends it. Plan B in 6 |
 | macOS | no ActivityKit; `liveStatus == .unavailable` |
 
 ### 2.7 Widget extension `CobaltWidgets` (UI owns the views; CORE adds the target)
+
+> **2026-11-13:** the widget is now `JobLiveActivity.swift`, drawn from `JobLiveState` only (`CONTRACT-JOBLIVE.md`
+> section 5). The four-cell rail and its labels below become the named step dots of the job, and the stage metrics in the
+> compact island become the state's `compact` text. The stale row now reads "still working, no news for 3 min". The old
+> `CobaltLiveActivity` widget stays registered for one release, then goes with `LiveViews.swift`, `LiveLockScreen.swift`
+> and `LiveSummaryViews.swift`.
 
 New target, iOS only, embedded in `Cobalt` with `platformFilter: iOS`:
 
@@ -568,6 +609,10 @@ JWT in them.
   per-device keys management (one push-to-start token per API key, so one key per device).
 
 ## 7. Supersedes
+
+**2026-11-13:** `CONTRACT-JOBLIVE.md` replaces, in this file, the activity type and content (2.2), the four-step rail
+(2.2, 2.7), the dismissal times (section 0 item 5, 2.5) and the stale times (2.5, 2.6). It leaves the server transport (section 3),
+the one-writer rule (2.1) and section 4 (offline storage) as they are.
 
 `CONTRACT.md` section 11 listed Live Activities and widgets as out of scope: this addendum brings
 in the Live Activity and its widget extension only (no home-screen widgets). `CONTRACT.md` 4.6

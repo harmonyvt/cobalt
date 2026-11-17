@@ -106,10 +106,43 @@ enum Pasteboard {
     static func contents() -> [PastedContent] {
         if let override { return [.text(override)] }
         #if canImport(AppKit)
-        let files = NSPasteboard.general.readObjects(
+        return contents(of: .general)
+        #else
+        return string().map { [.text($0)] } ?? []
+        #endif
+    }
+
+    /// `contents()` with the pasteboard read off the main thread (8.18). On iPhone and iPad `UIPasteboard.string` holds
+    /// the thread that reads it while iOS shows "Allow Paste": read on the main thread, the app stopped drawing for as
+    /// long as the prompt was up (a 3.3 s stall on the save tab in 8.17). The Mac reads as before (files need AppKit).
+    static func contentsOffMain() async -> [PastedContent] {
+        if let override { return [.text(override)] }
+        #if canImport(UIKit)
+        let text = await readGeneralString()
+        return text.map { [.text($0)] } ?? []
+        #else
+        return contents()
+        #endif
+    }
+
+    #if canImport(UIKit)
+    @concurrent
+    nonisolated private static func readGeneralString() async -> String? {
+        MainThreadGuard.assertOffMain()
+        return UIPasteboard.general.string
+    }
+    #endif
+
+    #if canImport(AppKit)
+    /// The same reading of any pasteboard: the general one for a paste, the one a service is handed (`QuickSave`).
+    static func contents(of pasteboard: NSPasteboard) -> [PastedContent] {
+        let files = pasteboard.readObjects(
             forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         if !files.isEmpty { return files.map(PastedContent.file) }
-        #endif
-        return string().map { [.text($0)] } ?? []
+        if let text = pasteboard.string(forType: .string) { return [.text(text)] }
+        // a link with no text beside it (a browser's "copy link" always has both; a service may send only this)
+        if let link = (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first { return [.link(link)] }
+        return []
     }
+    #endif
 }

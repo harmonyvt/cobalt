@@ -152,7 +152,9 @@ public final class LibraryModel {
     }
     #endif
 
-    static let pageSize = 20
+    // 50 (the client's cap), not 20: each page that lands rebuilds the whole library screen, and a small page lands
+    // mid-scroll (8.15)
+    static let pageSize = 50
     static let wholePageSize = 50
     /// The most hidden posts one whole-album read collects; past it the device's memory only grows.
     static let syncCap = 2000
@@ -419,6 +421,11 @@ public final class LibraryModel {
     /// `GET /emotes?sort=&page=`: top, trending, new or the global set, with or without a name. Nothing is stored.
     public func browseEmotes(query: String, sort: EmoteSort, page: Int) async throws -> EmotePage {
         try await ctx.client.browseEmotes(query: query, sort: sort, page: page)
+    }
+
+    /// `GET /emotes?exact=1` (20.2): one page of the emotes on 7TV with this own name. Nothing is stored.
+    public func emoteVariants(name: String, page: Int) async throws -> EmotePage {
+        try await ctx.client.emoteVariants(name: name, page: page)
     }
 
     /// `POST /emotes`, then the library is read again so the new file is in `posts`.

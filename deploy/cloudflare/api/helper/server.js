@@ -116,6 +116,13 @@
 //                      | 429 | 502. kind=clip has its own encode budget (SAFETY_ENCODE_MS, after the file is on disk) and an
 //                      upload cap (SAFETY_UPLOAD_MS). A still, including an animated WebP, keeps the about budget.
 //                      The client leaving kills ffmpeg and the temp dir is removed before the helper is free.
+//
+//   POST   /emote-fit?crop=x,y,w,h&size=&max_bytes=
+//                      body = a picture (gif, png, jpeg, webp, animated or not; <= 64 MB). Fits it for 7TV
+//                      (APP-API-CONTRACT 57.10, emote-fit.js): optional crop box (fractions), longest side <= size
+//                      (32-1000, default 512, never larger), <= 1000 frames, lossy WebP under max_bytes.
+//                      200 image/webp + x-emote-width/-height/-frames/-quality | 400 error.seventv.fit_shape
+//                      | 413 | 422 error.seventv.fit_failed / fit_too_big | 429 busy. 150 s wall.
 
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
@@ -191,6 +198,7 @@ import {
     videoExt,
 } from "./lib.js";
 import { safetyStillsFromAnimatedWebp } from "./webp-anim.js";
+import { EMOTE_FIT_MAX_INPUT, fitEmote } from "./emote-fit.js";
 
 /** Sent on every answer (see `createServer`): the Durable Object's `features.gallery` follows it. */
 export const HELPER_CAPS_HEADER = "x-cobalt-helper";
@@ -1461,6 +1469,95 @@ export function createHelper(opts = {}) {
         );
     }
 
+    // POST /emote-fit: a picture made to fit 7TV's limits (APP-API-CONTRACT 57.10). Holds the helper like /safety.
+    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {URL} url */
+    async function handleEmoteFit(req, res, url) {
+        if (req.method !== "POST") return fail(res, 405, "error.webp.bad_request");
+        const cropRaw = url.searchParams.get("crop");
+        const sizeRaw = url.searchParams.get("size");
+        const maxRaw = url.searchParams.get("max_bytes");
+        /** @type {{x: number, y: number, w: number, h: number} | null} */
+        let crop = null;
+        if (cropRaw) {
+            const v = cropRaw.split(",").map(Number);
+            const [x, y, w, h] = v;
+            if (v.length !== 4 || v.some((n) => !Number.isFinite(n)) || x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > 1.0001 || y + h > 1.0001) {
+                return failAndClose(req, res, 400, "error.webp.invalid_params");
+            }
+            crop = { x, y, w, h };
+        }
+        const size = sizeRaw ? Number(sizeRaw) : null;
+        const maxBytes = Number(maxRaw);
+        if ((size !== null && !(Number.isInteger(size) && size >= 32 && size <= 1000)) || !(Number.isInteger(maxBytes) && maxBytes >= 1024)) {
+            return failAndClose(req, res, 400, "error.webp.invalid_params");
+        }
+        if (busy()) return failAndClose(req, res, 429, "error.webp.busy");
+        const declared = Number(req.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > EMOTE_FIT_MAX_INPUT) return failAndClose(req, res, 413, "error.studio.too_large");
+
+        const id = `fit-${Date.now().toString(36)}`;
+        probing.add(id);
+        const unwatch = watchClient(req, res);
+        const dir = path.join(ABOUT_DIR, id);
+        const input = path.join(dir, "in");
+        let n = 0;
+        const counter = new Transform({
+            transform(chunk, _e, cb) {
+                n += chunk.length;
+                if (n > EMOTE_FIT_MAX_INPUT) cb(new JobError("error.studio.too_large"));
+                else cb(null, chunk);
+            },
+        });
+        /** @type {Awaited<ReturnType<typeof fitEmote>> | null} */
+        let answer = null;
+        let code = "";
+        let detail = "";
+        try {
+            await mkdir(dir, { recursive: true });
+            await pipeline(req, counter, createWriteStream(input));
+            if (n === 0) throw new JobError("error.seventv.fit_failed", "empty file");
+            answer = await fitEmote({
+                ffmpeg: ffmpegPath(),
+                img2webp: img2webpPath(),
+                input,
+                dir,
+                crop,
+                size,
+                maxBytes,
+                onChild: (/** @type {any} */ c) => {
+                    ffmpegChild = c;
+                },
+            });
+        } catch (e) {
+            if (e instanceof JobError) {
+                code = e.code;
+                detail = e.detail || "";
+            } else {
+                code = "error.seventv.fit_failed";
+                console.error("[webp-helper] emote-fit failed:", e);
+            }
+        } finally {
+            killFfmpeg();
+            unwatch();
+            await rm(dir, { recursive: true, force: true }).catch(() => {});
+            probing.delete(id);
+        }
+        if (res.headersSent || res.destroyed) return;
+        if (answer) {
+            res.writeHead(200, {
+                "content-type": "image/webp",
+                "content-length": answer.bytes.length,
+                "x-emote-width": String(answer.width),
+                "x-emote-height": String(answer.height),
+                "x-emote-frames": String(answer.frames),
+                "x-emote-quality": String(answer.quality),
+            });
+            return res.end(answer.bytes);
+        }
+        const status = code === "error.studio.too_large" ? 413 : code === "error.seventv.fit_shape" ? 400 : 422;
+        return failAndClose(req, res, status, code, detail);
+    }
+
     /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {URL} url */
     async function handleFetchRoute(req, res, url) {
         const { pathname } = url;
@@ -2019,6 +2116,7 @@ export function createHelper(opts = {}) {
             if (pathname === "/poster") return await handlePoster(req, res, url);
             if (pathname === "/about") return await handleAbout(req, res, url);
             if (pathname === "/safety") return await handleSafety(req, res, url);
+            if (pathname === "/emote-fit") return await handleEmoteFit(req, res, url);
             if (pathname === "/fetch" || pathname.startsWith("/fetch/")) {
                 return await handleFetchRoute(req, res, url);
             }

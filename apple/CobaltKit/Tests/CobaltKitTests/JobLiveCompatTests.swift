@@ -29,7 +29,8 @@ struct JobLiveCompatTests {
         let handle = try #require(rig.handle)
         #expect(rig.stages(of: handle).contains(.done), "the period ended on the run's activity: \(rig.stages(of: handle))")
         #expect(!rig.stages(of: handle).contains(.failed))
-        #expect(handle.end?.state.savedCount == 2 && handle.end?.state.webpCount == 1, "\(String(describing: handle.end?.state))")
+        let statuses = handle.end?.state.rows?.map(\.status) ?? []
+        #expect(statuses.filter { $0 == "saved" }.count == 2 && statuses.filter { $0 == "webp ready" }.count == 1, "\(String(describing: handle.end?.state))")
     }
 
     @Test func closingTheFocusMidRenderKeepsTheActivityGoing() async throws {

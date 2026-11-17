@@ -112,7 +112,10 @@ private struct FullScreenVideo: View {
     let close: (CMTime?) -> Void
     @State private var player = AVPlayer()
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
             SystemPlayer(player: player)
@@ -141,7 +144,11 @@ private struct FullScreenVideo: View {
             await item.seek(to: start.isValid ? start : .zero)
             player.play()
         }
-        .onDisappear { player.pause() }
+        // emptied as it goes, so a streamed clip's connections close now rather than whenever the player is freed
+        .onDisappear {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+        }
     }
 
     private func finish() {
@@ -160,7 +167,10 @@ private struct FullScreenVideo: View {
 private struct SystemPlayer: View {
     let player: AVPlayer
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         #if os(macOS)
         SystemPlayerView(player: player)
         #else

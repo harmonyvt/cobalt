@@ -357,7 +357,10 @@ private struct TimelineFilmstrip: View {
     let height: CGFloat
     @State private var image: ImageBox?
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         let tile = max(24, height * 0.8)
         let count = min(32, max(1, Int((width / tile).rounded(.up))))
         HStack(spacing: 0) {

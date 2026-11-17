@@ -15,7 +15,10 @@ struct FramePreview: View {
     let aspect: FrameSpec.Aspect
     let fill: FrameSpec.Fill
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         let ratio = CGFloat(aspect.ratio ?? Double(image.width) / Double(max(1, image.height)))
         Color.clear
             .aspectRatio(ratio, contentMode: .fit)
@@ -61,7 +64,10 @@ struct FrameCropStage: View {
     let model: FrameCropModel
     let image: CGImage
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         GeometryReader { geo in
             let fit = Self.fit(CGSize(width: image.width, height: image.height), in: geo.size)
             ZStack {

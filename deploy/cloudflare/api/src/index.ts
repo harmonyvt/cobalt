@@ -2,17 +2,20 @@ import { Container, getContainer } from "@cloudflare/containers";
 import { backfillPostDetails, postDetailsConfigFrom } from "./post-details";
 import { lookupDepsFrom } from "./registry/ops/post-frame";
 import { PORT_HEADER, stripInternalHeaders, KEY_ID_HEADER, SERVICE_HEADER } from "./headers";
+import { EMOTE_FIT_PATH } from "./seventv";
 import { handleWebpRoute, isWebpRoute, WebpService, type WebpDeps } from "./webp";
 import { ApnsClient, apnsConfigFrom, fetchTransport, helperTransport } from "./apns";
 import { handleLiveRoute, isLiveRoute, LiveService } from "./live";
 import { EditLiveService, handleEditLiveRoute, isEditLiveRoute } from "./edit-live";
+import { SwarmLiveService, handleSwarmLiveRoute, isSwarmLiveRoute } from "./swarm-live";
 import { ChatLiveService, handleChatLiveRoute, isChatLiveRoute } from "./chat-live";
 import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from "./notify";
 import { handleStudioRoute, isStudioRoute, parseSaveEngineMode, StudioService, type YtDlpDeps } from "./studio";
 import { YTDLP_START_PATH } from "./ytdlp-path";
 import { fetchWithStartRetry } from "./start-retry";
-import { runSweep, scheduleSweepSoon, type SweepScheduler } from "./sweep";
+import { runSweep, scheduleSweepSoon, type SweepLive, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
+import { capture, cronEvent } from "./posthog";
 import { purgeFrom } from "./visibility";
 import { releaseHeld } from "./hidden";
 import { syncMaintenance } from "./sync";
@@ -50,6 +53,9 @@ export { Workbench } from "./workbench";
 // The chat's job hooks (APP-API-CONTRACT.md section 33.14): one object per chat thread.
 export { ChatJobs } from "./chat-jobs-do";
 export { ChatAgent } from "./chat-agents-do";
+// Agent swarms (APP-API-CONTRACT.md section 59): one object per swarm runs its tasks in its alarm.
+export { Swarm } from "./swarm-do";
+export { SevenTvGate } from "./seventv-gate-do";
 export { ContainerProxy } from "@cloudflare/containers";
 
 export interface Env extends WorkerEnv {
@@ -106,9 +112,11 @@ export class CobaltContainer extends Container<Env> {
     sleepAfter = "45s";
 
     private webp: WebpService;
+    private helperCall!: WebpDeps["helper"];
     private studio: StudioService;
     private live: LiveService;
     private editLive: EditLiveService;
+    private swarmLive: SwarmLiveService;
     private chatLive: ChatLiveService;
     private notify: NotifyService;
 
@@ -170,6 +178,7 @@ export class CobaltContainer extends Container<Env> {
                     path.startsWith("/poster") ||
                     path.startsWith("/about") ||
                     path.startsWith("/safety") ||
+                    path.startsWith("/emote-fit") ||
                     (path.startsWith("/fetch/") && path.endsWith("/file"));
                 // A clip's own signal sits past the worker's SAFETY_CALL_MS. Stills and /about stay on 300 s.
                 const safetyClip = path.startsWith("/safety") && path.includes("kind=clip");
@@ -187,6 +196,7 @@ export class CobaltContainer extends Container<Env> {
             },
         };
         this.webp = new WebpService(webpDeps);
+        this.helperCall = webpDeps.helper;
 
         // Live Activity push (APP-API-CONTRACT.md section 8). The APNs secrets are read
         // here and by the Worker (the capability flag); none of them goes into
@@ -222,8 +232,10 @@ export class CobaltContainer extends Container<Env> {
         });
         // editor renders (section 32): the app's token, pushes from the EditRenderer's ticks
         this.editLive = new EditLiveService({ storage: this.ctx.storage, db: env.DB, now: webpDeps.now, apns });
+        // swarms (section 61.5): the approve island on the owner's newest device, pushed from the swarm ops and runner
+        this.swarmLive = new SwarmLiveService({ storage: this.ctx.storage, db: env.DB, now: webpDeps.now, apns, scheduleSweep: () => this.scheduleSweepSoon() });
         // chat replies shown on the owner's other devices (section 27.9): the start tokens, pushes from the chat route
-        this.chatLive = new ChatLiveService({ storage: this.ctx.storage, now: webpDeps.now, apns });
+        this.chatLive = new ChatLiveService({ storage: this.ctx.storage, now: webpDeps.now, apns, scheduleSweep: () => this.scheduleSweepSoon() });
 
         // Hark notification bridge (APP-API-CONTRACT.md section 9). HARK_WEBHOOK_URL is a
         // secret read only here (the Worker reads it for the capability flag); it never goes
@@ -327,9 +339,36 @@ export class CobaltContainer extends Container<Env> {
         await scheduleSweepSoon(this.sweepScheduler());
     }
 
-    // The schedule's callback (public: the library looks the method up by name).
+    // What the sweep asks of the Live Activity services: the run store's housekeeping and end retries, plus the chat
+    // replies' watchdog (a reply whose Worker went silent is ended as interrupted).
+    private sweepLive(): SweepLive {
+        const live = this.live;
+        const chat = this.chatLive;
+        const swarm = this.swarmLive;
+        return {
+            hasActiveRuns: () => live.hasActiveRuns(),
+            cleanup: (now) => live.cleanup(now),
+            // the swarm islands' expiries and keep-alives ride on the quiet pass (at most a minute apart)
+            watchQuiet: async (now) => {
+                const runs = await live.watchQuiet(now);
+                const swarms = await swarm.watch(now).catch((e) => (console.error("[cobalt-do] swarm live watch failed", String(e)), { nextInMs: null }));
+                const times = [runs.nextInMs, swarms.nextInMs].filter((ms): ms is number => ms !== null);
+                return { nextInMs: times.length > 0 ? Math.min(...times) : null };
+            },
+            retryEnds: async (now) => {
+                // Both run in the same sweep pass.
+                const runs = await live.retryEnds(now);
+                const chats = await chat.watch(now);
+                // The sweep comes back for whichever needs it first (null: neither needs it).
+                const times = [runs.nextInMs, chats.nextInMs].filter((ms): ms is number => ms !== null);
+                return { nextInMs: times.length > 0 ? Math.min(...times) : null };
+            },
+        };
+    }
+
+        // The schedule's callback (public: the library looks the method up by name).
     async sweepJobs(): Promise<void> {
-        await runSweep(this.sweepScheduler(), () => this.studio.sweep(), undefined, this.live, this.notify);
+        await runSweep(this.sweepScheduler(), () => this.studio.sweep(), undefined, this.sweepLive(), this.notify);
     }
 
     // A container rollout restarts the running instance with the env it was
@@ -381,6 +420,9 @@ export class CobaltContainer extends Container<Env> {
         if (isEditLiveRoute(new URL(request.url).pathname)) {
             return handleEditLiveRoute(this.editLive, request, this.env.COBALT_API_KEY);
         }
+        if (isSwarmLiveRoute(new URL(request.url).pathname)) {
+            return handleSwarmLiveRoute(this.swarmLive, request, this.env.COBALT_API_KEY);
+        }
         if (isChatLiveRoute(new URL(request.url).pathname)) {
             return handleChatLiveRoute(this.chatLive, request, this.env.COBALT_API_KEY);
         }
@@ -409,6 +451,18 @@ export class CobaltContainer extends Container<Env> {
         }
 
         const { pathname } = new URL(request.url);
+        // 7TV emote fit (APP-API-CONTRACT.md 57.10): the Worker's upload op hands the picture to the helper. Internal
+        // only: the caller proves itself with COBALT_API_KEY, which no client holds.
+        if (pathname === EMOTE_FIT_PATH) {
+            if (request.method !== "POST" || request.headers.get("x-internal-key") !== this.env.COBALT_API_KEY) {
+                return new Response(JSON.stringify({ status: "error", error: { code: "error.api.not_found" } }), { status: 404, headers: { "content-type": "application/json" } });
+            }
+            await this.startAndWaitForPorts([COBALT_PORT, HELPER_PORT]);
+            const headers: Record<string, string> = { "content-type": "application/octet-stream" };
+            const len = request.headers.get("content-length");
+            if (len) headers["content-length"] = len;
+            return this.helperCall(`/emote-fit${new URL(request.url).search}`, { method: "POST", headers, body: request.body });
+        }
         if (isStudioRoute(pathname)) {
             // POST /studio carries the key id the Worker set after its D1
             // lookup; the render routes are capability URLs (no key).
@@ -472,6 +526,35 @@ export default {
     // Durable Object only writes records and arms its sweep; the container wakes only if
     // there is something to do, and a row that failed is not tried again for a day).
     async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+        // section 58: one PostHog `cron_run` per trigger, whatever happens inside it
+        const started = Date.now();
+        const laps: Record<string, number> = {};
+        let ok = true;
+        try {
+            await runScheduled(controller, env, ctx, laps);
+        } catch (e) {
+            ok = false;
+            throw e;
+        } finally {
+            await capture(env, (p) => ctx.waitUntil(p), [cronEvent(controller.cron === SEARCH_CRON ? "every-15-min" : "daily", Date.now(), Date.now() - started, ok, { cron: controller.cron, ...laps })]);
+        }
+    },
+} satisfies ExportedHandler<Env>;
+
+async function runScheduled(
+    controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+    laps: Record<string, number> = {},
+): Promise<void> {
+    // section 58: how long each step of the run took (`<step>_ms` on the `cron_run` event), so a slow run names its step
+    let lapStart = Date.now();
+    const lap = (name: string) => {
+        const now = Date.now();
+        laps[`${name}_ms`] = now - lapStart;
+        lapStart = now;
+    };
+    {
         // Every 15 minutes (the second trigger): the library search indexer drains its queue for up to
         // SEARCH_RUN_BUDGET_MS (APP-API-CONTRACT.md sections 21 and 23). D1 and the Hugging Face Space
         // only; the container is not touched. Awaited, not waitUntil: the run is the handler's work.
@@ -483,6 +566,7 @@ export default {
             } catch (e) {
                 console.error("[sync] maintenance failed", e instanceof Error ? e.message.slice(0, 200) : "error");
             }
+            lap("sync");
             // Editor (section 31.9): re-queue renders whose renderer went away, and kick both instances when anything is
             // queued. D1 only unless there is work; an owner without migration 0021 just logs.
             if (env.EDIT_RENDERER) {
@@ -497,6 +581,7 @@ export default {
                 } catch (e) {
                     console.error("[edits] recover failed", e instanceof Error ? e.name : "error");
                 }
+                lap("edits");
             }
             // Roast captions (section 25): new public files and gallery links, and the backfill. Anthropic
             // and D1 only; up to ROAST_RUN_BUDGET_MS, then the search indexer below.
@@ -515,6 +600,7 @@ export default {
                 } catch (e) {
                     console.error("[roast] backfill failed", e instanceof Error ? e.name : "error");
                 }
+                lap("captions");
             }
             // AI video titles (section 53): new public videos and the backlog. OpenRouter and D1 only; up to
             // AI_TITLE_RUN_BUDGET_MS. Before migration 0037 it just logs.
@@ -526,6 +612,7 @@ export default {
                 } catch (e) {
                     console.error("[titles] run failed", e instanceof Error ? e.message.slice(0, 200) : "error");
                 }
+                lap("titles");
             }
             const client = embedFrom(env);
             // "What it's about" (section 34): with search on and the Anthropic key. The kick brings the rows up to date and
@@ -542,6 +629,7 @@ export default {
                 } catch (e) {
                     console.error("[about] kick failed", e instanceof Error ? e.name : "error");
                 }
+                lap("about_kick");
                 // Timed transcripts (section 47): the probes' sound heard with the time of every word (and every post heard
                 // before this section heard again), before the writer, which then reuses the words.
                 const transcriber = transcriberFrom(env.AI, env.TRANSCRIBE_MODEL);
@@ -552,6 +640,7 @@ export default {
                     } catch (e) {
                         console.error("[transcript] pass failed", e instanceof Error ? e.message.slice(0, 200) : "error");
                     }
+                    lap("transcripts");
                 }
                 try {
                     const r = await writeAbouts({
@@ -568,6 +657,7 @@ export default {
                 } catch (e) {
                     console.error("[about] words failed", e instanceof Error ? e.name : "error");
                 }
+                lap("about");
             }
             // Safety clips and Clef ratings (section 51). The kick only writes records; the sweep cuts the clip.
             // New files and the pilot list, unless SAFETY_BACKFILL=1. Clef runs here, on the Workers AI binding.
@@ -583,6 +673,7 @@ export default {
             } catch (e) {
                 console.error("[safety] kick failed", e instanceof Error ? e.name : "error");
             }
+            lap("safety_kick");
             if (env.AI) {
                 try {
                     const r = await rateSafety({ db: env.DB, originals: env.ORIGINALS, ai: env.AI, now: () => Date.now(), cfg: safetyCfg });
@@ -590,6 +681,7 @@ export default {
                 } catch (e) {
                     console.error("[safety] rate failed", e instanceof Error ? e.name : "error");
                 }
+                lap("safety");
             }
             // Hidden posts (section 37.3): saves held for an about rule are hidden or published once their words are
             // written (at once while "what it's about" is off; at the latest an hour after they were held). D1 and R2.
@@ -608,6 +700,7 @@ export default {
             } catch (e) {
                 console.error("[hidden] held failed", e instanceof Error ? e.name : "error");
             }
+            lap("hidden");
             // Post frames (section 52.1): the details of new saves, looked up while the post is still there. D1, the
             // yt-dlp box (only when there is a new save) and the sites' public lookups.
             try {
@@ -616,11 +709,13 @@ export default {
             } catch (e) {
                 console.error("[post] details failed", e instanceof Error ? e.name : "error");
             }
+            lap("post_details");
             if (!client) return;
             // Keep the Space awake: a free Space sleeps after 48 h without traffic, a sleeping one answers the
             // indexer's POSTs at once without waking, and a search would then wait while it boots. A GET every
             // run is traffic (and wakes it if it slept anyway). Under a second when it is up.
             if (client.wake && !(await client.wake(SPACE_WAKE_MS))) console.log("[search] space did not answer its wake-up");
+            lap("space_wake");
             // Search names (section 48.2): meanings embedded, then every name's point rewritten. D1 and the Space.
             try {
                 const r = await refreshNames({ db: env.DB, client, now: () => Date.now() });
@@ -628,6 +723,7 @@ export default {
             } catch (e) {
                 console.error("[names] refresh failed", e instanceof Error ? e.name : "error");
             }
+            lap("names");
             let indexed = 0;
             try {
                 const r = await drainIndexer({
@@ -644,6 +740,7 @@ export default {
             } catch (e) {
                 console.error("[search] index failed", e instanceof Error ? e.name : "error");
             }
+            lap("index");
             // Moments (section 47.4): a vector for each stretch of speech, so a search finds the moment.
             try {
                 const m = await indexMoments({ db: env.DB, client, now: () => Date.now(), budgetMs: MOMENTS_RUN_BUDGET_MS });
@@ -651,6 +748,7 @@ export default {
             } catch (e) {
                 console.error("[moments] index failed", e instanceof Error ? e.message.slice(0, 200) : "error");
             }
+            lap("moments");
             // The word list (section 34.5): new terms embedded in query mode, and every term's average after posts moved.
             try {
                 const t = await indexTerms({ db: env.DB, client, now: () => Date.now(), budgetMs: TERMS_RUN_BUDGET_MS, refreshMeans: indexed > 0 });
@@ -658,6 +756,7 @@ export default {
             } catch (e) {
                 console.error("[about] terms failed", e instanceof Error ? e.name : "error");
             }
+            lap("terms");
             return;
         }
         ctx.waitUntil(
@@ -703,5 +802,5 @@ export default {
                         (e) => console.error("[loops] daily kick failed", e instanceof Error ? e.name : "error"),
                     ),
             );
-    },
-} satisfies ExportedHandler<Env>;
+    }
+}

@@ -381,14 +381,37 @@ A running save or encode is never "cancelled": the server cannot stop one (17.7)
   server's 16 open runs per key are touched). The app writes it locally (at most once a second in total) and the
   server registration of that run is deleted (`DELETE /live/runs/<run>`), so the server never pushes one run's
   content into the summary. It stays local until the period ends (no flip back to push).
-- **Content** (additive optional fields on `LiveContentState`, lenient decoding already in place; the fixture
-  `live-states.json` and the server's copy are unchanged): the lead job's stage, rail, bytes/frames and title
-  (lead = the job running on the server, else the newest live one) plus `jobs: Int?` (live), `waiting: Int?`
-  (queued on the server or in the device line). Widget: compact = the lead's step glyph + its circular progress + a
-  count ("3"); Lock Screen and expanded = today's headline, detail, bar and stepper of the lead, then "+2 more · 1
-  waiting for the server". The period ends when nothing is live: "3 saved · 1 webp" (done) or "2 saved · 1 couldn't
-  be saved"; dismissal times as today (15 min done, 5 min failed). A Shortcut run with a system Live Activity of its
-  own (15.2 `LongRunningIntent`) is not merged into this one.
+- **Content** (changed 2026-11-13, `CONTRACT-JOBLIVE.md` 2.1; the paragraph below this one is the old design and is
+  superseded). The busy period writes `JobLive.many(...)` into the activity as a `JobLiveState`, with one `Row` per job
+  (`title`, `status`, `phase`):
+  - **Which jobs.** Every job that is live when the period begins, and every job that joins while it runs. A job that
+    leaves the queue keeps its row only if it had saved or made its webp; a cancelled job, or one whose failure was
+    acknowledged, drops out. A save that landed and now waits on the owner (the trim, a picture) reads "saved": as far as
+    the period goes it is done.
+  - **Rows.** At most 3, newest first by each job's `since` (jobs with the same `since` keep the order they joined).
+    A row's title is the job's title and its status is that job's own headline (the same words its own island would say),
+    both capped at 60 characters.
+  - **Headline.** "X done, Y going": a zero part is left out ("3 done", "2 going"). A failed or lost job is neither done
+    nor going, so it adds "1 failed" ("1 done, 1 going, 1 failed").
+  - **The rest of the state.** `kind` "many", `title` "N jobs", `steps` `["jobs"]`, `fraction` = done / total,
+    `compact` = "done/total" ("1/3"), `since` = the oldest job's start. The phase is `working` while any job runs, then
+    `done` (some saved) or `failed` (none did).
+  - **The widget picks the rows layout from `state.rows`, not from the kind.** A period that keeps the first run's
+    activity keeps that run's attributes (an activity's attributes never change), so its kind stays "save" and its
+    title stays the first job's. The widget therefore also reads the count in "N jobs" from the state (`compact`'s
+    total), not from the title.
+  - **End.** When nothing is live the activity ends with the rows of the jobs that came to something (saved, webp made,
+    failed): "3 done", or "2 failed" when nothing saved. If every job was cancelled it ends with no state. Dismissal
+    follows the end state: **60 s** when it ends `done`, **300 s** when it ends `failed` (the old 15 min / 5 min is
+    gone). Stale: last write + 180 s, and the app writes the period again every 60 s while nothing new is said, so a
+    live period is not marked "no news".
+  - **Old design (superseded, kept for the record).** Additive optional fields on `LiveContentState` (`jobs: Int?`,
+    `waiting: Int?`): the lead job's stage, rail, bytes/frames and title (lead = the job running on the server, else the
+    newest live one). Widget: compact = the lead's step glyph + its circular progress + a count ("3"); Lock Screen and
+    expanded = the lead's headline, detail, bar and stepper, then "+2 more · 1 waiting for the server". The period ended
+    with "3 saved · 1 webp" (done) or "2 saved · 1 couldn't be saved", dismissed after 15 min (done) or 5 min (failed).
+    `jobs` and `waiting` are now only logged. A Shortcut run with a system Live Activity of its own (15.2
+    `LongRunningIntent`) is not merged into this one.
 - **Continued Processing (iOS)**: one `BGContinuedProcessingTask` per busy period instead of per pipeline
   (`ContinuedProcessing(home:)` → the queue), and **in server mode only while local work remains** (a link check, an
   upload, a frame read, a keep download): a job queued or running on the server needs no process to finish. Progress
@@ -460,7 +483,7 @@ services.
 | alongside | saving 3 links alongside. / <title> keeps going alongside. |
 | cancel / stop | see 3.4; a11y "cancel <title>", "stop <title>"; "couldn't cancel: the server didn't answer." |
 | relaunch | 3 links from last time are back in line. |
-| Live | +2 more · 1 waiting for the server / 3 saved · 1 webp / 2 saved · 1 couldn't be saved |
+| Live | (superseded 2026-11-13, section 6: the rows say "1 done, 2 going" / "3 done" / "2 failed") +2 more · 1 waiting for the server / 3 saved · 1 webp / 2 saved · 1 couldn't be saved |
 | leaving (device mode, or an upload mid-way) | 2 links are waiting for cobalt / open cobalt to finish them. · 1 upload is waiting for cobalt / open cobalt to finish it. |
 | Hark summary (server, 17.8) | cobalt · done · 4 saved · 1 webp ready · 1 couldn't finish |
 | progress words | unchanged: downloading from <service>, saving to your library, reading the video, making your webp, packing the webp |

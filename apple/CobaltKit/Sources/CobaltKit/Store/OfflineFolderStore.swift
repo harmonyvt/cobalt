@@ -72,7 +72,7 @@ extension OfflineStore {
         let watching = watcher != nil
         stopWatching()
         visibleRoot = url
-        adopt(records)                                        // every record's file url resolves against the new root
+        adopt(records, force: true)                           // every record's file url resolves against the new root
         if watching { startWatching() }
         publishRoot()
     }
@@ -137,10 +137,9 @@ extension OfflineStore {
         if keep {
             // a store nobody promotes from has no kept files (`canKeep`): keeping is a no-op there, and nothing is downloaded
             guard canKeep else { return [] }
-            guard let merged = try? Self.mutate(root: root, { records in
+            guard (try? await write({ (records: inout [Record]) -> Void in
                 for i in records.indices where wanted.contains(records[i].id) { records[i].keep = true }
-            }) else { return [] }
-            adopt(merged)
+            })) != nil else { return [] }
             if visibleRoot != nil { await promote(only: wanted) }
             let have = Dictionary(records.map { ($0.id, $0.hasFile) }, uniquingKeysWith: { first, _ in first })
             return ids.filter { have[$0] == false }
@@ -198,11 +197,11 @@ extension OfflineStore {
         guard await tools.poster(for: file, isImage: record.kind == .webp || Self.looksLikeImage(file.lastPathComponent), to: url)
         else { return }
         let bytes = Self.fileSize(url)
-        if let merged = try? Self.mutate(root: root, { records in
+        _ = try? await write { records in
             guard let i = records.firstIndex(where: { $0.id == id }), records[i].posterName == nil else { return }
             records[i].posterName = name
             records[i].posterBytes = bytes
-        }) { adopt(merged) }
+        }
     }
 
     /// While cobalt is in front: watch the root (not its subfolders) and rescan, debounced to 0.5 s. Covers a
@@ -287,10 +286,9 @@ extension OfflineStore {
             guard let found = FolderAdoption.section(of: current, in: ledger.snapshot()),
                   FolderAdoption.readMarker(in: syncDirectory).sections[found.id] != nil else { return }
         }
-        guard let merged = try? Self.mutate(root: root, { records in
+        _ = try? await write { records in
             for i in records.indices where records[i].keep == nil { records[i].keep = false }
-        }) else { return }
-        adopt(merged)
+        }
     }
 
     /// How many kept files are in the visible root (what "move the 24 offline files" counts).
@@ -333,7 +331,7 @@ extension OfflineStore {
             return (outcome, resolution)
         }
         if outcome.interrupted == nil { finishSwitch(resolution) }
-        if let written = try? Self.readRecordsChecked(root: root) { adopt(written) }
+        if let snapshot = await engine.read() { adopt(snapshot) }
         Telemetry.log(.info, .store, "offline folder switched", data: [
             "moved": .int(outcome.moved), "stayed": .int(outcome.stayed), "move": .bool(move)])
         return (outcome.moved, outcome.stayed, outcome.interrupted)
@@ -370,18 +368,15 @@ extension OfflineStore {
             else if outcome == .deleted { trashRefused = false }
             if outcome == .refused || outcome == .noTrash { return false }
         }
-        var removed: Record?
-        guard let merged = try? Self.mutate(root: root, { records in
-            guard let i = records.firstIndex(where: { $0.id == id }) else { return }
-            removed = records.remove(at: i)
+        // `try?` flattens: nil when the write failed and when the record was already gone
+        guard let removed = try? await write({ records -> Record? in
+            guard let i = records.firstIndex(where: { $0.id == id }) else { return nil }
+            return records.remove(at: i)
         }) else { return false }
-        guard let removed else { return false }
-        Self.delete(
+        await engine.delete(
             Eviction(
                 files: removed.fileName.map { [$0] } ?? [], posters: removed.posterName.map { [$0] } ?? [],
-                previews: removed.previewNames ?? []),
-            root: root)
-        adopt(merged)
+                previews: removed.previewNames ?? []))
         return true
     }
 }

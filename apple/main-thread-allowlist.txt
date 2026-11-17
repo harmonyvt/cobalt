@@ -1,0 +1,99 @@
+# Main-thread code that still does disk, JSON or image work (apple/ARCHITECTURE.md rule 1).
+# One `<finding> # reason` per line; MainThreadLintTests fails on anything new and on entries that no longer
+# match, so this list only shrinks. Regenerate with UPDATE_MAIN_THREAD_ALLOWLIST=1 (reasons are kept).
+Cobalt/App/DebugHooks.swift: guard let info = try? JSONDecoder().decode(MediaInfo.self, from: Data(#"{"name":"debug clip","isImage":false}"#.utf8)) else { return } # 8.17 baseline, move off main
+Cobalt/App/DebugHooks.swift: model.jobs.upsert(try JSONDecoder().decode(SharedJob.self, from: Data(json.utf8))) # 8.17 baseline, move off main
+Cobalt/App/DebugPreviewClip.swift: let fm = FileManager.default # 8.17 baseline, move off main
+Cobalt/App/DebugPreviewClip.swift: let size = (try? fm.attributesOfItem(atPath: file.path)[.size]) as? Int, size > 0 # 8.17 baseline, move off main
+Cobalt/App/KeyboardShelf.swift: (try? FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? NSNumber)?.uint64Value # 8.17 baseline, move off main
+Cobalt/App/KeyboardShelf.swift: guard let container = FileManager.default.containerURL( # 8.17 baseline, move off main
+Cobalt/App/KeyboardShelf.swift: guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return } # 8.17 baseline, move off main
+Cobalt/App/KeyboardShelf.swift: guard let src = video.fileURL, fm.fileExists(atPath: src.path) else { continue } # 8.17 baseline, move off main
+Cobalt/App/KeyboardShelf.swift: if !fm.fileExists(atPath: dest.path) { # 8.17 baseline, move off main
+Cobalt/App/KeyboardShelf.swift: if fm.fileExists(atPath: dest.path), fileNumber(dest) != fileNumber(src) { try? fm.removeItem(at: dest) } # 8.17 baseline, move off main
+Cobalt/App/KeyboardShelf.swift: if let data = try? JSONEncoder().encode(entries) { # 8.17 baseline, move off main
+Cobalt/App/KeyboardShelf.swift: let fm = FileManager.default # 8.17 baseline, move off main
+Cobalt/App/KeyboardShelf.swift: try? data.write(to: dir.appendingPathComponent("manifest.json"), options: .atomic) # 8.17 baseline, move off main
+Cobalt/App/PhotoImport.swift: if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) } # 8.17 baseline, move off main
+Cobalt/App/PhotoImport.swift: let fm = FileManager.default # 8.17 baseline, move off main
+Cobalt/App/PhotoImport.swift: let size = (try? fm.attributesOfItem(atPath: received.file.path)[.size] as? NSNumber)?.int64Value ?? 0 # 8.17 baseline, move off main
+Cobalt/Screens/Combine/CombineModel.swift: if item(id)?.isPhoto == true, let url = stored.fileURL, FileManager.default.fileExists(atPath: url.path) { out.append(.file(url)) } # 8.17 baseline, move off main
+Cobalt/Screens/Combine/CombineModel.swift: if rendition.itemType == .photo, let url = rendition.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { # 8.17 baseline, move off main
+Cobalt/Screens/Detail/DetailActions.swift: if let url = rendition.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url } # 8.17 baseline, move off main
+Cobalt/Screens/Detail/DetailMenu.swift: if let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url } # 8.17 baseline, move off main
+Cobalt/Screens/Detail/DetailPhotos.swift: guard let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) else { # 8.17 baseline, move off main
+Cobalt/Screens/Detail/DetailPhotos.swift: if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) } # 8.17 baseline, move off main
+Cobalt/Screens/Detail/DetailPhotos.swift: if let url = r.local?.fileURL, fm.fileExists(atPath: url.path) { # 8.17 baseline, move off main
+Cobalt/Screens/Detail/DetailPhotos.swift: let fm = FileManager.default # 8.17 baseline, move off main
+Cobalt/Screens/Detail/GalleryActions.swift: if let url = r.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) { return true } # 8.17 baseline, move off main
+Cobalt/Screens/Detail/GalleryPager.swift: if let poster = r.local?.posterURL, fm.fileExists(atPath: poster.path) { # 8.17 baseline, move off main
+Cobalt/Screens/Detail/GalleryPager.swift: let fm = FileManager.default # 8.17 baseline, move off main
+Cobalt/Screens/Detail/GalleryPager.swift: } else if let file = r.local?.fileURL, r.isStillPicture, fm.fileExists(atPath: file.path) { # 8.17 baseline, move off main
+Cobalt/Screens/Detail/RenditionHero.swift: onDisk = FileManager.default.fileExists(atPath: url.path) # 8.17 baseline, move off main
+Cobalt/Screens/Home/FocusView.swift: guard FileManager.default.fileExists(atPath: path) else { return false } # 8.17 baseline, move off main
+Cobalt/Screens/Home/GalleryPreviewHooks.swift: guard let file = video.fileURL, let size = (try? fm.attributesOfItem(atPath: file.path)[.size]) as? Int, size > 0 else { continue } # 8.17 baseline, move off main
+Cobalt/Screens/Home/GalleryPreviewHooks.swift: let fm = FileManager.default # 8.17 baseline, move off main
+Cobalt/Screens/Home/HomeScreen.swift: let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return } # 8.17 baseline, move off main
+Cobalt/Screens/Home/HomeScreen.swift: try? data.write(to: docs.appendingPathComponent("orbit-slots.json")) # 8.17 baseline, move off main
+Cobalt/Screens/Home/OrbitGallery.swift: if GalleryPreviewImages.directory != nil, isStill(video), let file = video.fileURL, fm.fileExists(atPath: file.path) { return file } # 8.17 baseline, move off main
+Cobalt/Screens/Home/OrbitGallery.swift: if isStill(video), let file = video.fileURL, fm.fileExists(atPath: file.path) { return file } # 8.17 baseline, move off main
+Cobalt/Screens/Home/OrbitGallery.swift: if let poster = video.posterURL, fm.fileExists(atPath: poster.path) { return poster } # 8.17 baseline, move off main
+Cobalt/Screens/Home/OrbitGallery.swift: if let url = face.fileURL, fm.fileExists(atPath: url.path) { out.onDisk.insert(m.id) } # 8.17 baseline, move off main
+Cobalt/Screens/Home/OrbitGallery.swift: let fm = FileManager.default # 8.17 baseline, move off main
+Cobalt/Screens/Library/LibraryController.swift: if let url = face.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url } # 8.17 baseline, move off main
+Cobalt/Screens/Library/LibraryController.swift: if let url = face.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) { # 8.17 baseline, move off main
+Cobalt/Screens/Library/LibraryDeleteSheet.swift: if let poster = r.local?.posterURL, fm.fileExists(atPath: poster.path) { # 8.17 baseline, move off main
+Cobalt/Screens/Library/LibraryDeleteSheet.swift: let fm = FileManager.default # 8.17 baseline, move off main
+Cobalt/Screens/Library/LibraryDeleteSheet.swift: } else if let file = r.local?.fileURL, r.isStillPicture || r.isWebp, fm.fileExists(atPath: file.path) { # 8.17 baseline, move off main
+Cobalt/Screens/Library/LibraryPeek.swift: let kept = face.local?.fileURL.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } # 8.17 baseline, move off main
+Cobalt/Screens/PostFrame/PostFrameCards.swift: guard let data, let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil } # 8.17 baseline, move off main
+Cobalt/Screens/PostFrame/PostFrameCards.swift: return CGImageSourceCreateImageAtIndex(source, 0, nil) # 8.17 baseline, move off main
+Cobalt/Screens/Tools/ToolsDebug.swift: guard let path = defaults.string(forKey: "previewToolPhoto"), let data = FileManager.default.contents(atPath: path) else { return } # 8.17 baseline, move off main
+Cobalt/Screens/Tools/ToolsDebug.swift: if item.items.isEmpty, let url = item.video?.local?.fileURL { try? data.write(to: url) } # 8.17 baseline, move off main
+Cobalt/Screens/Tools/ToolsDebug.swift: if let url = r.local?.fileURL { try? data.write(to: url) } # 8.17 baseline, move off main
+Cobalt/Screens/Tools/ToolsExport.swift: if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) } # 8.17 baseline, move off main
+Cobalt/Screens/Tools/ToolsExport.swift: let fm = FileManager.default # 8.17 baseline, move off main
+Cobalt/Screens/Tools/ToolsExport.swift: try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Editor/EditorStore.swift: ? FileManager.default.temporaryDirectory.appendingPathComponent("capystore-editor-preview", isDirectory: true) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Folder/MacFolder.swift: do { try FileManager.default.createDirectory(at: defaultFolder, withIntermediateDirectories: true) } catch { return .failed } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: ?? FileManager.default.temporaryDirectory # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: guard let data = try? Data(contentsOf: url) else { return [] } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: if case .file(let path, let name, _, _, _) = e.input, !FileManager.default.fileExists(atPath: path) { # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: let decoder = JSONDecoder() # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: let encoder = JSONEncoder() # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: try encoder.encode(entries).write(to: fileURL, options: .atomic) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Media/Platform.swift: guard FileManager.default.isReadableFile(atPath: fileURL.path) else { throw PhotosError.unreadable } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Models/LibraryModel.swift: if isTemp { try? FileManager.default.removeItem(at: url) } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Models/LibraryModel.swift: if let url = stored?.fileURL, fm.fileExists(atPath: url.path) { return (url, false) } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Models/LibraryModel.swift: let fm = FileManager.default # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Offline/OfflineDownloads.swift: guard FileManager.default.fileExists(atPath: file.path) else { # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Offline/OfflineDownloads.swift: try? FileManager.default.removeItem(at: file) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Photos/PhotosSync.swift: guard FileManager.default.isReadableFile(atPath: fileURL.path) else { throw PhotosError.unreadable } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Photos/PhotosSync.swift: guard let file = video.fileURL, FileManager.default.fileExists(atPath: file.path) else { # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Photos/PhotosSync.swift: return FileManager.default.fileExists(atPath: file.path) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Pipeline/Pipeline.swift: for url in temporaryFiles where url != keep { try? FileManager.default.removeItem(at: url) } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Share/ShareModel.swift: try FileManager.default.copyItem(at: source, to: destination) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Share/ShareModel.swift: try? FileManager.default.removeItem(at: destination) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Shortcuts/ShortcutActions.swift: for staged in out { try? FileManager.default.removeItem(at: staged.0) } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/OfflineStore.swift: data["index"] = .bool(FileManager.default.fileExists(atPath: Self.indexURL(root: root).path)) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/OfflineStore.swift: if !(FileManager.default.fileExists(atPath: visibleRoot.path, isDirectory: &isDirectory) && isDirectory.boolValue) { # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/OfflineStore.swift: if posterName == nil || !fm.fileExists(atPath: posterURL.path) { # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/OfflineStore.swift: let fm = FileManager.default # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/OfflineStore.swift: let size = ((try? fm.attributesOfItem(atPath: destination.path)[.size]) as? NSNumber)?.int64Value ?? media.bytes ?? 0 # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/OfflineStore.swift: try FileManager.default.createDirectory(at: filesDir, withIntermediateDirectories: true) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/OfflineStore.swift: try? FileManager.default.removeItem(at: file) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: else if let data = try? JSONEncoder().encode(newValue) { defaults.set(data, forKey: "hidden.index") } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: new.path) else { continue } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: if let data = try? JSONEncoder().encode(known) { defaults.set(data, forKey: Settings.knownCapabilitiesKey) } # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: if let newValue, let data = try? JSONEncoder().encode(newValue) { # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: let fm = FileManager.default # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: let known = try? JSONDecoder().decode(KnownCapabilities.self, from: data), # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: let loaded = defaults.data(forKey: "hidden.index").flatMap { try? JSONDecoder().decode(HiddenIndex.self, from: $0) } ?? HiddenIndex() # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: return try? JSONDecoder().decode(GlobalShortcut.self, from: data) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: try Data("x".utf8).write(to: probe) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) # 8.17 baseline, move off main
+CobaltKit/Sources/CobaltKit/Store/Settings.swift: try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) # 8.17 baseline, move off main

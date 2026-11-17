@@ -8,7 +8,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { assemblePosts, libraryHide, type AppDeps } from "./app-routes";
 import { hiddenPostKeys } from "./hidden-store";
-import { lookBlocks, lookImages, type LookDeps } from "./look-pictures";
+import { lookBlocks, lookImages, lookMediaBlocks, lookMediaImages, type LookDeps, type MediaLookDeps } from "./look-pictures";
+import { mediaHostsOf } from "./media-refs";
 import { chatTools, loadPosts, postStatements, postsFrom, recordsOf, type ChatCollect, type ChatToolDeps, type ChatTools, type Post, type Ranked } from "./chat-tools";
 import { readTogether } from "./library";
 import { chatToolbox, runConfirmed } from "./registry/ai";
@@ -22,7 +23,7 @@ import type { EmbedClient } from "./embed";
 import { CODE_TIMEOUT_BOX_MS, type CodeRunner } from "./chat-limits";
 import { workbenchOn } from "./workbench-rules";
 import type { ModelFetch } from "./model-fetch";
-import type { JobEnded, JobsPort, ResumeOutcome } from "./chat-jobs";
+import { JOB_MESSAGE, type JobEnded, type JobsPort, type ResumeOutcome } from "./chat-jobs";
 import {
     AGENT_TURNS_MAX,
     agentRow,
@@ -63,7 +64,9 @@ const NEW_TITLE = "new chat";
 // ---- injected pieces ----------------------------------------------------------------------------
 
 
-export type ModelTurn = { content: any[]; stop_reason: string | null };
+// usage: the turn's token counts as the API reported them (agent swarms, section 59, price their tasks from it)
+export type ModelUsage = { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
+export type ModelTurn = { content: any[]; stop_reason: string | null; usage?: ModelUsage };
 export type ChatModel = {
     model: string;
     turn(req: { system: string; tools: any[]; messages: any[]; onText: (delta: string) => void }): Promise<ModelTurn>;
@@ -101,7 +104,7 @@ export function chatModelFrom(
                 });
                 stream.on("text", (d) => onText(d));
                 const final = await stream.finalMessage();
-                return { content: final.content as any[], stop_reason: final.stop_reason };
+                return { content: final.content as any[], stop_reason: final.stop_reason, usage: final.usage as ModelUsage | undefined };
             } catch (e) {
                 throw new ModelError(e instanceof Error ? e.message : String(e));
             }
@@ -143,7 +146,7 @@ export type ChatDeps = {
     waitUntil?: (p: Promise<unknown>) => void;
     pingMs?: number;
     // the reply's Live Activity on the owner's other devices (section 27.9, chat-live.ts); absent when push is off
-    liveFor?: (thread: string, prompt: string) => { event(name: string, data: unknown): void; close(): Promise<void> };
+    liveFor?: (thread: string, prompt: string) => { event(name: string, data: unknown): void; tick?(): void; close(): Promise<void> };
     // The op registry (section 33): the model's `cobalt` API and cheat sheet come from it. Without it (older callers)
     // the read tools of chat-tools.ts are called directly, under their flat names.
     registry?: Registry;
@@ -587,6 +590,11 @@ const lookDepsOf = (d: ChatDeps): LookDeps => {
     const env = (d.base?.env ?? {}) as { ORIGINALS?: unknown; MEDIA?: unknown; IMAGES?: unknown };
     return { db: d.db, mediaBaseUrl: d.mediaBaseUrl, originals: env.ORIGINALS as never, media: env.MEDIA as never, images: (env.IMAGES ?? null) as never };
 };
+const mediaLookDepsOf = (d: ChatDeps): MediaLookDeps => {
+    const env = (d.base?.env ?? {}) as { MEDIA_HOSTS?: string };
+    const shareBaseUrl = d.shareBaseUrl ?? d.base?.shareBaseUrl;
+    return { ...lookDepsOf(d), shareBaseUrl, hosts: mediaHostsOf(env, { mediaBaseUrl: d.mediaBaseUrl, shareBaseUrl }) };
+};
 
 // Consecutive turns of one role become one (a failed reply can leave two user turns in a row).
 function mergeRoles(messages: any[]): any[] {
@@ -757,11 +765,14 @@ function streamReply(d: ChatDeps, c: Omit<ReplyCtx, "emit">, first?: { event: st
             open = false; // the app went away; the reply carries on and is saved
         });
     };
-    const ping = setInterval(() => write(": ping\n\n"), d.pingMs ?? PING_MS);
-    if (first) write(sse(first.event, first.data));
-
     // the Live Activity follows replies to a new message (not the reply that goes on after a confirm card)
     const live = c.userRow ? d.liveFor?.(c.thread.id, c.text) : undefined;
+    // the ping also tells the Live Activity the reply is still alive (a long tool call says nothing new)
+    const ping = setInterval(() => {
+        write(": ping\n\n");
+        live?.tick?.();
+    }, d.pingMs ?? PING_MS);
+    if (first) write(sse(first.event, first.data));
     const emit = (e: string, v: unknown) => {
         write(sse(e, v));
         live?.event(e, v);
@@ -916,6 +927,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
         const system = systemPrompt(now(), search, d.registry ? toolTypes(search, d.registry, workbench, flags) : undefined, d.agentOf ?? null);
         let runs = 0;
         let looked = 0;
+        let lookedMedia = 0;
         for (let turn = 0; turn <= MAX_CODE_RUNS + 1; turn++) {
             // a sub-agent stopped (or deleted) by its parent ends after the step it was on
             if (d.agentOf && turn > 0) {
@@ -1036,6 +1048,13 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                     // private pictures go inline, a grid or video frames when asked (section 44.3)
                     const imgs = await lookImages(lookDepsOf(d), fresh, collect.lookOpts ?? {});
                     for (const pid of fresh) content.push(...lookBlocks(pid, imgs.get(pid), collect.lookOpts?.[pid]?.frames === true));
+                }
+                // look({ media }) (section 62.1): emotes, links and capystore refs
+                const freshMedia = (collect.lookMedia ?? []).slice(lookedMedia);
+                lookedMedia = collect.lookMedia?.length ?? 0;
+                if (freshMedia.length > 0) {
+                    const imgs = await lookMediaImages(mediaLookDepsOf(d), freshMedia).catch(() => new Map());
+                    for (const ref of freshMedia) content.push(...lookMediaBlocks(ref, imgs.get(ref)));
                 }
                 results.push({ type: "tool_result", tool_use_id: u.id, ...(out.error !== undefined ? { is_error: true } : {}), content });
             }
@@ -1188,7 +1207,8 @@ export async function resumeAfterJobs(d: ChatDeps, id: string, ended: JobEnded[]
             const steps = parse<Step[]>(host.steps, []);
             let changed = false;
             for (const s of steps) {
-                const e = s.kind === "job" && s.job ? ended.find((x) => x.watch.handed === s.job!.job && x.watch.message_id === String(host.id)) : undefined;
+                const e =
+                    s.kind === "job" && s.job ? ended.find((x) => x.result.status !== JOB_MESSAGE && x.watch.handed === s.job!.job && x.watch.message_id === String(host.id)) : undefined;
                 if (!e || !s.job || s.job.status !== "waiting") continue;
                 const st = e.result.status;
                 s.job = { ...s.job, status: st === "done" || st === "error" || st === "cancelled" || st === "timeout" ? st : "error" };
@@ -1200,8 +1220,21 @@ export async function resumeAfterJobs(d: ChatDeps, id: string, ended: JobEnded[]
             if (changed) await d.db.prepare("UPDATE chat_messages SET steps = ?2 WHERE id = ?1 AND thread_id = ?3").bind(host.id, JSON.stringify(steps), id).run();
         }
 
-        const lines = ended.map((e) => `- ${clipStr(stringify(e.result), JOB_RESULT_MAX)}${e.watch.note ? ` (your note: ${e.watch.note})` : ""}`);
-        note = `[The server: ${ended.length === 1 ? "a job you handed over with cobalt.jobs.onDone has" : "jobs you handed over with cobalt.jobs.onDone have"} ended.\n${lines.join("\n")}\nCarry on from here without waiting for Harmony: when it is done, cobalt.show([post_id]) and say it is ready (give share_url if they wanted a link); if it failed or timed out, say so in one short line.${ended.some((e) => /^agent:/.test(e.watch.handed)) ? " A sub-agent's result is its report: tell Harmony what it found or made, cobalt.show the post_ids that matter, and wait for the other sub-agents still working (their reports come the same way)." : ""}]`;
+        // a swarm agent's question (section 61.3): the job goes on; it is shown like agents mail, and marked read
+        const asks = ended.filter((e) => e.result.status === JOB_MESSAGE);
+        const over = ended.filter((e) => e.result.status !== JOB_MESSAGE);
+        const askLines = asks.flatMap((e) => {
+            const swarm = /^swarm:([A-Za-z0-9]{16})$/.exec(e.watch.job)?.[1] ?? e.watch.job;
+            return ((e.result.asks as { id: number; agent: number; text: string }[] | undefined) ?? []).map((a) => `- agent ${a.agent} of swarm ${swarm} asks: ${clipStr(a.text, JOB_RESULT_MAX)}`);
+        });
+        const askIds = asks.flatMap((e) => ((e.result.asks as { id: number }[] | undefined) ?? []).map((a) => a.id));
+        if (askIds.length) await d.db.prepare("UPDATE swarm_messages SET read_at = ?1 WHERE id IN (SELECT value FROM json_each(?2)) AND read_at IS NULL").bind(now, JSON.stringify(askIds)).run().catch(() => {});
+        const askNote = askLines.length
+            ? `[New ${askLines.length === 1 ? "message" : "messages"} (cobalt.swarm):\n${askLines.join("\n")}\nAnswer with cobalt.swarm.send(swarm_id, agent, text) (or ask Harmony first if you cannot); the swarm job is still being watched.]`
+            : null;
+        const lines = over.map((e) => `- ${clipStr(stringify(e.result), JOB_RESULT_MAX)}${e.watch.note ? ` (your note: ${e.watch.note})` : ""}`);
+        const endNote = over.length === 0 ? null : `[The server: ${over.length === 1 ? "a job you handed over with cobalt.jobs.onDone has" : "jobs you handed over with cobalt.jobs.onDone have"} ended.\n${lines.join("\n")}\nCarry on from here without waiting for Harmony: when it is done, cobalt.show([post_id]) and say it is ready (give share_url if they wanted a link); if it failed or timed out, say so in one short line.${over.some((e) => /^agent:/.test(e.watch.handed)) ? " A sub-agent's result is its report: tell Harmony what it found or made, cobalt.show the post_ids that matter, and wait for the other sub-agents still working (their reports come the same way)." : ""}]`;
+        note = [endNote, askNote].filter(Boolean).join("\n\n");
         earlier = results.slice(-HISTORY_MESSAGES);
         botRow = (await d.db
             .prepare("INSERT INTO chat_messages (thread_id, role, text, status, created_at, updated_at) VALUES (?1, 'assistant', '', 'running', ?2, ?2) RETURNING *")

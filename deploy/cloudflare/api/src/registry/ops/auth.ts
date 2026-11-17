@@ -384,7 +384,7 @@ const ROUTES = [
     }),
 ];
 
-// ---- extension pairing (55) ------------------------------------------------------------------------------------------
+// ---- extension pairing (64) ------------------------------------------------------------------------------------------
 // Safari cannot finish chrome.identity.launchWebAuthFlow, so it polls. Chrome's redirect sign-in does not use this
 // table: the approve page writes an auth_handoffs row and the existing POST /auth/exchange mints the session.
 // Codes are 32 random bytes, base64url (43 characters), the same shape as an app handoff code. Only the hash is stored.

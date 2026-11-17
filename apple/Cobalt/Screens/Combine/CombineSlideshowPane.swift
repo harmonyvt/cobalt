@@ -146,7 +146,10 @@ struct CombinePreviewPlayer: View {
         }
     }
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         let slides = slides
         let total = slides.reduce(0) { $0 + $1.length }
         VStack(alignment: .leading, spacing: 10) {

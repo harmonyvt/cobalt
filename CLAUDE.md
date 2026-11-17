@@ -102,9 +102,17 @@ the files and a real run before anything is called done.
   After changing an op run `npm run gen` in `deploy/cloudflare/api`: it rewrites `openapi.json`, the contract's route
   index and `apple/CobaltKit/.../API/Generated/Endpoints.swift` (section 33.13); `npm test` fails while they are stale.
 - MCP server (`APP-API-CONTRACT.md` section 35): `POST /mcp` on the API host serves the chat AI's ops as MCP tools
-  (`src/mcp.ts`, `src/registry/ops/mcp.ts`), auth `Bearer <client key>`, each key one MCP "thread" (`chat:<thread>`, same
-  caps). `upload_begin` mints a 15-minute `PUT /mcp/upload/<token>` link for local files. A new chat op appears there too;
-  hide chat-only calls in `MCP_SKIPPED_CALLS`, MCP-only ops use `when: (f) => f.mcp === true`.
+  (`src/mcp.ts`, `src/registry/ops/mcp.ts`), auth `Bearer <client key>`, each key one MCP "thread" (`chat:<thread>`; MCP calls
+  have no daily render or save cap, the in-app chat keeps both). `upload_files` (op `upload.begin`) mints a 15-minute `PUT /mcp/upload/<token>` link for local files. A new chat op appears there too;
+  hide chat-only calls in `MCP_SKIPPED_CALLS`, MCP-only ops use `when: (f) => f.mcp === true`. Twelve ops that the app
+  tools replaced are listed in `MCP_RETIRED_CALLS` (not listed, still answered by their app tool via `src/mcp-app/retired.ts`, which helps only raw JSON-RPC clients: hosts only call listed
+  tools, so saved prompts, skills and permission allowlists naming the old tools must switch to the new names);
+  every listed tool also answers `structuredContent`, and a few write tools end on a widget (`src/mcp-app/follow.ts`).
+- MCP app (`MCP-APP-CONTRACT.md`, setup per host in `MCP-APP.md`): the same `/mcp` is an MCP App for Claude, ChatGPT and
+  Grok. Core = the official SDK (`@modelcontextprotocol/server`, `src/mcp-app/server.ts`, loaded lazily); app tools in
+  `src/mcp-app/tools/` (text + `structuredContent`, shapes in `shapes.ts`, not registry ops); widgets in `src/mcp-app/widgets/`
+  (one bundle, nine views): after editing them run `npm run widgets`. `npm run widgets:test` clicks through them in Chromium;
+  `npm run mcp:dev` serves the real MCP code over demo data for a tunnel.
 - Workbench (`APP-API-CONTRACT.md` section 33.11, ffmpeg editing 33.11.1): the chat AI and MCP Linux box (`cobalt.box.run`/`pull`/`save`), the
   `Workbench` DO (`api/src/workbench*.ts`) on container app `cobalt-api-workbench` (`deploy/cloudflare/workbench/`, standard-1,
   one instance). No secrets, no own internet: every HTTP(S) request passes the Worker's outbound rule (19.2 + our own zone
@@ -117,6 +125,16 @@ the files and a real run before anything is called done.
   from the 15-minute cron (`api/src/ai-titles.ts`) and writes its title into `media_titles` with `key_id = 'ai:titles'`
   (never over an owner's title); cost and state in D1 `media_ai_titles` (migration 0037). Off unless `OPENROUTER_API_KEY`
   is in the secrets file.
+- 7TV accounts (`APP-API-CONTRACT.md` section 57): one linked 7TV login (D1 `seventv_account`, migration 0040, token sealed
+  with an HKDF of `COBALT_API_KEY`) edits the emote sets of its own channel and every channel it is an editor of, through
+  7TV's v4 GraphQL (`api/src/seventv.ts`, routes `/7tv*`, chat/MCP `seventv.*`, writes tier `ask`). 7TV has no OAuth: the
+  token is 7tv.app's `localStorage["7tv-token"]` session (30 days), brought in by a bookmarklet that opens
+  `cobalt-apple://7tv-link?token=` or pasted in the studio tab's link sheet; never through chat.
+- PostHog (`APP-API-CONTRACT.md` section 58): US cloud project "capystore" (735568). The API Worker sends an `op` event for
+  every route, chat and MCP call, plus app warn/error logs, crashes and cron runs (`api/src/posthog.ts`, `background()`,
+  never changes an answer); the token is a public-safe text binding. The apps use `posthog-ios` (the only third-party
+  package, app target only, `apple/Cobalt/App/Analytics.swift`): replay on iPhone/iPad with every media view wearing
+  `.mediaMask()`; a new view that draws media must wear it too. Read it through the claude.ai PostHog connector.
 - Chat (`APP-API-CONTRACT.md` section 27): Haiku 5.5 threads about the library in D1 `chat_threads`/`chat_messages`
   (`api/src/chat.ts`), code mode: the model's JavaScript runs in a Dynamic Worker (`LOADER` binding,
   `api/src/chat-loader.ts`) against the read-only tools in `api/src/chat-tools.ts`.
@@ -151,7 +169,7 @@ the files and a real run before anything is called done.
 
 Native SwiftUI app for this fork: one multiplatform target (iPhone, iPad, Mac; not
 Catalyst) plus an iOS share extension. iOS 18 / macOS 15, Swift 6, no third-party
-dependencies. Contracts: `apple/CONTRACT.md` (app: layout, CobaltKit public API, screens,
+dependencies except `posthog-ios` (app target only, section 58). Contracts: `apple/CONTRACT.md` (app: layout, CobaltKit public API, screens,
 copy, motion, lanes, gates) and `deploy/cloudflare/APP-API-CONTRACT.md` (the additive
 backend routes it uses; nothing under `api/` changes). Design source: `apple/mockup/`.
 

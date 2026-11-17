@@ -109,7 +109,10 @@ struct StarCanvas: View, @preconcurrency Animatable {
         set { growth = newValue.first; rings = newValue.second }
     }
 
-    var body: some View {
+    // Session replay (APP-API-CONTRACT 58): media is always masked.
+    var body: some View { mediaBody.mediaMask() }
+
+    @ViewBuilder private var mediaBody: some View {
         Canvas { ctx, size in
             let c = CGPoint(x: size.width / 2, y: size.height / 2)
             switch state.phase {

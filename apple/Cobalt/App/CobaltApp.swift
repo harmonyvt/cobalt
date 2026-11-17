@@ -101,9 +101,15 @@ struct CobaltApp: App {
         #if os(macOS)
         FinderDomain.install(model)
         MenuBarFinderWiring.connect(model)
+        QuickSave.install(model)
         #endif
         // Shortcuts, Siri and Spotlight run in this process, before any scene (CONTRACT-PARALLEL 15.2)
         IntentDependencies.register(model)
+        // The swarm buttons (Live Activity intents, notification actions) call the API with this model's session client;
+        // the system may launch the app in the background just to run one, so this is set before any scene.
+        model.installSwarmIntentHost()
+        SwarmNotifier.registerCategory()
+        SwarmNotifier.shared.start(model)
         #if os(macOS)
         DockBadge.follow(model.queue)
         #endif
@@ -164,11 +170,13 @@ struct CobaltApp: App {
         rootContent
             .onOpenURL { url in
                 #if DEBUG
-                DebugHooks.log("onOpenURL \(url.absoluteString)")
+                DebugHooks.log("onOpenURL \(SevenTvLink.redacted(url))")
                 #endif
                 handleAppLink(url, model: model)
             }
             .task { await sceneStarted() }
+            // PostHog (APP-API-CONTRACT 58): starts once the server names its project, follows the two switches
+            .onChange(of: AnalyticsKey(model), initial: true) { Analytics.sync(model: model) }
             #if os(macOS)
             .frame(minWidth: 900, minHeight: 600)
             #endif
@@ -265,3 +273,15 @@ private struct StageWallpaperCommand: View {
     }
 }
 #endif
+
+/// What `Analytics.sync` depends on, so the scene calls it again exactly when one of them changes.
+private struct AnalyticsKey: Equatable {
+    let project: PostHogProject?
+    let send: Bool
+    let record: Bool
+    @MainActor init(_ model: AppModel) {
+        project = model.capabilities.postHog
+        send = model.settings.sendTelemetry
+        record = model.settings.recordSessions
+    }
+}

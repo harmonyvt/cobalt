@@ -6,13 +6,13 @@ It is for Harmony, sideloaded. There is no store listing. The background service
 
 ## Before the extension can sign in
 
-The approve page and the Safari poll need a deploy of the web Worker and the API Worker, and one new D1 migration. **That migration is not applied by this change.** Apply it yourself, then deploy:
+The approve page and the Safari poll need a deploy of the web Worker and the API Worker, and the D1 table `extension_pairings`. Apply migrations yourself, then deploy:
 
 ```sh
 cd deploy/cloudflare/web && npx cf d1 migrations apply 42f18bb0-837a-47f7-b1e2-606eb705ab6c --dir ../d1/migrations
 ```
 
-`0039_extension_pairings.sql` is the file. Chrome's redirect sign-in reuses the existing `auth_handoffs` table, so it works once the web Worker that serves `/connect/extension` is deployed. Safari's poll needs `0039` as well. Until that table exists, `POST /auth/extension/begin` answers 503.
+`0045_extension_pairings.sql` is the file. It was `0039_extension_pairings.sql`, which was already applied to production D1 on 2026-11-12. Main has 0040 and 0042–0044, so the migration is 0045, and the SQL is `CREATE TABLE IF NOT EXISTS` so applying 0045 on that database changes nothing. Chrome's redirect sign-in reuses the existing `auth_handoffs` table, so it works once the web Worker that serves `/connect/extension` is deployed. Safari's poll needs the table as well. Until that table exists, `POST /auth/extension/begin` answers 503.
 
 ## Sign in
 

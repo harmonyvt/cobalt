@@ -59,6 +59,1278 @@
         }
       }
     },
+    "/7tv": {
+      "get": {
+        "operationId": "seventv_http.status",
+        "summary": "The linked 7TV account and the channels it can edit (GET /7tv).",
+        "tags": [
+          "seventv_http"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "linked": {
+                      "type": "boolean"
+                    },
+                    "account": {
+                      "$ref": "#/components/schemas/SevenTvAccount"
+                    },
+                    "channels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SevenTvChannel"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "linked"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "seventv_http.unlink",
+        "summary": "Forget the 7TV token (DELETE /7tv); ?logout=1 also ends that session on 7TV (the app's own login sheet).",
+        "tags": [
+          "seventv_http"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/channels/{id}/live": {
+      "post": {
+        "operationId": "seventv_http.live",
+        "summary": "Make an emote set the channel's live set (POST /7tv/channels/<id>/live).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "set_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "set_id"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "channel_id": {
+                      "type": "string"
+                    },
+                    "active_set_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "channel_id",
+                    "active_set_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/channels/{id}/sets": {
+      "get": {
+        "operationId": "seventv_http.sets",
+        "summary": "A channel's emote sets, live first (GET /7tv/channels/<id>/sets).",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "channel_id": {
+                      "type": "string"
+                    },
+                    "active_set_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "sets": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SevenTvSetSummary"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "channel_id",
+                    "active_set_id",
+                    "sets"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/emotes": {
+      "post": {
+        "operationId": "seventv_http.upload",
+        "summary": "Upload a library picture (webp, gif, png, avif, jpeg) as a new 7TV emote, optionally cropped and resized first and added to a set (POST /7tv/emotes).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 400
+                  },
+                  "tags": {
+                    "maxItems": 6,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 64
+                    }
+                  },
+                  "zero_width": {
+                    "type": "boolean"
+                  },
+                  "private": {
+                    "type": "boolean"
+                  },
+                  "set_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "alias": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 400
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "crop": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "y": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "w": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1
+                          },
+                          "h": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y",
+                          "w",
+                          "h"
+                        ],
+                        "additionalProperties": false,
+                        "description": "crop box before uploading, fractions of the picture: left, top, width, height (look at it with a grid first; never guess)"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "size": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 32,
+                        "maximum": 1000,
+                        "description": "longest side in px after fitting (default 512 when it has to shrink; never enlarged)"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "file",
+                  "name"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SevenTvUpload"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/emotes/{id}": {
+      "get": {
+        "operationId": "seventv_http.emote",
+        "summary": "One 7TV emote: its name, owner, and whether 7TV is still processing it (GET /7tv/emotes/<id>).",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "emote_id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "owner_id": {
+                      "type": "string"
+                    },
+                    "pending": {
+                      "type": "boolean"
+                    },
+                    "animated": {
+                      "type": "boolean"
+                    },
+                    "private": {
+                      "type": "boolean"
+                    },
+                    "zero_width": {
+                      "type": "boolean"
+                    },
+                    "preview_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "file_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "page_url": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    }
+                  },
+                  "required": [
+                    "emote_id",
+                    "name",
+                    "owner_id",
+                    "pending",
+                    "animated",
+                    "private",
+                    "zero_width",
+                    "preview_url",
+                    "file_url",
+                    "page_url",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/link": {
+      "post": {
+        "operationId": "seventv_http.link",
+        "summary": "Link a 7TV account with its session token from 7tv.app (POST /7tv/link).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "maxLength": 8192
+                  }
+                },
+                "required": [
+                  "token"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "linked": {
+                      "type": "boolean"
+                    },
+                    "account": {
+                      "$ref": "#/components/schemas/SevenTvAccount"
+                    },
+                    "channels": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SevenTvChannel"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "linked"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/owned": {
+      "get": {
+        "operationId": "seventv_http.owned",
+        "summary": "Every emote the linked 7TV account owns (uploaded anywhere), newest first, at most 500 (GET /7tv/owned).",
+        "tags": [
+          "seventv_http"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "owner_id": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "number",
+                      "description": "how many the account owns; at most 500 are listed"
+                    },
+                    "emotes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "emote_id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "animated": {
+                            "type": "boolean"
+                          },
+                          "private": {
+                            "type": "boolean"
+                          },
+                          "zero_width": {
+                            "type": "boolean"
+                          },
+                          "pending": {
+                            "type": "boolean",
+                            "description": "7TV still processing the images"
+                          },
+                          "preview_url": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "file_url": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "page_url": {
+                            "type": "string"
+                          },
+                          "file_id": {
+                            "description": "the library file it was uploaded from, when capystore uploaded it",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "created_at": {
+                            "description": "ms, from the emote id",
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "emote_id",
+                          "name",
+                          "animated",
+                          "private",
+                          "zero_width",
+                          "pending",
+                          "preview_url",
+                          "file_url",
+                          "page_url",
+                          "file_id",
+                          "created_at"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    }
+                  },
+                  "required": [
+                    "owner_id",
+                    "total",
+                    "emotes",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/sets": {
+      "post": {
+        "operationId": "seventv_http.create_set",
+        "summary": "Make a new emote set on a channel (POST /7tv/sets).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "owner_id": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 400
+                  }
+                },
+                "required": [
+                  "owner_id",
+                  "name"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set": {
+                      "$ref": "#/components/schemas/SevenTvSet"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/sets/{id}": {
+      "get": {
+        "operationId": "seventv_http.set",
+        "summary": "An emote set and a page of its emotes (GET /7tv/sets/<id>?q=&page=).",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set": {
+                      "$ref": "#/components/schemas/SevenTvSet"
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    },
+                    "emotes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SevenTvSetEmote"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set",
+                    "page",
+                    "has_more",
+                    "emotes"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "patch": {
+        "operationId": "seventv_http.rename_set",
+        "summary": "Rename an emote set (PATCH /7tv/sets/<id>).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 400
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set": {
+                      "$ref": "#/components/schemas/SevenTvSet"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/sets/{id}/emotes": {
+      "post": {
+        "operationId": "seventv_http.add",
+        "summary": "Add a 7TV emote to a set (POST /7tv/sets/<id>/emotes).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "emote_id": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "alias": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 400
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "override_conflicts": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "emote_id"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set_id": {
+                      "type": "string"
+                    },
+                    "emote_id": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set_id",
+                    "emote_id",
+                    "alias"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/sets/{id}/emotes/{emote}": {
+      "patch": {
+        "operationId": "seventv_http.rename",
+        "summary": "Rename an emote in a set (PATCH /7tv/sets/<id>/emotes/<emote>).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "alias": {
+                    "type": "string",
+                    "maxLength": 400
+                  },
+                  "from": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 400
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "alias"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          },
+          {
+            "name": "emote",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set_id": {
+                      "type": "string"
+                    },
+                    "emote_id": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set_id",
+                    "emote_id",
+                    "alias"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "seventv_http.remove",
+        "summary": "Remove an emote from a set (DELETE /7tv/sets/<id>/emotes/<emote>?alias=).",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          },
+          {
+            "name": "emote",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{20,32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "set_id": {
+                      "type": "string"
+                    },
+                    "emote_id": {
+                      "type": "string"
+                    },
+                    "removed": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "set_id",
+                    "emote_id",
+                    "removed"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/uploads": {
+      "get": {
+        "operationId": "seventv_http.uploads",
+        "summary": "Emotes uploaded to 7TV through capystore, newest first, at most 100 (GET /7tv/uploads).",
+        "tags": [
+          "seventv_http"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "uploads": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "file_id": {
+                            "type": "string"
+                          },
+                          "emote_id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "set_id": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "created_at": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "file_id",
+                          "emote_id",
+                          "name",
+                          "set_id",
+                          "created_at"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    }
+                  },
+                  "required": [
+                    "uploads",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/auth/exchange": {
       "post": {
         "operationId": "auth.exchange",
@@ -4511,7 +5783,7 @@
     "/library/transcript": {
       "get": {
         "operationId": "library.transcript",
-        "summary": "What is said in a video, line by line with times in seconds (from/to: only that part). state says why there are no lines.",
+        "summary": "What is said in a video, line by line with times (start/end in seconds, timecode: the start as m:ss to cite; from/to: only that part). state says why there are no lines.",
         "tags": [
           "library"
         ],
@@ -4788,7 +6060,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|swarm:[A-Za-z0-9]{16})$"
             }
           }
         ],
@@ -4822,7 +6094,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|swarm:[A-Za-z0-9]{16})$"
             }
           }
         ],
@@ -4858,7 +6130,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|swarm:[A-Za-z0-9]{16})$"
             }
           }
         ],
@@ -4934,6 +6206,76 @@
         "summary": "A device's push-to-start token.",
         "tags": [
           "live"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/live/swarms/{id}": {
+      "put": {
+        "operationId": "live.swarm.put",
+        "summary": "A push-started swarm activity's token.",
+        "tags": [
+          "live"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "durable_object",
+          "cors": false,
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "live.swarm.delete",
+        "summary": "A push-started swarm activity's token.",
+        "tags": [
+          "live"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
         ],
         "responses": {
           "default": {
@@ -5115,6 +6457,212 @@
           "raw": true,
           "input": "read by the handler",
           "ai": "hidden"
+        }
+      }
+    },
+    "/mcp/media/{token}": {
+      "get": {
+        "operationId": "mcp.media",
+        "summary": "/mcp/media/<token>: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "head": {
+        "operationId": "mcp.media.head",
+        "summary": "/mcp/media/<token>: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden",
+          "same_op": "mcp.media"
+        }
+      },
+      "options": {
+        "operationId": "mcp.media.options",
+        "summary": "/mcp/media/<token>: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden",
+          "same_op": "mcp.media"
+        }
+      }
+    },
+    "/mcp/media/{token}/poster": {
+      "get": {
+        "operationId": "mcp.media.poster",
+        "summary": "/mcp/media/<token>/poster: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "head": {
+        "operationId": "mcp.media.poster.head",
+        "summary": "/mcp/media/<token>/poster: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden",
+          "same_op": "mcp.media.poster"
+        }
+      },
+      "options": {
+        "operationId": "mcp.media.poster.options",
+        "summary": "/mcp/media/<token>/poster: a signed one-hour preview of a library file for MCP widgets.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden",
+          "same_op": "mcp.media.poster"
         }
       }
     },
@@ -5500,6 +7048,38 @@
           "runs": "worker",
           "cors": false,
           "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "options": {
+        "operationId": "mcp.upload.preflight",
+        "summary": "The preflight of an MCP upload link's PUT (OPTIONS /mcp/upload/<token>).",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "open",
+          "runs": "worker",
+          "cors": false,
           "raw": true,
           "input": "read by the handler",
           "ai": "hidden"
@@ -7744,6 +9324,1434 @@
         }
       }
     },
+    "/swarms": {
+      "post": {
+        "operationId": "swarm.plan",
+        "summary": "Plan a swarm: one Haiku task per batch of items (e.g. 1000 7TV emotes in batches of 50), each in code mode with only the read calls in `tools`. Nothing runs until Harmony approves it on approve_url (give Harmony that link); it answers the plan with its cost estimate. mode propose (default) answers { changes } Harmony reviews before they are applied; read answers results; act may call `writes` itself. Follow it with swarm.get or job_status on its job.",
+        "tags": [
+          "swarm"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80,
+                    "description": "shown on the approve page"
+                  },
+                  "mode": {
+                    "description": "propose (default): tasks only read and answer { changes }, Harmony reviews them, then they are applied; read: tasks answer results; act: tasks may also call `writes` themselves",
+                    "type": "string",
+                    "enum": [
+                      "propose",
+                      "read",
+                      "act"
+                    ]
+                  },
+                  "items": {
+                    "description": "the items to split (at most 5000, JSON at most 512 KB); or give source",
+                    "maxItems": 5000,
+                    "type": "array",
+                    "items": {}
+                  },
+                  "source": {
+                    "description": "fetch the items server-side now (pages are followed, at most 5000 items)",
+                    "type": "object",
+                    "properties": {
+                      "call": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "description": "a swarm read call, e.g. seventv.set (for a set's emotes: one read gives every name, id and picture; better than searching for each)"
+                      },
+                      "args": {
+                        "description": "its input object",
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      },
+                      "path": {
+                        "description": "dot path to the list in its answer, e.g. emotes",
+                        "type": "string",
+                        "maxLength": 200
+                      }
+                    },
+                    "required": [
+                      "call"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "batch": {
+                    "type": "object",
+                    "properties": {
+                      "size": {
+                        "description": "items per task, default 50",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8000,
+                    "description": "each task's message; must contain {{items}}; may use {{index}} {{total}} {{count}} {{name}}"
+                  },
+                  "tools": {
+                    "description": "read calls a task may make: library.list, library.search, library.post, library.about, library.transcript, look, collections.list, links.list, sets.list, names.list, emotes.find, emotes.findMany, seventv.status, seventv.sets, seventv.set, seventv.emote, seventv.owned, seventv.uploads",
+                    "maxItems": 30,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    }
+                  },
+                  "writes": {
+                    "description": "propose: ops a change may name; act: ops a task may call. Any of seventv.rename, seventv.add, seventv.remove, library.title, library.about.set",
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    }
+                  },
+                  "scope": {
+                    "description": "a write whose args have key k must have args[k] in scope[k], e.g. { set_id: [\"...\"] }",
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    "additionalProperties": {
+                      "minItems": 1,
+                      "maxItems": 5000,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      }
+                    }
+                  },
+                  "output": {
+                    "description": "read/act: the answer's JSON Schema; any mode: the board mapping",
+                    "type": "object",
+                    "properties": {
+                      "schema": {
+                        "description": "read/act: each task's answer must match this JSON Schema",
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      },
+                      "board": {
+                        "description": "how the answers read on the results board (section 62.4); guessed when left out",
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "media": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              {
+                                "minItems": 1,
+                                "maxItems": 4,
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 64
+                                }
+                              }
+                            ]
+                          },
+                          "score": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "group": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "fields": {
+                            "maxItems": 12,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "prefetch": {
+                    "description": "look each item up before its agent starts (section 62.6); the answer is attached to the item (4 KB at most)",
+                    "type": "object",
+                    "properties": {
+                      "call": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "description": "a swarm read call run by the runner (no model) once per item before its agent starts, e.g. emotes.find"
+                      },
+                      "args": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {},
+                        "description": "its input; string values may use {{item}} or {{item.path}}, e.g. { \"q\": \"{{item.name}}\" }"
+                      },
+                      "as": {
+                        "description": "the key the answer is attached under on each item, default \"lookup\"",
+                        "type": "string",
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,39}$"
+                      }
+                    },
+                    "required": [
+                      "call",
+                      "args"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "reduce": {
+                    "description": "one final summary over all results",
+                    "type": "object",
+                    "properties": {
+                      "prompt": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4000
+                      }
+                    },
+                    "required": [
+                      "prompt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "concurrency": {
+                    "description": "tasks at once, default 5",
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8
+                  },
+                  "budget": {
+                    "type": "object",
+                    "properties": {
+                      "usd": {
+                        "description": "the dollar cap, default 1 (at most SWARM_MAX_USD, 10 by default)",
+                        "type": "number",
+                        "minimum": 0.05
+                      },
+                      "turns_per_task": {
+                        "description": "model turns per task, default 6",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "retry": {
+                    "type": "object",
+                    "properties": {
+                      "attempts": {
+                        "description": "attempts per task, default 2",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5
+                      },
+                      "stop_after_failed_tasks": {
+                        "description": "the swarm stops after this many failed tasks, default 5",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "name",
+                  "prompt"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      },
+      "get": {
+        "operationId": "swarm.list",
+        "summary": "Your swarms, newest first (at most 50).",
+        "tags": [
+          "swarm"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "swarms": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Swarm"
+                      }
+                    }
+                  },
+                  "required": [
+                    "swarms"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/inbox": {
+      "get": {
+        "operationId": "swarm.inbox",
+        "summary": "Unread messages from the agents of your swarms (questions and reports), oldest first, at most 100; they are marked read. Answer a question with swarm.send.",
+        "tags": [
+          "swarm"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SwarmMessage"
+                      }
+                    }
+                  },
+                  "required": [
+                    "messages"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}": {
+      "get": {
+        "operationId": "swarm.get",
+        "summary": "One swarm: status, tasks done/running/failed, dollars spent, the reduce summary, and (propose mode) how many changes are proposed and applied.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}/agents/{agent}": {
+      "get": {
+        "operationId": "swarm.agent",
+        "summary": "One agent of a swarm: its items, status, cost, last steps, result, messages and (propose mode) changes.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwarmAgent"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}/apply": {
+      "post": {
+        "operationId": "swarm.apply",
+        "summary": "Harmony applies the kept changes of a propose-mode swarm (no model: each through its op).",
+        "tags": [
+          "swarm"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spec_hash": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "skip_clashes": {
+                    "description": "untick every kept change with a clash first (the Live Activity's apply)",
+                    "type": "boolean"
+                  },
+                  "count": {
+                    "description": "how many changes the caller expects to apply (the island's count); 409 when it is not that many",
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100000
+                  }
+                },
+                "required": [
+                  "spec_hash"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/swarms/{id}/approve": {
+      "post": {
+        "operationId": "swarm.approve",
+        "summary": "Harmony approves a swarm's plan (the web page or a device session); its tasks start.",
+        "tags": [
+          "swarm"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spec_hash": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "spec_hash"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/swarms/{id}/board": {
+      "get": {
+        "operationId": "swarm.board",
+        "summary": "A swarm's results as one board: every agent's outcome and score, and a row per thing its agents answered (title, score, group, other fields, up to 4 media previews). Failed agents appear as a row too. Filter with q, agent, status, group; sort by agent, score or title; pages of up to 200.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "matches any text of a row (case-insensitive)",
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "one agent's rows (from 1)",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "only agents with this status",
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "waiting",
+                "done",
+                "failed",
+                "skipped"
+              ]
+            }
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "one group's rows",
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "agent (default), score (best first) or title",
+              "type": "string",
+              "enum": [
+                "agent",
+                "score",
+                "title"
+              ]
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "default 0",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "default 100, at most 200",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "swarm": {
+                      "$ref": "#/components/schemas/Swarm"
+                    },
+                    "total": {
+                      "type": "number"
+                    },
+                    "offset": {
+                      "type": "number"
+                    },
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "count"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "agent": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "$ref": "#/components/schemas/SwarmOutcome"
+                          },
+                          "error": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "agent",
+                          "status",
+                          "outcome",
+                          "error"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "every agent, for the strip"
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BoardRow"
+                      }
+                    }
+                  },
+                  "required": [
+                    "swarm",
+                    "total",
+                    "offset",
+                    "groups",
+                    "agents",
+                    "rows"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}/changes": {
+      "get": {
+        "operationId": "swarm.changes",
+        "summary": "A propose-mode swarm's proposed changes in task order (a page of up to 200), with what Harmony kept, applied and what clashes.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "default 0",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "default and most 200",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "changes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SwarmChange"
+                      }
+                    },
+                    "total": {
+                      "type": "number"
+                    },
+                    "offset": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "changes",
+                    "total",
+                    "offset"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      },
+      "post": {
+        "operationId": "swarm.decide",
+        "summary": "Harmony ticks or edits proposed changes on the review page (a draft until apply).",
+        "tags": [
+          "swarm"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "changes": {
+                    "minItems": 1,
+                    "maxItems": 500,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "n": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "keep": {
+                          "type": "boolean"
+                        },
+                        "after": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 300
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "n"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "changes"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "swarm": {
+                      "$ref": "#/components/schemas/Swarm"
+                    },
+                    "changes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SwarmChange"
+                      }
+                    }
+                  },
+                  "required": [
+                    "swarm",
+                    "changes"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/swarms/{id}/decline": {
+      "post": {
+        "operationId": "swarm.decline",
+        "summary": "Harmony declines a swarm's plan; nothing runs.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/swarms/{id}/messages": {
+      "post": {
+        "operationId": "swarm.send",
+        "summary": "Message a running swarm's agents: answer an agent's question (to: its number) or tell every agent (to: \"all\"). It never changes the program: tools, writes, scope, cap and prompt stay what was approved.",
+        "tags": [
+          "swarm"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "to": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200
+                      },
+                      {
+                        "type": "string",
+                        "const": "all"
+                      }
+                    ],
+                    "description": "an agent number (from 1), or \"all\""
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "to",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sent": {
+                      "type": "boolean"
+                    },
+                    "to": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "const": "all"
+                        }
+                      ]
+                    },
+                    "woke": {
+                      "type": "boolean",
+                      "description": "an agent waiting on a question was woken"
+                    }
+                  },
+                  "required": [
+                    "sent",
+                    "to",
+                    "woke"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      },
+      "get": {
+        "operationId": "swarm.messages",
+        "summary": "A swarm's messages, both ways, oldest first (at most 200); does not mark them read.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "one agent's messages (and those to every agent)",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "only messages after this id",
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SwarmMessage"
+                      }
+                    }
+                  },
+                  "required": [
+                    "messages"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}/results": {
+      "get": {
+        "operationId": "swarm.results",
+        "summary": "A swarm's results in task order (a page of up to 100), each with its error and cost.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "default 0",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "description": "default and most 100",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SwarmResult"
+                      }
+                    },
+                    "total": {
+                      "type": "number"
+                    },
+                    "offset": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "results",
+                    "total",
+                    "offset"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}/retry": {
+      "post": {
+        "operationId": "swarm.retry",
+        "summary": "Run a finished swarm's failed (and skipped) tasks again: it goes back to awaiting Harmony's approval, with a new estimate and a new approve link check.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
+    "/swarms/{id}/stop": {
+      "post": {
+        "operationId": "swarm.stop",
+        "summary": "Stop a swarm: no new tasks start, running ones stop after their current step (or stop applying changes). Nothing is undone.",
+        "tags": [
+          "swarm"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Swarm"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "free"
+        }
+      }
+    },
     "/sync": {
       "get": {
         "operationId": "sync",
@@ -8116,6 +11124,72 @@
         ],
         "additionalProperties": false
       },
+      "BoardRow": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "number"
+          },
+          "n": {
+            "type": "number",
+            "description": "the row's number within its agent, from 1"
+          },
+          "title": {
+            "type": "string"
+          },
+          "score": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            "description": "the other plain values, at most 12"
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediaRef"
+            },
+            "description": "resolved, at most 4"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "agent",
+          "n",
+          "title",
+          "score",
+          "group",
+          "fields",
+          "media",
+          "links"
+        ],
+        "additionalProperties": false
+      },
       "HiddenRule": {
         "type": "object",
         "properties": {
@@ -8308,6 +11382,49 @@
         "additionalProperties": {},
         "x-swift": "LibraryPost"
       },
+      "MediaRef": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "post",
+              "file",
+              "emote",
+              "image",
+              "video"
+            ]
+          },
+          "preview_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "open_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "animated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "kind",
+          "preview_url",
+          "open_url"
+        ],
+        "additionalProperties": false
+      },
       "SearchName": {
         "type": "object",
         "properties": {
@@ -8385,6 +11502,352 @@
         ],
         "additionalProperties": false
       },
+      "SevenTvAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linked_at": {
+            "type": "integer"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "relink"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "avatar_url",
+          "linked_at",
+          "expires_at",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvChannel": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "you": {
+            "type": "boolean",
+            "description": "the linked account's own channel"
+          },
+          "active_set_id": {
+            "description": "the live emote set",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "can": {
+            "type": "object",
+            "properties": {
+              "manage_sets": {
+                "type": "boolean"
+              },
+              "create_sets": {
+                "type": "boolean"
+              },
+              "make_live": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "manage_sets",
+              "create_sets",
+              "make_live"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "avatar_url",
+          "you",
+          "active_set_id",
+          "can"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvSet": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "capacity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "count": {
+            "type": "integer"
+          },
+          "owner_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "live": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "capacity"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvSetEmote": {
+        "type": "object",
+        "properties": {
+          "emote_id": {
+            "type": "string"
+          },
+          "alias": {
+            "type": "string",
+            "description": "its name in this set"
+          },
+          "name": {
+            "type": "string",
+            "description": "its own 7TV name"
+          },
+          "renamed": {
+            "type": "boolean"
+          },
+          "animated": {
+            "type": "boolean"
+          },
+          "preview_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "added_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "emote_id",
+          "alias",
+          "name",
+          "renamed",
+          "animated",
+          "preview_url",
+          "file_url",
+          "added_at"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvSetSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "capacity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "count": {
+            "type": "integer"
+          },
+          "live": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "capacity",
+          "count",
+          "live"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvUpload": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "success"
+          },
+          "emote_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string",
+            "description": "the library file that was uploaded"
+          },
+          "page_url": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean",
+            "description": "7TV still processing the images (usually a minute)"
+          },
+          "fitted": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "width": {
+                    "type": "number"
+                  },
+                  "height": {
+                    "type": "number"
+                  },
+                  "frames": {
+                    "type": "number"
+                  },
+                  "bytes": {
+                    "type": "number"
+                  },
+                  "quality": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "width",
+                  "height",
+                  "frames",
+                  "bytes",
+                  "quality"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "what was sent when the picture was cropped or resized first; null when it went as it was"
+          },
+          "added": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "set_id": {
+                    "type": "string"
+                  },
+                  "alias": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "set_id",
+                  "alias"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "add_error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "status",
+          "emote_id",
+          "name",
+          "file_id",
+          "page_url",
+          "pending",
+          "fitted",
+          "added"
+        ],
+        "additionalProperties": false
+      },
       "ShareCollection": {
         "type": "object",
         "properties": {
@@ -8419,6 +11882,832 @@
         ],
         "additionalProperties": false,
         "x-swift": "ShareCollection"
+      },
+      "Swarm": {
+        "type": "object",
+        "properties": {
+          "swarm": {
+            "type": "string",
+            "description": "its id"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "propose",
+              "read",
+              "act"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "awaiting_approval",
+              "running",
+              "stopping",
+              "done",
+              "failed",
+              "stopped",
+              "declined",
+              "expired"
+            ]
+          },
+          "spec_hash": {
+            "type": "string",
+            "description": "the approve and apply POSTs send it back"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "writes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "items": {
+            "type": "number"
+          },
+          "batch_size": {
+            "type": "number"
+          },
+          "concurrency": {
+            "type": "number"
+          },
+          "tasks": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "number"
+              },
+              "queued": {
+                "type": "number"
+              },
+              "running": {
+                "type": "number"
+              },
+              "waiting": {
+                "type": "number",
+                "description": "agents parked on a question to their owner"
+              },
+              "done": {
+                "type": "number"
+              },
+              "failed": {
+                "type": "number"
+              },
+              "cells": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "idx": {
+                      "type": "number"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "running",
+                        "waiting",
+                        "done",
+                        "failed",
+                        "skipped"
+                      ]
+                    },
+                    "error": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "step": {
+                      "description": "its last step",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "idx",
+                    "status",
+                    "error",
+                    "step"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "total",
+              "queued",
+              "running",
+              "waiting",
+              "done",
+              "failed",
+              "cells"
+            ],
+            "additionalProperties": false
+          },
+          "estimate_usd": {
+            "type": "object",
+            "properties": {
+              "low": {
+                "type": "number"
+              },
+              "high": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "low",
+              "high"
+            ],
+            "additionalProperties": false
+          },
+          "cap_usd": {
+            "type": "number"
+          },
+          "spent_usd": {
+            "type": "number"
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "approved_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "description": "an unapproved plan expires then",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "reduce": {
+            "description": "the reduce step's summary",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changes": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "total": {
+                    "type": "number"
+                  },
+                  "kept": {
+                    "type": "number"
+                  },
+                  "done": {
+                    "type": "number"
+                  },
+                  "failed": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "total",
+                  "kept",
+                  "done",
+                  "failed"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "propose mode"
+          },
+          "apply": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "ready",
+                  "applying",
+                  "applied",
+                  "failed"
+                ]
+              },
+              "done": {
+                "type": "number"
+              },
+              "failed": {
+                "type": "number"
+              },
+              "total": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "status",
+              "done",
+              "failed",
+              "total"
+            ],
+            "additionalProperties": false
+          },
+          "spec_preview": {
+            "type": "object",
+            "properties": {
+              "items_sample": {
+                "type": "array",
+                "items": {},
+                "description": "the first 10 items"
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "call": {
+                        "type": "string"
+                      },
+                      "args": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      },
+                      "path": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "call",
+                      "args",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "output_schema": {
+                "anyOf": [
+                  {},
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reduce_prompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "board": {
+                "anyOf": [
+                  {},
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "output.board, the program's board mapping"
+              },
+              "prefetch": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "call": {
+                        "type": "string"
+                      },
+                      "args": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      },
+                      "as": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "call",
+                      "args",
+                      "as"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "looks up each item with this call first (section 62.6)"
+              },
+              "turns_per_task": {
+                "type": "number"
+              },
+              "attempts": {
+                "type": "number"
+              },
+              "stop_after_failed_tasks": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "items_sample",
+              "source",
+              "output_schema",
+              "reduce_prompt",
+              "board",
+              "prefetch",
+              "turns_per_task",
+              "attempts",
+              "stop_after_failed_tasks"
+            ],
+            "additionalProperties": false,
+            "description": "what the approve page shows of the spec"
+          },
+          "unscoped_writes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "write ops no scope key limits (none of their input fields is a scope key)"
+          },
+          "approve_url": {
+            "type": "string",
+            "description": "Harmony approves (and reviews) here; give this link to Harmony"
+          },
+          "job": {
+            "type": "string",
+            "description": "swarm:<id>, for job_status"
+          },
+          "messages": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "number"
+              },
+              "waiting": {
+                "type": "number",
+                "description": "open questions: answer with swarm.send"
+              }
+            },
+            "required": [
+              "total",
+              "waiting"
+            ],
+            "additionalProperties": false
+          },
+          "planner": {
+            "type": "string",
+            "description": "who planned it: the client key's name, chat or mcp"
+          },
+          "score": {
+            "description": "the mean of the ended agents' scores (section 62.3), null before any ended",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "swarm",
+          "name",
+          "mode",
+          "status",
+          "spec_hash",
+          "prompt",
+          "tools",
+          "writes",
+          "scope",
+          "items",
+          "batch_size",
+          "concurrency",
+          "tasks",
+          "estimate_usd",
+          "cap_usd",
+          "spent_usd",
+          "created_at",
+          "approved_at",
+          "finished_at",
+          "expires_at",
+          "reduce",
+          "error",
+          "changes",
+          "apply",
+          "spec_preview",
+          "unscoped_writes",
+          "approve_url",
+          "job",
+          "messages",
+          "planner",
+          "score"
+        ],
+        "additionalProperties": false
+      },
+      "SwarmAgent": {
+        "type": "object",
+        "properties": {
+          "swarm": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "waiting",
+              "done",
+              "failed",
+              "skipped"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {}
+          },
+          "attempts": {
+            "type": "number"
+          },
+          "in_tokens": {
+            "type": "number"
+          },
+          "out_tokens": {
+            "type": "number"
+          },
+          "usd": {
+            "type": "number"
+          },
+          "started_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {},
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "number"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "at",
+                "text"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SwarmMessage"
+            }
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SwarmChange"
+            },
+            "description": "propose mode: this agent's changes"
+          }
+        },
+        "required": [
+          "swarm",
+          "agent",
+          "status",
+          "items",
+          "attempts",
+          "in_tokens",
+          "out_tokens",
+          "usd",
+          "started_at",
+          "ended_at",
+          "error",
+          "result",
+          "steps",
+          "messages",
+          "changes"
+        ],
+        "additionalProperties": false
+      },
+      "SwarmChange": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "number"
+          },
+          "task": {
+            "type": "number"
+          },
+          "op": {
+            "type": "string"
+          },
+          "args": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "edit_arg": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preview_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keep": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "applying",
+              "done",
+              "failed",
+              "skipped"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "clash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "n",
+          "task",
+          "op",
+          "args",
+          "target",
+          "before",
+          "after",
+          "edit_arg",
+          "preview_url",
+          "keep",
+          "status",
+          "error",
+          "clash"
+        ],
+        "additionalProperties": false
+      },
+      "SwarmMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number"
+          },
+          "swarm": {
+            "type": "string"
+          },
+          "agent": {
+            "description": "1-based; null: to every agent",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down"
+            ],
+            "description": "up: an agent to its owner; down: to agents"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ask",
+              "tell",
+              "reply",
+              "note"
+            ]
+          },
+          "sender": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "owner",
+              "you"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "at": {
+            "type": "number"
+          },
+          "answered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "swarm",
+          "agent",
+          "dir",
+          "kind",
+          "sender",
+          "text",
+          "at",
+          "answered"
+        ],
+        "additionalProperties": false
+      },
+      "SwarmOutcome": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "items": {
+            "type": "number"
+          },
+          "answered": {
+            "type": "number",
+            "description": "how many of its items appear in its rows"
+          },
+          "tool_calls": {
+            "type": "number"
+          },
+          "tool_errors": {
+            "type": "number",
+            "description": "calls that still failed after their retries"
+          },
+          "asks": {
+            "type": "number"
+          },
+          "turns": {
+            "type": "number"
+          },
+          "usd": {
+            "type": "number"
+          },
+          "ms": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "score": {
+            "description": "0..1: answered / items × (1 − tool_errors / max(tool_calls, 1)); 0 for a failed agent; null while it runs",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "items",
+          "answered",
+          "tool_calls",
+          "tool_errors",
+          "asks",
+          "turns",
+          "usd",
+          "ms",
+          "score"
+        ],
+        "additionalProperties": false
+      },
+      "SwarmResult": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "result": {},
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "usd": {
+            "type": "number"
+          },
+          "items": {
+            "type": "array",
+            "items": {},
+            "description": "the agent's batch, always"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/SwarmOutcome"
+          }
+        },
+        "required": [
+          "task",
+          "status",
+          "result",
+          "error",
+          "usd",
+          "items",
+          "outcome"
+        ],
+        "additionalProperties": false
       },
       "TranscriptLine": {
         "type": "object",

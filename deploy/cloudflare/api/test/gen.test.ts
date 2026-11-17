@@ -25,7 +25,10 @@ describe("the generated files", () => {
     it("list every API route once in openapi.json, and every route in the contract's index", () => {
         const doc = openApi();
         const api = REGISTRY.ops.filter((o) => o.route && (o.route.host ?? "api") === "api");
-        const ops = Object.values(doc.paths).flatMap((p: any) => Object.values(p).map((o: any) => o.operationId));
+        // an ANY route is listed under GET, HEAD and OPTIONS; HEAD and OPTIONS name the op they share (x-cobalt.same_op)
+        const ops = Object.values(doc.paths).flatMap((p: any) => Object.values(p).filter((o: any) => !o["x-cobalt"]?.same_op).map((o: any) => o.operationId));
+        const dup = Object.values(doc.paths).flatMap((p: any) => Object.values(p).map((o: any) => o.operationId));
+        expect(new Set(dup).size).toBe(dup.length);
         expect(ops.sort()).toEqual(api.map((o) => o.name).sort());
         const contract = read("deploy/cloudflare/APP-API-CONTRACT.md");
         const table = contract.slice(contract.indexOf(ROUTES_BEGIN), contract.indexOf(ROUTES_END));
