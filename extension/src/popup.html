@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Save to Capystore</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <span id="capy" class="capy sleeping" aria-hidden="true"></span>
+      <div>
+        <h1 id="heading">Capystore</h1>
+        <p id="detail"></p>
+      </div>
+    </header>
+    <div class="actions">
+      <button id="sign-in" type="button">Sign in</button>
+      <button id="sign-out" type="button" hidden>Sign out</button>
+      <button id="library" type="button">Library</button>
+      <button id="options" type="button">Sites</button>
+    </div>
+    <h2>Recent saves</h2>
+    <ul id="recent"></ul>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

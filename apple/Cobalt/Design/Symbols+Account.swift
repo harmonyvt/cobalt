@@ -30,6 +30,7 @@ extension Symbol {
             case .ipados: return "ipad"
             case .mac: return "desktopcomputer"
             case .web: return "globe"
+            case .extension: return "puzzlepiece.extension"
             }
         }
     }

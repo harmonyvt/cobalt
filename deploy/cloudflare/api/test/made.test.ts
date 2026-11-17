@@ -1,8 +1,11 @@
 // PUT /library/items/<id>/made (APP-API-CONTRACT.md section 18.6, lane GS2): a crop or an export (the long image,
 // the PDF) made on the device and stored as a new file of the post. The Worker streams the body to R2; everything
 // that can refuse does so before it is read.
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { jpegSize } from "../src/app-routes";
+import { jpegSize, MAX_MADE_BYTES, MAX_UPLOAD_BYTES } from "../src/app-routes";
+import { VP9_HDR_CODECS } from "../src/mp4-info";
 import { KEY_ID, MEDIA_BASE, POSTER_URL, asBody, auth, json, svc, world, type World } from "./poster-world";
 import { POST, itemRows, photos, saveGallery } from "./gallery-world";
 import { listAll } from "./visibility-fixture";
@@ -340,6 +343,75 @@ describe("the gate", () => {
         const viaService = await w.call(url, { method: "PUT", headers: { ...svc, "content-type": "image/jpeg", "content-length": String(body.length) }, body });
         expect(viaService.status).toBe(201);
         expect(w.item(((await viaService.json()) as any).item.id).key_id).toBe("service:library");
+    });
+});
+
+const fixture = (name: string) => new Uint8Array(readFileSync(path.join(import.meta.dirname, "fixtures/hdr", name)));
+
+describe("an HDR alternate", () => {
+    const alt = (id: string, body: Uint8Array, o: Put = {}) =>
+        put(id, { role: "alt", spec: spec({ kind: "hdr_alt" }), type: "video/mp4", body, ...o });
+
+    it("stores an AV1 mp4 on the post, with codecs, size and duration, and replaces the previous one", async () => {
+        const { sid } = await saveGallery(w, [{ type: "video" }]);
+        const video = itemRows(w, sid)[0]!;
+        const body = fixture("av1.mp4");
+        const first = await alt(video.id, body, { name: "hdr-av1.mp4" });
+        expect(first.status).toBe(201);
+        const a = (await first.json()) as any;
+        expect(a).toMatchObject({ status: "success", replaced: [], item: { role: "alt", width: 64, height: 64, duration: 0.2, content_type: "video/mp4", made_spec: { kind: "hdr_alt", codecs: "av01.0.00M.10.0.110.09.16.09.0" } } });
+        expect(a.item.made_from).toEqual([video.id]);
+        const row = w.item(a.item.id);
+        expect(row).toMatchObject({ source: "made", role: "alt", r2_key: `made/${row.id}.mp4`, bytes: body.length, post_key: sid });
+        expect(w.originals.objects.get(row.r2_key)!.bytes).toEqual(body);
+        // over the 50 MB made cap is still accepted at the header; over the upload cap is not
+        const underUpload = await alt(video.id, body, { headers: { "content-length": String(MAX_MADE_BYTES + 1) } });
+        expect(underUpload.status).toBe(400);
+        const tooBig = await alt(video.id, body, { headers: { "content-length": String(MAX_UPLOAD_BYTES + 1) } });
+        expect(tooBig.status).toBe(413);
+        expect(((await tooBig.json()) as any).error.code).toBe("error.studio.too_large");
+        // the mismatched length above did not leave a second live alternate
+        const again = await alt(video.id, body);
+        expect(again.status).toBe(201);
+        const b = (await again.json()) as any;
+        expect(b.replaced).toEqual([a.item.id]);
+        expect(w.item(a.item.id).deleted_at).not.toBeNull();
+        expect(w.originals.objects.has(row.r2_key)).toBe(false);
+        const legacy = await listAll(w);
+        expect(legacy.files.map((f) => f.id)).not.toContain(b.item.id);
+        const v3 = await listAll(w, "v=3");
+        expect(v3.files.map((f) => f.role)).toEqual(["item", "alt"]);
+        const del = await w.call(`/library/items/${b.item.id}`, { method: "DELETE", headers: auth });
+        expect(del.status).toBe(200);
+        expect(w.item(b.item.id).deleted_at).not.toBeNull();
+    });
+
+    it("refuses a non-AV1 mp4, a bad type and a bad kind, and accepts a webm with the default or a given codecs string", async () => {
+        const { sid } = await saveGallery(w, [{ type: "video" }], { public: true });
+        const video = itemRows(w, sid)[0]!;
+        const before = w.originals.objects.size;
+        const hevc = await alt(video.id, fixture("hevc.mp4"));
+        expect(hevc.status).toBe(400);
+        expect(((await hevc.json()) as any).error.code).toBe("error.library.bad_request");
+        expect((await alt(video.id, fixture("av1.mp4"), { type: "video/quicktime" })).status).toBe(400);
+        expect((await alt(video.id, fixture("av1.mp4"), { spec: spec({ kind: "long" }) })).status).toBe(400);
+        expect((await put("NoSuchItem000001", { role: "alt", spec: spec({ kind: "hdr_alt" }), type: "video/mp4", body: fixture("av1.mp4") })).status).toBe(404);
+        expect(w.originals.objects.size).toBe(before);
+        const webm = fixture("vp9.webm");
+        const plain = await alt(video.id, webm, { type: "video/webm" });
+        expect(plain.status).toBe(201);
+        const out = (await plain.json()) as any;
+        expect(out.item).toMatchObject({ visibility: "public", content_type: "video/webm", width: 64, height: 64, duration: 0.2, made_spec: { kind: "hdr_alt", codecs: VP9_HDR_CODECS } });
+        expect(out.item.url).toMatch(/\.webm$/);
+        const row = w.item(out.item.id);
+        expect(w.media.objects.get(row.public_key)!.data).toEqual(webm);
+        const given = "vp09.02.10.10.01.09.16.09.00";
+        const next = await alt(video.id, webm, { type: "video/webm", spec: spec({ kind: "hdr_alt", codecs: given }) });
+        expect(next.status).toBe(201);
+        const replaced = (await next.json()) as any;
+        expect(replaced.replaced).toEqual([out.item.id]);
+        expect(replaced.item.made_spec.codecs).toBe(given);
+        expect(w.media.objects.has(row.public_key)).toBe(false);
     });
 });
 

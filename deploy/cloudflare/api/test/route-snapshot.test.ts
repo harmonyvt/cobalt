@@ -128,6 +128,7 @@ export const PATHS: string[] = [
     `/library/names/${ID16}`,
     "/library/names/bad",
     "/library/search/index",
+    "/library/videos/dimensions",
     "/library/posters/backfill",
     "/library/visibility/migrate",
     `/library/items/${ID16}`,
@@ -186,6 +187,10 @@ export const PATHS: string[] = [
     "/mcp/media/bad",
     // added with accounts (section 42): device sessions and the owner's keys
     "/auth/exchange",
+    // browser extension sign-in (section 65): Safari polls; Chrome trades the code at /auth/exchange
+    "/auth/extension/begin",
+    "/auth/extension/poll",
+    "/auth/extension/other",
     "/auth/me",
     "/auth/sessions",
     "/auth/sessions/0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a99",

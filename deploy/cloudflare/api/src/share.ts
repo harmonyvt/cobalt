@@ -8,6 +8,7 @@
 
 import { notHiddenClause } from "./hidden-store";
 import { POST_KEY_SQL } from "./app-routes";
+import { readMp4Info, SHARE_CODEC_BYTES } from "./mp4-info";
 import { captionOf, fileOf, itemSubject, writeCaption, type Caption, type Captioner } from "./roast";
 import { shareSetRoute } from "./share-sets";
 import { privateRoute, type ByteBucket } from "./share-private";
@@ -104,7 +105,32 @@ export function shareLinkFrom(env: { MEDIA_BASE_URL: string; SHARE_BASE_URL?: st
     return (url) => shareUrlFor(url, env.MEDIA_BASE_URL, share) ?? url;
 }
 
-export type Found = MediaRow & { custom_title: string | null };
+export type Found = MediaRow & { custom_title: string | null; post_key?: string | null };
+
+// One <source> on the share page. `type` is the whole type attribute, codecs included when we know them.
+export type PageSource = { url: string; type: string };
+
+const SAFE_CODECS = /^[A-Za-z0-9.]{1,80}$/;
+
+// video/mp4 for HEVC/AVC/AV1 (and a quicktime file, which is the same boxes); video/webm for VP9.
+export function sourceType(mime: string, codecs?: string | null): string {
+    const base = mime === "video/webm" ? "video/webm" : "video/mp4";
+    return codecs && SAFE_CODECS.test(codecs) ? `${base}; codecs="${codecs}"` : base;
+}
+
+// The original's codecs string, remembered for a while so a page view does not re-read R2. Empty means
+// "looked, and the header did not say" — a miss is not fetched again until the isolate drops it.
+const codecCache = new Map<string, string>();
+const CODEC_CACHE_MAX = 128;
+const rememberCodec = (key: string, codecs: string) => {
+    if (codecCache.has(key)) codecCache.delete(key);
+    codecCache.set(key, codecs);
+    while (codecCache.size > CODEC_CACHE_MAX) {
+        const first = codecCache.keys().next().value;
+        if (first === undefined) break;
+        codecCache.delete(first);
+    }
+};
 
 // The live public row whose public object is `<base>.<ext>` (or exactly `<base>.<ext>` when the link
 // carries the extension). The public object is r2_key for a row in the public bucket, else public_key.
@@ -117,7 +143,7 @@ async function findPublic(db: D1Database, base: string, ext: string | undefined)
     const cols = ITEM_COLUMNS.split(", ").map((c) => `m.${c}`).join(", ");
     const { results } = await db
         .prepare(
-            `SELECT ${cols}, (SELECT t.title FROM media_titles t WHERE t.post_key = ${POST_KEY_SQL}) AS custom_title
+            `SELECT ${cols}, ${POST_KEY_SQL} AS post_key, (SELECT t.title FROM media_titles t WHERE t.post_key = ${POST_KEY_SQL}) AS custom_title
                FROM media_items m
               WHERE m.deleted_at IS NULL${await notHiddenClause(db)}
                 AND ((m.bucket = 'media' AND m.r2_key >= ?1 AND m.r2_key ${op} ?2)
@@ -156,7 +182,17 @@ const fmtDuration = (s: number): string => {
 // The page of one file: its Open Graph and Twitter card tags and a plain player. `fileUrl`, `poster` and `pageUrl` are
 // where the page says the file, its poster and the page itself are: the media domain for a public file (section 22),
 // share.../p/<key>/ for a private link (section 36).
-export function singlePageHtml(p: { row: Found; type: string; fileUrl: string; poster: string | null; pageUrl: string; caption: Caption | null }): string {
+export function singlePageHtml(p: {
+    row: Found;
+    type: string;
+    fileUrl: string;
+    poster: string | null;
+    pageUrl: string;
+    caption: Caption | null;
+    // Public HDR alternates first, then the original with its codecs, then a plain video/mp4 catch-all.
+    // Absent (a private link): one plain source for the file.
+    sources?: PageSource[];
+}): string {
     const { row, type, fileUrl, poster, pageUrl } = p;
     const isVideo = type.startsWith("video/");
     const isImage = type.startsWith("image/");
@@ -212,8 +248,9 @@ export function singlePageHtml(p: { row: Found; type: string; fileUrl: string; p
         meta.push(`<meta property="og:type" content="website">`);
     }
 
+    const sources = p.sources && p.sources.length > 0 ? p.sources : isVideo ? [{ url: fileUrl, type: sourceType(type) }] : [];
     const body = isVideo
-        ? `<video src="${e(fileUrl)}"${poster ? ` poster="${e(poster)}"` : ""} controls autoplay muted loop playsinline></video>`
+        ? `<video${poster ? ` poster="${e(poster)}"` : ""} controls autoplay muted loop playsinline>${sources.map((s) => `<source src="${e(s.url)}" type='${s.type}'>`).join("")}</video>`
         : isImage
           ? `<img src="${e(fileUrl)}" alt="${e(title)}">`
           : `<a href="${e(fileUrl)}">${e(title)}</a>`;
@@ -255,6 +292,73 @@ export const pageHeaders = (fileOrigin: string, cacheControl: string, extra: Rec
 export const typeOf = (row: Pick<MediaRow, "content_type">, key: string): string =>
     (row.content_type || TYPES[extOf(key)] || "application/octet-stream").split(";")[0]!.trim().toLowerCase();
 
+const codecsOf = (raw: string | null): string | undefined => {
+    if (!raw) return undefined;
+    try {
+        const spec = JSON.parse(raw) as { codecs?: unknown };
+        return typeof spec.codecs === "string" && SAFE_CODECS.test(spec.codecs) ? spec.codecs : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+// Public HDR alternates of this post (newest first), then the original with its codecs when the header
+// says, then a plain video/mp4 source so a browser that declines the codecs strings still plays it.
+// og:video stays the original; this list is only the <video> element.
+async function videoSources(d: ShareDeps, row: Found, fileUrl: string, type: string): Promise<PageSource[]> {
+    const out: PageSource[] = [];
+    const media = withSlash(d.mediaBaseUrl);
+    if (row.post_key) {
+        try {
+            const { results } = await d.db
+                .prepare(
+                    `SELECT m.id, m.content_type, m.public_key, m.made_spec, m.visibility, m.bucket
+                       FROM media_items m
+                      WHERE m.deleted_at IS NULL AND m.role = 'alt' AND ${POST_KEY_SQL} = ?1
+                      ORDER BY m.created_at DESC, m.id DESC`,
+                )
+                .bind(row.post_key)
+                .all<{ id: string; content_type: string | null; public_key: string | null; made_spec: string | null; visibility: string | null; bucket: string }>();
+            for (const a of results) {
+                if (a.id === row.id || effectiveVisibility(a) !== "public" || !a.public_key) continue;
+                if (!/^[A-Za-z0-9]{6,40}\.[A-Za-z0-9]{1,8}$/.test(a.public_key)) continue;
+                const mime = (a.content_type || "video/mp4").split(";")[0]!.trim().toLowerCase();
+                out.push({ url: `${media}${a.public_key}`, type: sourceType(mime, codecsOf(a.made_spec)) });
+            }
+        } catch (e) {
+            console.error("[share] alt lookup failed", String(e));
+        }
+    }
+    const mime = type.split(";")[0]!.trim().toLowerCase();
+    if (mime === "video/mp4" || mime === "video/quicktime") {
+        const codecs = await originalCodecs(d, row);
+        if (codecs) out.push({ url: fileUrl, type: sourceType(mime, codecs) });
+    }
+    out.push({ url: fileUrl, type: sourceType(mime) });
+    return out;
+}
+
+async function originalCodecs(d: ShareDeps, row: Found): Promise<string | undefined> {
+    const cacheKey = `${row.bucket}\0${row.r2_key}`;
+    const hit = codecCache.get(cacheKey);
+    if (hit !== undefined) return hit || undefined;
+    const bucket = row.bucket === "media" ? d.media : d.originals;
+    if (!bucket) return undefined;
+    try {
+        const info = await readMp4Info(async (offset, length) => {
+            const obj = await bucket.get(row.r2_key, { range: { offset, length } });
+            if (!obj) return null;
+            return { bytes: new Uint8Array(await new Response(obj.body).arrayBuffer()), size: obj.size };
+        }, SHARE_CODEC_BYTES);
+        const codecs = info?.codecs && SAFE_CODECS.test(info.codecs) ? info.codecs : "";
+        rememberCodec(cacheKey, codecs);
+        return codecs || undefined;
+    } catch (e) {
+        console.error("[share] codec probe failed", row.id, String(e));
+        return undefined;
+    }
+}
+
 // One page per public file. HEAD gets the same headers.
 export async function sharePage(d: ShareDeps, request: Request): Promise<Response> {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -292,7 +396,9 @@ export async function sharePage(d: ShareDeps, request: Request): Promise<Respons
     const poster = row.poster && row.poster.startsWith(media) ? row.poster : null;
     const custom = (row.custom_title ?? "").trim() !== "";
     const caption = custom ? null : await captionNow(d, row, fileUrl);
-    const html = singlePageHtml({ row, type: typeOf(row, key), fileUrl, poster, pageUrl, caption });
+    const type = typeOf(row, key);
+    const sources = type.startsWith("video/") ? await videoSources(d, row, fileUrl, type) : undefined;
+    const html = singlePageHtml({ row, type, fileUrl, poster, pageUrl, caption, sources });
     return new Response(request.method === "HEAD" ? null : html, {
         // short: a file made private stops having a page within a minute
         headers: pageHeaders(new URL(media).origin, "public, max-age=60"),

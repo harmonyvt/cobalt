@@ -171,6 +171,11 @@ enum Endpoints {
         APIEndpoint(op: "library.search.index", method: "POST", path: "/library/search/index", auth: .keyOrService)
     }
 
+    /// `POST /library/videos/dimensions` (op `library.videos.dimensions`, auth key_or_service): Fill width, height and duration on videos that lack them.
+    static func libraryVideosDimensions() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.videos.dimensions", method: "POST", path: "/library/videos/dimensions", auth: .keyOrService)
+    }
+
     /// `POST /library/posters/backfill` (op `library.posters.backfill`, auth key_or_service): Queue the missing posters.
     static func libraryPostersBackfill() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "library.posters.backfill", method: "POST", path: "/library/posters/backfill", auth: .keyOrService)
@@ -924,6 +929,16 @@ enum Endpoints {
     /// `POST /auth/exchange` (op `auth.exchange`, auth open): Trade a sign-in code for a device session (POST /auth/exchange).
     static func authExchange() -> APIEndpoint<AuthExchangeResponse> {
         APIEndpoint(op: "auth.exchange", method: "POST", path: "/auth/exchange", auth: .open)
+    }
+
+    /// `POST /auth/extension/begin` (op `auth.extension.begin`, auth open): Start a browser-extension sign-in (POST /auth/extension/begin). The owner approves it on the web app.
+    static func authExtensionBegin() -> APIEndpoint<AuthExtensionBeginResponse> {
+        APIEndpoint(op: "auth.extension.begin", method: "POST", path: "/auth/extension/begin", auth: .open)
+    }
+
+    /// `POST /auth/extension/poll` (op `auth.extension.poll`, auth open): Poll a browser-extension sign-in (POST /auth/extension/poll). Pending until the owner approves, then a device session.
+    static func authExtensionPoll() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "auth.extension.poll", method: "POST", path: "/auth/extension/poll", auth: .open)
     }
 
     /// `GET /auth/me` (op `auth.me`, auth key): Who is calling (a key or a device session) and how many sessions and keys are active (GET /auth/me).
@@ -2070,6 +2085,16 @@ struct AuthExchangeResponse: Decodable, Sendable {
     /// the session token: send it as Api-Key
     var key: String
     var session: AuthSessionRow
+}
+
+struct AuthExtensionBeginResponse: Decodable, Sendable {
+    var status: String
+    /// the extension's secret for POST /auth/extension/poll; shown once
+    var deviceCode: String
+    /// goes in the approve page URL; useless without the device code and the verifier
+    var userCode: String
+    var expiresAt: Int
+    var interval: Int
 }
 
 struct AuthMeResponseCaller: Decodable, Sendable {
