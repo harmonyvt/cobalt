@@ -59,7 +59,9 @@ const page = (status: number, title: string, body: string) =>
                 "cache-control": "no-store",
                 "x-content-type-options": "nosniff",
                 "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
-                "referrer-policy": "no-referrer",
+                // Not no-referrer: under no-referrer a browser sends `Origin: null` on the Approve form's POST, and
+                // approve() refuses that. same-origin still sends nothing to any other site.
+                "referrer-policy": "same-origin",
                 "x-frame-options": "DENY",
             },
         },
@@ -155,10 +157,14 @@ async function show(q: URLSearchParams, request: Request, env: Env, _email: stri
 }
 
 async function approve(request: Request, env: Env, email: string, now: number): Promise<Response> {
-    if (request.headers.get("Origin") !== env.WEB_ORIGIN) {
+    // `Origin: null` is what a browser sends for this page's own form when a referrer policy strips it (pages
+    // served before the policy change were no-referrer); the browser's own Sec-Fetch-Site still says where it came from.
+    const origin = request.headers.get("Origin");
+    const site = request.headers.get("sec-fetch-site");
+    const sameSite = origin === env.WEB_ORIGIN || (origin === "null" && site === "same-origin");
+    if (!sameSite) {
         return page(403, "not signed in", "<p>That approval did not come from Capystore. Close this window and try again from the extension.</p>");
     }
-    const site = request.headers.get("sec-fetch-site");
     if (site && site !== "same-origin") {
         return page(403, "not signed in", "<p>That approval did not come from Capystore. Close this window and try again from the extension.</p>");
     }

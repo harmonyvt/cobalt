@@ -100,17 +100,47 @@ export function start(site: SiteId, scan: Scan): void {
         buttons.add(record);
     };
 
+    // A failed click shows the error pose for a moment, then goes back to what the button was.
+    const flashError = (record: Button, label: string, after: SpriteState) => {
+        paint(record, "error");
+        record.button.title = label;
+        record.button.setAttribute("aria-label", label);
+        window.setTimeout(() => {
+            if (record.state === "error") paint(record, after);
+        }, 4000);
+    };
+
+    const ask = async <T>(message: unknown): Promise<T | undefined> => {
+        try {
+            return (await ext.runtime.sendMessage(message)) as T | undefined;
+        } catch {
+            // The background restarted or the extension was reloaded under this page.
+            return undefined;
+        }
+    };
+
     const onClick = async (record: Button) => {
         if (record.state === "saving") return;
         if (!signedIn) {
-            paint(record, "sleeping");
-            await ext.runtime.sendMessage({ type: "sign-in" });
-            const auth = (await ext.runtime.sendMessage({ type: "auth-state" })) as { signedIn?: boolean } | undefined;
+            // Sign-in opens an approve tab and waits for it: animate meanwhile so the click visibly did something.
+            paint(record, "saving");
+            record.button.title = "Signing in to Capystore… approve it in the tab that opened";
+            record.button.setAttribute("aria-label", record.button.title);
+            const res = await ask<{ ok?: boolean; message?: string }>({ type: "sign-in" });
+            const auth = await ask<{ signedIn?: boolean }>({ type: "auth-state" });
             signedIn = auth?.signedIn === true;
-            if (!signedIn) return;
+            if (!signedIn) {
+                flashError(record, res?.message ?? "Couldn't sign in to Capystore. Try again from the toolbar button.", "sleeping");
+                return;
+            }
+            for (const b of buttons) if (b !== record && b.state === "sleeping") paint(b, "idle");
         }
         paint(record, "saving");
-        const res = (await ext.runtime.sendMessage({ type: "save", url: record.url, site })) as { state?: string } | undefined;
+        const res = await ask<{ state?: string; message?: string }>({ type: "save", url: record.url, site });
+        if (!res) {
+            flashError(record, "Couldn't reach the Capystore extension. Reload the page and try again.", "idle");
+            return;
+        }
         if (res?.state === "signed-out") {
             signedIn = false;
             paint(record, "sleeping");
@@ -120,7 +150,7 @@ export function start(site: SiteId, scan: Scan): void {
             paint(record, "sleeping");
             return;
         }
-        if (res?.state === "error") paint(record, "error");
+        if (res?.state === "error") flashError(record, res.message ?? LABEL.error, "idle");
     };
 
     const scanNow = async () => {

@@ -126,11 +126,28 @@ describe("GET /connect/extension", () => {
 describe("POST /connect/extension", () => {
     const body = `challenge=${CHALLENGE}&state=${encodeURIComponent(STATE)}&redirect_uri=${encodeURIComponent(REDIRECT)}`;
     it("refuses a post that is not from the page itself", async () => {
-        for (const o of [{ origin: null }, { origin: "https://evil.example" }, { site: "cross-site" }] as Opts[]) {
+        for (const o of [
+            { origin: null },
+            { origin: "https://evil.example" },
+            { site: "cross-site" },
+            { origin: "null" },
+            { origin: "null", site: "cross-site" },
+            { origin: "null", site: "same-site" },
+        ] as Opts[]) {
             const r = await call("/connect/extension", { method: "POST", body, ua: CHROME_MAC, ...o });
             expect(r.status).toBe(403);
         }
         expect(handoffs()).toEqual([]);
+    });
+    it("accepts the page's own form when the browser sends Origin: null with Sec-Fetch-Site: same-origin", async () => {
+        const r = await call("/connect/extension", { method: "POST", body, ua: CHROME_MAC, origin: "null", site: "same-origin" });
+        expect(r.status).toBe(302);
+        expect(handoffs()).toHaveLength(1);
+    });
+    it("serves the approve page with a referrer policy that keeps Origin on its own POST", async () => {
+        const r = await call(`/connect/extension?${chromeQuery}`, { ua: CHROME_MAC });
+        expect(r.status).toBe(200);
+        expect(r.headers.get("referrer-policy")).toBe("same-origin");
     });
     it("stores a one-time code and redirects only to the extension", async () => {
         const r = await call("/connect/extension", { method: "POST", body, ua: CHROME_MAC });
