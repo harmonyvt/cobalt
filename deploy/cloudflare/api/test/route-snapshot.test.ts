@@ -128,6 +128,7 @@ export const PATHS: string[] = [
     `/library/names/${ID16}`,
     "/library/names/bad",
     "/library/search/index",
+    "/library/videos/dimensions",
     "/library/posters/backfill",
     "/library/visibility/migrate",
     `/library/items/${ID16}`,

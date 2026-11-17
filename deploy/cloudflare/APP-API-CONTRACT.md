@@ -116,6 +116,7 @@ Response (streams, uploads, file bytes, forwarding). Chat: the op is also a chat
 | GET | `/library/search/post` | `library.search.post` | key_or_service |  | yes | Worker |  |  |
 | POST | `/library/status` | `library.status.route` | key_or_service | yes | yes | Worker |  |  |
 | GET | `/library/transcript` | `library.transcript` | key_or_service |  | yes | Worker |  | free |
+| POST | `/library/videos/dimensions` | `library.videos.dimensions` | key_or_service |  | yes | Worker |  |  |
 | POST | `/library/visibility/migrate` | `library.visibility.migrate` | key_or_service |  | yes | Worker |  |  |
 | DELETE | `/live/chat-start-token` | `live.chat_start_token.delete` | key |  |  | DO |  |  |
 | PUT | `/live/chat-start-token` | `live.chat_start_token.put` | key |  |  | DO |  |  |

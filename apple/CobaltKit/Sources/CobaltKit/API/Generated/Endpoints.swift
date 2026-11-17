@@ -171,6 +171,11 @@ enum Endpoints {
         APIEndpoint(op: "library.search.index", method: "POST", path: "/library/search/index", auth: .keyOrService)
     }
 
+    /// `POST /library/videos/dimensions` (op `library.videos.dimensions`, auth key_or_service): Fill width, height and duration on videos that lack them.
+    static func libraryVideosDimensions() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.videos.dimensions", method: "POST", path: "/library/videos/dimensions", auth: .keyOrService)
+    }
+
     /// `POST /library/posters/backfill` (op `library.posters.backfill`, auth key_or_service): Queue the missing posters.
     static func libraryPostersBackfill() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "library.posters.backfill", method: "POST", path: "/library/posters/backfill", auth: .keyOrService)

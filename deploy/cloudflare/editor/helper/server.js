@@ -28,7 +28,7 @@ import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { renderChat } from "./chat/render.js";
 import { renderPost } from "./post/render.js";
-import { compile } from "./compile.js";
+import { compile, hdrTonemapChain } from "./compile.js";
 import { ffmpegInfo, parseInfo, probeSource } from "./probe.js";
 import { EDIT_MAX_CLIPS, EDIT_MAX_INPUT_BYTES, EDIT_MAX_OUTPUT_BYTES, checkSources, parseTimeline, sourceKind } from "./timeline.js";
 
@@ -51,13 +51,20 @@ export function posterTime(duration) {
     if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) return 0;
     return +Math.min(duration * 0.1, 3).toFixed(3);
 }
-/** 13.3's recipe: one JPEG, longer side at most 720 px (never upscaled), square pixels, `-q:v 4`. @param {{input: string, output: string, at: number}} j */
+const POSTER_SCALE = "scale='if(gte(iw,ih),min(720,iw),-1)':'if(gte(iw,ih),-1,min(720,ih))':flags=lanczos,setsar=1";
+
+/** 13.3's recipe: one JPEG, longer side at most 720 px (never upscaled), square pixels, `-q:v 4`.
+ * PQ (`smpte2084`) and HLG (`arib-std-b67`) are tonemapped with the editor's HDR chain first, so the
+ * poster is not a washed-out still of the HDR signal. Existing posters are not re-cut.
+ * @param {{input: string, output: string, at: number, transfer?: string | null}} j */
 export function posterArgs(j) {
+    const hdr = j.transfer === "smpte2084" || j.transfer === "arib-std-b67";
+    const vf = hdr ? `${hdrTonemapChain(j.transfer)},${POSTER_SCALE},format=yuvj420p` : `${POSTER_SCALE},format=yuvj420p`;
     return [
         "-nostdin", "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "file,pipe",
         ...(j.at > 0 ? ["-ss", String(j.at)] : []),
         "-i", j.input, "-frames:v", "1", "-an", "-sn", "-dn",
-        "-vf", "scale='if(gte(iw,ih),min(720,iw),-1)':'if(gte(iw,ih),-1,min(720,ih))':flags=lanczos,setsar=1,format=yuvj420p",
+        "-vf", vf,
         "-q:v", "4", "-f", "image2", "-update", "1", "-y", j.output,
     ];
 }
@@ -367,7 +374,7 @@ export function createEditServer(opts = {}) {
         r.duration = info.duration !== null ? +info.duration.toFixed(3) : r.secondsTotal;
         r.status = "poster";
         const poster = path.join(r.dir, "poster.jpg");
-        const pr = await run(FFMPEG, posterArgs({ input: output, output: poster, at: posterTime(r.duration) }), { timeoutMs: 60000, onChild: (c) => (r.child = c) });
+        const pr = await run(FFMPEG, posterArgs({ input: output, output: poster, at: posterTime(r.duration), transfer: info.transfer }), { timeoutMs: 60000, onChild: (c) => (r.child = c) });
         r.child = undefined;
         if (r.gone) return;
         r.hasPoster = pr.code === 0 && ((await stat(poster).catch(() => null))?.size ?? 0) > 0;

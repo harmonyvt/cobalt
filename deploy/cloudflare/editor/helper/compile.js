@@ -52,8 +52,10 @@ export function atempoChain(s) {
 // (npl=100), which keeps scene brightness the way AVFoundation's SDR conversion does; nothing is left above 1.0 to
 // compress, so `tonemap=clip` (hable halved the brightness: mean luma 65 vs 125 for the signal as shown). PQ has real
 // headroom above 100 nits: `mobius` (linear up to a knee, smooth roll-off) keeps mid-tones where hable darkens them.
-const HDR_CHAIN = (/** @type {string} */ tr) =>
-    `zscale=tin=${tr}:pin=bt2020:min=bt2020nc:rin=tv:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=${tr === "arib-std-b67" ? "clip" : "mobius:param=0.3:desat=0"},zscale=t=bt709:m=bt709:r=tv`;
+/** HDR (PQ or HLG) to SDR BT.709. HLG uses `tonemap=clip`; PQ uses `mobius` so mid-tones stay put. */
+export function hdrTonemapChain(/** @type {string} */ tr) {
+    return `zscale=tin=${tr}:pin=bt2020:min=bt2020nc:rin=tv:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=${tr === "arib-std-b67" ? "clip" : "mobius:param=0.3:desat=0"},zscale=t=bt709:m=bt709:r=tv`;
+}
 
 /** The video path of a decoded source up to colour (31.5 steps 1-2). @param {import("./probe.js").Source} s @returns {string[]} */
 function decodeSteps(s) {
@@ -61,7 +63,7 @@ function decodeSteps(s) {
     const f = [];
     if (s.kind === "photo") f.push(...orientationFilters(s.orientation));
     if (s.squareFrom) f.push(`scale=${s.width}:${s.height}:flags=bicubic`, "setsar=1");
-    if (s.hdr && s.transfer) f.push(HDR_CHAIN(s.transfer));
+    if (s.hdr && s.transfer) f.push(hdrTonemapChain(s.transfer));
     return f;
 }
 
