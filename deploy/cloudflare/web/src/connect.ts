@@ -59,7 +59,9 @@ const page = (status: number, title: string, body: string) =>
                 "cache-control": "no-store",
                 "x-content-type-options": "nosniff",
                 "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
-                "referrer-policy": "no-referrer",
+                // Not "no-referrer": with it Chromium sends `Origin: null` on the Approve form's POST, and the
+                // Origin check below refuses the owner's own approval. "same-origin" still sends nothing elsewhere.
+                "referrer-policy": "same-origin",
                 "x-frame-options": "DENY",
             },
         },
@@ -155,7 +157,11 @@ async function show(q: URLSearchParams, request: Request, env: Env, _email: stri
 }
 
 async function approve(request: Request, env: Env, email: string, now: number): Promise<Response> {
-    if (request.headers.get("Origin") !== env.WEB_ORIGIN) {
+    // The form's own POST: Origin is the web origin, or (a browser that still sends `Origin: null` for this
+    // page) Sec-Fetch-Site says same-origin, which a page on another site cannot fake.
+    const origin = request.headers.get("Origin");
+    const sameSite = request.headers.get("sec-fetch-site") === "same-origin";
+    if (origin !== env.WEB_ORIGIN && !((origin === null || origin === "null") && sameSite)) {
         return page(403, "not signed in", "<p>That approval did not come from Capystore. Close this window and try again from the extension.</p>");
     }
     const site = request.headers.get("sec-fetch-site");
