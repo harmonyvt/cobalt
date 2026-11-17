@@ -136,6 +136,11 @@ export interface WorkerEnv {
     // The most one swarm's dollar cap may be (default 10), and the dollars all swarms may spend per UTC day (default 5).
     SWARM_MAX_USD?: string;
     SWARM_DAILY_USD?: string;
+    // Section 64: swarms running at once per planning key (default 4) and in all (default 6), and the model tasks all
+    // running swarms may have going together (default 16, shared out evenly).
+    SWARM_RUNNING_PER_KEY?: string;
+    SWARM_RUNNING_ALL?: string;
+    SWARM_TASKS_AT_ONCE?: string;
     // How long a swarm agent waits for an answer to its question, in ms (section 61.2; default 10 minutes, for tests).
     SWARM_ASK_WAIT_MS?: string;
     // "1": every request's D1 round trips are counted and one JSON line per request is logged (src/d1-timing.ts).

@@ -6931,8 +6931,8 @@ All are web CORS and `no-store`. The `:id` is 16 letters and digits. A bad input
   `hidden`, so the chat and the MCP never list them either.
 - **approve**: the plan must be `awaiting_approval` (else 409 `error.swarm.not_awaiting`; an expired one 410
   `error.swarm.expired`), the hash must match, swarms must be on (the `SWARMS` binding and `ANTHROPIC_API_KEY`; else 503
-  `error.swarm.off`), at most **1** running swarm for the planning key and **2** in all (an applying swarm counts; 429
-  `error.swarm.busy`), today's spend under `SWARM_DAILY_USD` (429 `error.swarm.daily_cap`) and the swarm's own spend under
+  `error.swarm.off`), at most **4** running swarms for the planning key and **6** in all (section 64; an applying swarm
+  counts; 429 `error.swarm.busy`), today's spend under `SWARM_DAILY_USD` (429 `error.swarm.daily_cap`) and the swarm's own spend under
   its cap (409 `error.swarm.over_cap`). Then it is `running`, `approved_by` is the session's key id or `service`, and the
   swarm's Durable Object is woken. An approval is used once.
 - **decline**: an `awaiting_approval` plan becomes `declined`.
@@ -7313,3 +7313,41 @@ counts no model turns and costs no money; the estimate is unchanged. The approve
   allowed; `args` are at most 4 KB. The step "prefetched <n> of <m>" is written after each lookup or batch of 20, so a long
   prefetch shows its progress and resumes where it stopped after the tick's deadline. The approve page row reads "Looks
   up each item with <call> first (no model, no cost)".
+
+## 64. Several swarms at once (addendum, 2026-11-17; owner: "could we support multiple swarms running in parallel". Numbering: 63 is the emote-variant tools of PR #177; no migration)
+
+Until now a planning key could have **1** swarm running and the server **2** in all (59.6), so an agent's second swarm
+was refused (429 `error.swarm.busy`) until the first ended, and the island's approve button failed with "another swarm is
+running". Nothing else held swarms to one at a time: each swarm already has its own `Swarm` Durable Object, its own
+island (`live:swarm:<id>`, 61.5), its own row in the app's list, and every 7TV call already waits at the one shared
+`SevenTvGate` (62.5), so several swarms on 7TV share its pace instead of adding to it.
+
+### 64.1 The limits
+
+| What | Default | Var |
+|---|---|---|
+| swarms running (or stopping, or applying) planned by one key | **4** | `SWARM_RUNNING_PER_KEY` |
+| swarms running (or stopping, or applying) in all | **6** | `SWARM_RUNNING_ALL` |
+| model tasks going at once over all running swarms | **16** | `SWARM_TASKS_AT_ONCE` |
+
+- Approve past either running limit is still 429 `error.swarm.busy`, now saying how many run and the most (e.g.
+  "swarm: 4 swarms planned by the same key are running (the most is 4); approve this one when one ends"). Apply checks
+  the overall limit as before. The per-key limit is never above the overall one; a missing, empty or bad var keeps the
+  default, and each is at least 1.
+- **Fair share**: a running swarm starts at most `min(its concurrency, floor(SWARM_TASKS_AT_ONCE / swarms running))`
+  tasks at once, never fewer than 1. Alone it runs at its own `concurrency` (at most 8, 59.2); beside others it slows to
+  its share, so the model calls through `ModelRelay` stay near 16 however many swarms run. "Swarms running" counts
+  `running` and `stopping` (an apply uses no model). Each swarm looks again every **30 s** inside its alarm, so a swarm
+  that ends hands its share to the others within half a minute. A task already going is never stopped for this.
+- Unchanged: the dollar caps. `SWARM_DAILY_USD` (default **5**) is shared by all swarms of the day, so several swarms
+  reach it sooner; each swarm still stops at its own `cap_usd`. Plans waiting for approval stay 10 per key, 20 in all.
+
+### 64.2 Clients
+
+- Web approve page and app (`SwarmAuthError.busy`): the busy words become "too many swarms are running at once".
+- The app's swarm list already groups every running swarm, and each swarm has its own island; no app change beyond the
+  words. iOS shows a limited number of Live Activities at once per app: a push-start past that limit is dropped by the
+  system, and that swarm is still in the app's list.
+- MCP and chat: no new call. An agent may plan and (after Harmony approves) run several swarms side by side and follow
+  each with `swarm_get`/`swarm_board`.
+

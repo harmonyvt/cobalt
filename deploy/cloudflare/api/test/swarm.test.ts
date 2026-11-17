@@ -21,6 +21,12 @@ import {
     Limiter,
     PLANS_ALL,
     PLANS_PER_KEY,
+    RUNNING_ALL,
+    RUNNING_PER_KEY,
+    TASKS_AT_ONCE_ALL,
+    runningLimitsOf,
+    taskShare,
+    tasksAtOnceOf,
     UNKNOWN_WRITE,
     argsHash,
     checkProposals,
@@ -63,7 +69,7 @@ let slept: number[];
 let runners: Map<string, { core: SwarmRunnerCore; alarm: number | null }>;
 let renames: { set_id: string; emote_id: string; alias: string; at: number }[];
 // the scripted model: one queue per task index (from "batch <n> of"), and "reduce"
-let scripts: Map<string, ((s: Seen) => ModelTurn)[]>;
+let scripts: Map<string, ((s: Seen) => ModelTurn | Promise<ModelTurn>)[]>;
 let seen: (Seen & { who: string })[];
 let modelFailures: string[];
 let emoteBusy = 0;
@@ -518,7 +524,78 @@ describe("planning and approval", () => {
         expect(late).toEqual({ status: 410, body: { status: "error", error: { code: "error.swarm.expired" } } });
     });
 
-    it("limits: 10 waiting plans per key, 1 running per key, 2 overall, the day's dollars", async () => {
+    it("several at once: 4 running per key and 6 in all by default (section 64)", async () => {
+        expect([RUNNING_PER_KEY, RUNNING_ALL, TASKS_AT_ONCE_ALL]).toEqual([4, 6, 16]);
+        const plans = [];
+        for (let i = 0; i < 7; i++) plans.push(await plan());
+        for (const p of plans.slice(0, 4)) expect((await approve(p.swarm, p.spec_hash)).status).toBe(200);
+        const busy = await approve(plans[4]!.swarm, plans[4]!.spec_hash);
+        expect(busy.status).toBe(429);
+        expect(busy.body.error.code).toBe("error.swarm.busy");
+        // other keys fill the rest of the 6
+        db.raw.prepare("UPDATE swarms SET key_id = 'other' WHERE id IN (?, ?, ?)").run(plans[4]!.swarm, plans[5]!.swarm, plans[6]!.swarm);
+        expect((await approve(plans[4]!.swarm, plans[4]!.spec_hash)).status).toBe(200);
+        expect((await approve(plans[5]!.swarm, plans[5]!.spec_hash)).status).toBe(200);
+        expect((await approve(plans[6]!.swarm, plans[6]!.spec_hash)).body.error.code).toBe("error.swarm.busy");
+        // one ends: the next may start
+        db.raw.prepare("UPDATE swarms SET status = 'done' WHERE id = ?").run(plans[0]!.swarm);
+        expect((await approve(plans[6]!.swarm, plans[6]!.spec_hash)).status).toBe(200);
+    });
+
+    it("several at once: the limits come from the env, and running swarms share the model tasks evenly", () => {
+        expect(runningLimitsOf({})).toEqual({ perKey: 4, all: 6 });
+        expect(runningLimitsOf({ SWARM_RUNNING_PER_KEY: "2", SWARM_RUNNING_ALL: "3" })).toEqual({ perKey: 2, all: 3 });
+        // per key never above the total, never below 1; junk falls back
+        expect(runningLimitsOf({ SWARM_RUNNING_PER_KEY: "9", SWARM_RUNNING_ALL: "3" })).toEqual({ perKey: 3, all: 3 });
+        expect(runningLimitsOf({ SWARM_RUNNING_PER_KEY: "0", SWARM_RUNNING_ALL: "x" })).toEqual({ perKey: 1, all: 6 });
+        expect(tasksAtOnceOf({})).toBe(16);
+        expect(tasksAtOnceOf({ SWARM_TASKS_AT_ONCE: "8" })).toBe(8);
+        // alone: its own concurrency; several: an even split of the total, at least 1
+        expect(taskShare(5, 1, 16)).toBe(5);
+        expect(taskShare(8, 2, 16)).toBe(8);
+        expect(taskShare(8, 3, 16)).toBe(5);
+        expect(taskShare(5, 6, 16)).toBe(2);
+        expect(taskShare(3, 20, 16)).toBe(1);
+        expect(taskShare(3, 0, 16)).toBe(3);
+    });
+
+    it("several at once: a running swarm starts no more tasks than its share", async () => {
+        const items = [1, 2, 3, 4].map((id) => ({ id }));
+        const measure = async (others: number) => {
+            const s = await plan(SPEC({ concurrency: 4, items, batch: { size: 1 }, tools: [], writes: [], mode: "read", scope: undefined }));
+            let active = 0;
+            let most = 0;
+            for (const b of ["1", "2", "3", "4"])
+                scripts.set(b, [
+                    async () => {
+                        active++;
+                        most = Math.max(most, active);
+                        await new Promise((r) => setTimeout(r, 5));
+                        active--;
+                        return say(JSON.stringify({ ok: true }));
+                    },
+                ]);
+            for (let i = 0; i < others; i++)
+                db.raw
+                    .prepare(
+                        `INSERT INTO swarms (id, key_id, name, mode, spec, spec_hash, round, status, item_count, task_count, est_low, est_high, cap_usd, created_at, updated_at)
+                         SELECT ?, 'other', name, mode, spec, spec_hash, round, 'running', item_count, task_count, est_low, est_high, cap_usd, created_at, updated_at FROM swarms WHERE id = ?`,
+                    )
+                    .run(`busy${String(i).padStart(12, "0")}${others}`, s.swarm);
+            expect((await approve(s.swarm, s.spec_hash)).status).toBe(200);
+            await drain(s.swarm);
+            expect(row(s.swarm).status).toBe("done");
+            return most;
+        };
+        env.SWARM_TASKS_AT_ONCE = "4";
+        // alone: all 4 at once; beside 3 others (4 running, 4 tasks in all): 1 at a time
+        expect(await measure(0)).toBe(4);
+        expect(await measure(3)).toBe(1);
+    });
+
+    it("limits: 10 waiting plans per key, the running caps (set to 1 per key, 2 overall), the day's dollars", async () => {
+        env.SWARM_RUNNING_PER_KEY = "1";
+        env.SWARM_RUNNING_ALL = "2";
         const first = await plan();
         for (let i = 1; i < PLANS_PER_KEY; i++) await plan();
         expect((await json(req("/swarms", "POST", KEY, SPEC()))).body.error.code).toBe("error.swarm.busy");

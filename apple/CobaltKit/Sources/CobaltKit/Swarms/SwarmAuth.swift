@@ -82,7 +82,7 @@ public enum SwarmError: Error, Sendable, Equatable {
     case expired
     /// `403 error.swarm.owner_only`: this key cannot answer (only the phone's own session can).
     case ownerOnly
-    /// `429 error.swarm.busy`: another swarm is running.
+    /// `429 error.swarm.busy`: as many swarms as may run at once are running (APP-API-CONTRACT 64).
     case busy
     /// `429 error.swarm.daily_cap`.
     case dailyCap
@@ -154,7 +154,7 @@ public enum SwarmError: Error, Sendable, Equatable {
         case .hashMismatch: return "the plan changed: look again"
         case .expired: return "it expired: ask again"
         case .ownerOnly: return "only this phone can answer"
-        case .busy: return "another swarm is running: wait for it"
+        case .busy: return "too many swarms are running at once: wait for one to end"
         case .dailyCap: return "today's swarm budget is spent"
         case .overCap: return "it already spent its cap"
         case .countMismatch: return "the number of changes moved on: look again"

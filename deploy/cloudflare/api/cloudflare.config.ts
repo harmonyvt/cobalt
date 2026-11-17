@@ -227,6 +227,11 @@ export default defineConfig({
 			// together may spend per UTC day (Haiku tokens only; a swarm stops when either is reached).
 			SWARM_MAX_USD: bindings.text("10"),
 			SWARM_DAILY_USD: bindings.text("5"),
+			// Several swarms at once (APP-API-CONTRACT.md section 64): how many may run per planning key and in all, and the
+			// model tasks all running swarms may have going together (each running swarm gets an even share).
+			SWARM_RUNNING_PER_KEY: bindings.text("4"),
+			SWARM_RUNNING_ALL: bindings.text("6"),
+			SWARM_TASKS_AT_ONCE: bindings.text("16"),
 			// Stage (APP-API-CONTRACT.md section 30): https://<stage host>/ , one of `domains` above; empty turns the stage
 			// off (every /stage* route is a 404, `features.stage` false). The three Twitch values are SECRETS from
 			// ~/.config/cobalt/secrets.json (`cf deploy` refuses while a declared one is missing; empty is fine and
