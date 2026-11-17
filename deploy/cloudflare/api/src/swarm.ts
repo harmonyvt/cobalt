@@ -47,9 +47,14 @@ export const ATTEMPTS_DEFAULT = 2;
 export const STOP_AFTER_DEFAULT = 5;
 export const SWARM_MAX_USD_DEFAULT = 10;
 export const SWARM_DAILY_USD_DEFAULT = 5;
-// running (or stopping) at once: per planning key, and over all keys
-export const RUNNING_PER_KEY = 1;
-export const RUNNING_ALL = 2;
+// Several swarms at once (section 64): running (or stopping, or applying) at once per planning key and over all keys,
+// and the model tasks all running swarms may have going together, shared out evenly (SWARM_RUNNING_PER_KEY,
+// SWARM_RUNNING_ALL, SWARM_TASKS_AT_ONCE override them)
+export const RUNNING_PER_KEY = 4;
+export const RUNNING_ALL = 6;
+export const TASKS_AT_ONCE_ALL = 16;
+// how often a running swarm looks again at how many others run (its share of TASKS_AT_ONCE_ALL)
+export const SHARE_RECHECK_MS = 30_000;
 // plans waiting for approval per key, and how long one waits
 export const PLANS_PER_KEY = 10;
 export const PLANS_ALL = 20;
@@ -146,6 +151,17 @@ const num = (v: string | undefined, fallback: number) => {
 };
 export const maxUsdOf = (env: { SWARM_MAX_USD?: string }) => num(env.SWARM_MAX_USD, SWARM_MAX_USD_DEFAULT);
 export const dailyUsdOf = (env: { SWARM_DAILY_USD?: string }) => num(env.SWARM_DAILY_USD, SWARM_DAILY_USD_DEFAULT);
+const atLeastOne = (v: string | undefined, fallback: number) => Math.max(1, Math.floor(num(v, fallback)));
+export type SwarmLimitEnv = { SWARM_RUNNING_PER_KEY?: string; SWARM_RUNNING_ALL?: string; SWARM_TASKS_AT_ONCE?: string };
+export const runningLimitsOf = (env: SwarmLimitEnv) => {
+    const all = atLeastOne(env.SWARM_RUNNING_ALL, RUNNING_ALL);
+    return { perKey: Math.min(all, atLeastOne(env.SWARM_RUNNING_PER_KEY, RUNNING_PER_KEY)), all };
+};
+export const tasksAtOnceOf = (env: SwarmLimitEnv) => atLeastOne(env.SWARM_TASKS_AT_ONCE, TASKS_AT_ONCE_ALL);
+// One swarm's share of the tasks all running swarms may have going: its own concurrency, but never more than an even
+// split of the total, and always at least 1 (so a swarm over the share still moves).
+export const taskShare = (concurrency: number, running: number, total: number) =>
+    Math.max(1, Math.min(concurrency, Math.floor(total / Math.max(1, running))));
 // Swarms can run while the Durable Object binding and the model key are there.
 export const swarmsOn = (env: { SWARMS?: unknown; ANTHROPIC_API_KEY?: string }) => !!env.SWARMS && !!env.ANTHROPIC_API_KEY?.trim();
 // How long an agent waits for an answer to its question before it goes on (section 61.2); the var is for tests.
@@ -776,6 +792,12 @@ export const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 export async function daySpent(db: D1Database, now: number): Promise<number> {
     const r = await db.prepare("SELECT usd FROM swarm_spend WHERE day = ?1").bind(dayOf(now)).first<{ usd: number }>();
     return r?.usd ?? 0;
+}
+
+// Swarms whose tasks are running now (an apply uses no model, so it does not count here).
+export async function taskSwarmCount(db: D1Database): Promise<number> {
+    const r = await db.prepare("SELECT COUNT(*) AS n FROM swarms WHERE status IN ('running', 'stopping')").first<{ n: number }>();
+    return r?.n ?? 0;
 }
 
 export async function runningCounts(db: D1Database, keyId: string): Promise<{ mine: number; all: number }> {
@@ -2116,13 +2138,21 @@ async function tickTasks(d: SwarmRunDeps, row: SwarmRow, spec: Spec, started: nu
     };
     const inflight = new Set<Promise<void>>();
     let halt: string | null = null;
+    // this swarm's share of the tasks all running swarms may have going (section 64), looked at again now and then
+    const total = tasksAtOnceOf(d.base.env as SwarmLimitEnv);
+    let share = spec.concurrency;
+    let shareAt = -Infinity;
     for (;;) {
         halt = await haltReason(d, row.id);
         if (!halt && (await taskCounts(db, row.id)).failed >= spec.stop_after) halt = "error.swarm.too_many_failed";
         if (halt || d.base.now() >= budget) break;
         // parked agents whose answer came (or whose wait ran out) queue again (section 61.2)
         await wakeWaiting(db, row.id, d.base.now(), waitMs);
-        while (inflight.size < spec.concurrency) {
+        if (d.base.now() - shareAt >= SHARE_RECHECK_MS) {
+            shareAt = d.base.now();
+            share = taskShare(spec.concurrency, await taskSwarmCount(db).catch(() => 1), total);
+        }
+        while (inflight.size < share) {
             const idx = await claimNext(d, row.id);
             if (idx === null) break;
             const p: Promise<void> = runTask(d, row, spec, idx, tc).finally(() => inflight.delete(p));

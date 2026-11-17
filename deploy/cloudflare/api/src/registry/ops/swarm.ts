@@ -13,8 +13,6 @@ import {
     argsHash,
     badSpec,
     clashGroup,
-    RUNNING_ALL,
-    RUNNING_PER_KEY,
     SWARM_ID_REGEX,
     SwarmSpecSchema,
     batchesOf,
@@ -35,6 +33,7 @@ import {
     TASKS_MAX,
     asksByTask,
     runningCounts,
+    runningLimitsOf,
     setSwarm,
     shapeOf,
     specHash,
@@ -480,7 +479,9 @@ export const swarmApproveOp = defineOp({
         if (!swarmsOn(ctx.env)) throw new OpError(503, "error.swarm.off", "swarms cannot run on this server");
         const now = ctx.now();
         const running = await runningCounts(ctx.db, row.key_id);
-        if (running.mine >= RUNNING_PER_KEY || running.all >= RUNNING_ALL) throw new OpError(429, "error.swarm.busy", "swarm: another swarm is running; approve this one when it ends");
+        const limits = runningLimitsOf(ctx.env);
+        if (running.mine >= limits.perKey) throw new OpError(429, "error.swarm.busy", `swarm: ${running.mine} swarms planned by the same key are running (the most is ${limits.perKey}); approve this one when one ends`);
+        if (running.all >= limits.all) throw new OpError(429, "error.swarm.busy", `swarm: ${running.all} swarms are running (the most is ${limits.all}); approve this one when one ends`);
         if ((await daySpent(ctx.db, now)) >= dailyUsdOf(ctx.env)) throw new OpError(429, "error.swarm.daily_cap", "swarm: today's swarm budget is spent");
         if (row.spent_usd >= row.cap_usd) throw new OpError(409, "error.swarm.over_cap", "swarm: its dollar cap is spent");
         const r = await ctx.db
@@ -632,7 +633,8 @@ export const swarmApplyOp = defineOp({
             throw new OpError(409, "error.swarm.count_mismatch", `swarm: ${toApply} changes would be applied, not ${input.count}; look again`);
         if (toApply === 0) throw notAwaiting("no kept change is left to apply");
         const running = await runningCounts(ctx.db, row.key_id);
-        if (running.all >= RUNNING_ALL) throw new OpError(429, "error.swarm.busy", "swarm: other swarms are running; apply when one ends");
+        const limits = runningLimitsOf(ctx.env);
+        if (running.all >= limits.all) throw new OpError(429, "error.swarm.busy", `swarm: ${running.all} swarms are running (the most is ${limits.all}); apply when one ends`);
         const now = ctx.now();
         // the transition and the untick in one batch: the untick only happens when this call started the apply
         const started = "(SELECT apply_status = 'applying' AND updated_at = ?2 FROM swarms WHERE id = ?1)";
