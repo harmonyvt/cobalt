@@ -2,11 +2,13 @@ import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import { describe, expect, it } from "vitest";
 import { wire } from "../src/background";
+import { badgeColor } from "../src/lib/brand";
 import type { Ext, StorageArea } from "../src/lib/browser";
 import { mountedHost, relocateHost, scanInstagram, scanTwitch, scanX, scanYouTube } from "../src/lib/find";
 import { describeSave, friendlyError, sizePair } from "../src/lib/progress";
 import { createSave, followSave, pollSave } from "../src/lib/save";
 import { chromeApproveUrl, matchCode, parseRedirect, pkceChallenge, prefersWebAuthFlow, runSignIn, safariApproveUrl } from "../src/lib/signin";
+import { buttonCss, hostCss, themeFromSignals } from "../src/lib/surface";
 import { popupView, publicAuth, spriteCss } from "../src/lib/view";
 import { canonicalInstagram, canonicalTwitch, canonicalX, canonicalYouTube } from "../src/lib/urls";
 
@@ -412,6 +414,33 @@ describe("save progress copy", () => {
             retry: true,
             details: true,
         });
+    });
+});
+
+describe("save feedback surface", () => {
+    it("uses the web accent for the badge and a thin arc instead of a filled disc", () => {
+        expect(badgeColor()).toBe("#2f8af9");
+        expect(badgeColor("1")).toBe("#2f8af9");
+        expect(badgeColor("✓")).toBe("#30bd1b");
+        expect(badgeColor("!")).toBe("#ed2236");
+        for (const kind of ["icon", "pill", "rail"] as const) {
+            const css = buttonCss(kind);
+            expect(css).not.toContain("conic-gradient");
+            expect(css).toContain("stroke-width: 2");
+            expect(css).toContain("prefers-reduced-motion");
+        }
+        expect(hostCss()).toContain("background:transparent !important");
+        expect(buttonCss("icon")).toContain("background: transparent");
+    });
+
+    it("follows an explicit site theme, then the page, then the OS", () => {
+        expect(themeFromSignals({ hint: "dark", scheme: "light", luminance: 1, prefersDark: false })).toBe("dark");
+        expect(themeFromSignals({ hint: "theme-light", scheme: "dark", luminance: 0, prefersDark: true })).toBe("light");
+        expect(themeFromSignals({ hint: "", scheme: "light dark", luminance: 0, prefersDark: false })).toBe("dark");
+        expect(themeFromSignals({ hint: "", scheme: "", luminance: 1, prefersDark: true })).toBe("light");
+        expect(themeFromSignals({ hint: "", scheme: "dark", luminance: null, prefersDark: false })).toBe("dark");
+        expect(themeFromSignals({ hint: "", scheme: "", luminance: null, prefersDark: true })).toBe("dark");
+        expect(themeFromSignals({ hint: "", scheme: "", luminance: null, prefersDark: false })).toBe("light");
     });
 });
 

@@ -1,47 +1,17 @@
 // Injects one Save button per post. Re-scans on DOM changes so a feed that scrolls in more posts,
 // and a site that redraws itself without a navigation, both get buttons. A button that was mounted
 // before its real anchor existed is moved there on the next scan.
+//
+// The button is a shadow root. The host is also pinned inline, because X and Instagram style every
+// span and button on the page and that styling was painting a disc around the capybara.
 
 import { getExt, type Ext } from "./lib/browser";
 import { deepAll, mountedHost, relocateHost, type FoundPost, type Scan } from "./lib/find";
 import { describeSave, EMPTY_PROGRESS, type SaveFace, type SaveProgress } from "./lib/progress";
-import { spriteCss, type SiteId, type SpriteState } from "./lib/view";
+import { buttonCss, hostCss, pageTheme, shieldHost, type SurfaceKind } from "./lib/surface";
+import { type SiteId, type SpriteState } from "./lib/view";
 
 const HOST = "capystore-save";
-
-function buttonCss(fit?: FoundPost["fit"]): string {
-    // X's action icons are about 34px; the reels rail's hit targets are about 40px.
-    const size = fit === "rail" ? 40 : fit === "row" ? 34 : 36;
-    const sprite = fit ? spriteCss(20, 14) : spriteCss();
-    return `
-:host { all: initial; position: relative; }
-button {
-  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  margin: 0; padding: 0; border: 0; background: transparent; color: inherit;
-  font: 13px/1 -apple-system, system-ui, sans-serif; cursor: pointer; border-radius: 999px;
-}
-button.icon { width: ${size}px; height: auto; min-height: ${size}px; flex-direction: column; gap: 1px; }
-button.pill { height: 36px; padding: 0 10px 0 4px; flex-direction: row; }
-button:hover, button:focus-visible { background: color-mix(in srgb, currentColor 12%, transparent); outline: none; }
-.ring { width: ${size}px; height: ${size}px; border-radius: 999px; display: grid; place-items: center; background: transparent; box-shadow: inset 0 0 0 2px color-mix(in srgb, currentColor 35%, transparent); }
-.ring.on { background: conic-gradient(#f4f1ea calc(var(--p) * 1%), transparent 0); }
-.ring.spin { background: conic-gradient(transparent 0 70%, #f4f1ea 0 100%); animation: capy-spin 0.9s linear infinite; }
-@keyframes capy-spin { to { transform: rotate(1turn); } }
-.label { font: 10px/1 -apple-system, system-ui, sans-serif; color: inherit; }
-.label:empty { display: none; }
-.toast {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 2147483646;
-  width: max-content; max-width: 280px; box-sizing: border-box;
-  background: #141414; color: #f4f1ea; border-radius: 12px; padding: 8px 10px;
-  font: 12px/1.35 -apple-system, system-ui, sans-serif; box-shadow: 0 10px 28px rgba(0,0,0,.45);
-}
-.toast[hidden] { display: none; }
-.toast .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.toast button { width: auto; height: auto; min-height: 0; padding: 2px 8px; border-radius: 999px; background: #2a2622; color: inherit; font: inherit; }
-.toast .code { display: block; margin-top: 4px; color: #b7b0a4; font-family: ui-monospace, monospace; font-size: 11px; }
-${sprite}
-`;
-}
 
 const LABEL: Record<SpriteState, string> = {
     idle: "Save to Capystore",
@@ -53,15 +23,36 @@ const LABEL: Record<SpriteState, string> = {
 
 type Button = {
     url: string;
+    root: HTMLElement;
     button: HTMLButtonElement;
     capy: HTMLElement;
-    ring: HTMLElement;
-    label: HTMLElement;
+    tip: HTMLElement;
     toast: HTMLElement;
     toastText: HTMLElement;
+    toastBar: HTMLElement;
+    toastFill: HTMLElement;
+    markWork: SVGElement;
+    markOk: SVGElement;
+    markBad: SVGElement;
+    actions: HTMLElement;
     state: SpriteState;
     hideToast: number;
+    hovering: boolean;
+    toastGen: number;
+    arm: () => void;
+    untrack: () => void;
 };
+
+function kindOf(found: FoundPost): SurfaceKind {
+    if (found.fit === "rail") return "rail";
+    return found.variant === "pill" ? "pill" : "icon";
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string): HTMLElementTagNameMap[K] {
+    const node = document.createElement(tag);
+    node.className = className;
+    return node;
+}
 
 export function start(site: SiteId, scan: Scan): void {
     const ext = getExt();
@@ -86,8 +77,7 @@ export function start(site: SiteId, scan: Scan): void {
         window.clearInterval(hrefTimer);
         for (const b of buttons) {
             paint(b, "sleeping");
-            b.button.title = "Capystore was updated: reload this page";
-            b.button.setAttribute("aria-label", b.button.title);
+            say(b, "Capystore was updated: reload this page");
         }
     };
     const send = async (message: unknown): Promise<unknown> => {
@@ -102,29 +92,40 @@ export function start(site: SiteId, scan: Scan): void {
     };
 
     const sheet = document.createElement("style");
-    // Shrink to the button. A flex or grid parent (a card, <main>, a results row) would otherwise stretch this into a full-width bar.
-    // `row` takes an equal share of an X action bar so the row does not wrap. `rail` is one reels slot.
-    sheet.textContent = `.${HOST}{display:inline-flex;align-items:center;vertical-align:middle;position:relative;width:max-content;max-width:max-content;flex:0 0 auto;align-self:center;box-sizing:border-box}.${HOST}.row{display:flex;flex:1 1 0%;width:auto;max-width:none;min-width:0;justify-content:flex-start}.${HOST}.rail{display:flex;flex:0 0 auto;width:auto;max-width:none;min-width:0;justify-content:center}`;
+    sheet.textContent = hostCss();
     document.documentElement.appendChild(sheet);
+
+    const say = (b: Button, text: string) => {
+        b.button.setAttribute("aria-label", text);
+        b.tip.textContent = text;
+    };
+
+    const syncTheme = (b: Button) => {
+        b.root.dataset.theme = pageTheme(document);
+    };
 
     const paint = (b: Button, state: SpriteState) => {
         b.state = state;
-        b.capy.className = `capy ${state}`;
+        b.capy.className = `cs-glyph capy ${state}`;
+        b.root.classList.toggle("busy", state === "saving");
+        b.root.classList.toggle("saved", state === "saved");
+        b.root.classList.toggle("error", state === "error");
+        if (state !== "saving") b.root.classList.remove("spin");
         const label = state === "sleeping" && signedIn ? "Capystore is offline" : LABEL[state];
-        b.button.setAttribute("aria-label", label);
-        b.button.title = label;
+        say(b, label);
     };
 
     const findHost = (url: string): HTMLElement | null => {
-        for (const el of deepAll(document, `.${HOST}`)) {
-            if ((el as HTMLElement).dataset.url === url) return el as HTMLElement;
+        for (const node of deepAll(document, `.${HOST}`)) {
+            if ((node as HTMLElement).dataset.url === url) return node as HTMLElement;
         }
         return null;
     };
 
-    const mark = (host: HTMLElement, found: FoundPost) => {
+    const stamp = (host: HTMLElement, found: FoundPost) => {
         host.className = found.fit ? `${HOST} ${found.fit}` : HOST;
         host.dataset.url = found.url;
+        shieldHost(host, found.fit);
     };
 
     const ensure = (found: FoundPost) => {
@@ -135,38 +136,128 @@ export function start(site: SiteId, scan: Scan): void {
             if (previousUrl && previousUrl !== found.url) {
                 for (const b of buttons) if (b.url === previousUrl) b.url = found.url;
             }
-            mark(prev, found);
+            stamp(prev, found);
             relocateHost(prev, found.mount, found.after, found.before);
+            const existing = [...buttons].find((b) => b.button.getRootNode() instanceof ShadowRoot && (b.button.getRootNode() as ShadowRoot).host === prev);
+            if (existing) syncTheme(existing);
             return;
         }
+        const kind = kindOf(found);
         const host = document.createElement("span");
-        mark(host, found);
+        stamp(host, found);
         const root = host.attachShadow({ mode: "open" });
         const style = document.createElement("style");
-        style.textContent = buttonCss(found.fit);
-        const button = document.createElement("button");
+        style.textContent = buttonCss(kind);
+        const wrap = el("span", `cs-root ${kind}`);
+        wrap.dataset.theme = pageTheme(document);
+        const button = el("button", found.variant === "pill" ? "cs-btn pill" : "cs-btn");
         button.type = "button";
-        button.className = found.variant;
-        const ring = document.createElement("span");
-        ring.className = "ring";
-        const capy = document.createElement("span");
-        capy.className = "capy idle";
+        const hit = el("span", "cs-hit");
+        hit.innerHTML = `<svg class="cs-arc" viewBox="0 0 36 36" aria-hidden="true">
+            <circle class="cs-track" cx="18" cy="18" r="15.5"></circle>
+            <circle class="cs-value" cx="18" cy="18" r="15.5"></circle>
+        </svg>
+        <svg class="cs-check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.4 8.3 6.5 11.2 12.6 4.8"/></svg>`;
+        const capy = el("span", "cs-glyph capy idle");
         capy.setAttribute("aria-hidden", "true");
         capy.style.backgroundImage = `url("${ext.runtime.getURL("assets/capy-sprites.png")}")`;
-        ring.append(capy);
-        const label = document.createElement("span");
-        label.className = "label";
-        button.append(ring, label);
-        if (found.variant === "pill") label.textContent = "Save";
-        const toast = document.createElement("div");
-        toast.className = "toast";
+        hit.append(capy);
+        button.append(hit);
+        if (found.variant === "pill") {
+            const word = el("span", "cs-word");
+            word.textContent = "Save";
+            button.append(word);
+        }
+        const tip = el("span", "cs-tip");
+        tip.setAttribute("role", "tooltip");
+        const toast = el("div", "cs-toast");
+        toast.setAttribute("role", "status");
         toast.hidden = true;
-        const toastText = document.createElement("span");
-        toastText.className = "text";
-        toast.append(toastText);
-        root.append(style, button, toast);
-        const record: Button = { url: found.url, button, capy, ring, label, toast, toastText, state: signedIn ? "idle" : "sleeping", hideToast: 0 };
+        const markWork = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        markWork.setAttribute("viewBox", "0 0 16 16");
+        markWork.setAttribute("class", "cs-mark-work");
+        markWork.innerHTML = `<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="11 27"/>`;
+        const markOk = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        markOk.setAttribute("viewBox", "0 0 16 16");
+        markOk.setAttribute("class", "cs-mark-ok");
+        markOk.innerHTML = `<circle cx="8" cy="8" r="8" fill="var(--cs-ok)"/><path d="M4.2 8.2 6.8 10.7 11.8 5.4" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>`;
+        const markBad = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        markBad.setAttribute("viewBox", "0 0 16 16");
+        markBad.setAttribute("class", "cs-mark-bad");
+        markBad.innerHTML = `<circle cx="8" cy="8" r="8" fill="var(--cs-bad)"/><path d="M8 4.1v4.6" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="11.5" r="0.9" fill="#fff"/>`;
+        const markEl = el("span", "cs-mark");
+        markEl.setAttribute("aria-hidden", "true");
+        markEl.append(markWork, markOk, markBad);
+        const toastText = el("span", "cs-line");
+        const toastBar = el("span", "cs-bar");
+        toastBar.setAttribute("role", "progressbar");
+        toastBar.setAttribute("aria-valuemin", "0");
+        toastBar.setAttribute("aria-valuemax", "100");
+        const toastFill = document.createElement("i");
+        toastBar.append(toastFill);
+        toastBar.hidden = true;
+        const actions = el("span", "cs-actions");
+        toast.append(markEl, toastText, toastBar, actions);
+        wrap.append(button, tip, toast);
+        root.append(style, wrap);
+        const record: Button = {
+            url: found.url,
+            root: wrap,
+            button,
+            capy,
+            tip,
+            toast,
+            toastText,
+            toastBar,
+            toastFill,
+            markWork,
+            markOk,
+            markBad,
+            actions,
+            state: signedIn ? "idle" : "sleeping",
+            hideToast: 0,
+            hovering: false,
+            toastGen: 0,
+            arm: () => {},
+            untrack: () => {},
+        };
         paint(record, record.state);
+        const placeTip = () => {
+            const box = button.getBoundingClientRect();
+            const rail = kind === "rail";
+            if (rail) {
+                record.tip.style.left = `${Math.max(8, box.left - record.tip.offsetWidth - 8)}px`;
+                record.tip.style.top = `${box.top + box.height / 2 - record.tip.offsetHeight / 2}px`;
+            } else {
+                const width = record.tip.offsetWidth;
+                let left = box.left + box.width / 2 - width / 2;
+                left = Math.min(Math.max(8, left), window.innerWidth - width - 8);
+                record.tip.style.left = `${left}px`;
+                record.tip.style.top = `${box.bottom + 6}px`;
+            }
+        };
+        button.addEventListener("mouseenter", () => {
+            if (record.root.classList.contains("toast-open")) return;
+            record.root.classList.add("show-tip");
+            placeTip();
+        });
+        button.addEventListener("mouseleave", () => record.root.classList.remove("show-tip"));
+        button.addEventListener("focus", () => {
+            if (record.root.classList.contains("toast-open")) return;
+            record.root.classList.add("show-tip");
+            placeTip();
+        });
+        button.addEventListener("blur", () => record.root.classList.remove("show-tip"));
+        toast.addEventListener("mouseenter", () => {
+            record.hovering = true;
+            window.clearTimeout(record.hideToast);
+        });
+        toast.addEventListener("mouseleave", () => {
+            record.hovering = false;
+            record.arm();
+        });
+        toast.addEventListener("mousedown", (e) => e.stopPropagation());
+        toast.addEventListener("click", (e) => e.stopPropagation());
         button.addEventListener("mousedown", (e) => e.stopPropagation());
         button.addEventListener("click", (e) => {
             e.preventDefault();
@@ -187,16 +278,14 @@ export function start(site: SiteId, scan: Scan): void {
         if (!signedIn) {
             // Visible while the approve tab is open, so a click never looks like nothing happened.
             paint(record, "saving");
-            record.button.title = "Signing in to Capystore: approve it in the tab that opened";
-            record.button.setAttribute("aria-label", record.button.title);
+            record.root.classList.add("spin");
+            say(record, "Signing in to Capystore: approve it in the tab that opened");
             const res = (await send({ type: "sign-in" })) as { ok?: boolean; message?: string } | undefined;
             const auth = (await send({ type: "auth-state" })) as { signedIn?: boolean } | undefined;
             signedIn = auth?.signedIn === true;
             if (!signedIn) {
                 paint(record, "error");
-                const why = res?.message ?? "Sign-in did not finish.";
-                record.button.title = `${why} Click to try again.`;
-                record.button.setAttribute("aria-label", record.button.title);
+                say(record, `${res?.message ?? "Sign-in did not finish."} Click to try again.`);
                 return;
             }
         }
@@ -219,13 +308,16 @@ export function start(site: SiteId, scan: Scan): void {
         const sites = (await send({ type: "get-sites" })) as Record<string, boolean> | undefined;
         enabled = !sites || sites[site] !== false;
         if (!enabled) {
-            for (const b of buttons) b.button.getRootNode() instanceof ShadowRoot && (b.button.getRootNode() as ShadowRoot).host.remove();
+            for (const b of buttons) {
+                const node = b.button.getRootNode();
+                if (node instanceof ShadowRoot) node.host.remove();
+            }
             buttons.clear();
             return;
         }
         for (const b of buttons) {
-            const root = b.button.getRootNode();
-            if (root instanceof ShadowRoot && !root.host.isConnected) buttons.delete(b);
+            const node = b.button.getRootNode();
+            if (node instanceof ShadowRoot && !node.host.isConnected) buttons.delete(b);
         }
         for (const found of scan(document, location.href)) {
             try {
@@ -234,6 +326,7 @@ export function start(site: SiteId, scan: Scan): void {
                 // A node the site detached between the scan and the insert.
             }
         }
+        for (const b of buttons) syncTheme(b);
     };
 
     let timer = 0;
@@ -248,6 +341,9 @@ export function start(site: SiteId, scan: Scan): void {
     observer.observe(document.documentElement, { childList: true, subtree: true });
     document.addEventListener("yt-navigate-finish", schedule);
     window.addEventListener("popstate", schedule);
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+        for (const b of buttons) syncTheme(b);
+    });
     // A content script's history.pushState wrapper does not see the page's own calls. Reels
     // change the URL with the up/down arrows and often keep the same rail, so watch the href.
     let href = location.href;
@@ -270,15 +366,112 @@ export function start(site: SiteId, scan: Scan): void {
         }
     };
 
+    const dismiss = (b: Button) => {
+        b.toast.classList.remove("cs-in");
+        b.root.classList.remove("toast-open");
+        const gen = b.toastGen;
+        window.setTimeout(() => {
+            if (gen === b.toastGen && !b.toast.classList.contains("cs-in")) b.toast.hidden = true;
+        }, 200);
+    };
+
+    const placeToast = (b: Button) => {
+        const box = b.button.getBoundingClientRect();
+        const width = b.toast.offsetWidth;
+        const height = b.toast.offsetHeight;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const rail = b.root.classList.contains("rail");
+        let left = box.left + box.width / 2 - width / 2;
+        let top = box.bottom + 8;
+        let place: "below" | "above" | "left" = "below";
+        const overflowsRight = left + width > vw - 8;
+        if (rail || overflowsRight) {
+            place = "left";
+            left = box.left - width - 10;
+            top = box.top + box.height / 2 - height / 2;
+        } else if (top + height > vh - 8) {
+            place = "above";
+            top = box.top - height - 8;
+        }
+        if (left < 8) left = 8;
+        if (left + width > vw - 8) left = Math.max(8, vw - width - 8);
+        if (top < 8) top = 8;
+        if (top + height > vh - 8) top = Math.max(8, vh - height - 8);
+        b.root.classList.toggle("place-left", place === "left");
+        b.root.classList.toggle("place-above", place === "above");
+        b.toast.style.left = `${Math.round(left)}px`;
+        b.toast.style.top = `${Math.round(top)}px`;
+    };
+
+    const reveal = (b: Button) => {
+        b.untrack();
+        const gen = ++b.toastGen;
+        b.toast.hidden = false;
+        b.root.classList.add("toast-open");
+        b.root.classList.remove("show-tip");
+        placeToast(b);
+        void b.toast.offsetWidth;
+        b.toast.classList.add("cs-in");
+        placeToast(b);
+        const track = () => {
+            if (gen !== b.toastGen || b.toast.hidden) return;
+            placeToast(b);
+        };
+        window.addEventListener("scroll", track, true);
+        window.addEventListener("resize", track);
+        b.untrack = () => {
+            window.removeEventListener("scroll", track, true);
+            window.removeEventListener("resize", track);
+        };
+        b.arm = () => {
+            window.clearTimeout(b.hideToast);
+            if (b.hovering || gen !== b.toastGen) return;
+            b.hideToast = window.setTimeout(() => {
+                b.untrack();
+                dismiss(b);
+            }, 4000);
+        };
+        b.arm();
+    };
+
     const showFace = (b: Button, face: SaveFace, studioUrl: string | null, shareUrl: string | null, code: string | null) => {
-        b.label.textContent = face.label;
-        b.button.setAttribute("aria-label", face.toast);
-        b.button.title = face.toast;
-        b.ring.classList.toggle("spin", face.ring === "spin");
-        b.ring.classList.toggle("on", typeof face.ring === "number");
-        b.ring.style.setProperty("--p", typeof face.ring === "number" ? String(Math.round(face.ring * 100)) : "0");
-        b.toastText.textContent = face.toast;
-        b.toast.querySelectorAll("button, .code").forEach((n) => n.remove());
+        say(b, face.toast);
+        const saving = b.state === "saving";
+        const determinate = typeof face.ring === "number";
+        const wasSpin = b.root.classList.contains("spin");
+        b.root.classList.toggle("busy", saving);
+        b.root.classList.toggle("spin", face.ring === "spin");
+        b.root.classList.toggle("saved", b.state === "saved");
+        b.root.classList.toggle("error", b.state === "error");
+        const pct = determinate ? String(Math.round((face.ring as number) * 100)) : b.state === "saved" ? "100" : "0";
+        if (wasSpin && face.ring !== "spin") b.root.classList.add("no-ease");
+        b.root.style.setProperty("--p", pct);
+        if (wasSpin && face.ring !== "spin") {
+            requestAnimationFrame(() => requestAnimationFrame(() => b.root.classList.remove("no-ease")));
+        }
+        const showIcon = (node: SVGElement, on: boolean) => (on ? node.removeAttribute("hidden") : node.setAttribute("hidden", ""));
+        showIcon(b.markWork, b.state === "saving");
+        showIcon(b.markOk, b.state === "saved");
+        showIcon(b.markBad, b.state === "error");
+        // The saved copy names the buttons. They are real controls, so the line stays the headline.
+        b.toastText.textContent = face.open ? face.headline : face.toast;
+        const working = saving && face.ring !== null;
+        b.toastBar.hidden = !working;
+        b.toastBar.classList.toggle("indet", face.ring === "spin");
+        if (determinate) {
+            const pct = Math.round((face.ring as number) * 100);
+            b.toastFill.style.width = `${pct}%`;
+            b.toastBar.setAttribute("aria-valuenow", String(pct));
+            b.toastBar.removeAttribute("aria-valuetext");
+        } else {
+            b.toastFill.style.width = "";
+            b.toastBar.removeAttribute("aria-valuenow");
+            if (face.ring === "spin") b.toastBar.setAttribute("aria-valuetext", face.headline);
+        }
+        b.actions.replaceChildren();
+        b.toast.querySelector(".cs-code")?.remove();
+        b.toast.classList.remove("has-code");
         const add = (text: string, run: () => void) => {
             const btn = document.createElement("button");
             btn.type = "button";
@@ -288,36 +481,36 @@ export function start(site: SiteId, scan: Scan): void {
                 e.stopPropagation();
                 run();
             });
-            b.toast.append(btn);
+            b.actions.append(btn);
         };
         if (face.open && studioUrl) add("Open", () => void send({ type: "open", url: studioUrl }));
         if (face.copy) add("Copy link", () => void copyText(shareUrl || studioUrl || b.url));
         if (face.retry) add("Retry", () => void onClick(b));
         if (face.details && code) {
             add("Details", () => {
-                let codeEl = b.toast.querySelector(".code");
+                let codeEl = b.toast.querySelector(".cs-code");
                 if (codeEl) {
                     codeEl.remove();
+                    b.toast.classList.remove("has-code");
+                    placeToast(b);
                     return;
                 }
                 codeEl = document.createElement("span");
-                codeEl.className = "code";
+                codeEl.className = "cs-code";
                 codeEl.textContent = code;
                 b.toast.append(codeEl);
+                b.toast.classList.add("has-code");
+                placeToast(b);
             });
         }
-        b.toast.hidden = false;
-        window.clearTimeout(b.hideToast);
-        b.hideToast = window.setTimeout(() => {
-            b.toast.hidden = true;
-        }, 4000);
+        reveal(b);
     };
 
     const applyUpdate = (b: Button, state: string, progress: SaveProgress | null, studioUrl: string | null, shareUrl: string | null) => {
         if (state === "sleeping" || state === "idle" || state === "signed-out") {
             paint(b, state === "idle" ? "idle" : "sleeping");
-            b.label.textContent = "";
-            b.ring.className = "ring";
+            b.root.classList.remove("spin", "busy", "saved");
+            b.root.style.setProperty("--p", "0");
             return;
         }
         if (state === "saving" || state === "saved" || state === "error") {

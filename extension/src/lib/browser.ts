@@ -43,6 +43,7 @@ export type Ext = {
     action?: {
         setBadgeText(details: { text: string }): Promise<void> | void;
         setBadgeBackgroundColor(details: { color: string }): Promise<void> | void;
+        setBadgeTextColor?(details: { color: string }): Promise<void> | void;
     };
     /** Absent on a browser that has no context-menu API (some Safari builds). */
     contextMenus?: {

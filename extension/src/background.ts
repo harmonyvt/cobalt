@@ -2,6 +2,7 @@
 // Content scripts and the popup ask for state; the session token stays in extension storage.
 
 import { getExt, type Ext } from "./lib/browser";
+import { badgeColor } from "./lib/brand";
 import { EMPTY_PROGRESS, type SaveProgress } from "./lib/progress";
 import { createSave, followSave, LIBRARY_URL, type SaveOutcome } from "./lib/save";
 import { runSignIn } from "./lib/signin";
@@ -231,7 +232,8 @@ async function paintBadge(ext: Ext, text?: string) {
     const n = (await recent(ext)).filter((r) => r.status === "saving").length;
     const shown = text ?? (n > 0 ? String(Math.min(n, 9)) : "");
     try {
-        await ext.action?.setBadgeBackgroundColor({ color: text === "!" ? "#b3362d" : "#3a342c" });
+        await ext.action?.setBadgeBackgroundColor({ color: badgeColor(text) });
+        await ext.action?.setBadgeTextColor?.({ color: "#ffffff" });
         await ext.action?.setBadgeText({ text: shown });
     } catch {
         // Safari builds that have no badge API.

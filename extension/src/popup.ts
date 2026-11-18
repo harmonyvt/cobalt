@@ -40,7 +40,12 @@ async function init(api: NonNullable<ReturnType<typeof getExt>>) {
         if (current) {
             cardHeadline.textContent = current.headline;
             cardLabel.textContent = current.label;
-            cardFill.style.width = current.fraction === null ? "12%" : `${Math.round(current.fraction * 100)}%`;
+            const working = current.fraction === null && !current.retry && !current.open;
+            const bar = cardFill.parentElement as HTMLElement;
+            bar.hidden = current.retry;
+            bar.classList.toggle("indeterminate", working);
+            card.dataset.tone = current.retry ? "error" : current.open ? "saved" : "saving";
+            cardFill.style.width = current.fraction === null ? "" : `${Math.round(current.fraction * 100)}%`;
             cardOpen.hidden = !current.open;
             cardCopy.hidden = !current.copy;
             cardRetry.hidden = !current.retry;
@@ -73,6 +78,7 @@ async function init(api: NonNullable<ReturnType<typeof getExt>>) {
             });
             const status = document.createElement("span");
             status.className = "status";
+            status.dataset.state = row.status;
             status.textContent = row.status === "error" ? "failed" : row.status;
             li.append(a, status);
             recent.append(li);
