@@ -544,6 +544,19 @@ export const makeWebpOp = defineOp({
         crop: CropSchema.optional(),
         width: z.union([z.literal(320), z.literal(480)]).optional().describe("default 480"),
         quality: Quality.optional().describe("default med"),
+        key: z
+            .object({
+                color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+                similarity: z.number().min(0.01).max(0.6),
+                blend: z.number().min(0).max(0.5),
+                spill: z.number().min(0).max(1),
+            })
+            .optional()
+            .describe("chroma key. Green #00B140 and blue #0047BB also despill. Omit for an opaque webp"),
+        background: z
+            .object({ type: z.enum(["transparent", "color"]), color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional() })
+            .optional()
+            .describe("behind the key. color needs color. Another clip is an editor overlay, not a webp"),
     }),
     output: JobSchema,
     ai: {
@@ -559,7 +572,15 @@ export const makeWebpOp = defineOp({
         const length = Math.round((input.end - input.start) * 1000) / 1000;
         if (length < 0.5 || length > 10) throw stop(call, "a webp is 0.5 to 10 s long (end - start)");
         const f = await fileFor(ctx, call, input.id, "video");
-        const body = { start: input.start, length, width: input.width ?? 480, quality: input.quality ?? "med", ...(input.crop ? { crop: input.crop } : {}) };
+        const body = {
+            start: input.start,
+            length,
+            width: input.width ?? 480,
+            quality: input.quality ?? "med",
+            ...(input.crop ? { crop: input.crop } : {}),
+            ...(input.key ? { key: input.key } : {}),
+            ...(input.background ? { background: input.background } : {}),
+        };
         // a reopened item is its session's lead: `item` only on the gallery's own session (18.13)
         const plan = (at: At): Plan => ({ route: "render", body: at.item === undefined || at.reopened ? body : { ...body, item: at.item } });
         return ok(await makeOnFile(ctx, call, f, plan).catch((e) => fail(call, e)));
@@ -771,7 +792,10 @@ const TIMELINE_TYPE = `type Timeline = { version: 1; canvas: { w, h, fps: 30 | 6
   main: { id: string /* unique, letters */; item: string /* a video file id */; in: number; out: number /* source seconds */; speed: number /* 0.25..4 */;
           crop?: { aspect: "free"; x; y; w; h } /* fractions */; fit: "fill" | "fit"; volume: number /* 0..1 */; muted: boolean; pitch?: number /* semitones -12..12 */ }[];
   overlay: { id; item /* a video, gif, photo, webp (7TV emotes too) or cutout file id */; at: number /* output seconds */; in; out /* video: source seconds; picture: in 0, out = seconds shown */;
-             frame: { x; y; w } /* top-left + width, canvas fractions; height follows the picture */; opacity: number; volume; muted; track?: number /* layer 0..7, higher on top */ }[] }
+             frame: { x; y; w } /* top-left + width, canvas fractions; height follows the picture */; opacity: number; volume; muted; track?: number /* layer 0..7, higher on top */;
+             key?: { color: "#RRGGBB"; similarity: number /* 0.01..0.6 */; blend: number /* 0..0.5 */; spill: number /* 0..1 */ } /* omitted when absent */;
+             background?: { type: "clip" } | { type: "color"; color: "#RRGGBB" } /* transparent is omitted */ }[];
+  output?: "webm" | "prores" | "webp" /* mp4 is omitted; it flattens. webm and prores keep alpha */ }
   // overlay[] sorted by at; overlays on one track never overlap, on different tracks they may (stack stickers, several videos at once).
   // Adding one overlay to an existing project: edits.addOverlay is simpler.`;
 

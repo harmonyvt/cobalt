@@ -121,6 +121,9 @@ describe("embedded page", () => {
 
     it("is self-contained and CSP-clean", () => {
         expect(STUDIO_HTML).toMatch(/<video id="vid" crossorigin="anonymous" playsinline/);
+        expect(STUDIO_HTML).toContain("greenscreen");
+        expect(STUDIO_HTML).toContain("another clip");
+        expect(STUDIO_HTML).toContain("0.0225");
         expect(STUDIO_HTML).toContain('name="viewport"');
         // only inline scripts (CSP script-src is 'self' 'unsafe-inline')
         expect(STUDIO_HTML).not.toMatch(/<script[^>]*\bsrc=/i);

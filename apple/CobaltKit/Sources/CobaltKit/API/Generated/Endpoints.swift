@@ -321,6 +321,41 @@ enum Endpoints {
         APIEndpoint(op: "edits.route.render", method: "POST", path: "/edits/\(HTTPCobaltClient.encode(id))/render", auth: .key)
     }
 
+    /// `GET /library/items/:id/rmbg` (op `library.rmbg.quote`, auth key): What removing a video's background would cost.
+    static func libraryRmbgQuote(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.rmbg.quote", method: "GET", path: "/library/items/\(HTTPCobaltClient.encode(id))/rmbg", auth: .key)
+    }
+
+    /// `POST /library/items/:id/rmbg` (op `library.removeBackground`, auth key): Remove the background of a video up to 60s with Bria ($0.0225/s). Returns a job; the result is a private ProRes alternate (role alt) you can overlay. spill (0..1) is greenscreen fringe removal.
+    static func libraryRemoveBackground(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.removeBackground", method: "POST", path: "/library/items/\(HTTPCobaltClient.encode(id))/rmbg", auth: .key)
+    }
+
+    /// `GET /library/items/:id/rmbg/:job` (op `library.rmbg.status`, auth key): A background-removal job.
+    static func libraryRmbgStatus(id: String, job: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "library.rmbg.status", method: "GET", path: "/library/items/\(HTTPCobaltClient.encode(id))/rmbg/\(HTTPCobaltClient.encode(job))", auth: .key)
+    }
+
+    /// `GET /studio/:sid/rmbg` (op `studio.rmbg.quote`, auth capability): What removing this studio clip's background would cost.
+    static func studioRmbgQuote(sid: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "studio.rmbg.quote", method: "GET", path: "/studio/\(HTTPCobaltClient.encode(sid))/rmbg", auth: .capability)
+    }
+
+    /// `POST /studio/:sid/rmbg` (op `studio.rmbg`, auth capability): Remove the background of the video open in a studio.
+    static func studioRmbg(sid: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "studio.rmbg", method: "POST", path: "/studio/\(HTTPCobaltClient.encode(sid))/rmbg", auth: .capability)
+    }
+
+    /// `GET /studio/:sid/rmbg/:job` (op `studio.rmbg.status`, auth capability): A studio background-removal job.
+    static func studioRmbgStatus(sid: String, job: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "studio.rmbg.status", method: "GET", path: "/studio/\(HTTPCobaltClient.encode(sid))/rmbg/\(HTTPCobaltClient.encode(job))", auth: .capability)
+    }
+
+    /// `GET /rmbg/media/:token` (op `rmbg.media`, auth capability): A short-lived signed original for background removal.
+    static func rmbgMedia(token: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "rmbg.media", method: "GET", path: "/rmbg/media/\(HTTPCobaltClient.encode(token))", auth: .capability)
+    }
+
     /// `POST /chat/threads/:id/video` (op `chat.video.route`, auth key): Make a video of a chat thread (45.1).
     static func chatVideoRoute(id: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "chat.video.route", method: "POST", path: "/chat/threads/\(HTTPCobaltClient.encode(id))/video", auth: .key)

@@ -18,7 +18,7 @@ export const SERVICE_KEY_ID = "service:library";
 export type MediaSource = "webp" | "studio" | "host" | "upload" | "saved" | "made" | "emote";
 
 // migration 0009 (section 18.1)
-export type MediaRole = "item" | "slideshow" | "crop" | "export";
+export type MediaRole = "item" | "slideshow" | "crop" | "export" | "alt";
 
 export type MediaItemInput = {
     kind: "public" | "private";

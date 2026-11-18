@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
     JobError,
     buildFrameArgs,
+    buildKeyedExportArgs,
     buildImg2webpArgs,
     downloadToFile,
     encodeAnimatedWebp,
@@ -103,6 +104,27 @@ describe("buildFrameArgs", () => {
     it("formats a fractional effective clip", () => {
         const a = buildFrameArgs({ ...base, length: 5.9994999 });
         expect(a[a.indexOf("-t") + 1]).toBe("5.999");
+    });
+    it("a chroma key is chromakey, despill for the presets, then rgba, and is absent otherwise", () => {
+        const key = { color: "#00B140", similarity: 0.2, blend: 0.05, spill: 0.4 };
+        const a = buildFrameArgs({ ...base, key });
+        expect(a[a.indexOf("-vf") + 1]).toBe(
+            "fps=15,chromakey=color=0x00B140:similarity=0.2:blend=0.05,despill=type=green:mix=0.4:expand=0,format=rgba,scale='min(480,iw)':-2:flags=lanczos",
+        );
+        const blue = buildFrameArgs({ ...base, key: { ...key, color: "#0047BB", spill: 1 } });
+        expect(blue[blue.indexOf("-vf") + 1]).toContain("despill=type=blue:mix=1:expand=0,format=rgba");
+        const drop = buildFrameArgs({ ...base, key: { ...key, color: "#C0FF33" } });
+        expect(drop[drop.indexOf("-vf") + 1]).not.toContain("despill");
+        const solid = buildFrameArgs({ ...base, key, background: { type: "color", color: "#111111" } });
+        expect(solid[solid.indexOf("-filter_complex") + 1]).toContain("color=c=0x111111");
+        expect(solid).not.toContain("-vf");
+        const webm = buildKeyedExportArgs({ input: base.input, output: "/tmp/out.webm", start: 0, length: 2, width: 480, fps: 15, format: "webm", key });
+        expect(webm).toContain("libvpx-vp9");
+        expect(webm).toContain("yuva420p");
+        expect(webm[webm.indexOf("-auto-alt-ref") + 1]).toBe("0");
+        const prores = buildKeyedExportArgs({ input: base.input, output: "/tmp/out.mov", start: 0, length: 2, width: 480, fps: 15, format: "prores", key });
+        expect(prores).toContain("prores_ks");
+        expect(prores).toContain("yuva444p10le");
     });
 });
 

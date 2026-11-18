@@ -4777,6 +4777,151 @@
         }
       }
     },
+    "/library/items/{id}/rmbg": {
+      "get": {
+        "operationId": "library.rmbg.quote",
+        "summary": "What removing a video's background would cost.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "library.removeBackground",
+        "summary": "Remove the background of a video up to 60s with Bria ($0.0225/s). Returns a job; the result is a private ProRes alternate (role alt) you can overlay. spill (0..1) is greenscreen fringe removal.",
+        "tags": [
+          "library"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spill": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "ai": "ask"
+        }
+      }
+    },
+    "/library/items/{id}/rmbg/{job}": {
+      "get": {
+        "operationId": "library.rmbg.status",
+        "summary": "A background-removal job.",
+        "tags": [
+          "library"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          },
+          {
+            "name": "job",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{20}$"
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/library/items/{id}/studio": {
       "post": {
         "operationId": "library.reopen",
@@ -7127,7 +7272,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[A-Za-z0-9]{10}\\.webp$"
+              "pattern": "^[A-Za-z0-9]{10}\\.(webp|webm|mov|mp4)$"
             }
           }
         ],
@@ -7175,6 +7320,41 @@
           "no_store": true,
           "input": "read by the handler",
           "ai": "free"
+        }
+      }
+    },
+    "/rmbg/media/{token}": {
+      "get": {
+        "operationId": "rmbg.media",
+        "summary": "A short-lived signed original for background removal.",
+        "tags": [
+          "rmbg"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,400}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
         }
       }
     },
@@ -9244,6 +9424,133 @@
           "runs": "durable_object",
           "cors": false,
           "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/rmbg": {
+      "get": {
+        "operationId": "studio.rmbg.quote",
+        "summary": "What removing this studio clip's background would cost.",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "post": {
+        "operationId": "studio.rmbg",
+        "summary": "Remove the background of the video open in a studio.",
+        "tags": [
+          "studio"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spill": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/{sid}/rmbg/{job}": {
+      "get": {
+        "operationId": "studio.rmbg.status",
+        "summary": "A studio background-removal job.",
+        "tags": [
+          "studio"
+        ],
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{22}$"
+            }
+          },
+          {
+            "name": "job",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{20}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
           "input": "read by the handler",
           "ai": "hidden"
         }

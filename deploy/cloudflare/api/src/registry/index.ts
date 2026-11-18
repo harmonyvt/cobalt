@@ -18,6 +18,7 @@ import { LIBRARY_ADMIN_OPS } from "./ops/library-admin";
 import { LIVE_OPS } from "./ops/live";
 import { LIBRARY_WRITE_OPS } from "./ops/library-writes";
 import { MAKE_OPS } from "./ops/make";
+import { RMBG_OPS } from "./ops/rmbg";
 import { MCP_OPS } from "./ops/mcp";
 import { NAMES_OPS } from "./ops/names";
 import { PRIVATE_OPS } from "./ops/private";
@@ -38,6 +39,7 @@ export const REGISTRY = new Registry([
     ...CHAT_OPS,
     ...CHAT_SHARE_OPS,
     ...MAKE_OPS,
+    ...RMBG_OPS,
     ...CHAT_VIDEO_OPS,
     ...AGENT_OPS,
     ...SWARM_OPS,
