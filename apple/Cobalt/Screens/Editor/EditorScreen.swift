@@ -12,6 +12,8 @@ struct EditorScreen: View {
     @State private var timelineHeight: CGFloat = 268
     @State private var resizeBase: CGFloat?
     @State private var renderShown = false
+    /// The selected clip's source player. The trim bar and the trim keys share it.
+    @State private var clipTrim = ClipTrimPreview()
 
     static let binWidth: CGFloat = 236
     static let inspectorWidth: CGFloat = 272
@@ -29,7 +31,7 @@ struct EditorScreen: View {
         }
         .background(EditorColor.panel)
         .modifier(EditorKeyboard(
-            model: model, session: session,
+            model: model, session: session, clipTrim: clipTrim,
             zoomIn: { scale = scale.zoomed(by: 1.25) }, zoomOut: { scale = scale.zoomed(by: 0.8) },
             openRender: { renderShown = true }))
         .onChange(of: session.renderConfirmRequested, initial: true) { _, requested in
@@ -46,10 +48,10 @@ struct EditorScreen: View {
             EditorBin(model: model, session: session)
                 .frame(width: Self.binWidth)
             divider
-            EditorPreviewPane(session: session)
+            EditorPreviewPane(session: session, clipTrim: clipTrim)
                 .background(EditorColor.lane.opacity(0.5))
             divider
-            EditorInspector(session: session, pitchEnabled: model.capabilities.limits.editPitch)
+            EditorInspector(session: session, pitchEnabled: model.capabilities.limits.editPitch, clipTrim: clipTrim)
                 .frame(width: Self.inspectorWidth)
         }
         .frame(maxHeight: .infinity)

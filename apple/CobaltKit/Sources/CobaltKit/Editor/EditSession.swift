@@ -1579,6 +1579,13 @@ public final class EditSession {
     /// The decoded file of a clip (once it is on the device).
     func asset(_ id: String) -> EditSourceAsset? { assets[id] }
 
+    /// The on-device file for a library video, once the preview has decoded it. Nil until then, and for a
+    /// gif or a photo. `assets` is not observed: a view refreshes from `playable` or the download state.
+    public func localVideoURL(for itemID: String) -> URL? {
+        guard case .video(let asset, _, _) = assets[itemID] else { return nil }
+        return asset.url
+    }
+
     // MARK: - Closing
 
     /// Stops everything the session runs: timers, downloads, the player. The store calls it when the editor closes.

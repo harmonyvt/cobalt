@@ -8,6 +8,8 @@ struct EditorInspector: View {
     let session: EditSession
     /// `limits.editPitch` of the server; false hides every pitch control.
     var pitchEnabled = true
+    /// The selected clip's source player, for "set in/out at playhead".
+    let clipTrim: ClipTrimPreview
 
     var body: some View {
         ScrollView {
@@ -17,8 +19,10 @@ struct EditorInspector: View {
                 } else {
                     switch session.selection {
                     case .main:
-                        if let (index, clip) = session.selectedMain { MainClipInspector(session: session, index: index, clip: clip, pitchEnabled: pitchEnabled) }
-                        else { nothing }
+                        if let (index, clip) = session.selectedMain {
+                            MainClipInspector(
+                                session: session, index: index, clip: clip, pitchEnabled: pitchEnabled, clipTrim: clipTrim)
+                        } else { nothing }
                     case .overlay:
                         if let overlay = session.selectedOverlay { OverlayInspector(session: session, overlay: overlay, pitchEnabled: pitchEnabled) }
                         else { nothing }
@@ -86,6 +90,7 @@ private struct MainClipInspector: View {
     let index: Int
     let clip: EditClip
     var pitchEnabled = true
+    let clipTrim: ClipTrimPreview
 
     private var source: EditSource? { session.source(for: clip.item) }
     private var fps: Int { session.timeline.canvas.fps }
@@ -177,6 +182,14 @@ private struct MainClipInspector: View {
                 EditorNumberField.time(
                     label: Copy.Editor.trimOut, value: clip.out, fps: fps,
                     commit: { session.trim(clip: clip.id, in: nil, out: $0) }, onEnd: { session.endGesture() })
+                Button(Copy.Editor.setInAtPlayhead) {
+                    ClipTrimEditing.setIn(session: session, clip: clip.id, preview: clipTrim)
+                }
+                .buttonStyle(.cobaltSecondary(compact: true))
+                Button(Copy.Editor.setOutAtPlayhead) {
+                    ClipTrimEditing.setOut(session: session, clip: clip.id, preview: clipTrim)
+                }
+                .buttonStyle(.cobaltSecondary(compact: true))
             }
         }
     }

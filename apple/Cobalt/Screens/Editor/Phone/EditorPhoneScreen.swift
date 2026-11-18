@@ -107,12 +107,18 @@ private struct EditorPhoneSheetContent: View {
     let close: () -> Void
     let switchTo: (EditorPhoneSheet) -> Void
 
+    /// Opens on the medium detent so the editor's picture and its play button stay visible. Large is there when the
+    /// settings need the room.
+    @State private var clipDetent: PresentationDetent = .medium
+
     var body: some View {
         switch sheet {
         case .clip(let section):
             EditorPhoneClipSheet(session: session, section: section, pitchEnabled: model.capabilities.limits.editPitch)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.hidden)
+                .presentationDetents([.medium, .large], selection: $clipDetent)
+                .presentationDragIndicator(.visible)
+                .presentationContentInteraction(.scrolls)
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
                 .interactiveDismissDisabled()
         case .overlay:
             EditorPhoneOverlaySheet(
