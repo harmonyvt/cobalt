@@ -294,8 +294,13 @@ export function createEditServer(opts = {}) {
         const ck = checkSources(timeline, rows);
         if (!ck.ok) return fail(ck);
 
-        const output = path.join(r.dir, "out.mp4");
-        const c = compile(ck.timeline, sources, { output });
+        const format = ck.timeline.output ?? "mp4";
+        const ext = format === "webm" ? "webm" : format === "prores" ? "mov" : format === "webp" ? "webp" : "mp4";
+        const outType = format === "webm" ? "video/webm" : format === "prores" ? "video/quicktime" : format === "webp" ? "image/webp" : "video/mp4";
+        const output = path.join(r.dir, `out.${ext}`);
+        r.outFile = output;
+        r.outType = outType;
+        const c = compile(ck.timeline, sources, { output, format });
         if (!c.ok) return fail(c);
         r.secondsTotal = c.timing.seconds;
         r.secondsDone = 0;
@@ -538,7 +543,7 @@ export function createEditServer(opts = {}) {
                 const r = hold(res, rid, false);
                 if (!r) return;
                 if (r.status !== "done") return err(res, 409, "error.edit.not_ready");
-                if (parts[2] === "file") return await sendFile(res, path.join(r.dir, "out.mp4"), "video/mp4");
+                if (parts[2] === "file") return await sendFile(res, r.outFile || path.join(r.dir, "out.mp4"), r.outType || "video/mp4");
                 return r.hasPoster ? await sendFile(res, path.join(r.dir, "poster.jpg"), "image/jpeg") : err(res, 404, "error.edit.not_found");
             }
             return err(res, 404, "error.edit.not_found");

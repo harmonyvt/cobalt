@@ -12,6 +12,7 @@
 // The input is opened with `-ss` a few seconds before `in` and `-t` after `out` so a clip of a long file does not decode
 // the whole file; timestamps are relative to that seek, so the filter times are `in - seek`.
 
+import { chromaChain, colorUnderlay } from "./chroma.js";
 import { EDIT_SAMPLE_RATE, mainPlacement, overlayDrawOrder, overlayPlacement, timing } from "./timeline.js";
 import { orientationFilters } from "./probe.js";
 
@@ -110,7 +111,7 @@ const toStereo = (channels) =>
  * `{ok: false, code, path}` when a crop is under 64 px (error.edit.range) or a source is missing (error.edit.input_missing).
  * @param {import("./timeline.js").Timeline} t the parsed, source-checked (clamped) timeline
  * @param {Record<string, import("./probe.js").Source> | Map<string, import("./probe.js").Source>} sources
- * @param {{output: string, progress?: boolean, loglevel?: string}} opts
+ * @param {{output: string, progress?: boolean, loglevel?: string, format?: "mp4" | "webm" | "prores" | "webp"}} opts
  * @returns {Compiled | {ok: false, code: string, path: string}}
  */
 export function compile(t, sources, opts) {
@@ -186,7 +187,18 @@ export function compile(t, sources, opts) {
         if (o.opacity < 1) v.push(`colorchannelmixer=aa=${dec(o.opacity, 2)}`);
         v.push(`setpts=PTS-STARTPTS+${om.start}/(${F}*TB)`);
         chains.push(`[${n}:v:0]${v.join(",")}[ov${j}]`);
-        chains.push(`${vLast}[ov${j}]overlay=${box.x}:${box.y}:eof_action=pass:format=auto[vo${j}]`);
+        // A key is its own link so a timeline without one keeps the graph byte for byte (section 66).
+        let ovLabel = `[ov${j}]`;
+        if (o.key) {
+            chains.push(`[ov${j}]${chromaChain(o.key, "yuva420p")}[k${j}]`);
+            ovLabel = `[k${j}]`;
+            if (o.background?.type === "color") {
+                chains.push(`${colorUnderlay(o.background.color, box.w, box.h, F, om.frames / F)},format=yuv420p[c${j}]`);
+                chains.push(`[c${j}]${ovLabel}overlay=0:0:eof_action=pass:format=auto[p${j}]`);
+                ovLabel = `[p${j}]`;
+            }
+        }
+        chains.push(`${vLast}${ovLabel}overlay=${box.x}:${box.y}:eof_action=pass:format=auto[vo${j}]`);
         vLast = `[vo${j}]`;
 
         if (s.kind === "video" && s.hasAudio && !o.muted) {
@@ -199,25 +211,42 @@ export function compile(t, sources, opts) {
     if (mixIn.length > 1) {
         chains.push(`${mixIn.join("")}amix=inputs=${mixIn.length}:duration=first:dropout_transition=0:normalize=0[aout]`);
     }
-    const videoLabel = vLast;
+    const format = opts.format ?? t.output ?? "mp4";
+    let videoLabel = vLast;
+    // Alpha outputs need a yuva frame. MP4 stays yuv420p, which flattens the key onto the background.
+    if (format === "webm" || format === "webp") {
+        chains.push(`${vLast}format=yuva420p[vout]`);
+        videoLabel = "[vout]";
+    } else if (format === "prores") {
+        chains.push(`${vLast}format=yuva444p10le[vout]`);
+        videoLabel = "[vout]";
+    }
     const audioLabel = mixIn.length > 1 ? "[aout]" : "[am]";
     const filter = chains.join(";");
 
     const M = maxrateFor(t.canvas);
-    const outputArgs = [
-        "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast", "-crf", "20",
-        "-maxrate", `${M}M`, "-bufsize", `${2 * M}M`, "-g", String(2 * F), "-pix_fmt", "yuv420p",
-        "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
-        "-fps_mode", "cfr", "-r", String(F),
-        "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
-        "-movflags", "+faststart",
-        ...(opts.progress === false ? [] : ["-progress", "pipe:1", "-nostats"]),
-    ];
+    const progressArgs = opts.progress === false ? [] : ["-progress", "pipe:1", "-nostats"];
+    const outputArgs = format === "webm"
+        ? ["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-crf", "32", "-b:v", "0", "-c:a", "libopus", "-b:a", "128k", "-ar", "48000", "-ac", "2", ...progressArgs]
+        : format === "prores"
+          ? ["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", ...progressArgs]
+          : format === "webp"
+            ? ["-c:v", "libwebp_anim", "-pix_fmt", "yuva420p", "-loop", "0", "-an", ...progressArgs]
+            : [
+                "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast", "-crf", "20",
+                "-maxrate", `${M}M`, "-bufsize", `${2 * M}M`, "-g", String(2 * F), "-pix_fmt", "yuv420p",
+                "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
+                "-fps_mode", "cfr", "-r", String(F),
+                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+                "-movflags", "+faststart",
+                ...progressArgs,
+            ];
     const args = [
         "-nostdin", "-hide_banner", "-loglevel", opts.loglevel ?? "error", "-y",
         ...inputArgs,
         "-filter_complex", filter,
-        "-map", videoLabel, "-map", audioLabel,
+        "-map", videoLabel,
+        ...(format === "webp" ? [] : ["-map", audioLabel]),
         ...outputArgs,
         opts.output,
     ];

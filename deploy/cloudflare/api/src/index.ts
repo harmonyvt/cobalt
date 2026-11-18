@@ -3,6 +3,7 @@ import { backfillPostDetails, postDetailsConfigFrom } from "./post-details";
 import { lookupDepsFrom } from "./registry/ops/post-frame";
 import { PORT_HEADER, stripInternalHeaders, KEY_ID_HEADER, SERVICE_HEADER } from "./headers";
 import { EMOTE_FIT_PATH } from "./seventv";
+import { handleRmbgRoute, RmbgService } from "./rmbg";
 import { handleWebpRoute, isWebpRoute, WebpService, type WebpDeps } from "./webp";
 import { ApnsClient, apnsConfigFrom, fetchTransport, helperTransport } from "./apns";
 import { handleLiveRoute, isLiveRoute, LiveService } from "./live";
@@ -115,6 +116,7 @@ export class CobaltContainer extends Container<Env> {
     private helperCall!: WebpDeps["helper"];
     private studio: StudioService;
     private live: LiveService;
+    private rmbg!: RmbgService;
     private editLive: EditLiveService;
     private swarmLive: SwarmLiveService;
     private chatLive: ChatLiveService;
@@ -229,6 +231,17 @@ export class CobaltContainer extends Container<Env> {
             // a failed `end` push is retried by the sweep: arm it
             scheduleSweep: () => this.scheduleSweepSoon(),
             apns,
+        });
+        this.rmbg = new RmbgService({
+            storage: this.ctx.storage,
+            db: env.DB,
+            originals: env.ORIGINALS,
+            ai: env.AI,
+            now: () => Date.now(),
+            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+            fetch,
+            waitUntil: (p) => this.ctx.waitUntil(p),
+            live: this.live,
         });
         // editor renders (section 32): the app's token, pushes from the EditRenderer's ticks
         this.editLive = new EditLiveService({ storage: this.ctx.storage, db: env.DB, now: webpDeps.now, apns });
@@ -428,6 +441,10 @@ export class CobaltContainer extends Container<Env> {
         }
         if (isLiveRoute(new URL(request.url).pathname)) {
             return handleLiveRoute(this.live, request);
+        }
+        // Background removal (section 67): DO storage and the AI binding, never the container.
+        if (new URL(request.url).pathname === "/rmbg" || new URL(request.url).pathname.startsWith("/rmbg/")) {
+            return handleRmbgRoute(this.rmbg, request);
         }
 
         // The Hark opt-in (PUT|DELETE /studio/<sid>/notify) is DO storage and D1 only, like

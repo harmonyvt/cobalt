@@ -39,9 +39,14 @@ export const EDIT_CROP_ASPECTS = ["free", "9:16", "1:1", "4:5", "16:9"];
  * @typedef {{aspect: string, x: number, y: number, w: number, h: number}} EditCrop
  * @typedef {{id: string, item: string, in: number, out: number, speed: number, crop?: EditCrop, fit: "fill" | "fit",
  *            volume: number, muted: boolean, pitch?: number}} MainClip
+ * @typedef {{color: string, similarity: number, blend: number, spill: number}} ChromaKey
+ * @typedef {{type: "transparent" | "clip"} | {type: "color", color: string}} KeyBackground
+ * @typedef {"mp4" | "webm" | "prores" | "webp"} EditOutput
  * @typedef {{id: string, item: string, at: number, in: number, out: number, frame: {x: number, y: number, w: number},
- *            opacity: number, volume: number, muted: boolean, pitch?: number, track?: number}} OverlayClip
- * @typedef {{version: 1, canvas: {w: number, h: number, fps: number}, main: MainClip[], overlay: OverlayClip[]}} Timeline
+ *            opacity: number, volume: number, muted: boolean, pitch?: number, track?: number,
+ *            key?: ChromaKey, background?: KeyBackground}} OverlayClip
+ * @typedef {{version: 1, canvas: {w: number, h: number, fps: number}, main: MainClip[], overlay: OverlayClip[],
+ *            output?: Exclude<EditOutput, "mp4">}} Timeline
  * @typedef {{id: string, content_type: string | null, source?: string | null, width: number | null, height: number | null,
  *            duration: number | null, bytes: number | null, deleted?: boolean | number | null}} SourceRow
  * @typedef {{ok: false, code: string, path: string, items?: string[]}} Failure
@@ -127,9 +132,16 @@ export function parseTimeline(raw) {
         }
     }
     if (!isObj(t)) return bad("");
-    let f = keysOk(t, ["version", "canvas", "main", "overlay"], [], "");
+    let f = keysOk(t, ["version", "canvas", "main", "overlay"], ["output"], "");
     if (f) return f;
     if (t.version !== 1) return bad("version");
+    // mp4 is the default and is omitted, so a project that does not name an output stays byte for byte (section 66)
+    /** @type {Exclude<EditOutput, "mp4"> | null} */
+    let output = null;
+    if (t.output !== undefined) {
+        if (t.output !== "mp4" && t.output !== "webm" && t.output !== "prores" && t.output !== "webp") return bad("output");
+        if (t.output !== "mp4") output = /** @type {Exclude<EditOutput, "mp4">} */ (t.output);
+    }
 
     // canvas
     const cv = t.canvas;
@@ -171,7 +183,7 @@ export function parseTimeline(raw) {
         overlay.push(r.clip);
     }
     /** @type {Timeline} */
-    const timeline = { canvas, main, overlay, version: 1 };
+    const timeline = { canvas, main, overlay, version: 1, ...(output ? { output } : {}) };
     const tf = checkTiming(timeline);
     if (tf) return tf;
     return { ok: true, timeline };
@@ -245,7 +257,7 @@ function parseCrop(c, p) {
  */
 function parseOverlay(c, p, idOk) {
     if (!isObj(c)) return bad(p);
-    let f = keysOk(c, ["id", "item", "at", "in", "out", "frame", "opacity", "volume", "muted"], ["pitch", "track"], p);
+    let f = keysOk(c, ["id", "item", "at", "in", "out", "frame", "opacity", "volume", "muted"], ["pitch", "track", "key", "background"], p);
     if (f) return f;
     f = idOk(c.id, `${p}.id`);
     if (f) return f;
@@ -274,6 +286,10 @@ function parseOverlay(c, p, idOk) {
     if (vol < 0 || vol > 1) return range(`${p}.volume`);
     const pt = parsePitch(c, p);
     if (!pt.ok) return pt;
+    const keyed = parseOverlayKey(c.key, `${p}.key`);
+    if (!keyed.ok) return keyed;
+    const bg = parseOverlayBackground(c.background, `${p}.background`);
+    if (!bg.ok) return bg;
     // optional layer (section 39): an integer 0..7, present only when non-zero, so older timelines stay byte for byte
     let track = 0;
     if (c.track !== undefined) {
@@ -295,8 +311,57 @@ function parseOverlay(c, p, idOk) {
             opacity: roundTo(op, 2),
             out: cout,
             volume: roundTo(vol, 2),
+            // omitted when absent, so a project with no key stays byte for byte (section 66)
+            ...(keyed.key ? { key: keyed.key } : {}),
+            ...(bg.background ? { background: bg.background } : {}),
         }),
     };
+}
+
+const KEY_HEX = /^#[0-9A-Fa-f]{6}$/;
+
+/** @param {unknown} raw @param {string} p @returns {{ok: true, key: ChromaKey | null} | Failure} */
+function parseOverlayKey(raw, p) {
+    if (raw === undefined) return { ok: true, key: null };
+    if (!isObj(raw)) return bad(p);
+    const f = keysOk(raw, ["color", "similarity", "blend", "spill"], [], p);
+    if (f) return f;
+    if (typeof raw.color !== "string" || !KEY_HEX.test(raw.color)) return bad(`${p}.color`);
+    for (const k of ["similarity", "blend", "spill"]) if (!isNum(raw[k])) return bad(`${p}.${k}`);
+    const similarity = /** @type {number} */ (raw.similarity);
+    const blend = /** @type {number} */ (raw.blend);
+    const spill = /** @type {number} */ (raw.spill);
+    if (similarity < 0.01 - 1e-9 || similarity > 0.6) return range(`${p}.similarity`);
+    if (blend < 0 || blend > 0.5) return range(`${p}.blend`);
+    if (spill < 0 || spill > 1) return range(`${p}.spill`);
+    return {
+        ok: true,
+        key: {
+            blend: roundTo(blend, 3),
+            color: `#${raw.color.slice(1).toUpperCase()}`,
+            similarity: roundTo(similarity, 3),
+            spill: roundTo(spill, 3),
+        },
+    };
+}
+
+/** Transparent is the default and is omitted. @param {unknown} raw @param {string} p @returns {{ok: true, background: KeyBackground | null} | Failure} */
+function parseOverlayBackground(raw, p) {
+    if (raw === undefined) return { ok: true, background: null };
+    if (!isObj(raw)) return bad(p);
+    if (raw.type === "transparent") return { ok: true, background: null };
+    if (raw.type === "clip") {
+        const f = keysOk(raw, ["type"], [], p);
+        if (f) return f;
+        return { ok: true, background: { type: "clip" } };
+    }
+    if (raw.type === "color") {
+        const f = keysOk(raw, ["type", "color"], [], p);
+        if (f) return f;
+        if (typeof raw.color !== "string" || !KEY_HEX.test(raw.color)) return bad(`${p}.color`);
+        return { ok: true, background: { type: "color", color: `#${raw.color.slice(1).toUpperCase()}` } };
+    }
+    return bad(`${p}.type`);
 }
 
 /** @template T @param {T} o @returns {T} */

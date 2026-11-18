@@ -12,6 +12,7 @@ import { mkdir, open, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { chromaChain, parseBackground, parseChromaKey, parseKeyedFormat } from "./chroma.js";
 import { fromWire } from "./crop.js";
 
 export const COBALT_ORIGIN = "http://127.0.0.1:9000";
@@ -150,9 +151,22 @@ export function validateEncodeFields(b, o) {
     // upload's query string. Converted to pixels at encode time, from the probed size.
     const crop = b.crop === undefined || b.crop === null || b.crop === "" ? { ok: true, crop: null } : fromWire(b.crop);
     if (!crop.ok) return null;
+    // Optional chroma key and background (section 66). Absent = omitted, so a job
+    // without them is the same object this function has always returned.
+    const key = parseChromaKey(b.key);
+    if (!key.ok) return null;
+    const background = parseBackground(b.background);
+    if (!background.ok) return null;
+    // A studio WebP has one clip. "Another clip" is the editor's main track.
+    if (background.background?.type === "clip") return null;
+    const format = parseKeyedFormat(b.format);
+    if (format === "") return null;
     const out = { start, width, fps, quality: b.quality };
     if (hasLength) out.length = length;
     if (crop.crop) out.crop = crop.crop;
+    if (key.key) out.key = key.key;
+    if (background.background && background.background.type !== "transparent") out.background = background.background;
+    if (format && format !== "webp") out.format = format;
     return out;
 }
 
@@ -582,11 +596,17 @@ const dec = (n) => String(+Number(n).toFixed(3));
  * metadata before the filter graph by default) is applied after `fps` and BEFORE the
  * scale, so the output width is min(width, cropped width) and the height keeps the
  * crop's aspect. Without it the filter is exactly what it always was.
+ * `key` (section 66) inserts chromakey, despill for the green/blue presets, and
+ * `format=rgba` before the PNG frames so img2webp keeps the alpha. A solid
+ * `background` is a `color=c=` underlay scaled to the keyed frame. With neither,
+ * the argv is what it has always been.
  * @param {{input: string, framesDir: string, start: number, length?: number,
- *          width: number, fps: number, crop?: {x: number, y: number, w: number, h: number} | null}} j
+ *          width: number, fps: number, crop?: {x: number, y: number, w: number, h: number} | null,
+ *          key?: {color: string, similarity: number, blend: number, spill: number} | null,
+ *          background?: {type: "color", color: string} | null}} j
  */
 export function buildFrameArgs(j) {
-    return [
+    const head = [
         "-nostdin",
         "-hide_banner",
         "-loglevel", "error",
@@ -595,12 +615,65 @@ export function buildFrameArgs(j) {
         // omitted only when no length is given (the supervisor always passes one)
         ...(j.length === undefined ? [] : ["-t", dec(j.length)]),
         "-i", j.input,
-        "-vf",
-        `fps=${j.fps},${j.crop ? `crop=${j.crop.w}:${j.crop.h}:${j.crop.x}:${j.crop.y},` : ""}scale='min(${j.width},iw)':-2:flags=lanczos`,
-        "-an", "-sn", "-dn",
-        "-f", "image2",
+    ];
+    const tail = ["-an", "-sn", "-dn", "-f", "image2", "-y", path.join(j.framesDir, "f%05d.png")];
+    const scale = `scale='min(${j.width},iw)':-2:flags=lanczos`;
+    const pre = `fps=${j.fps},${j.crop ? `crop=${j.crop.w}:${j.crop.h}:${j.crop.x}:${j.crop.y},` : ""}`;
+    if (!j.key) {
+        return [...head, "-vf", `${pre}${scale}`, ...tail];
+    }
+    const keyed = `${pre}${chromaChain(j.key, "rgba")},${scale}`;
+    if (j.background?.type === "color") {
+        // The keyed frame's size is not known until it is scaled, so the plate is
+        // scaled to that frame (scale2ref) and the subject is laid on top of it.
+        const plate = `color=c=0x${j.background.color.slice(1)}:s=16x16:r=${j.fps},format=rgba[bg]`;
+        const graph = `[0:v]${keyed}[fg];${plate};[bg][fg]scale2ref[bg][fg2];[bg][fg2]overlay=format=auto:shortest=1,format=rgba`;
+        return [...head, "-filter_complex", graph, ...tail];
+    }
+    return [...head, "-vf", keyed, ...tail];
+}
+
+/**
+ * One ffmpeg argv that encodes the same window as `buildFrameArgs` straight to WebM (VP9 + alpha),
+ * ProRes 4444, or an MP4 that flattens the key onto the background. Used when a studio render asks
+ * for something other than the animated WebP. Without a key the video filters are the plain scale.
+ * @param {{input: string, output: string, start: number, length?: number, width: number, fps: number,
+ *          format: "webm" | "prores" | "mp4",
+ *          crop?: {x: number, y: number, w: number, h: number} | null,
+ *          key?: {color: string, similarity: number, blend: number, spill: number} | null,
+ *          background?: {type: "color", color: string} | null}} j
+ */
+export function buildKeyedExportArgs(j) {
+    const scale = `scale='min(${j.width},iw)':-2:flags=lanczos`;
+    const pre = `fps=${j.fps},${j.crop ? `crop=${j.crop.w}:${j.crop.h}:${j.crop.x}:${j.crop.y},` : ""}`;
+    const chain = j.key ? `${pre}${chromaChain(j.key, "rgba")},${scale}` : `${pre}${scale}`;
+    /** @type {string[]} */
+    const filter = [];
+    if (j.background?.type === "color" && j.key) {
+        const plate = `color=c=0x${j.background.color.slice(1)}:s=16x16:r=${j.fps},format=rgba[bg]`;
+        filter.push("-filter_complex", `[0:v]${chain}[fg];${plate};[bg][fg]scale2ref[bg][fg2];[bg][fg2]overlay=format=auto:shortest=1,format=rgba`);
+    } else if (j.format === "mp4") {
+        // MP4 has no alpha: the key (if any) flattens onto the background, which is black when none was chosen.
+        filter.push("-vf", j.key ? `${chain},format=yuv420p` : chain);
+    } else {
+        filter.push("-vf", j.key ? chain : `${chain},format=yuva420p`);
+    }
+    const video =
+        j.format === "webm"
+            ? ["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-crf", "32", "-b:v", "0", "-an"]
+            : j.format === "prores"
+              ? ["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", "-an"]
+              : ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", "-an"];
+    return [
+        "-nostdin", "-hide_banner", "-loglevel", "error",
+        "-protocol_whitelist", "file,pipe",
+        "-ss", dec(j.start),
+        ...(j.length === undefined ? [] : ["-t", dec(j.length)]),
+        "-i", j.input,
+        ...filter,
+        ...video,
         "-y",
-        path.join(j.framesDir, "f%05d.png"),
+        j.output,
     ];
 }
 
@@ -920,7 +993,10 @@ export function runProcess(o) {
  * @param {{ffmpegBin: string, img2webpBin: string, input: string,
  *          output: string, framesDir: string, start: number, length?: number,
  *          width: number, fps: number, quality: "low"|"med"|"high",
- *          crop?: {x: number, y: number, w: number, h: number} | null, timeoutMs: number, spawnImpl?: typeof spawn,
+ *          crop?: {x: number, y: number, w: number, h: number} | null,
+ *          key?: {color: string, similarity: number, blend: number, spill: number} | null,
+ *          background?: {type: "color", color: string} | null,
+ *          timeoutMs: number, spawnImpl?: typeof spawn,
  *          onChild?: (c: import("node:child_process").ChildProcess | undefined) => void,
  *          onPhase?: (phase: "decode" | "pack", info: {total?: number | null, frames?: number}) => void}} o
  *   `onPhase("decode", {total})` fires before ffmpeg starts (`total` = the

@@ -149,6 +149,7 @@ import {
     VIDEO_TYPES,
     downloadToFile,
     effectiveItems,
+    buildKeyedExportArgs,
     encodeAnimatedWebp,
     keyMatches,
     parseFetchSelection,
@@ -470,7 +471,12 @@ export function createHelper(opts = {}) {
     // POST /jobs/upload (after the body landed on disk).
     /** @param {Job} job @param {any} p @param {string} input @param {string | null} srcFilename @param {string} service */
     async function encodeJob(job, p, input, srcFilename, service) {
-        const output = path.join(job.dir, "out.webp");
+        const format = p.format && p.format !== "webp" ? p.format : "webp";
+        const ext = format === "webm" ? "webm" : format === "prores" ? "mov" : format === "mp4" ? "mp4" : "webp";
+        const contentType = format === "webm" ? "video/webm" : format === "prores" ? "video/quicktime" : format === "mp4" ? "video/mp4" : "image/webp";
+        job.outName = `out.${ext}`;
+        job.contentType = contentType;
+        const output = path.join(job.dir, job.outName);
         const framesDir = path.join(job.dir, "frames");
         // the probe is part of "decode": the count is not known until it ends
         job.progress = { phase: "decode", total: null, framesDir };
@@ -494,6 +500,48 @@ export function createHelper(opts = {}) {
             );
         }
 
+        // WebM / ProRes / MP4: one ffmpeg of the same window. The animated WebP stays
+        // PNG frames then img2webp (section 66).
+        if (format !== "webp") {
+            await runProcess({
+                bin: ffmpegPath(),
+                args: buildKeyedExportArgs({
+                    input,
+                    output,
+                    start: p.start,
+                    length: plan.seconds,
+                    width: p.width,
+                    fps: p.fps,
+                    format,
+                    crop: cropPx,
+                    ...(p.key ? { key: p.key } : {}),
+                    ...(p.background ? { background: p.background } : {}),
+                }),
+                timeoutMs: FFMPEG_TIMEOUT_MS,
+                label: "ffmpeg",
+                onChild: (c) => {
+                    job.proc = c;
+                },
+            });
+            await rm(input, { force: true });
+            const { size } = await stat(output);
+            if (size > MAX_OUTPUT_BYTES) throw new JobError("error.webp.too_large");
+            const base = (srcFilename || "").replace(/\.[^.]*$/, "");
+            const scaledW = info.width ? Math.min(p.width, info.width) : p.width;
+            const scaledH = info.width && info.height ? Math.max(2, Math.round((scaledW * info.height) / info.width / 2) * 2) : 0;
+            job.result = {
+                bytes: size,
+                width: scaledW,
+                height: scaledH,
+                seconds: plan.seconds,
+                filename: `${base || "cobalt"}.${ext}`,
+                contentType,
+                service,
+            };
+            job.status = "done";
+            return;
+        }
+
         // ffmpeg -> PNG frames -> img2webp with forced keyframes (frames dir is
         // removed by encodeAnimatedWebp, success or failure); one 240 s budget.
         const enc = await doEncode({
@@ -508,6 +556,8 @@ export function createHelper(opts = {}) {
             fps: p.fps,
             quality: p.quality,
             crop: cropPx,
+            ...(p.key ? { key: p.key } : {}),
+            ...(p.background ? { background: p.background } : {}),
             timeoutMs: FFMPEG_TIMEOUT_MS,
             onChild: (c) => {
                 job.proc = c;
@@ -2164,10 +2214,10 @@ export function createHelper(opts = {}) {
 
             if (file) {
                 if (job.status !== "done") return fail(res, 409, "error.webp.not_ready");
-                const out = path.join(job.dir, "out.webp");
+                const out = path.join(job.dir, job.outName || "out.webp");
                 const { size } = await stat(out);
                 res.writeHead(200, {
-                    "content-type": "image/webp",
+                    "content-type": job.contentType || "image/webp",
                     "content-length": size,
                 });
                 return void createReadStream(out).pipe(res);

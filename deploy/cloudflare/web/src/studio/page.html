@@ -58,7 +58,24 @@ button.primary { background: var(--secondary); color: var(--primary); }
 button.primary:hover { opacity: .88; }
 button.big { min-height: 48px; font-size: 15px; font-weight: 600; }
 button:disabled { opacity: .45; cursor: not-allowed; }
-button:focus-visible, select:focus-visible, .tlwrap:focus-visible, a:focus-visible, .linkcode:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+button:focus-visible, select:focus-visible, .tlwrap:focus-visible, a:focus-visible, .linkcode:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.keybox { display: grid; gap: 8px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chips button { min-height: 36px; display: inline-flex; gap: 6px; align-items: center; }
+.chips button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--blue) inset; }
+.swatch { width: 14px; height: 14px; border-radius: 4px; box-shadow: 0 0 0 1px rgba(0,0,0,.25) inset; }
+.seg { display: flex; gap: 4px; }
+.seg button { flex: 1; min-height: 36px; font-size: 12px; }
+.seg button[aria-pressed="true"] { background: var(--secondary); color: var(--primary); }
+.keybox label { display: grid; gap: 2px; font-size: 12px; }
+.keybox input[type="range"] { width: 100%; accent-color: var(--blue); }
+.hint { color: var(--gray); font-size: 11.5px; font-weight: 400; }
+.prev { position: relative; border-radius: 8px; overflow: hidden; background:
+  linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%),
+  linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%);
+  background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; background-color: #fff; }
+.prev canvas { display: block; width: 100%; height: auto; cursor: crosshair; }
+.cost { font-variant-numeric: tabular-nums; }
 a { color: inherit; }
 .muted { color: var(--gray); }
 .small { font-size: 12px; }
@@ -259,6 +276,50 @@ kbd { font: 500 11px var(--f-mono); padding: 0 5px; border-radius: 4px; box-shad
         <div class="opts">
           <label for="oW">width (px)<select id="oW"></select></label>
           <label for="oQ">quality<select id="oQ"><option value="low">low</option><option value="med" selected>medium</option><option value="high">high</option></select></label>
+        </div>
+        <div class="keybox" id="keyBox">
+          <div class="head"><h3>greenscreen</h3><label class="small">key it <input type="checkbox" id="keyOn"></label></div>
+          <div class="chips" role="group" aria-label="key colour">
+            <button type="button" id="chipG" aria-pressed="true"><i class="swatch" style="background:#00B140"></i>green</button>
+            <button type="button" id="chipB" aria-pressed="false"><i class="swatch" style="background:#0047BB"></i>blue</button>
+            <button type="button" id="chipE" aria-pressed="false"><i class="swatch" id="swatchE" style="background:#888"></i>eyedropper</button>
+          </div>
+          <p class="hint" id="dropHint">tap the preview to sample a colour.</p>
+          <label>similarity <span id="simV">0.15</span><input id="sim" type="range" min="0.01" max="0.6" step="0.01" value="0.15"></label>
+          <p class="hint">how close a colour has to be before it becomes transparent.</p>
+          <label>blend <span id="blendV">0.05</span><input id="blend" type="range" min="0" max="0.5" step="0.01" value="0.05"></label>
+          <p class="hint">edge softness. higher lets more of the edge fade out.</p>
+          <label>spill <span id="spillV">0.40</span><input id="spill" type="range" min="0" max="1" step="0.01" value="0.4"></label>
+          <p class="hint">spill suppression on the green and blue presets. pulls the fringe off the subject.</p>
+          <div class="small">background</div>
+          <div class="seg" role="group" aria-label="background">
+            <button type="button" id="bgT" aria-pressed="true">transparent</button>
+            <button type="button" id="bgC" aria-pressed="false">solid colour</button>
+            <button type="button" id="bgK" aria-pressed="false" disabled title="the main track, in the editor">another clip</button>
+          </div>
+          <label id="bgColorRow" hidden>colour <input id="bgColor" type="color" value="#111111"></label>
+          <div class="small">output</div>
+          <div class="seg" role="group" aria-label="output">
+            <button type="button" data-fmt="webp" aria-pressed="true">webp</button>
+            <button type="button" data-fmt="webm" aria-pressed="false">webm</button>
+            <button type="button" data-fmt="prores" aria-pressed="false">prores</button>
+            <button type="button" data-fmt="mp4" aria-pressed="false">mp4</button>
+          </div>
+          <p class="hint" id="fmtHint">webp keeps the alpha. webm and prores do too. mp4 flattens onto the background.</p>
+          <div class="prev" id="keyPrev"><canvas id="keyCanvas" width="320" height="180" aria-label="live key preview. tap to sample a colour"></canvas></div>
+          <p class="cost" id="briaCost">background removal · —</p>
+          <button type="button" class="big" id="rmbg">remove background</button>
+          <p class="hint">bria, up to 60 s, $0.0225 a second. the result is a private prores alternate linked to this studio.</p>
+        </div>
+        <div class="keybox" id="ovBox">
+          <h3>overlay key</h3>
+          <p class="hint">the same key on an editor overlay. another clip is the main track under it.</p>
+          <div class="seg" role="group" aria-label="overlay background">
+            <button type="button" id="ovT" aria-pressed="true">transparent</button>
+            <button type="button" id="ovC" aria-pressed="false">solid colour</button>
+            <button type="button" id="ovK" aria-pressed="false">another clip</button>
+          </div>
+          <p class="hint" id="ovHint">holes in the key stay transparent in a webp, webm or prores. mp4 flattens them onto the main track.</p>
         </div>
         <div class="est"><span class="muted">about</span><b id="estSize">—</b><span class="muted" id="estTime">—</span></div>
         <button type="button" class="primary big" id="make" aria-describedby="rPill">make webp</button>
@@ -732,6 +793,8 @@ async function makeWebp() {
   S.rendering = true; $("makeErr").hidden = true; paintOptions();
   var width = +$("oW").value, quality = $("oQ").value;
   var params = { start: +S.inn.toFixed(3), length: c.len, width: width, quality: quality };
+  var keyed = keyParams();
+  if (keyed) { params.key = keyed.key; if (keyed.background) params.background = keyed.background; if (keyed.format) params.format = keyed.format; }
   var est = estimate(c.len, width, quality);
   show("prog", true); $("pStep1").className = "step doing"; $("pStep2").className = "step"; $("pStep3").className = "step";
   $("pStep2").textContent = "encoding (about " + Math.max(3, Math.round(est.secs)) + " s)";
@@ -858,8 +921,138 @@ function paintRenders() {
   });
 }
 
+/* ---------- greenscreen (section 66) and bria (section 67) ---------- */
+var KEY = { mode: "green", color: "#00B140", sim: 0.15, blend: 0.05, spill: 0.4, bg: "transparent", bgColor: "#111111", format: "webp", ov: "transparent", drop: false };
+function keyParams() {
+  if (!$("keyOn").checked) return null;
+  var key = { color: KEY.color, similarity: KEY.sim, blend: KEY.blend, spill: KEY.spill };
+  var background = KEY.bg === "color" ? { type: "color", color: KEY.bgColor } : null;
+  var format = KEY.format !== "webp" ? KEY.format : null;
+  return { key: key, background: background, format: format };
+}
+function setPressed(id, on) { var b = $(id); if (b) b.setAttribute("aria-pressed", on ? "true" : "false"); }
+function paintKey() {
+  var c = $("keyCanvas"), g = c.getContext("2d", { willReadFrequently: true });
+  var w = c.width, h = c.height;
+  var vid = $("vid");
+  g.clearRect(0, 0, w, h);
+  if (vid && vid.readyState >= 2) {
+    g.drawImage(vid, 0, 0, w, h);
+  } else {
+    g.fillStyle = "#00B140"; g.fillRect(0, 0, w, h);
+    g.fillStyle = "#f4c7a0"; g.beginPath(); g.arc(w * 0.5, h * 0.62, h * 0.28, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#3a2a22"; g.beginPath(); g.arc(w * 0.5, h * 0.48, h * 0.12, Math.PI, 0); g.fill();
+  }
+  var img = g.getImageData(0, 0, w, h), d = img.data;
+  var hex = KEY.color.replace("#", "");
+  var kr = parseInt(hex.slice(0, 2), 16), kg = parseInt(hex.slice(2, 4), 16), kb = parseInt(hex.slice(4, 6), 16);
+  var sim = KEY.sim * 442, soft = Math.max(0.001, KEY.blend * 442);
+  for (var i = 0; i < d.length; i += 4) {
+    var dist = Math.hypot(d[i] - kr, d[i + 1] - kg, d[i + 2] - kb);
+    var a = dist <= sim ? 0 : dist >= sim + soft ? 255 : Math.round(255 * (dist - sim) / soft);
+    if (KEY.bg === "color" && a < 255) {
+      var t = a / 255, bh = KEY.bgColor.replace("#", "");
+      d[i] = Math.round(d[i] * t + parseInt(bh.slice(0, 2), 16) * (1 - t));
+      d[i + 1] = Math.round(d[i + 1] * t + parseInt(bh.slice(2, 4), 16) * (1 - t));
+      d[i + 2] = Math.round(d[i + 2] * t + parseInt(bh.slice(4, 6), 16) * (1 - t));
+      a = 255;
+    }
+    d[i + 3] = a;
+  }
+  if (KEY.bg === "clip") {
+    g.fillStyle = "#1d4e89"; g.fillRect(0, 0, w, h);
+    g.fillStyle = "#f2d2b0"; g.fillRect(w * 0.15, h * 0.2, w * 0.7, h * 0.6);
+  }
+  g.putImageData(img, 0, 0);
+  $("simV").textContent = KEY.sim.toFixed(2);
+  $("blendV").textContent = KEY.blend.toFixed(2);
+  $("spillV").textContent = KEY.spill.toFixed(2);
+  var secs = (S && S.dur) || 8;
+  var cost = secs * 0.0225;
+  var over = secs > 60;
+  $("briaCost").textContent = over
+    ? "this clip is " + secs.toFixed(1) + " s. background removal stops at 60 s."
+    : "background removal · about $" + cost.toFixed(4) + " for " + secs.toFixed(1) + " s";
+  $("rmbg").disabled = over;
+}
+function pickChip(mode, color) {
+  KEY.mode = mode; KEY.color = color; KEY.drop = mode === "drop";
+  setPressed("chipG", mode === "green"); setPressed("chipB", mode === "blue"); setPressed("chipE", mode === "drop");
+  if (mode === "drop") $("swatchE").style.background = color;
+  paintKey();
+}
+$("chipG").addEventListener("click", function () { pickChip("green", "#00B140"); });
+$("chipB").addEventListener("click", function () { pickChip("blue", "#0047BB"); });
+$("chipE").addEventListener("click", function () { KEY.drop = true; setPressed("chipG", false); setPressed("chipB", false); setPressed("chipE", true); $("dropHint").textContent = "tap the preview to sample a colour."; });
+["sim", "blend", "spill"].forEach(function (id) {
+  $(id).addEventListener("input", function () { KEY[id === "sim" ? "sim" : id] = +this.value; paintKey(); });
+});
+function seg(ids, key, map) {
+  ids.forEach(function (id) {
+    $(id).addEventListener("click", function () {
+      ids.forEach(function (x) { setPressed(x, x === id); });
+      KEY[key] = map[id];
+      if ($("bgColorRow")) $("bgColorRow").hidden = KEY.bg !== "color";
+      paintKey();
+      if (key === "ov") {
+        $("ovHint").textContent = KEY.ov === "clip"
+          ? "the main track shows through the key."
+          : KEY.ov === "color"
+            ? "a solid colour fills the key, then that plate sits on the main track."
+            : "holes in the key stay transparent in a webp, webm or prores. mp4 flattens them onto the main track.";
+      }
+    });
+  });
+}
+seg(["bgT", "bgC", "bgK"], "bg", { bgT: "transparent", bgC: "color", bgK: "clip" });
+seg(["ovT", "ovC", "ovK"], "ov", { ovT: "transparent", ovC: "color", ovK: "clip" });
+$("bgColor").addEventListener("input", function () { KEY.bgColor = this.value; paintKey(); });
+document.querySelectorAll("[data-fmt]").forEach(function (b) {
+  b.addEventListener("click", function () {
+    document.querySelectorAll("[data-fmt]").forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+    KEY.format = b.getAttribute("data-fmt");
+    $("fmtHint").textContent = KEY.format === "mp4"
+      ? "mp4 flattens the key onto the background."
+      : KEY.format === "webp"
+        ? "webp keeps the alpha. webm and prores do too. mp4 flattens onto the background."
+        : KEY.format + " keeps the alpha (yuva). mp4 would flatten it.";
+    paintKey();
+  });
+});
+$("keyCanvas").addEventListener("click", function (ev) {
+  if (!KEY.drop && $("chipE").getAttribute("aria-pressed") !== "true") return;
+  var r = this.getBoundingClientRect();
+  var x = Math.min(this.width - 1, Math.max(0, Math.round((ev.clientX - r.left) / r.width * this.width)));
+  var y = Math.min(this.height - 1, Math.max(0, Math.round((ev.clientY - r.top) / r.height * this.height)));
+  var p = this.getContext("2d").getImageData(x, y, 1, 1).data;
+  var hex = "#" + [p[0], p[1], p[2]].map(function (n) { return n.toString(16).padStart(2, "0"); }).join("").toUpperCase();
+  pickChip("drop", hex);
+});
+$("keyOn").addEventListener("change", paintKey);
+$("rmbg").addEventListener("click", async function () {
+  if (!SID) { say("open a studio to remove a background"); return; }
+  var secs = S.dur || 0;
+  if (secs > 60) return;
+  $("rmbg").disabled = true;
+  say("removing the background, about $" + (secs * 0.0225).toFixed(4));
+  try {
+    var res = await api("/studio/" + SID + "/rmbg", { body: { spill: KEY.spill } });
+    if (!res || !res.body || !res.body.id) { say("couldn't start background removal"); $("rmbg").disabled = false; return; }
+    var id = res.body.id;
+    for (;;) {
+      var pr = await api("/studio/" + SID + "/rmbg/" + id + "?wait=20");
+      if (pr && pr.body && pr.body.status === "success") { say("background removed. saved as " + (pr.body.item_id || "an alternate")); break; }
+      if (pr && pr.body && pr.body.status === "error") { say("background removal failed"); break; }
+      await sleep(400);
+    }
+  } catch (e) { say("couldn't reach the server"); }
+  $("rmbg").disabled = false;
+});
+paintKey();
+
 /* ---------- go ---------- */
-if (SID) loadSession(); else view("vGone");
+if (new URLSearchParams(location.search).get("demo") === "1") { view("vReady"); S.dur = 8; paintKey(); }
+else if (SID) loadSession(); else view("vGone");
 })();
 </script>
 </body>

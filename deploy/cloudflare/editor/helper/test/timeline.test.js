@@ -362,3 +362,27 @@ test("pitch (31.16): optional, rounded to 0.5 st, range -12..12, omitted at 0, m
     const a = T.timing(ok(tl({ main: [main({ speed: 1.5 })] }))), b = T.timing(ok(tl({ main: [main({ speed: 1.5, pitch: 7 })] })));
     assert.deepEqual(a, b);
 });
+
+test("a timeline with no key is byte for byte the canonical form it had before keys existed", () => {
+    const raw = {
+        version: 1,
+        canvas: { w: 1080, h: 1920, fps: 30 },
+        main: [{ id: "m1", item: A, in: 0, out: 2, speed: 1, fit: "fill", volume: 1, muted: true }],
+        overlay: [{ id: "o1", item: B, at: 0, in: 0, out: 2, frame: { x: 0.1, y: 0.1, w: 0.4 }, opacity: 1, volume: 1, muted: true }],
+    };
+    const before = '{"canvas":{"fps":30,"h":1920,"w":1080},"main":[{"fit":"fill","id":"m1","in":0,"item":"AAAAAAAAAAAAAAAA","muted":true,"out":2,"speed":1,"volume":1}],"overlay":[{"at":0,"frame":{"w":0.4,"x":0.1,"y":0.1},"id":"o1","in":0,"item":"BBBBBBBBBBBBBBBB","muted":true,"opacity":1,"out":2,"volume":1}],"version":1}';
+    const p = T.parseTimeline(raw);
+    assert.equal(p.ok, true);
+    assert.equal(T.canonicalJSON(p.timeline), before);
+    assert.equal(JSON.stringify(p.timeline).includes('"key"'), false);
+    const withKey = T.parseTimeline({
+        ...raw,
+        overlay: [{ ...raw.overlay[0], key: { color: "#00b140", similarity: 0.2, blend: 0.05, spill: 0.4 } }],
+    });
+    assert.equal(withKey.ok, true);
+    assert.match(T.canonicalJSON(withKey.timeline), /"key":\{"blend":0\.05,"color":"#00B140","similarity":0\.2,"spill":0\.4\}/);
+    const transparent = T.parseTimeline({ ...raw, overlay: [{ ...raw.overlay[0], background: { type: "transparent" } }] });
+    assert.equal(T.canonicalJSON(transparent.timeline), before);
+    const mp4 = T.parseTimeline({ ...raw, output: "mp4" });
+    assert.equal(T.canonicalJSON(mp4.timeline), before);
+});

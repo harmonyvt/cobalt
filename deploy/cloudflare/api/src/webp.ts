@@ -14,6 +14,7 @@ import { KEY_ID_HEADER } from "./headers";
 import { randomBase62 } from "./ids";
 import { insertMediaItem, markMediaDeleted } from "./library";
 import type { SlideshowRun } from "./line";
+import { parseBackground, parseChromaKey, parseKeyedFormat } from "../helper/chroma.js";
 import { cropToWire, parseCrop } from "../helper/crop.js";
 
 export const WEBP_ID_LENGTH = 20;
@@ -47,6 +48,12 @@ export type WebpParams = {
     // (APP-API-CONTRACT.md section 10). Absent = the whole frame; the key is then
     // not present at all, so every record and helper call is what it always was.
     crop?: Crop;
+    // Optional chroma key (section 66). Absent = the encode this type has always described.
+    key?: { color: string; similarity: number; blend: number; spill: number };
+    // Solid colour behind the key. Transparent is omitted. "clip" is refused (no second clip).
+    background?: { type: "color"; color: string };
+    // Absent or "webp" = the animated WebP. webm / prores / mp4 are the other keyed outputs.
+    format?: "webm" | "prores" | "mp4";
 };
 
 export type Crop = { x: number; y: number; w: number; h: number };
@@ -85,8 +92,8 @@ export { randomBase62 };
 
 export const mintId = (rb?: (n: number) => Uint8Array) =>
     randomBase62(WEBP_ID_LENGTH, rb);
-export const mintName = (rb?: (n: number) => Uint8Array) =>
-    `${randomBase62(MEDIA_NAME_LENGTH, rb)}.webp`;
+export const mintName = (rb?: (n: number) => Uint8Array, ext = "webp") =>
+    `${randomBase62(MEDIA_NAME_LENGTH, rb)}.${ext}`;
 
 // --- request validation ----------------------------------------------------
 
@@ -153,6 +160,15 @@ export function validateParams(body: unknown): ParseResult {
     const crop = parseCrop(b.crop);
     if (!crop.ok) return bad;
     if (crop.crop) params.crop = crop.crop;
+    const key = parseChromaKey(b.key);
+    if (!key.ok) return bad;
+    if (key.key) params.key = key.key;
+    const background = parseBackground(b.background);
+    if (!background.ok || background.background?.type === "clip") return bad;
+    if (background.background?.type === "color") params.background = background.background;
+    const format = parseKeyedFormat(b.format);
+    if (format === "") return bad;
+    if (format && format !== "webp") params.format = format;
     return { ok: true, params };
 }
 
@@ -397,6 +413,9 @@ export class WebpService {
         });
         if (params.length !== undefined) q.set("length", String(params.length));
         if (params.crop) q.set("crop", cropToWire(params.crop));
+        if (params.key) q.set("key", JSON.stringify(params.key));
+        if (params.background) q.set("background", JSON.stringify(params.background));
+        if (params.format) q.set("format", params.format);
 
         let res: Response;
         try {
@@ -527,11 +546,13 @@ export class WebpService {
             return err(502, "error.webp.upstream");
         }
 
-        const name = mintName(this.d.randomBytes);
+        const ext = job.params.format === "webm" ? "webm" : job.params.format === "prores" ? "mov" : job.params.format === "mp4" ? "mp4" : "webp";
+        const contentType = job.params.format === "webm" ? "video/webm" : job.params.format === "prores" ? "video/quicktime" : job.params.format === "mp4" ? "video/mp4" : "image/webp";
+        const name = mintName(this.d.randomBytes, ext);
         try {
             await this.d.bucket.put(name, buf, {
                 httpMetadata: {
-                    contentType: "image/webp",
+                    contentType,
                     cacheControl: "public, max-age=31536000, immutable",
                 },
                 customMetadata: {
@@ -565,7 +586,7 @@ export class WebpService {
                 r2_key: name,
                 url: result.url,
                 name: done.filename || name,
-                content_type: "image/webp",
+                content_type: contentType,
                 bytes: buf.byteLength,
                 width: done.width ?? null,
                 height: done.height ?? null,

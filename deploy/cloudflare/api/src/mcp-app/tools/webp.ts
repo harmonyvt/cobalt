@@ -18,6 +18,19 @@ const Input = z.object({
         .optional(),
     width: z.union([z.literal(320), z.literal(480)]).default(480),
     quality: z.enum(["low", "med", "high"]).default("med"),
+    key: z
+        .object({
+            color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+            similarity: z.number().min(0.01).max(0.6),
+            blend: z.number().min(0).max(0.5),
+            spill: z.number().min(0).max(1),
+        })
+        .optional()
+        .describe("chroma key. #00B140 green and #0047BB blue also suppress spill"),
+    background: z
+        .object({ type: z.enum(["transparent", "color"]), color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional() })
+        .optional()
+        .describe("behind the key. transparent is the default"),
 });
 
 export const WEBP_MIN_S = 0.5;
@@ -31,7 +44,7 @@ export const convertToWebp: AppTool<z.infer<typeof Input>> = {
     name: "convert_to_webp",
     title: "Convert to animated webp",
     description:
-        "Make a silent, looping animated webp (0.5 to 10 seconds, 320 or 480 px wide) from part of a video in the capystore library. Give start and end in seconds, and optionally a crop {x,y,w,h} as fractions of the picture; without them the tool shows a range picker (a video of 10 seconds or less converts whole).",
+        "Make a silent, looping animated webp (0.5 to 10 seconds, 320 or 480 px wide) from part of a video in the capystore library. Give start and end in seconds, and optionally a crop {x,y,w,h} as fractions of the picture; without them the tool shows a range picker (a video of 10 seconds or less converts whole). Optional key {color, similarity, blend, spill} drops a greenscreen colour to alpha (#00B140 green, #0047BB blue).",
     input: Input,
     output: WebpOut,
     readOnly: false,
@@ -81,7 +94,16 @@ export const convertToWebp: AppTool<z.infer<typeof Input>> = {
             throw new OpError(400, "error.webp.range", `a webp is ${WEBP_MIN_S} to ${WEBP_MAX_S} seconds long (end minus start); ${start} to ${end} is ${length}`);
         }
         const range = { start: round(start), end: round(end) };
-        const started = rec(await ctx.call("make.webp", { id: input.id, start: range.start, end: range.end, ...(input.crop ? { crop: input.crop } : {}), width: input.width, quality: input.quality }));
+        const started = rec(await ctx.call("make.webp", {
+            id: input.id,
+            start: range.start,
+            end: range.end,
+            ...(input.crop ? { crop: input.crop } : {}),
+            width: input.width,
+            quality: input.quality,
+            ...(input.key ? { key: input.key } : {}),
+            ...(input.background ? { background: input.background } : {}),
+        }));
         let job = str(started.job);
         let phase = phaseOf(started);
         let latest: Record<string, unknown> = started;

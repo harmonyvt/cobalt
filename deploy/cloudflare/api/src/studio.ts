@@ -19,6 +19,7 @@
 // session id is a capability: the routes that use it need no API key.
 
 import { raceCeiling } from "./ceiling";
+import { parseBackground, parseChromaKey, parseKeyedFormat } from "../helper/chroma.js";
 import { Crop, HELPER_UPLOAD_MS, JobRecord, KV, MEDIA_NAME_LENGTH, Quality, WebpParams, WebpService, mintId, num, randomBase62, serviceFromUrl } from "./webp";
 import { AGENT_LIVE_HEADER, KEY_ID_HEADER } from "./headers";
 import { cropToPixels, parseCrop } from "../helper/crop.js";
@@ -402,6 +403,10 @@ export type RenderParams = {
     effectiveWidth: number;
     // optional spatial crop, normalized (section 10); absent = the whole frame
     crop?: Crop;
+    // optional chroma key (section 66); absent = not on the params object
+    key?: WebpParams["key"];
+    background?: WebpParams["background"];
+    format?: WebpParams["format"];
 };
 
 export type RenderCheck =
@@ -456,9 +461,25 @@ export function validateRender(
         if (!px) return invalid();
         effectiveWidth = Math.min(width, px.w);
     }
+    const key = parseChromaKey(b.key);
+    if (!key.ok) return invalid();
+    const background = parseBackground(b.background);
+    if (!background.ok || background.background?.type === "clip") return invalid();
+    const format = parseKeyedFormat(b.format);
+    if (format === "") return invalid();
     return {
         ok: true,
-        params: { start, length, width, quality, effectiveWidth, ...(parsedCrop.crop ? { crop: parsedCrop.crop } : {}) },
+        params: {
+            start,
+            length,
+            width,
+            quality,
+            effectiveWidth,
+            ...(parsedCrop.crop ? { crop: parsedCrop.crop } : {}),
+            ...(key.key ? { key: key.key } : {}),
+            ...(background.background?.type === "color" ? { background: background.background } : {}),
+            ...(format && format !== "webp" ? { format } : {}),
+        },
     };
 }
 
@@ -3761,6 +3782,9 @@ export class StudioService {
             fps: RENDER_FPS,
             quality: p.quality,
             ...(p.crop ? { crop: p.crop } : {}),
+            ...(p.key ? { key: p.key } : {}),
+            ...(p.background ? { background: p.background } : {}),
+            ...(p.format ? { format: p.format } : {}),
         };
         const joinOpts = { sid, row, params, p, focused, notifyFlag: notifyFlag === true, item, r2Key };
         if (!free) {

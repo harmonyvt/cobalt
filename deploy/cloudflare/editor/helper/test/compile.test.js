@@ -272,3 +272,48 @@ test("a pitched video overlay keeps its atrim and delay; a photo overlay ignores
     const tp = edit([mc({ out: 10 })], [oc({ item: P, out: 2, pitch: 7 })]);
     assert.equal(build(tp, photo).filter, build(edit([mc({ out: 10 })], [oc({ item: P, out: 2 })]), photo).filter);
 });
+
+test("a keyed overlay adds chromakey and despill before the overlay, and a missing key leaves the graph alone", () => {
+    const plain = build(edit([mc({ out: 10 })], [oc({ at: 1, out: 2 })]));
+    assert.ok(plain.filter.includes("[vm][ov0]overlay="));
+    assert.doesNotMatch(plain.filter, /chromakey/);
+    const keyed = build(edit([mc({ out: 10 })], [oc({
+        at: 1, out: 2,
+        key: { color: "#00B140", similarity: 0.2, blend: 0.05, spill: 0.4 },
+    })]));
+    assert.ok(keyed.filter.includes("[ov0]chromakey=color=0x00B140:similarity=0.2:blend=0.05,despill=type=green:mix=0.4:expand=0,format=yuva420p[k0]"));
+    assert.ok(keyed.filter.includes("[vm][k0]overlay="));
+    assert.doesNotMatch(keyed.filter, /\[vm\]\[ov0\]overlay/);
+    const blue = build(edit([mc({ out: 10 })], [oc({ at: 1, out: 2, key: { color: "#0047BB", similarity: 0.1, blend: 0, spill: 1 } })]));
+    assert.ok(blue.filter.includes("despill=type=blue:mix=1:expand=0"));
+    const drop = build(edit([mc({ out: 10 })], [oc({ at: 1, out: 2, key: { color: "#C0FF33", similarity: 0.3, blend: 0.1, spill: 0.5 } })]));
+    assert.match(drop.filter, /chromakey=color=0xC0FF33:similarity=0\.3:blend=0\.1,format=yuva420p/);
+    assert.doesNotMatch(drop.filter, /despill/);
+    const plate = build(edit([mc({ out: 10 })], [oc({
+        at: 1, out: 2,
+        key: { color: "#00B140", similarity: 0.2, blend: 0, spill: 0 },
+        background: { type: "color", color: "#111111" },
+    })]));
+    assert.match(plate.filter, /color=c=0x111111:s=\d+x\d+:r=30:d=/);
+    assert.ok(plate.filter.includes("[c0][k0]overlay=0:0:eof_action=pass:format=auto[p0]"));
+});
+
+test("webm, prores and webp outputs keep alpha; mp4 stays the old argv", () => {
+    const t = edit([mc({ out: 4 })]);
+    const mp4 = compile(t, std(), { output: "/o/out.mp4" });
+    assert.ok(mp4.ok);
+    assert.ok(mp4.outputArgs.includes("libx264"));
+    assert.ok(mp4.outputArgs.includes("yuv420p"));
+    assert.doesNotMatch(mp4.filter, /\[vout\]/);
+    const webm = compile(t, std(), { output: "/o/out.webm", format: "webm" });
+    assert.ok(webm.ok);
+    assert.ok(webm.outputArgs.includes("libvpx-vp9") && webm.outputArgs.includes("yuva420p") && webm.outputArgs.includes("-auto-alt-ref"));
+    assert.equal(webm.outputArgs[webm.outputArgs.indexOf("-auto-alt-ref") + 1], "0");
+    const prores = compile(t, std(), { output: "/o/out.mov", format: "prores" });
+    assert.ok(prores.ok);
+    assert.ok(prores.outputArgs.includes("prores_ks") && prores.outputArgs.includes("4444") && prores.outputArgs.includes("yuva444p10le"));
+    const webp = compile(t, std(), { output: "/o/out.webp", format: "webp" });
+    assert.ok(webp.ok);
+    assert.ok(webp.outputArgs.includes("libwebp_anim"));
+    assert.ok(!webp.args.includes("-map") || webp.args.filter((x) => x === "-map").length === 1);
+});

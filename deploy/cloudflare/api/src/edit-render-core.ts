@@ -85,6 +85,20 @@ const FINAL_CODES = new Set([
 export const renderErrorCode = (code: unknown): string =>
     typeof code === "string" && FINAL_CODES.has(code) ? code : "error.edit.render_failed";
 
+// The file a render writes (section 66). A project that does not name `output` is an mp4, as every render was.
+export function editFile(timeline: string | null | undefined): { ext: "mp4" | "webm" | "mov" | "webp"; type: string } {
+    let output = "";
+    try {
+        output = String((JSON.parse(timeline || "{}") as { output?: unknown }).output ?? "");
+    } catch {
+        output = "";
+    }
+    if (output === "webm") return { ext: "webm", type: "video/webm" };
+    if (output === "prores") return { ext: "mov", type: "video/quicktime" };
+    if (output === "webp") return { ext: "webp", type: "image/webp" };
+    return { ext: "mp4", type: "video/mp4" };
+}
+
 // ---- records ----------------------------------------------------------------------------------------------------
 
 export type InputRef = { n: number; item: string; bucket: "media" | "originals"; key: string; bytes: number; kind: "video" | "gif" | "photo" };
@@ -115,6 +129,9 @@ export type StepRecord = {
     result?: RenderResult;
     // `edits/<rid>.mp4` may exist (written, or being written)
     mp4?: boolean;
+    // the object key and type when the project asked for webm, prores or webp (section 66); absent = the mp4
+    outKey?: string;
+    outType?: string;
     // the poster object, until the library row names it
     posterName?: string;
     posterUrl?: string | null;
@@ -834,6 +851,7 @@ export class EditRenderCore {
     // ---- 5. collect ----------------------------------------------------------------------------------------------------
 
     private mp4Key = (rid: string) => `edits/${rid}.mp4`;
+    private outKeyOf = (rec: StepRecord) => rec.outKey ?? this.mp4Key(rec.rid);
 
     private async stepCollect(rec: StepRecord, row: ClaimRow): Promise<Outcome> {
         const result = rec.result;
@@ -860,12 +878,15 @@ export class EditRenderCore {
         }
         // the key may hold a partial object from here on: ending the render deletes it
         rec.mp4 = true;
+        const file = editFile(row.timeline);
+        rec.outKey = `edits/${rec.rid}.${file.ext}`;
+        rec.outType = file.type;
         await this.d.storage.put(RENDER_KEY, rec);
-        const key = this.mp4Key(rec.rid);
+        const key = rec.outKey;
         try {
             const put = await raceCeiling(
                 this.d.originals.put(key, this.d.fixedLength(res.body, length, () => this.d.renew?.()), {
-                    httpMetadata: { contentType: "video/mp4" },
+                    httpMetadata: { contentType: file.type },
                     customMetadata: {
                         keyId: row.key_id ?? "",
                         source: "studio",
@@ -974,7 +995,8 @@ export class EditRenderCore {
             return await this.end(rec, "error", "error.edit.render_failed");
         }
         // the title cleaned like an upload name: no `/`, no control characters, at most 120 characters
-        const name = cleanName(`${row.title}.mp4`, "mp4");
+        const file = editFile(row.timeline);
+        const name = cleanName(`${row.title}.${file.ext}`, file.ext);
         const post = rec.post ? (timeline as unknown as PostSpec) : null;
         const madeFrom = JSON.stringify(rec.chat ? [...new Set(rec.inputs.map((i) => i.item))] : post ? [post.item] : timelineItems(timeline));
         const madeSpec = JSON.stringify(
@@ -991,9 +1013,9 @@ export class EditRenderCore {
                 kind: "private",
                 source: "studio",
                 bucket: "originals",
-                r2_key: key,
+                r2_key: rec.outKey ?? key,
                 name,
-                content_type: "video/mp4",
+                content_type: rec.outType ?? file.type,
                 bytes: result.bytes,
                 width: result.width,
                 height: result.height,
@@ -1050,7 +1072,7 @@ export class EditRenderCore {
     private async deleteLeftovers(rec: StepRecord): Promise<void> {
         // unconditional (R2 delete is idempotent): a tick that died inside the put never set the flag
         try {
-            await this.d.originals.delete(this.mp4Key(rec.rid));
+            await this.d.originals.delete(this.outKeyOf(rec));
             rec.mp4 = false;
         } catch (e) {
             console.error("[edit-render] deleting the half-made video failed", String(e));

@@ -36,7 +36,8 @@ export type GateDecision =
 // /webp/:id ids are 16-32 alphanumerics (the DO mints 20); media names are 10
 // alphanumerics + ".webp". Validated before anything reaches a handler.
 export const WEBP_ID_REGEX = /^[A-Za-z0-9]{16,32}$/;
-export const MEDIA_NAME_REGEX = /^[A-Za-z0-9]{10}\.webp$/;
+// A hosted render's public name. `.webp` is the animated WebP; the keyed exports add webm, mov and mp4 (section 66).
+export const MEDIA_NAME_REGEX = /^[A-Za-z0-9]{10}\.(webp|webm|mov|mp4)$/;
 
 // Studio session id: 22 base62 chars (>= 128 bits); render job id: 20.
 export const STUDIO_SID_REGEX = /^[A-Za-z0-9]{22}$/;
