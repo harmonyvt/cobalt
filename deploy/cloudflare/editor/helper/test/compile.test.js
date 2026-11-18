@@ -317,3 +317,34 @@ test("webm, prores and webp outputs keep alpha; mp4 stays the old argv", () => {
     assert.ok(webp.outputArgs.includes("libwebp_anim"));
     assert.ok(!webp.args.includes("-map") || webp.args.filter((x) => x === "-map").length === 1);
 });
+
+test("24 overlapping overlays: one chain, bottom track first, hidden layers are not inputs", () => {
+    const raw = fx("timeline-many-overlays.json");
+    const parsed = parseTimeline(raw);
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    const t = parsed.timeline;
+    assert.equal(t.overlay.length, 24);
+    assert.equal(t.overlay.filter((o) => o.hidden).length, 1);
+    assert.equal(t.overlay[5].hidden, true);
+    assert.ok(!("hidden" in t.overlay[6]), "hidden: false is omitted");
+    const c = build(t);
+    const visible = t.overlay.map((o, i) => ({ o, i })).filter((x) => !x.o.hidden);
+    assert.equal(c.filter.match(/overlay=/g)?.length, visible.length);
+    assert.doesNotMatch(c.filter, /\[ov5\]|\[vo5\]/);
+    // draw order is track order; the hidden track is left out of the chain
+    let prev = "[vm]";
+    for (const { i } of visible) {
+        const step = `${prev}[ov${i}]overlay=`;
+        assert.ok(c.filter.includes(step), step);
+        prev = `[vo${i}]`;
+    }
+    assert.equal(c.videoLabel, prev);
+    // one input for the main clip, one per visible overlay; each overlay is seek-trimmed to its window
+    const inputs = c.inputArgs.join(" ").match(/-i /g) ?? [];
+    assert.equal(inputs.length, 1 + visible.length);
+    const seek = c.inputArgs.join(" ");
+    assert.ok(seek.includes("-ss 1"), seek);
+    assert.ok(seek.includes("-t 5"), seek);
+    // the one unmuted overlay is mixed with the main track; hidden and muted overlays are not
+    assert.match(c.filter, /amix=inputs=2:/);
+});

@@ -25,6 +25,11 @@ describe("job island states (CONTRACT-JOBLIVE 3)", () => {
         const c = jobCases();
         expect(c.save_done!.state).toMatchObject({ phase: "done", step: 2, headline: "saved", result: "1280×720 · 30 s · 8.9 MB" });
         expect(c.make_done!.state).toMatchObject({ phase: "done", step: 1, headline: "webp ready", link: "https://media.capybaraharmony.com/PrEvIeW001.webp" });
+        const removing = { stage: "rendering" as const, rail: 3, since: 1, waking: false, packing: true, work: "rmbg" as const };
+        expect(jobOfSave(c.make_working!.attributes as never, removing, "make").state.headline).toBe("removing background");
+        expect(jobOfSave(c.make_working!.attributes as never, { ...removing, stage: "done", resultURL: "" }, "make").state.headline).toBe("background removed");
+        expect(jobOfSave(c.make_working!.attributes as never, { ...removing, stage: "failed", code: "error.rmbg.failed" }, "make").state.headline).toBe("couldn't remove the background");
+        expect(jobOfSave(c.make_working!.attributes as never, { ...removing, stage: "failed", code: "error.live.lost" }, "make").state.headline).toBe("lost track of this background removal");
         expect(c.save_failed!.state).toMatchObject({ phase: "failed", step: 0, headline: "couldn't save", detail: "the link could not be fetched." });
         expect(c.save_lost!.state).toMatchObject({ phase: "lost", headline: "lost track of this save" });
         for (const k of ["save_done", "save_failed", "save_lost", "edit_done", "edit_failed", "chat_done"]) expect(isJobTerminal(jobCases()[k]!.state), k).toBe(true);

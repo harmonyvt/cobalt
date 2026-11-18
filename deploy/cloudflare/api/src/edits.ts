@@ -66,8 +66,9 @@ export const parseEditTimeline = parse;
 
 // ---- shapes and constants ---------------------------------------------------------------------------------
 
-// the body of POST /edits and PUT /edits/<id> (31.12): a 64 KiB timeline plus the envelope
-export const EDIT_BODY_CAP = 72 * 1024;
+// the body of POST /edits and PUT /edits/<id> (31.12): an 80 KiB timeline plus the envelope
+// The raw request, which wraps the timeline (section 31). 8 KiB over EDIT_MAX_JSON_BYTES for the envelope.
+export const EDIT_BODY_CAP = 88 * 1024;
 export const EDIT_DEFAULT_TITLE = "untitled edit";
 // A claimed render nobody has written to for this long is stale (31.9).
 export const EDIT_STALE_MS = 10 * 60 * 1000;
@@ -466,7 +467,7 @@ function bodyTitle(body: Record<string, unknown>): { ok: true; title: string | u
 
 const isRevision = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= Number.MAX_SAFE_INTEGER;
 
-// parseTimeline, the 64 KiB cap and the overlay height check where the rows know the size (POST, PUT).
+// parseTimeline, the 80 KiB cap and the overlay height check where the rows know the size (POST, PUT).
 async function checkTimelineForSave(
     d: EditsDeps,
     raw: unknown,

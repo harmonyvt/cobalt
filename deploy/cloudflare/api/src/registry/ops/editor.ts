@@ -157,7 +157,7 @@ export const editsAddOverlayOp = defineOp({
         at: z.number().min(0).optional().describe("output seconds where it starts, default 0"),
         seconds: z.number().gt(0).optional().describe("how long it stays, default: a picture to the end, a video its length"),
         in: z.number().min(0).optional().describe("a video: source seconds to start from, default 0"),
-        track: z.number().int().min(0).max(EDIT_OVERLAY_TRACKS - 1).optional().describe("layer 0..7 (higher on top); default the lowest free one"),
+        track: z.number().int().min(0).max(EDIT_OVERLAY_TRACKS - 1).optional().describe("layer 0..63 (higher on top); default the lowest free one"),
         position: z.enum(POSITIONS).optional().describe("default center (ignored when x and y are given)"),
         x: z.number().min(0).max(1).optional().describe("left edge, canvas fraction"),
         y: z.number().min(0).max(1).optional().describe("top edge, canvas fraction"),

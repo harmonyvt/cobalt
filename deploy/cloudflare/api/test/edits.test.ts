@@ -2,7 +2,7 @@
 // each state, the capability, GET /queue and the cron's recovery. The Worker with real SQL on node:sqlite over every migration.
 import { beforeEach, describe, expect, it } from "vitest";
 import { editsRecover, editTablesPresent, renderProgress } from "../src/edits";
-import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS } from "../../editor/helper/timeline.js";
+import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS, EDIT_OVERLAY_TRACKS } from "../../editor/helper/timeline.js";
 import { AUTH, MEDIA_BASE, ids, mainClip, overlayClip, timeline, world, type World } from "./edits-world";
 
 let w: World;
@@ -680,9 +680,9 @@ describe("GET /capabilities", () => {
     it("features.editor and the limits: on with the binding and the tables", async () => {
         const r = await w.api("GET", "/capabilities");
         expect(r.json.features.editor).toBe(true);
-        expect(r.json.limits).toMatchObject({ edit_max_seconds: 600, edit_max_clips: 50, edit_max_projects: 200 });
+        expect(r.json.limits).toMatchObject({ edit_max_seconds: 600, edit_max_clips: 200, edit_max_projects: 200, edit_overlay_tracks: 64 });
         expect(r.json.limits.edit_pitch).toBe(true);
-        expect([EDIT_MAX_SECONDS, EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS]).toEqual([600, 50, 200]);
+        expect([EDIT_MAX_SECONDS, EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_OVERLAY_TRACKS]).toEqual([600, 200, 200, 64]);
     });
 
     it("false without the binding, and false (still 200) without migration 0021", async () => {

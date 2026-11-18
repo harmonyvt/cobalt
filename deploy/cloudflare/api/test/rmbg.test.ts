@@ -127,4 +127,43 @@ describe("POST /library/items/:id/rmbg", () => {
         expect(JSON.parse(row.made_from)).toEqual([ITEM]);
         expect([...originals.objects.keys()].some((k) => k.startsWith("rmbg/") && k.endsWith(".mov"))).toBe(true);
     });
+
+    it("tells the Live Activity this is background removal, not a webp", async () => {
+        const seen: { kind: string; work?: string }[] = [];
+        db.raw.prepare("UPDATE media_items SET session_id = ? WHERE id = ?").run("S".repeat(22), ITEM);
+        const live = {
+            onRender: async (_sid: string, _job: string, e: { kind: string; work?: string }) => {
+                seen.push({ kind: e.kind, work: e.work });
+            },
+        };
+        const watched = new RmbgService({
+            storage: new MemoryKV(),
+            db: db as unknown as D1Database,
+            originals,
+            ai,
+            now: () => 1_000,
+            sleep: async () => {},
+            fetch: async () => new Response(new Uint8Array([9, 9, 9, 9])),
+            waitUntil: (p) => {
+                jobs.push(p);
+            },
+            live,
+        });
+        const local = {
+            async fetch(r: Request) {
+                const path = new URL(r.url).pathname;
+                if (path === "/rmbg" || /^\/rmbg\/[^/]+$/.test(path)) return handleRmbgRoute(watched, r);
+                return new Response("no", { status: 404 });
+            },
+        };
+        const res = await handleRequest(
+            new Request(`https://api.capybaraharmony.com/library/items/${ITEM}/rmbg`, { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: "{}" }),
+            env(),
+            local,
+        );
+        expect(res.status).toBe(202);
+        await Promise.all(jobs);
+        expect(seen.map((e) => e.kind)).toEqual(["accepted", "pending", "success"]);
+        expect(seen.every((e) => e.work === "rmbg")).toBe(true);
+    });
 });

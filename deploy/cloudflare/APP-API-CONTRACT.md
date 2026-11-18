@@ -3395,8 +3395,8 @@ sweep,ceiling}.ts`, `helper/{supervisor,server,lib,crop}.js`, `cloudflare.config
 - **Out of v1** (not in the schema; a field for them is refused): text titles, transitions/crossfades, keyframes, filters, a music
   track, more than one overlay track, 4K, rotate/flip, speed ramps, photos or GIFs on the main track, crop of an overlay.
 - **Limits** (constants in `editor/helper/timeline.js`, 31.3, imported by the Worker, never retyped): output ≤ **600 s**
-  (`EDIT_MAX_SECONDS`), main + overlay clips ≤ **50** (`EDIT_MAX_CLIPS`), at least 1 main clip, timeline JSON ≤ **64 KiB**
-  (`EDIT_MAX_JSON_BYTES`), projects ≤ **200** (`EDIT_MAX_PROJECTS`), renders queued or running ≤ **20** (`EDIT_QUEUE_MAX`), the
+  (`EDIT_MAX_SECONDS`), main + overlay clips ≤ **200** (`EDIT_MAX_CLIPS`), at least 1 main clip, timeline JSON ≤ **80 KiB**
+  (`EDIT_MAX_JSON_BYTES`; raised from 64 KiB because a 200-clip timeline with every optional key set is about 67 KiB), projects ≤ **200** (`EDIT_MAX_PROJECTS`), renders queued or running ≤ **20** (`EDIT_QUEUE_MAX`), the
   inputs of one render ≤ **6 GiB** together (`EDIT_MAX_INPUT_BYTES`; the standard-4 instance has a 20 GB disk), one output ≤
   **4 GiB** (`EDIT_MAX_OUTPUT_BYTES`).
 - **Naming**: "edit" in routes, tables, error codes and code (`/edits`, `edit_*`, `error.edit.*`, `edits*.ts`, Swift `Edit*`);
@@ -3424,8 +3424,8 @@ Every field (all required unless marked optional; any other key anywhere, a wron
 | `version` | integer | exactly `1` | `1` |
 | `canvas.w`, `canvas.h` | integer | one of the six pairs: 9:16 `1080×1920`, `720×1280`; 1:1 `1080×1080`, `720×720`; 16:9 `1920×1080`, `1280×720` (else `error.edit.canvas`) | from the first video (31.2.1), 1080p |
 | `canvas.fps` | integer | `30` or `60` (else `error.edit.canvas`) | `30` |
-| `main` | array | 1..50 clips (0: `error.edit.empty`; with `overlay` over 50: `error.edit.too_many_clips`) | |
-| `overlay` | array | 0..49 clips, sorted by `at`, never overlapping in frames (31.5) | `[]` |
+| `main` | array | 1..200 clips (0: `error.edit.empty`; with `overlay` over 200: `error.edit.too_many_clips`) | |
+| `overlay` | array | 0..199 clips, sorted by `at`, never overlapping in frames on one track (31.5, 39.1) | `[]` |
 | `*.id` | string | `^[A-Za-z0-9_-]{1,24}$`, unique across main and overlay (duplicate: `error.edit.bad_request`) | `c` + 8 base62 |
 | `*.item` | string | a library file id, `^[A-Za-z0-9]{16}$` (a `media_items.id`; a `public_id` is refused) | |
 | `main[].in`, `main[].out` | number | seconds of the SOURCE file, `0 ≤ in < out`, rounded to 0.001; `(out - in) / speed ≥ 0.1` (else `error.edit.range`); `out ≤ source duration + 0.05` checked at render (`error.edit.past_source_end`), a value within the 0.05 s slack is clamped to the duration | `0` and the duration |
@@ -3438,6 +3438,7 @@ Every field (all required unless marked optional; any other key anywhere, a wron
 | `overlay[].in`, `overlay[].out` | number | video: source seconds as for main (no speed; `out - in ≥ 0.1`). GIF: `in` = 0 and `out` = how long it stays up, `0.1..600`; it loops (31.5). Photo: `in` = 0 and `out` = how long it stays up, `0.1..600` | video: `0` and min(duration, the rest of the timeline); GIF/photo: `0` and `3` |
 | `overlay[].frame` | object | `x, y` = top-left corner, `w` = width, all fractions of the CANVAS (x and w of its width, y of its height), rounded to 0.0001; `0.05 ≤ w ≤ 1`; the height follows the overlay's own display aspect: `h = w × canvas.w / canvas.h × srcH / srcW`; it must sit inside the canvas: `x ≥ 0, y ≥ 0, x + w ≤ 1.001, y + h ≤ 1.001` (`error.edit.range`; the `y + h` half is checked where the source size is known: at save when `media_items` has it, always at render) | `x 0.6, y 0.05, w 0.35`, then clamped inside |
 | `overlay[].opacity` | number | `0.1 ≤ opacity ≤ 1`, rounded to 0.01 | `1` |
+| `overlay[].hidden` | boolean, optional | `true` drops the overlay from the render (39.7). Absent and `false` are omitted from the canonical JSON | absent |
 
 **Canonical JSON.** The server stores and returns the timeline canonicalised: numbers rounded as above, keys sorted by code point at
 every level, no whitespace, `crop` omitted when absent, numbers in the shortest round-trip decimal form (what both `JSON.stringify`
@@ -3458,7 +3459,7 @@ imports it (`import { ... } from "../../editor/helper/timeline.js"`, the way `sr
 render helper uses the same file. Pinned exports:
 
 ```js
-export const EDIT_MAX_SECONDS = 600, EDIT_MAX_CLIPS = 50, EDIT_MAX_JSON_BYTES = 65536, EDIT_MAX_PROJECTS = 200,
+export const EDIT_MAX_SECONDS = 600, EDIT_MAX_CLIPS = 200, EDIT_MAX_JSON_BYTES = 80 * 1024, EDIT_MAX_PROJECTS = 200,
              EDIT_QUEUE_MAX = 20, EDIT_MAX_INPUT_BYTES = 6 * 1024 ** 3, EDIT_MAX_OUTPUT_BYTES = 4 * 1024 ** 3;
 export const EDIT_CANVASES = [[1080,1920],[720,1280],[1080,1080],[720,720],[1920,1080],[1280,720]];
 export const EDIT_SOURCE_TYPES = ["video/mp4","video/quicktime","video/x-m4v","image/gif","image/jpeg","image/png"];
@@ -3698,7 +3699,7 @@ RETURNING *;
 | route | body | answer |
 |---|---|---|
 | `GET /health` | | `200 {"status":"ok","render":"<rid>"\|null,"version":"<EDIT_DEPLOY_VERSION>"}` |
-| `PUT /renders/<rid>/inputs/<n>` | the source bytes; `content-length` required | `204`; `409 error.edit.busy` (another render holds this container); `413 error.edit.too_large` (over the per-render 6 GiB); `400` bad `n` (0..49) |
+| `PUT /renders/<rid>/inputs/<n>` | the source bytes; `content-length` required | `204`; `409 error.edit.busy` (another render holds this container); `413 error.edit.too_large` (over the per-render 6 GiB); `400` bad `n` (0..199) |
 | `POST /renders/<rid>/start` | `{"timeline": <canonical>, "inputs": [{"n": 0, "item": "<id>", "kind": "video"\|"gif"\|"photo"}]}` | `202`; `409 error.edit.input_missing`; `400 {error:{code, path}}` from `parseTimeline` / the probe (below) |
 | `GET /renders/<rid>` | | `{"status":"receiving"\|"probing"\|"encoding"\|"poster"\|"done"\|"error","seconds_done":n\|null,"seconds_total":n,"speed":n\|null,"bytes":n\|null,"width":n,"height":n,"duration":n,"error":{"code"}\|null}`; `404` unknown rid |
 | `GET /renders/<rid>/file` | | `200 video/mp4` with `content-length` |
@@ -3806,7 +3807,7 @@ Shapes:
 | route | body | answer |
 |---|---|---|
 | `GET /edits` | | `200 {status, "projects": [<project summary>]}`, live, most recently updated first, ≤ 200 |
-| `POST /edits` | `{"title"?: "...", "timeline": {...}}` (≤ 72 KiB) | `201 {status, "project": <project>}` (`revision` 1; title default `untitled edit`); `409 error.edit.too_many` (200 live projects) |
+| `POST /edits` | `{"title"?: "...", "timeline": {...}}` (≤ 88 KiB) | `201 {status, "project": <project>}` (`revision` 1; title default `untitled edit`); `409 error.edit.too_many` (200 live projects) |
 | `GET /edits/<id>` | | `200 {status, "project": <project>, "sources": {"<item id>": <source>}}` (every item the timeline names) |
 | `PUT /edits/<id>` | `{"timeline": {...}, "base_revision": n, "title"?: "..."}` | `200 {status, "project"}` (`revision + 1`); `409 error.edit.conflict` with `"project": <project>` (the current one) when `base_revision` ≠ the stored revision; nothing changes |
 | `PATCH /edits/<id>` | `{"title": "..."}` | `200 {status, "project"}` (no revision check; `revision + 1`) |
@@ -3827,7 +3828,7 @@ all of it). Body `{"status":"error","error":{"code":"<code>"},"path":"<field>"}`
 | `error.edit.bad_request` | 400 | not JSON, too large, wrong type, missing or unknown key, bad id, `version` ≠ 1, bad title, bad `base_revision`/`revision` |
 | `error.edit.canvas` | 400 | canvas not one of the six sizes, fps not 30/60 |
 | `error.edit.empty` | 400 | no main clip |
-| `error.edit.too_many_clips` | 400 | over 50 clips |
+| `error.edit.too_many_clips` | 400 | over 200 clips |
 | `error.edit.too_long` | 400 | over 600 s |
 | `error.edit.range` | 400 | a number out of its range (31.2), `in ≥ out`, a clip under 0.1 s, a crop under 64 px, an overlay off the canvas |
 | `error.edit.overlay_overlap` | 400 | overlays not sorted by `at` or overlapping in frames |
@@ -3856,15 +3857,16 @@ Render outcomes (`render.error`): `error.edit.render_failed`, `error.edit.timeou
   older server. One D1 query; the container is never woken. A render that is not done counts as work for the app's 5-second polling
   (`QueueSnapshot.isActive`). The app shows them as described in `apple/CONTRACT-EDITOR.md` 6.
 - **`GET /capabilities`**: `features.editor` is true exactly while the Worker has the `EDIT_RENDERER` binding and migration 0021 is
-  applied; `limits.edit_max_seconds: 600`, `limits.edit_max_clips: 50`, `limits.edit_max_projects: 200` (imported from
-  `timeline.js`). Missing = false: the app shows no `edit` button and no edits shelf.
+  applied; `limits.edit_max_seconds: 600`, `limits.edit_max_clips: 200`, `limits.edit_max_projects: 200`,
+  `limits.edit_overlay_tracks: 64` (imported from `timeline.js`). Missing = false: the app shows no `edit` button and no edits shelf.
+  An older app that still clamps to 8 layers and 50 clips keeps working: it never sends a track past 7 or more than 50 clips.
 - **Gate** (`src/gate.ts`): a `decideEdits` block next to `decideStage`: `/edits` `GET|POST`, `/edits/renders` `GET`,
   `/edits/renders/<rid>` `GET|DELETE`, `/edits/<id>` `GET|PUT|PATCH|DELETE`, `/edits/<id>/render` `POST`, each `lookupThen(req,
   "edits_<op>", {id | rid})` with ops `list, create, get, update, rename, delete, render, renders, render_get, render_cancel`; the
   service credential and everything else 404.
 - **Worker** (`src/worker.ts`): `if (decision.then?.startsWith("edits_"))` → `editsKeyed(deps, op, request, params, searchParams)`
   from `src/edits.ts` (no Cloudflare imports; deps: `db`, `mediaBaseUrl`, `now`, `kick: () => Promise<void>` that posts `/kick` to
-  r0 and r1). Bodies are read with `readCapped` (72 KiB). No `request_log` row.
+  r0 and r1). Bodies are read with `readCapped` (88 KiB). No `request_log` row.
 - **Cron** (`src/index.ts`): the 15-minute trigger also runs `editsRecover` (stale rows, 31.9) and kicks both instances when any
   render is queued. D1 only unless there is work.
 
@@ -5048,13 +5050,13 @@ Any other op: a chip only. A new op gets a card by adding a case to `cardFor` (`
 
 ## 39. Editor layers, webp/emote sources and cutouts (addendum, 2026-10-30; owner: "put images and convert images to remove any white bg or colour bg ... and then have the option to place it over a video I can stack multiple and also I want to be able to overlay multiple videos can we also expand our like agent and mcp tools too please"; plan `editor-layers/PLAN.md`, mockup https://claude.ai/artifact/VqimMVfpEKT12kxKEkLhqb)
 
-Section 31's timeline gets **layers**: overlays sit on up to 8 tracks, so pictures, cutouts, 7TV emotes and videos can
+Section 31's timeline gets **layers**: overlays sit on up to 64 tracks, so pictures, cutouts, 7TV emotes and videos can
 overlap in time and stack. Pictures can be **cut out** (background removed) into a new private PNG in the library. The
 chat AI and the MCP get `make.cutout` and `edits.addOverlay`. No migration, no secret.
 
 ### 39.1 Overlay `track` (timeline, `editor/helper/timeline.js`)
 
-- An overlay may carry `track`: an integer `0..7` (`EDIT_OVERLAY_TRACKS = 8`). Absent = `0`. A non-integer answers
+- An overlay may carry `track`: an integer `0..63` (`EDIT_OVERLAY_TRACKS = 64`). Absent = `0`. A non-integer answers
   `error.edit.bad_request`, out of range `error.edit.range` (with the usual `path`).
 - Canonical JSON omits `track` when it is `0`, so every timeline saved before this section is byte-identical (same
   fingerprint, same cached render).
@@ -5063,8 +5065,9 @@ chat AI and the MCP get `make.cutout` and `edits.addOverlay`. No migration, no s
 - Draw order (`overlayDrawOrder`): track ascending, then array order. A higher track is drawn on top. The render
   (`compile.js`) and the app preview use the same order.
 - Every overlay video's sound is mixed (one `amix` input per unmuted overlay video plus the main track), as before.
-- `GET /capabilities` `limits.edit_overlay_tracks: 8`. A client that does not know the limit sends no `track`, which
-  keeps the old one-lane behaviour.
+- `GET /capabilities` `limits.edit_overlay_tracks: 64` and `limits.edit_max_clips: 200` (section 31.1). A client that
+  does not know the limit sends no `track`, which keeps the old one-lane behaviour. An older app that clamps to 8 layers
+  and 50 clips is unchanged: the server still accepts those timelines.
 
 ### 39.2 webp sources (7TV emotes, animated webps)
 
@@ -5121,7 +5124,7 @@ the account). A cutout is made only on request, never in the cron.
   Without `track` it takes the lowest track free over `[at, at + seconds)`; `position` is one of the nine named
   spots (`center` default, margins 4% of the width); `size` is the width as a canvas fraction (default 0.35, a video
   0.4), the height follows the source's aspect. Answers the project like `edits.update` plus `clip` (the new
-  overlay's id) and `track`. When every layer is taken over that span it answers `error.make.refused` ("all 8 layers are busy then"); an explicit busy `track` is refused the same way.
+  overlay's id) and `track`. When every layer is taken over that span it answers `error.make.refused` ("all 64 layers are busy then"); an explicit busy `track` is refused the same way.
 - `edits.get` also returns `sources` (each source's id, kind, size, seconds, `source`), so the AI can place things.
 - The timeline type text the AI reads (`TIMELINE_TYPE`) documents `track`, webp/emote/cutout sources and points at
   `edits.addOverlay`.
@@ -5130,7 +5133,7 @@ the account). A cutout is made only on request, never in the cron.
 
 ### 39.5 Clients (app plan, `apple/CONTRACT-EDITOR.md` section 12)
 
-The app shows layers as lanes L1..L8 under the main track, an add sheet with videos / images / emotes tabs, and a cutout
+The app shows one lane per `limits.edit_overlay_tracks` (L1..L64 on this server; an older app still draws L1..L8) under the main track, an add sheet with videos / images / emotes tabs, and a cutout
 sheet (auto / white / colour, tolerance, keep-inside switch, before/after) that makes the cutout on the device and
 uploads the PNG through 39.3, or asks the server when the device can't (`features.cutout_auto`).
 
@@ -5145,6 +5148,16 @@ uploads the PNG through 39.3, or asks the server when the device can't (`feature
 - **Deploy**: API deploy (new `IMAGES` binding, `bindings.images()`, Images must be enabled on the account) which also
   rebuilds the `EditRenderer` image (webp support). No migration, no secret. Older apps keep working (they never send
   `track`).
+
+### 39.7 Hiding an overlay (`hidden`)
+
+An overlay may carry `hidden: true`. The renderer (`compile.js`) skips it entirely: the file is not opened, and it adds
+no filter and no audio. It still counts as a clip and still occupies its track for the overlap check, so un-hiding it
+later cannot create an overlap the server would have refused.
+
+Canonical JSON and the render fingerprint omit `hidden` when it is absent or `false`, so a timeline saved before this
+key, and one that sends `hidden: false`, stay byte for byte the same. `hidden: true` is kept. Anything that is not a
+boolean is `error.edit.bad_request`. No migration.
 
 ## 41. Editing a gallery link's files (addendum, 2026-10-30; owner: "I can edit collection links, but I can't click on the share link and edit the videos in that. So I need UX UIs for all that flow"; plan `share-link-edit/PLAN.md`, mockup https://claude.ai/artifact/Uicw2T9mJKSiZP5RQGcJKv)
 
@@ -7496,6 +7509,23 @@ are 404.
 `POST /library/items/<id>/rmbg` (keyed) and `POST /studio/<sid>/rmbg` (the studio page, no key) answer
 `202 { status: "pending", id, seconds, estimate_usd }`. The work runs in the Durable Object and is polled with
 `GET …/rmbg/<job>?wait=`, the same pending / success / error shape as a studio render, and a Live Activity
-registered for the session is updated from it. The result is a private ProRes alternate on the source
+registered for the session is updated from it. The activity's words are the background-removal ones (`work: "rmbg"`
+on the render event, omitted from the content state of a save or a webp): "removing background", then "background
+removed", or "couldn't remove the background". A webp render of the same session clears that mark and says "making
+the webp" again. The result is a private ProRes alternate on the source
 (`role = alt`, `made_spec.kind = "rmbg"`), linked by `session_id` / `post_key`, and its id is a video the editor
 can overlay. No new secret: the existing `AI` binding is the one the docs name. No migration.
+
+## 68. Depth-cut alternates (`PUT /library/items/<id>/made`, `role=alt`)
+
+The same made-file route that stores an HDR alternate (`spec.kind = "hdr_alt"`, `video/mp4` AV1 or `video/webm` VP9)
+also stores a depth cut. `spec.kind` is `depth_cut`, `person_cut` or `subject_cut` (the three are one family: a new
+one replaces the earlier cut of any of those kinds, and does not replace an `hdr_alt` or an `rmbg` alt). The body is
+`video/quicktime`, a QuickTime `.mov` (`ftyp` brand `qt  `) whose video is ProRes 4444 (`ap4h` or `ap4x`) or
+HEVC-with-alpha (`muxa`, or `hvc1` / `hev1` with depth ≥ 32, a compressor name that says alpha, or an `auxi` /
+`auxiliary:alpha` box). Anything else is `400 error.library.bad_request`. The size cap is the upload cap, not the
+50 MB made cap.
+
+The row is `role = alt`, `source = made`, `bucket = originals`, `made_from` the anchor, `made_spec` the spec plus
+`codecs` (the fourcc, or the HEVC RFC 6381 string when the `hvcC` was in the header). It stays **private** even when
+the post is public, the same as a Bria `rmbg` alternate (section 67). No migration, no new secret.

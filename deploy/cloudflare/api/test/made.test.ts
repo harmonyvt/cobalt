@@ -415,6 +415,97 @@ describe("an HDR alternate", () => {
     });
 });
 
+describe("a depth-cut alternate", () => {
+    const concat = (...parts: Uint8Array[]) => {
+        const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+        let o = 0;
+        for (const p of parts) {
+            out.set(p, o);
+            o += p.length;
+        }
+        return out;
+    };
+    const box = (type: string, payload: Uint8Array) => {
+        const out = new Uint8Array(8 + payload.length);
+        new DataView(out.buffer).setUint32(0, out.length);
+        out.set(new TextEncoder().encode(type), 4);
+        out.set(payload, 8);
+        return out;
+    };
+    const u32 = (n: number) => {
+        const b = new Uint8Array(4);
+        new DataView(b.buffer).setUint32(0, n);
+        return b;
+    };
+    const zeros = (n: number) => new Uint8Array(n);
+    const mov = (fourcc: string, depth: number) => {
+        const head = zeros(78);
+        const view = new DataView(head.buffer);
+        view.setUint16(24, 64);
+        view.setUint16(26, 48);
+        view.setUint16(74, depth);
+        const entry = box(fourcc, head);
+        const stsd = box("stsd", concat(zeros(4), u32(1), entry));
+        const hdlr = box("hdlr", concat(zeros(8), new TextEncoder().encode("vide")));
+        const tkhd = zeros(84);
+        new DataView(tkhd.buffer).setUint32(76, 64 * 65536);
+        new DataView(tkhd.buffer).setUint32(80, 48 * 65536);
+        const trak = box("trak", concat(box("tkhd", tkhd), box("mdia", concat(hdlr, box("minf", box("stbl", stsd))))));
+        const mvhd = zeros(20);
+        new DataView(mvhd.buffer).setUint32(12, 1000);
+        new DataView(mvhd.buffer).setUint32(16, 2500);
+        const ftyp = box("ftyp", concat(new TextEncoder().encode("qt  "), u32(0), new TextEncoder().encode("qt  ")));
+        return concat(ftyp, box("moov", concat(box("mvhd", mvhd), trak)));
+    };
+    const cut = (id: string, body: Uint8Array, kind = "depth_cut", type = "video/quicktime") =>
+        put(id, { role: "alt", spec: spec({ kind }), type, body });
+
+    it("stores a private ProRes 4444 or HEVC-with-alpha .mov and replaces the earlier cut", async () => {
+        const { sid } = await saveGallery(w, [{ type: "video" }], { public: true });
+        const video = itemRows(w, sid)[0]!;
+        const body = mov("ap4h", 32);
+        const first = await cut(video.id, body, "depth_cut");
+        expect(first.status).toBe(201);
+        const a = (await first.json()) as any;
+        expect(a.item).toMatchObject({
+            role: "alt",
+            visibility: "private",
+            url: null,
+            content_type: "video/quicktime",
+            width: 64,
+            height: 48,
+            duration: 2.5,
+            made_spec: { kind: "depth_cut", codecs: "ap4h" },
+        });
+        expect(a.item.made_from).toEqual([video.id]);
+        expect(w.item(a.item.id)).toMatchObject({ bucket: "originals", visibility: "private", r2_key: `made/${a.item.id}.mov` });
+        expect(w.media.objects.has(w.item(a.item.id).public_key)).toBe(false);
+
+        const hevc = mov("hvc1", 32);
+        const person = await cut(video.id, hevc, "person_cut");
+        expect(person.status).toBe(201);
+        const b = (await person.json()) as any;
+        expect(b.replaced).toEqual([a.item.id]);
+        expect(b.item).toMatchObject({ visibility: "private", made_spec: { kind: "person_cut", codecs: "hvc1" } });
+        expect(w.item(a.item.id).deleted_at).not.toBeNull();
+
+        const subject = await cut(video.id, mov("ap4x", 32), "subject_cut");
+        expect(subject.status).toBe(201);
+        expect(((await subject.json()) as any).replaced).toEqual([b.item.id]);
+    });
+
+    it("refuses a cut that is not QuickTime alpha, and an HDR alternate that is a mov", async () => {
+        const { sid } = await saveGallery(w, [{ type: "video" }]);
+        const video = itemRows(w, sid)[0]!;
+        expect((await cut(video.id, mov("hvc1", 24))).status).toBe(400);
+        expect((await cut(video.id, mov("apcn", 24))).status).toBe(400);
+        expect((await cut(video.id, mov("avc1", 32))).status).toBe(400);
+        expect((await cut(video.id, fixture("av1.mp4"), "depth_cut", "video/mp4")).status).toBe(400);
+        expect((await put(video.id, { role: "alt", spec: spec({ kind: "hdr_alt" }), type: "video/quicktime", body: mov("ap4h", 32) })).status).toBe(400);
+        expect(w.db.raw.prepare("SELECT COUNT(*) AS n FROM media_items WHERE role = 'alt'").get()).toEqual({ n: 0 });
+    });
+});
+
 describe("jpegSize", () => {
     it("reads the start-of-frame, skips other segments, and says null for anything else", () => {
         expect(jpegSize(jpeg(1080, 1920))).toEqual({ width: 1080, height: 1920 });

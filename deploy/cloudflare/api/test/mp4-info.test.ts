@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { moovOffset, mp4Info, readMp4Info, vp9Codecs, webmInfo, VP9_HDR_CODECS } from "../src/mp4-info";
+import { alphaCutIn, isQuickTime, moovOffset, mp4Info, readMp4Info, readQuicktimeAlphaCut, vp9Codecs, webmInfo, VP9_HDR_CODECS } from "../src/mp4-info";
 
 const dir = path.join(import.meta.dirname, "fixtures/hdr");
 const file = (name: string) => new Uint8Array(readFileSync(path.join(dir, name)));
@@ -118,6 +118,53 @@ describe("mp4Info", () => {
             duration: 0.2,
             codecs: "av01.0.00M.10.0.110.09.16.09.0",
         });
+    });
+});
+
+describe("quicktime alpha cuts", () => {
+    const qt = (entry: Uint8Array, ms = 1500) => concat(box("ftyp", concat(new TextEncoder().encode("qt  "), u32(0), new TextEncoder().encode("qt  "))), box("moov", concat(mvhd(ms), videoTrak(entry, 64, 64))));
+    const visual = (fourcc: string, depth: number, name = "", children = new Uint8Array()) => {
+        const head = zeros(78);
+        const view = new DataView(head.buffer);
+        view.setUint16(24, 320);
+        view.setUint16(26, 180);
+        view.setUint16(74, depth);
+        if (name) {
+            const bytes = new TextEncoder().encode(name).subarray(0, 31);
+            head[42] = bytes.length;
+            head.set(bytes, 43);
+        }
+        return box(fourcc, concat(head, children));
+    };
+
+    it("accepts ProRes 4444 and 4444 XQ, and refuses 422 and a non-QuickTime brand", () => {
+        const prores = qt(visual("ap4h", 32));
+        expect(isQuickTime(prores)).toBe(true);
+        expect(alphaCutIn(prores)).toMatchObject({ codec: "prores4444", codecs: "ap4h", width: 320, height: 180, duration: 1.5 });
+        expect(alphaCutIn(qt(visual("ap4x", 32)))).toMatchObject({ codec: "prores4444", codecs: "ap4x" });
+        expect(alphaCutIn(qt(visual("apcn", 24)))).toBeNull();
+        expect(isQuickTime(movie(sample("ap4h", new Uint8Array()), 64, 64, 1000))).toBe(false);
+        expect(alphaCutIn(movie(sample("ap4h", new Uint8Array()), 64, 64, 1000))).toMatchObject({ codecs: "ap4h" });
+    });
+
+    it("accepts HEVC only when the sample entry says it has alpha", () => {
+        const hvcC = box("hvcC", Uint8Array.from([0x01, 0x02, 0x20, 0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78]));
+        expect(alphaCutIn(qt(visual("hvc1", 24, "HEVC")))).toBeNull();
+        expect(alphaCutIn(qt(visual("hvc1", 32, "", hvcC)))).toMatchObject({ codec: "hevc_alpha", codecs: "hvc1.2.4.L120.90", width: 320, height: 180 });
+        expect(alphaCutIn(qt(visual("hev1", 24, "HEVC Video with Alpha")))).toMatchObject({ codec: "hevc_alpha", codecs: "hev1" });
+        expect(alphaCutIn(qt(visual("muxa", 24)))).toMatchObject({ codec: "hevc_alpha", codecs: "muxa" });
+        const auxi = box("auxi", new TextEncoder().encode("urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"));
+        expect(alphaCutIn(qt(visual("hvc1", 24, "", auxi)))).toMatchObject({ codec: "hevc_alpha" });
+        expect(alphaCutIn(qt(visual("avc1", 32)))).toBeNull();
+    });
+
+    it("reads a moov that sits past the first window", async () => {
+        const entry = visual("ap4h", 32);
+        const moov = box("moov", concat(mvhd(1500), videoTrak(entry, 64, 64)));
+        const fileBytes = concat(box("ftyp", concat(new TextEncoder().encode("qt  "), u32(0))), box("mdat", new Uint8Array(800)), moov);
+        const read = async (offset: number, length: number) => ({ bytes: fileBytes.subarray(offset, offset + length), size: fileBytes.length });
+        expect(await readQuicktimeAlphaCut(read, 512)).toMatchObject({ codec: "prores4444", codecs: "ap4h", width: 320, height: 180, duration: 1.5 });
+        expect(await readQuicktimeAlphaCut(async () => ({ bytes: file("av1.mp4"), size: file("av1.mp4").length }), 4096)).toBeNull();
     });
 });
 

@@ -7,8 +7,10 @@
 // these and may be used, but is not part of the pinned contract.
 
 export const EDIT_MAX_SECONDS = 600,
-    EDIT_MAX_CLIPS = 50,
-    EDIT_MAX_JSON_BYTES = 65536,
+    EDIT_MAX_CLIPS = 200,
+    // A full 200-clip timeline with every optional key set (chroma key, pitch, track, hidden) is about 67 KiB of
+    // canonical JSON, past the old 64 KiB cap. 80 KiB covers that with a little room. See timeline.test.js.
+    EDIT_MAX_JSON_BYTES = 80 * 1024,
     EDIT_MAX_PROJECTS = 200,
     EDIT_QUEUE_MAX = 20,
     EDIT_MAX_INPUT_BYTES = 6 * 1024 ** 3,
@@ -23,7 +25,7 @@ export const EDIT_CANVASES = [
 ];
 export const EDIT_SOURCE_TYPES = ["video/mp4", "video/quicktime", "video/x-m4v", "image/gif", "image/jpeg", "image/png", "image/webp"];
 /** Overlay layers (section 39): an overlay's optional `track` is 0..EDIT_OVERLAY_TRACKS - 1; absent means 0. */
-export const EDIT_OVERLAY_TRACKS = 8;
+export const EDIT_OVERLAY_TRACKS = 64;
 
 /** Smallest cropped width and height in pixels (section 10: api/helper/crop.js, copied because the image has no monorepo). */
 export const MIN_CROP_PX = 64;
@@ -43,7 +45,7 @@ export const EDIT_CROP_ASPECTS = ["free", "9:16", "1:1", "4:5", "16:9"];
  * @typedef {{type: "transparent" | "clip"} | {type: "color", color: string}} KeyBackground
  * @typedef {"mp4" | "webm" | "prores" | "webp"} EditOutput
  * @typedef {{id: string, item: string, at: number, in: number, out: number, frame: {x: number, y: number, w: number},
- *            opacity: number, volume: number, muted: boolean, pitch?: number, track?: number,
+ *            opacity: number, volume: number, muted: boolean, pitch?: number, track?: number, hidden?: boolean,
  *            key?: ChromaKey, background?: KeyBackground}} OverlayClip
  * @typedef {{version: 1, canvas: {w: number, h: number, fps: number}, main: MainClip[], overlay: OverlayClip[],
  *            output?: Exclude<EditOutput, "mp4">}} Timeline
@@ -257,7 +259,7 @@ function parseCrop(c, p) {
  */
 function parseOverlay(c, p, idOk) {
     if (!isObj(c)) return bad(p);
-    let f = keysOk(c, ["id", "item", "at", "in", "out", "frame", "opacity", "volume", "muted"], ["pitch", "track", "key", "background"], p);
+    let f = keysOk(c, ["id", "item", "at", "in", "out", "frame", "opacity", "volume", "muted"], ["pitch", "track", "hidden", "key", "background"], p);
     if (f) return f;
     f = idOk(c.id, `${p}.id`);
     if (f) return f;
@@ -290,16 +292,20 @@ function parseOverlay(c, p, idOk) {
     if (!keyed.ok) return keyed;
     const bg = parseOverlayBackground(c.background, `${p}.background`);
     if (!bg.ok) return bg;
-    // optional layer (section 39): an integer 0..7, present only when non-zero, so older timelines stay byte for byte
+    // optional layer (section 39): an integer 0..EDIT_OVERLAY_TRACKS-1, present only when non-zero, so older timelines stay byte for byte
     let track = 0;
     if (c.track !== undefined) {
         if (!Number.isInteger(c.track)) return bad(`${p}.track`);
         track = /** @type {number} */ (c.track) + 0;
         if (track < 0 || track >= EDIT_OVERLAY_TRACKS) return range(`${p}.track`);
     }
+    // optional `hidden` (section 39.7): only `true` is stored, so a missing or false key does not change the fingerprint
+    if (c.hidden !== undefined && typeof c.hidden !== "boolean") return bad(`${p}.hidden`);
+    const hidden = c.hidden === true;
     return {
         ok: true,
         clip: sortKeys({
+            ...(hidden ? { hidden: true } : {}),
             ...(pt.pitch !== 0 ? { pitch: pt.pitch } : {}),
             ...(track !== 0 ? { track } : {}),
             at: roundTo(at, 3),

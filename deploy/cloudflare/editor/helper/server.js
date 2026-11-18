@@ -2,7 +2,7 @@
 // no dependencies. Every request needs x-internal-key (= EDIT_INTERNAL_KEY, the Worker's COBALT_API_KEY); without it 403.
 //
 //   GET    /health                       -> 200 {"status":"ok","render":<rid>|null,"version":"<EDIT_DEPLOY_VERSION>"}
-//   PUT    /renders/<rid>/inputs/<n>     body = the source bytes (content-length required, n 0..49)
+//   PUT    /renders/<rid>/inputs/<n>     body = the source bytes (content-length required, n 0..EDIT_MAX_CLIPS-1)
 //                                        -> 204 | 409 error.edit.busy | 413 error.edit.too_large | 400 | 411
 //   POST   /renders/<rid>/start          {"timeline": <canonical>, "inputs": [{"n","item","kind"}]}
 //                                        (or {"chat": …} for a chat video, section 45; {"post": <spec>} for a post frame, 52.5)
@@ -190,7 +190,7 @@ export function createEditServer(opts = {}) {
 
     // ---- PUT /renders/<rid>/inputs/<n>
     async function putInput(/** @type {http.IncomingMessage} */ req, /** @type {http.ServerResponse} */ res, /** @type {string} */ rid, /** @type {string} */ nRaw) {
-        const n = /^\d{1,2}$/.test(nRaw) ? Number(nRaw) : -1;
+        const n = /^\d{1,3}$/.test(nRaw) ? Number(nRaw) : -1;
         if (n < 0 || n >= EDIT_MAX_CLIPS) return err(res, 400, "error.edit.bad_request", { path: "n" });
         const cl = req.headers["content-length"];
         if (typeof cl !== "string" || !/^\d+$/.test(cl)) return err(res, 411, "error.edit.bad_request", { path: "content-length" });
@@ -396,7 +396,7 @@ export function createEditServer(opts = {}) {
         }
         const o = typeof chat.options === "object" && chat.options !== null ? chat.options : {};
         // the snapshot names its files by input number; one that never arrived is drawn without its picture
-        const have = (/** @type {unknown} */ n) => (typeof n === "string" && /^\d{1,2}$/.test(n) && r.inputs.has(Number(n)) ? n : null);
+        const have = (/** @type {unknown} */ n) => (typeof n === "string" && /^\d{1,3}$/.test(n) && Number(n) < EDIT_MAX_CLIPS && r.inputs.has(Number(n)) ? n : null);
         const snap = structuredClone(chat.snapshot);
         for (const p of Object.values(snap.posts ?? {})) {
             const post = /** @type {any} */ (p);

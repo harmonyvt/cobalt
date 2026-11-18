@@ -158,7 +158,7 @@ test("one render per container: another rid is busy until DELETE", { skip }, asy
 });
 
 test("input uploads: bad n, no content-length, over the cap, a body shorter than its length, re-upload replaces", { skip }, async () => {
-    assert.equal((await put(RID, 50, media.files.idx)).status, 400);
+    assert.equal((await put(RID, 200, media.files.idx)).status, 400);
     assert.equal((await put(RID, "x", media.files.idx)).status, 400);
     assert.equal((await put(RID, -1, media.files.idx)).status, 400);
     assert.equal((await get("/health")).body.render, null, "a bad n does not take the container");
