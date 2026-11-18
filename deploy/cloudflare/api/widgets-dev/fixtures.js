@@ -80,6 +80,35 @@ export const editPrivate = () => editOut({
 });
 export const editLong = () => editOut({ ...EDIT, id: "edit-long", title: "stream vod cut", duration_s: 3725, main: [clip({ id: "l1", name: "intro", start: 0, end: 600 }), clip({ id: "l2", name: "game", start: 600, end: 3600, muted: false }), clip({ id: "l3", name: "outro", start: 3600, end: 3725 })], overlay: [], render: { status: "running", progress: 0.4, post_id: null, poster_url: null, video_url: null, private: false, stale: false, file_id: null } });
 export const editShort = () => editOut({ ...EDIT, id: "edit-short", title: "tiny loop", duration_s: 3, main: [clip({ id: "s1", name: "loop", start: 0, end: 3 })], overlay: [], render: { status: "done", progress: 1, post_id: null, poster_url: null, video_url: null, private: false, stale: true, file_id: null } });
+// 20 overlay layers (tracks 0..19, L20 on top), one hidden, two with an effect
+export const editLayers = () => {
+    const overlay = [];
+    for (let t = 0; t < 20; t++) {
+        overlay.push(ovl({
+            id: "ov" + t,
+            name: t === 3 ? "hidden sticker" : t === 7 ? "cutout" : t === 11 ? "greenscreen" : "layer " + (t + 1),
+            kind: t === 7 ? "cutout" : t === 11 ? "video" : "image",
+            start: 0.4,
+            end: 6.2,
+            track: t,
+            hidden: t === 3,
+            fx: t === 7 || t === 11,
+            frame: { x: 0.04 + (t % 4) * 0.22, y: 0.08 + (t % 3) * 0.22, w: 0.28, h: 0.2 },
+            poster_url: thumb(t % 8, String(t + 1)),
+        }));
+    }
+    return editOut({
+        ...EDIT,
+        id: "edit-layers",
+        title: "twenty layers",
+        duration_s: 8,
+        canvas: { w: 1080, h: 1920, fps: 30 },
+        main: [clip({ id: "m", name: "base clip", start: 0, end: 8, in: 0, out: 8, speed: 1, muted: false, poster_url: thumb(6, "base"), video_url: `${MEDIA}/base.mp4`, media_kind: "video", src_w: 1080, src_h: 1920 })],
+        overlay,
+        render: null,
+        preview_expires_at: null,
+    });
+};
 
 const link = (o) => ({ id: "l0", url: `${SHARE}/g/7Kp2xQ`, title: null, files: 1, private: false, created_at: "2026-11-06T10:00:00Z", thumbs: [], collection: null, ...o });
 export const LINKS = [

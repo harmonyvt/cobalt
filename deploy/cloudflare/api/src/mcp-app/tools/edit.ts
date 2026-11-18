@@ -115,6 +115,7 @@ async function projectOf(ctx: AppToolCtx, got: Record<string, unknown>, read: Po
             out: num(clip.out),
             speed: num(clip.speed),
             muted: typeof clip.muted === "boolean" ? clip.muted : null,
+            fx: !!(str(clip.item) && read.files.get(str(clip.item)!)?.effect),
             poster_url: mainSrc[i]!.poster,
             video_url: mainSrc[i]!.url,
             media_kind: mainSrc[i]!.kind,
@@ -131,12 +132,17 @@ async function projectOf(ctx: AppToolCtx, got: Record<string, unknown>, read: Po
         const ov = rec(o);
         const src = rec(sources[str(ov.item) ?? ""]);
         const at = num(ov.at) ?? 0;
+        const item = str(ov.item);
+        const keyed = !!ov.key && typeof ov.key === "object" && !Array.isArray(ov.key);
         return {
             id: str(ov.id) ?? `overlay${i + 1}`,
-            name: nameOf(str(ov.item), src, `overlay ${i + 1}`),
+            name: nameOf(item, src, `overlay ${i + 1}`),
             kind: overlayKind(src),
             start: round(at),
             end: round(at + Math.max(0, (num(ov.out) ?? 0) - (num(ov.in) ?? 0))),
+            track: Number.isInteger(ov.track) && (ov.track as number) >= 0 ? (ov.track as number) : 0,
+            hidden: ov.hidden === true,
+            fx: keyed || overlayKind(src) === "cutout" || !!(item && read.files.get(item)?.effect),
             in: num(ov.in),
             out: num(ov.out),
             frame: (() => {
@@ -224,7 +230,7 @@ function projectText(p: Project): string {
             ? "No overlays."
             : `${plural(p.overlay.length, "overlay")}: ${p.overlay
                   .slice(0, 5)
-                  .map((o) => `${cut(o.name, 30)} (${o.kind}) ${clock(o.start)}–${clock(o.end)}`)
+                  .map((o) => `${cut(o.name, 30)} (${o.kind}${o.fx ? ", fx" : ""}) L${(o.track ?? 0) + 1}${o.hidden ? " hidden" : ""} ${clock(o.start)}–${clock(o.end)}`)
                   .join("; ")}${p.overlay.length > 5 ? "; …" : ""}`;
     const r = p.render;
     const render = !r
