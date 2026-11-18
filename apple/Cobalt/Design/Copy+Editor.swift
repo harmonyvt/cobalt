@@ -420,6 +420,53 @@ extension Copy {
             }
         }
 
+        // MARK: effects and layers (section 66, 67; overlay stacking)
+
+        static let effects = "effects"
+        static let effectsNeedVideo = "pick a video overlay"
+        static let effectsBack = "‹ overlay"
+        static let effectsPick = "pick a method"
+        static let effectGreenscreen = "greenscreen"
+        static let effectDepth = "depth cutout"
+        static let effectPerson = "person"
+        static let effectSubject = "subject"
+        static let effectRemoveBackground = "remove background"
+        static let effectMark = "fx"
+        static let effectColour = "key colour"
+        static let effectGreen = "green"
+        static let effectBlue = "blue"
+        static let effectSimilarity = "similarity"
+        static let effectSpill = "spill"
+        static let effectSoften = "soften edges"
+        static let effectSplit = "before / after"
+        static let effectResult = "result"
+        static let effectMask = "mask"
+        static let effectBackground = "background"
+        static let effectTransparent = "transparent"
+        static let effectColourPlate = "colour"
+        static let effectClip = "clip underneath"
+        static let effectBlur = "blur"
+        static let effectBlurNote = "blur is a preview on this device · the render stays transparent"
+        static let effectOutput = "output"
+        static let effectApply = "apply"
+        static let effectDepthStub = "depth anything v2 small isn't in this build. it's about 95 mb and would download once into an on-device cache. person and subject work on this device."
+        static let effectNear = "near"
+        static let effectFar = "far"
+        static let effectPrice = "$0.0225/s"
+        static let effectSixty = "60s limit"
+        static func effectQuote(_ seconds: Double, _ dollars: Double) -> String {
+            String(format: "$0.0225/s · %.1fs · $%.4f · 60s limit", seconds, dollars)
+        }
+        static let effectTooLong = "that clip is over 60s"
+        static let addLayer = "+ layer"
+        static let layerShow = "show"
+        static let layerHide = "hide"
+        static let layerLock = "lock"
+        static let layerUnlock = "unlock"
+        static let layerLockNote = "lock stays on this device"
+        static let layerHiddenNote = "this server doesn't hide layers yet · hidden here, still in the render"
+        static let previewCrowded = "lots of videos at once — preview may stutter, render is fine"
+
         // MARK: icon names (added for the icon-first controls: what a long press shows and VoiceOver reads)
 
         static let lengthShorter = "a tenth shorter", lengthLonger = "a tenth longer"

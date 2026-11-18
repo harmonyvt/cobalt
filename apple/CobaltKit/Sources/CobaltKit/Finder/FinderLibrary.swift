@@ -182,7 +182,7 @@ public enum FinderLibrary {
         let plain = post.files.filter { !isPreview($0) }
         if !plain.isEmpty { return plain.sorted(by: fileOrder) }
         let fallback = post.files.filter { file in
-            file.source != .made && file.galleryRole != .slideshow && file.galleryRole != .crop && file.galleryRole != .export
+            file.source != .made && file.galleryRole != .slideshow && file.galleryRole != .crop && file.galleryRole != .export && file.galleryRole != .alt
         }
         return fallback.sorted(by: fileOrder)
     }
@@ -191,7 +191,7 @@ public enum FinderLibrary {
     /// is not a preview. A webp the owner uploaded (or an emote) is the file itself.
     public static func isPreview(_ file: LibraryFile) -> Bool {
         switch file.galleryRole {
-        case .slideshow, .crop, .export: return true
+        case .slideshow, .crop, .export, .alt: return true
         case .item, nil: break
         }
         switch file.source {

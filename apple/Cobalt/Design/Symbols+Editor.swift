@@ -46,6 +46,11 @@ extension Symbol {
         static let close = "xmark"
         static let more = "ellipsis.circle"
         static let imageCrop = "crop"                                // crop a picture (CONTRACT-EDITOR 13)
+        static let effects = "camera.filters"                        // greenscreen, cutouts, remove background
+        static let layerShow = "eye"
+        static let layerHide = "eye.slash"
+        static let layerLock = "lock.fill"
+        static let layerUnlock = "lock.open"
         static let cropRotateLeft = "rotate.left"
         static let cropFlip = "arrow.left.and.right.righttriangle.left.righttriangle.right"
         static let cropReset = "arrow.counterclockwise"

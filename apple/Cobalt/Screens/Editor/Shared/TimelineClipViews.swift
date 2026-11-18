@@ -175,6 +175,7 @@ struct TimelineOverlayClipView: View {
     let height: CGFloat
     var isSelected = false
     var missing = false
+    var showsEffect = false
     var actions = TimelineClipActions()
 
     var body: some View {
@@ -187,6 +188,13 @@ struct TimelineOverlayClipView: View {
                     .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
                     .lineLimit(1)
                 if let tag = tag { Text(tag).font(Font.cobalt(9.5, .regular, relativeTo: .caption2)).opacity(0.85).fixedSize() }
+                if showsEffect {
+                    Text(Copy.Editor.effectMark)
+                        .font(Font.cobalt(9, .semibold, relativeTo: .caption2))
+                        .padding(.horizontal, 3)
+                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+                        .accessibilityLabel(Copy.Editor.effects)
+                }
                 if missing { Image(systemName: Symbol.Editor.missing).font(.system(size: 10, weight: .semibold)) }
             }
             .foregroundStyle(EditorColor.clipInk)

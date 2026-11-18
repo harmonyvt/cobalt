@@ -13,6 +13,7 @@ struct EditorPreviewPane: View {
     @ViewBuilder private var mediaBody: some View {
         VStack(spacing: 12) {
             stage
+            EditorPreviewCrowdedNote(session: session)
             EditorTransport(session: session)
         }
         .padding(16)

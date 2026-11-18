@@ -49,6 +49,9 @@ struct EditorPhoneToolTray: View {
             ToolButton(title: Copy.Editor.toolVolume, symbol: Symbol.Editor.volume, enabled: hasClip || session.selectedOverlay != nil) {
                 openVolume()
             }
+            ToolButton(title: Copy.Editor.effects, symbol: Symbol.Editor.effects, enabled: videoOverlay != nil) {
+                openEffects()
+            }
             if showsPost {
                 ToolButton(title: Copy.PostFrame.toolPost, symbol: Symbol.PostFrame.frame, enabled: !session.timeline.main.isEmpty) {
                     openPost()
@@ -99,6 +102,20 @@ struct EditorPhoneToolTray: View {
         open(.post(target))
     }
 
+    private var videoOverlay: EditOverlay? {
+        if let selected = session.selectedOverlay, session.source(for: selected.item)?.kind == .video { return selected }
+        return session.timeline.overlay.first { session.source(for: $0.item)?.kind == .video }
+    }
+
+    private func openEffects() {
+        guard let overlay = videoOverlay else {
+            host.show(Copy.Editor.effectsNeedVideo)
+            return
+        }
+        session.selection = .overlay(overlay.id)
+        open(.effects)
+    }
+
     private func openVolume() {
         if session.selectedOverlay == nil, !ensureClip() { return }
         open(.volume)
@@ -130,6 +147,49 @@ private struct EditorPhoneSplitHaptic: ViewModifier {
 
     func body(content: Content) -> some View {
         content.haptic(.impact(weight: .light), trigger: tick)
+    }
+}
+
+// MARK: - effects
+
+/// `effects` · `done`, medium detent. The same panel as the Mac inspector.
+struct EditorPhoneEffectsSheet: View {
+    let session: EditSession
+
+    @Environment(\.dismiss) private var dismiss
+
+    private var overlay: EditOverlay? {
+        if let selected = session.selectedOverlay, session.source(for: selected.item)?.kind == .video { return selected }
+        return session.timeline.overlay.first { session.source(for: $0.item)?.kind == .video }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(Copy.Editor.effects)
+                    .font(Font.cobalt(12.5, .semibold, relativeTo: .subheadline))
+                    .foregroundStyle(CobaltColor.text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityAddTraits(.isHeader)
+                Button(Copy.Editor.done) {
+                    session.closeEffects()
+                    dismiss()
+                }
+                .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
+            }
+            .padding(.horizontal, Metrics.gutter)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
+            ScrollView {
+                if let overlay {
+                    EditorEffectsPanel(session: session, overlay: overlay)
+                        .padding(.horizontal, Metrics.gutter)
+                        .padding(.bottom, 28)
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
+        .background(CobaltColor.surface.ignoresSafeArea())
     }
 }
 

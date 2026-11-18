@@ -757,3 +757,24 @@ sends `features.image_crop`; an older server has no crop item anywhere.
   **AppModel**: `canCropImages`, `canCropImage(_:)`, `cropPicture(of:)`, `cropImage(of:picture:spec:)`.
 - Tests: `ImageCropperTests.swift` (rounding, clamping, the 2 px floor, turn and flip pixels for every combination, the
   shown-picture mapping, JSON and query, error codes, the answer, the capability, the session's place / replace / refuse).
+
+## 14. Effects and more layers (addendum, 2026-11-18; server half: APP-API-CONTRACT 66 and 67, plus the companion limits)
+
+No migration. The owner picks the method. Nothing is chosen automatically.
+
+- **Wire**: a greenscreen is `key` on the overlay (`color`, `similarity`, `blend` as feather, `spill`) and optional
+  `background` (`color` or `clip`). `output` (`webm`, `prores`, `webp`) is on the timeline. mp4, a transparent background
+  and `hidden: false` are left out. The in-app list of effects maps onto those fields (`EditEffects`). Person, subject and
+  depth replace the overlay's file with an uploaded `role = alt` movie (`spec.kind` `person_cut`, `subject_cut`,
+  `depth_cut`, `video/quicktime`). Remove background is section 67 (quote, start, poll); the result is a ProRes alternate.
+- **Depth** is a labelled stub. Depth Anything V2 small is not bundled (about 95 MB, on-demand cache
+  `coreml-depth-anything-v2-small`). Person (Vision person segmentation) and subject (foreground instance mask) are real.
+- **Where**: Mac, an `effects` row under `layer` swaps the 272 pt inspector (`‹ overlay` back). iPhone, a 7th tool after
+  volume opens a medium sheet `effects` · `done`, and the overlay sheet has the same row. An applied effect marks the clip `fx`.
+- **Layers**: `EditSession.overlayTrackLimit` and the clip ceiling follow `limits.edit_overlay_tracks` and
+  `limits.edit_max_clips`. Absent `edit_overlay_tracks` stays 1 (that server refuses `track`). Absent `edit_max_clips` stays
+  50. The old 8 and 50 are only the defaults of `EditValidation.check` when it is not given a limit. Mac lanes scroll past 8
+  with `+ layer`. iPhone keeps `+N more` (`foldedLayers` 3) and the expanded stack scrolls. Show/hide writes `hidden` only
+  when `limits.edit_overlay_hidden` (or `features.overlay_hidden`) is set; otherwise it is preview-only and stripped before
+  save. Lock is device-only and never sent. More than 8 videos at one moment draws a half-size preview and says
+  `lots of videos at once — preview may stutter, render is fine`.

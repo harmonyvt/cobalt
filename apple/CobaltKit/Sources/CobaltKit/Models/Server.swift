@@ -34,8 +34,12 @@ public struct Capabilities: Sendable, Codable, Equatable {
         /// kept within 1...200.
         public var statusIds: Int = 200
         /// `limits.edit_overlay_tracks` (APP-API-CONTRACT 39.1): overlay layers an edit may use (`track` 0..n-1). 1 when
-        /// absent: an older server refuses `track`, so everything stays on one layer.
+        /// absent: an older server refuses `track`, so everything stays on one layer. A server that sends 64 is taken at
+        /// 64; the old ceiling of 8 is only what `EditValidation` uses when nobody passes a limit.
         public var editOverlayTracks: Int = 1
+        /// `limits.edit_overlay_hidden`: the server stores optional per-overlay `hidden: true` (omitted when false).
+        /// False when absent: the app still hides a layer in the preview, and strips `hidden` before the save.
+        public var editOverlayHidden: Bool = false
 
         public static let fork = Limits(
             maxWebpSeconds: 10, minWebpSeconds: 0.5, webpWidths: [320, 480], renderFPS: 15,

@@ -68,6 +68,8 @@ enum FolderNaming {
         case .export?:
             if case .galleryImage(let layout)? = video.madeKind { return assemble(stem: "gallery image · \(layout.label)", ext: ext) }
             return assemble(stem: "export", ext: ext)
+        case .alt?:
+            return assemble(stem: "alt", ext: ext)
         case .crop?:
             let n = video.madeFrom?.first.map { itemNumber($0) }
             let aspect = video.madeSpec.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }?["aspect"] as? String

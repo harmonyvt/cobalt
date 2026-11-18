@@ -199,7 +199,8 @@ struct OverlayClipBlock: View {
         ZStack(alignment: .topLeading) {
             TimelineOverlayClipView(
                 overlay: overlay, source: source, seconds: span.length, width: width, height: blockHeight,
-                isSelected: selected, missing: session.isMissing(item: overlay.item), actions: actions)
+                isSelected: selected, missing: session.isMissing(item: overlay.item),
+                showsEffect: session.showsEffect(overlay), actions: actions)
             if selected {
                 if source?.kind == .video { leadingHandle }
                 trailingHandle

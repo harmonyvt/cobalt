@@ -229,6 +229,8 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var hidden: Bool?
                 var cutout: Bool?
                 var cutoutAuto: Bool?
+                /// Either name the companion may send. `limits.edit_overlay_hidden` is the one the app documents.
+                var overlayHidden: Bool?
                 var accounts: Bool?
                 var imageCrop: Bool?
                 var chatVideo: Bool?
@@ -246,6 +248,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var editPitch: Bool?
                 var statusIds: Int?
                 var editOverlayTracks: Int?
+                var editOverlayHidden: Bool?
             }
             var server: String?
             var cobalt: Cobalt?
@@ -274,11 +277,17 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
             if let wait = l.lineWaitMs { limits.lineWait = wait / 1000 }
             limits.shareSetMax = max(ShareSetRule.minimum, l.shareSetMax ?? limits.shareSetMax)
             limits.editMaxSeconds = l.editMaxSeconds ?? limits.editMaxSeconds
-            limits.editMaxClips = l.editMaxClips ?? limits.editMaxClips
+            if let clips = l.editMaxClips {
+                limits.editMaxClips = min(EditValidation.safetyMaxClips, max(1, clips))
+            }
             limits.editMaxProjects = l.editMaxProjects ?? limits.editMaxProjects
             limits.editPitch = l.editPitch ?? limits.editPitch
             limits.statusIds = min(200, max(1, l.statusIds ?? limits.statusIds))
-            limits.editOverlayTracks = min(EditValidation.maxOverlayTracks, max(1, l.editOverlayTracks ?? limits.editOverlayTracks))
+            // Absent stays 1 (an older server refuses `track`). A sent count is kept, including past the old 8.
+            if let tracks = l.editOverlayTracks {
+                limits.editOverlayTracks = min(EditValidation.safetyOverlayTracks, max(1, tracks))
+            }
+            limits.editOverlayHidden = l.editOverlayHidden ?? limits.editOverlayHidden
         }
         let f = w.features
         var caps = Capabilities(
@@ -328,6 +337,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.transcripts = (f?.transcripts ?? false) && caps.aboutSound
         caps.hidden = f?.hidden ?? false
         caps.cutout = f?.cutout ?? false
+        if f?.overlayHidden == true { caps.limits.editOverlayHidden = true }
         caps.cutoutAuto = (f?.cutoutAuto ?? false) && caps.cutout
         caps.accounts = f?.accounts ?? false
         caps.imageCrop = f?.imageCrop ?? false

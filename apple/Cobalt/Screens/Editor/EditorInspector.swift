@@ -12,15 +12,19 @@ struct EditorInspector: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                switch session.selection {
-                case .main:
-                    if let (index, clip) = session.selectedMain { MainClipInspector(session: session, index: index, clip: clip, pitchEnabled: pitchEnabled) }
-                    else { nothing }
-                case .overlay:
-                    if let overlay = session.selectedOverlay { OverlayInspector(session: session, overlay: overlay, pitchEnabled: pitchEnabled) }
-                    else { nothing }
-                case .none:
-                    nothing
+                if let id = session.effectsFor, let overlay = session.timeline.overlay.first(where: { $0.id == id }) {
+                    effects(overlay)
+                } else {
+                    switch session.selection {
+                    case .main:
+                        if let (index, clip) = session.selectedMain { MainClipInspector(session: session, index: index, clip: clip, pitchEnabled: pitchEnabled) }
+                        else { nothing }
+                    case .overlay:
+                        if let overlay = session.selectedOverlay { OverlayInspector(session: session, overlay: overlay, pitchEnabled: pitchEnabled) }
+                        else { nothing }
+                    case .none:
+                        nothing
+                    }
                 }
             }
             .padding(14)
@@ -42,6 +46,22 @@ struct EditorInspector: View {
                 duration: Copy.Editor.clock(session.timing.seconds), clips: session.timeline.main.count))
                 .font(CobaltType.captionSmall)
                 .foregroundStyle(CobaltColor.caption)
+            EditorLayersList(session: session)
+        }
+    }
+
+    private func effects(_ overlay: EditOverlay) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                session.closeEffects()
+            } label: {
+                Text(Copy.Editor.effectsBack)
+                    .font(Font.cobalt(12.5, .semibold, relativeTo: .subheadline))
+                    .foregroundStyle(CobaltColor.text)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Copy.Editor.overlay)
+            EditorEffectsPanel(session: session, overlay: overlay)
         }
     }
 }
@@ -193,7 +213,9 @@ private struct OverlayInspector: View {
                 .foregroundStyle(CobaltColor.errorText)
         }
         EditorOverlayLayerRows(
-            session: session, overlay: overlay, removeBackground: { cutoutOf = source }, crop: { croppingImage = source })
+            session: session, overlay: overlay, removeBackground: { cutoutOf = source }, crop: { croppingImage = source },
+            openEffects: isVideo ? { session.openEffects(overlay.id) } : nil)
+        EditorLayersList(session: session)
         EditorSection(Copy.Editor.start) {
             VStack(spacing: 6) {
                 EditorNumberField.time(

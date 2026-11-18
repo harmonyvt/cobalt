@@ -294,6 +294,8 @@ struct EditorOverlayLayerRows: View {
     let removeBackground: () -> Void
     /// Opens the crop sheet on the overlay's picture (shown with `features.image_crop`).
     var crop: (() -> Void)?
+    /// Opens the effects menu for a video overlay. Pictures keep remove background and crop.
+    var openEffects: (() -> Void)?
 
     @State private var refused = 0
 
@@ -315,6 +317,9 @@ struct EditorOverlayLayerRows: View {
                         }
                     }
                 }
+            }
+            if source?.kind == .video, let openEffects {
+                EditorInspectorButton(title: Copy.Editor.effects, symbol: Symbol.Editor.effects, action: openEffects)
             }
             if isPicture, session.canCutout || (session.canCropImage && crop != nil) {
                 IconRow(alignment: .leading) {

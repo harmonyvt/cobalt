@@ -24,10 +24,11 @@ struct EditorTimelinePane: View {
     @State private var blade = TimelineBladeHover()
     @State private var mainTargeted = false
     @State private var overlayTargeted: Int?
+    @State private var layerScroll = ScrollPosition(idType: Int.self)
 
     private static let headerWidth: CGFloat = 92
     private static let rulerHeight: CGFloat = 28
-    private static let footer: CGFloat = 34
+    private static let footer: CGFloat = 48
 
     private var unit: CGFloat { min(80, max(34, (height - Self.rulerHeight - Self.footer) / 3.2)) }
     /// Overlay lanes: every layer up to the highest in use, plus an empty one for a new layer, within the server's limit.
@@ -35,9 +36,16 @@ struct EditorTimelinePane: View {
         let used = (session.timeline.overlay.map(\.track).max() ?? -1) + 1
         return min(session.overlayTrackLimit, max(1, session.timeline.overlay.isEmpty ? 1 : used + 1))
     }
-    /// One lane is as tall as before; several share about two lanes' room (at least 22 pt each).
-    private var overlayHeight: CGFloat { overlayLanes == 1 ? unit : max(22, unit * 1.8 / CGFloat(overlayLanes)) }
-    private var overlaysHeight: CGFloat { overlayHeight * CGFloat(overlayLanes) }
+    /// One lane is as tall as before; up to 8 share about two lanes' room. Past 8 they stay 28 pt and scroll.
+    private var overlayHeight: CGFloat {
+        if overlayLanes > 8 { return 28 }
+        return overlayLanes == 1 ? unit : max(22, unit * 1.8 / CGFloat(overlayLanes))
+    }
+    private var overlaysHeight: CGFloat { overlayHeight * CGFloat(min(overlayLanes, 8)) }
+    private var canAddLayer: Bool {
+        let used = (session.timeline.overlay.map(\.track).max() ?? -1) + 1
+        return used < session.overlayTrackLimit
+    }
     private var mainHeight: CGFloat { unit * 1.4 }
     private var audioHeight: CGFloat { unit * 0.8 }
     private var lanesHeight: CGFloat { overlaysHeight + mainHeight + audioHeight }
@@ -68,22 +76,51 @@ struct EditorTimelinePane: View {
     private var headers: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: Self.rulerHeight)
-            if overlayLanes == 1 {
-                header(Copy.Editor.trackOverlay, height: overlayHeight)
-            } else {
-                ForEach((0..<overlayLanes).reversed(), id: \.self) { track in
-                    header(Copy.Editor.layerN(track), height: overlayHeight)
-                }
-            }
+            overlayHeaders
             header(Copy.Editor.trackMain, height: mainHeight)
             header(Copy.Editor.trackAudio, height: audioHeight)
             Spacer(minLength: 0)
-            HStack(spacing: 6) {
-                zoomButton(Symbol.Editor.zoomOut, Copy.Editor.zoomOut, disabled: scale.isAtMinimum, key: "−") { zoom(by: 0.8) }
-                zoomButton(Symbol.Editor.zoomIn, Copy.Editor.zoomIn, disabled: scale.isAtMaximum, key: "=") { zoom(by: 1.25) }
+            VStack(spacing: 2) {
+                if session.overlayTrackLimit > 1 {
+                    Button {
+                        guard canAddLayer else { return }
+                        layerScroll.scrollTo(id: overlayLanes - 1)
+                    } label: {
+                        Text(Copy.Editor.addLayer)
+                            .font(Font.cobalt(10, .medium, relativeTo: .caption2))
+                            .foregroundStyle(canAddLayer ? CobaltColor.text : CobaltColor.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canAddLayer)
+                    .accessibilityLabel(Copy.Editor.addLayer)
+                }
+                HStack(spacing: 6) {
+                    zoomButton(Symbol.Editor.zoomOut, Copy.Editor.zoomOut, disabled: scale.isAtMinimum, key: "−") { zoom(by: 0.8) }
+                    zoomButton(Symbol.Editor.zoomIn, Copy.Editor.zoomIn, disabled: scale.isAtMaximum, key: "=") { zoom(by: 1.25) }
+                }
             }
             .padding(.bottom, 6)
             .frame(height: Self.footer)
+        }
+    }
+
+    @ViewBuilder
+    private var overlayHeaders: some View {
+        let stack = VStack(spacing: 0) {
+            if overlayLanes == 1 {
+                header(Copy.Editor.trackOverlay, height: overlayHeight).id(0)
+            } else {
+                ForEach((0..<overlayLanes).reversed(), id: \.self) { track in
+                    header(Copy.Editor.layerN(track), height: overlayHeight).id(track)
+                }
+            }
+        }
+        if overlayLanes > 8 {
+            ScrollView(.vertical, showsIndicators: false) { stack }
+                .scrollPosition($layerScroll)
+                .frame(height: overlaysHeight)
+        } else {
+            stack
         }
     }
 
@@ -133,9 +170,7 @@ struct EditorTimelinePane: View {
         return ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
                 ruler(width: width)
-                ForEach((0..<overlayLanes).reversed(), id: \.self) { track in
-                    overlayLane(width: width, track: track)
-                }
+                overlayLanesView(width: width)
                 mainLane(width: width)
                 audioLane(width: width)
             }
@@ -165,6 +200,22 @@ struct EditorTimelinePane: View {
     }
 
     // MARK: lanes
+
+    @ViewBuilder
+    private func overlayLanesView(width: CGFloat) -> some View {
+        let stack = VStack(spacing: 0) {
+            ForEach((0..<overlayLanes).reversed(), id: \.self) { track in
+                overlayLane(width: width, track: track).id(track)
+            }
+        }
+        if overlayLanes > 8 {
+            ScrollView(.vertical, showsIndicators: true) { stack }
+                .scrollPosition($layerScroll)
+                .frame(width: width, height: overlaysHeight)
+        } else {
+            stack
+        }
+    }
 
     /// The lane of overlay layer `track`.
     private func overlayLane(width: CGFloat, track: Int) -> some View {
