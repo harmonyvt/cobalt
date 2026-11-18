@@ -2025,6 +2025,7 @@ export class StudioService {
         let galleryImageField: unknown;
         let liveField: unknown;
         let engineField: unknown;
+        let phoneField: unknown;
         try {
             if (rawBody.length <= MAX_BODY_BYTES) {
                 const parsed = JSON.parse(rawBody);
@@ -2041,6 +2042,7 @@ export class StudioService {
                     galleryImageField = (parsed as { gallery_image?: unknown }).gallery_image;
                     liveField = (parsed as { live?: unknown }).live;
                     engineField = (parsed as { engine?: unknown }).engine;
+                    phoneField = (parsed as { phone?: unknown }).phone;
                 }
             }
         } catch {
@@ -2060,6 +2062,13 @@ export class StudioService {
             return studioErr(400, "error.studio.invalid_params");
         }
         const fromShare = originField === "share";
+        const fromExtension = originField === "extension";
+        // `phone` (section 65.5): the extension's "Show saves on my iPhone". Absent or true starts the
+        // job island; false does not. Any other type is refused. Other origins ignore it.
+        if (phoneField !== undefined && phoneField !== null && typeof phoneField !== "boolean") {
+            return studioErr(400, "error.studio.invalid_params");
+        }
+        const phoneOn = phoneField !== false;
         // `notify: {on, label}` (section 14): the opt-in of PUT /studio/<sid>/notify, validated by
         // the same parser BEFORE anything is created.
         let optIn: string | null = null;
@@ -2187,9 +2196,12 @@ export class StudioService {
         }
         // A save the chat agent or an MCP client started (key `chat:<thread>`): no device follows it, so the server
         // push-starts the island on the owner's devices (APP-API-CONTRACT.md 8.11). Same place as the share start.
-        if (keyId.startsWith("chat:")) {
+        if (keyId.startsWith("chat:") || (fromExtension && phoneOn)) {
             const ref = agentRef(link);
-            await this.liveCall("agent start", (l) => l.startAgent?.(sid, { kind: "save", service: serviceFromUrl(link), ref, title }) ?? Promise.resolve());
+            await this.liveCall(
+                "agent start",
+                (l) => l.startAgent?.(sid, { kind: "save", service: serviceFromUrl(link), ref, title, ...(fromExtension ? { browser: true } : {}) }) ?? Promise.resolve(),
+            );
         }
         // The opt-in goes in before the save can move, so even an instant save is announced.
         const notifyBody = optIn === null ? undefined : await this.optInAtCreate(keyId, sid, optIn);

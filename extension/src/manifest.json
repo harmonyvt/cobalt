@@ -26,7 +26,7 @@
         "page": "options.html",
         "open_in_tab": true
     },
-    "permissions": ["storage", "identity", "tabs", "alarms"],
+    "permissions": ["storage", "identity", "tabs", "alarms", "contextMenus"],
     "host_permissions": [
         "https://api.capybaraharmony.com/*",
         "https://cobalt.capybaraharmony.com/*",

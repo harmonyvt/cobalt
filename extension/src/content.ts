@@ -4,6 +4,7 @@
 
 import { getExt, type Ext } from "./lib/browser";
 import { deepAll, mountedHost, relocateHost, type FoundPost, type Scan } from "./lib/find";
+import { describeSave, EMPTY_PROGRESS, type SaveFace, type SaveProgress } from "./lib/progress";
 import { spriteCss, type SiteId, type SpriteState } from "./lib/view";
 
 const HOST = "capystore-save";
@@ -13,15 +14,31 @@ function buttonCss(fit?: FoundPost["fit"]): string {
     const size = fit === "rail" ? 40 : fit === "row" ? 34 : 36;
     const sprite = fit ? spriteCss(20, 14) : spriteCss();
     return `
-:host { all: initial; }
+:host { all: initial; position: relative; }
 button {
   display: inline-flex; align-items: center; justify-content: center; gap: 4px;
   margin: 0; padding: 0; border: 0; background: transparent; color: inherit;
   font: 13px/1 -apple-system, system-ui, sans-serif; cursor: pointer; border-radius: 999px;
 }
-button.icon { width: ${size}px; height: ${size}px; }
-button.pill { height: 36px; padding: 0 10px 0 4px; }
+button.icon { width: ${size}px; height: auto; min-height: ${size}px; flex-direction: column; gap: 1px; }
+button.pill { height: 36px; padding: 0 10px 0 4px; flex-direction: row; }
 button:hover, button:focus-visible { background: color-mix(in srgb, currentColor 12%, transparent); outline: none; }
+.ring { width: ${size}px; height: ${size}px; border-radius: 999px; display: grid; place-items: center; background: transparent; box-shadow: inset 0 0 0 2px color-mix(in srgb, currentColor 35%, transparent); }
+.ring.on { background: conic-gradient(#f4f1ea calc(var(--p) * 1%), transparent 0); }
+.ring.spin { background: conic-gradient(transparent 0 70%, #f4f1ea 0 100%); animation: capy-spin 0.9s linear infinite; }
+@keyframes capy-spin { to { transform: rotate(1turn); } }
+.label { font: 10px/1 -apple-system, system-ui, sans-serif; color: inherit; }
+.label:empty { display: none; }
+.toast {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 2147483646;
+  width: max-content; max-width: 280px; box-sizing: border-box;
+  background: #141414; color: #f4f1ea; border-radius: 12px; padding: 8px 10px;
+  font: 12px/1.35 -apple-system, system-ui, sans-serif; box-shadow: 0 10px 28px rgba(0,0,0,.45);
+}
+.toast[hidden] { display: none; }
+.toast .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.toast button { width: auto; height: auto; min-height: 0; padding: 2px 8px; border-radius: 999px; background: #2a2622; color: inherit; font: inherit; }
+.toast .code { display: block; margin-top: 4px; color: #b7b0a4; font-family: ui-monospace, monospace; font-size: 11px; }
 ${sprite}
 `;
 }
@@ -34,7 +51,17 @@ const LABEL: Record<SpriteState, string> = {
     sleeping: "Sign in to Capystore",
 };
 
-type Button = { url: string; button: HTMLButtonElement; capy: HTMLElement; state: SpriteState };
+type Button = {
+    url: string;
+    button: HTMLButtonElement;
+    capy: HTMLElement;
+    ring: HTMLElement;
+    label: HTMLElement;
+    toast: HTMLElement;
+    toastText: HTMLElement;
+    state: SpriteState;
+    hideToast: number;
+};
 
 export function start(site: SiteId, scan: Scan): void {
     const ext = getExt();
@@ -77,7 +104,7 @@ export function start(site: SiteId, scan: Scan): void {
     const sheet = document.createElement("style");
     // Shrink to the button. A flex or grid parent (a card, <main>, a results row) would otherwise stretch this into a full-width bar.
     // `row` takes an equal share of an X action bar so the row does not wrap. `rail` is one reels slot.
-    sheet.textContent = `.${HOST}{display:inline-flex;align-items:center;vertical-align:middle;width:max-content;max-width:max-content;flex:0 0 auto;align-self:center;box-sizing:border-box}.${HOST}.row{display:flex;flex:1 1 0%;width:auto;max-width:none;min-width:0;justify-content:flex-start}.${HOST}.rail{display:flex;flex:0 0 auto;width:auto;max-width:none;min-width:0;justify-content:center}`;
+    sheet.textContent = `.${HOST}{display:inline-flex;align-items:center;vertical-align:middle;position:relative;width:max-content;max-width:max-content;flex:0 0 auto;align-self:center;box-sizing:border-box}.${HOST}.row{display:flex;flex:1 1 0%;width:auto;max-width:none;min-width:0;justify-content:flex-start}.${HOST}.rail{display:flex;flex:0 0 auto;width:auto;max-width:none;min-width:0;justify-content:center}`;
     document.documentElement.appendChild(sheet);
 
     const paint = (b: Button, state: SpriteState) => {
@@ -120,26 +147,30 @@ export function start(site: SiteId, scan: Scan): void {
         const button = document.createElement("button");
         button.type = "button";
         button.className = found.variant;
+        const ring = document.createElement("span");
+        ring.className = "ring";
         const capy = document.createElement("span");
         capy.className = "capy idle";
         capy.setAttribute("aria-hidden", "true");
         capy.style.backgroundImage = `url("${ext.runtime.getURL("assets/capy-sprites.png")}")`;
-        button.append(capy);
-        if (found.variant === "pill") {
-            const label = document.createElement("span");
-            label.textContent = "Save";
-            button.append(label);
-        }
-        root.append(style, button);
-        const record: Button = { url: found.url, button, capy, state: signedIn ? "idle" : "sleeping" };
+        ring.append(capy);
+        const label = document.createElement("span");
+        label.className = "label";
+        button.append(ring, label);
+        if (found.variant === "pill") label.textContent = "Save";
+        const toast = document.createElement("div");
+        toast.className = "toast";
+        toast.hidden = true;
+        const toastText = document.createElement("span");
+        toastText.className = "text";
+        toast.append(toastText);
+        root.append(style, button, toast);
+        const record: Button = { url: found.url, button, capy, ring, label, toast, toastText, state: signedIn ? "idle" : "sleeping", hideToast: 0 };
         paint(record, record.state);
-        const stop = (e: Event) => {
+        button.addEventListener("mousedown", (e) => e.stopPropagation());
+        button.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
-        };
-        button.addEventListener("mousedown", stop);
-        button.addEventListener("click", (e) => {
-            stop(e);
             void onClick(record);
         });
         relocateHost(host, found.mount, found.after, found.before);
@@ -170,7 +201,8 @@ export function start(site: SiteId, scan: Scan): void {
             }
         }
         paint(record, "saving");
-        const res = (await send({ type: "save", url: record.url, site })) as { state?: string } | undefined;
+        showFace(record, describeSave("saving", { ...EMPTY_PROGRESS, step: "fetching", waking: true }), null, null, null);
+        const res = (await send({ type: "save", url: record.url, site })) as { state?: string; studioUrl?: string; message?: string } | undefined;
         if (res?.state === "signed-out") {
             signedIn = false;
             paint(record, "sleeping");
@@ -225,10 +257,80 @@ export function start(site: SiteId, scan: Scan): void {
         schedule();
     }, 250);
 
+    const copyText = async (text: string) => {
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch {
+            const area = document.createElement("textarea");
+            area.value = text;
+            document.documentElement.append(area);
+            area.select();
+            document.execCommand("copy");
+            area.remove();
+        }
+    };
+
+    const showFace = (b: Button, face: SaveFace, studioUrl: string | null, shareUrl: string | null, code: string | null) => {
+        b.label.textContent = face.label;
+        b.button.setAttribute("aria-label", face.toast);
+        b.button.title = face.toast;
+        b.ring.classList.toggle("spin", face.ring === "spin");
+        b.ring.classList.toggle("on", typeof face.ring === "number");
+        b.ring.style.setProperty("--p", typeof face.ring === "number" ? String(Math.round(face.ring * 100)) : "0");
+        b.toastText.textContent = face.toast;
+        b.toast.querySelectorAll("button, .code").forEach((n) => n.remove());
+        const add = (text: string, run: () => void) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = text;
+            btn.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                run();
+            });
+            b.toast.append(btn);
+        };
+        if (face.open && studioUrl) add("Open", () => void send({ type: "open", url: studioUrl }));
+        if (face.copy) add("Copy link", () => void copyText(shareUrl || studioUrl || b.url));
+        if (face.retry) add("Retry", () => void onClick(b));
+        if (face.details && code) {
+            add("Details", () => {
+                let codeEl = b.toast.querySelector(".code");
+                if (codeEl) {
+                    codeEl.remove();
+                    return;
+                }
+                codeEl = document.createElement("span");
+                codeEl.className = "code";
+                codeEl.textContent = code;
+                b.toast.append(codeEl);
+            });
+        }
+        b.toast.hidden = false;
+        window.clearTimeout(b.hideToast);
+        b.hideToast = window.setTimeout(() => {
+            b.toast.hidden = true;
+        }, 4000);
+    };
+
+    const applyUpdate = (b: Button, state: string, progress: SaveProgress | null, studioUrl: string | null, shareUrl: string | null) => {
+        if (state === "sleeping" || state === "idle" || state === "signed-out") {
+            paint(b, state === "idle" ? "idle" : "sleeping");
+            b.label.textContent = "";
+            b.ring.className = "ring";
+            return;
+        }
+        if (state === "saving" || state === "saved" || state === "error") {
+            paint(b, state === "saving" ? "saving" : state);
+            const face = describeSave(state, progress ?? EMPTY_PROGRESS);
+            showFace(b, face, studioUrl, shareUrl, progress?.code ?? null);
+        }
+    };
+
     ext.runtime.onMessage.addListener((message) => {
-        const msg = message as { type?: string; url?: string; state?: SpriteState };
+        const msg = message as { type?: string; url?: string; state?: string; progress?: SaveProgress | null; studioUrl?: string | null; shareUrl?: string | null };
         if (msg?.type !== "save-update" || !msg.url || !msg.state) return;
-        for (const b of buttons) if (b.url === msg.url) paint(b, msg.state);
+        for (const b of buttons) if (b.url === msg.url) applyUpdate(b, msg.state, msg.progress ?? null, msg.studioUrl ?? null, msg.shareUrl ?? null);
     });
     ext.storage.onChanged.addListener((changes, area) => {
         if (area !== "local") return;
@@ -254,11 +356,12 @@ export function start(site: SiteId, scan: Scan): void {
         for (const b of buttons) {
             if (b.state !== "saving" && b.state !== "sleeping") continue;
             void send({ type: "status", url: b.url }).then((res) => {
-                const raw = (res as { state?: string; signedIn?: boolean } | undefined)?.state;
-                if (typeof (res as { signedIn?: boolean } | undefined)?.signedIn === "boolean") signedIn = (res as { signedIn: boolean }).signedIn;
-                if (raw === "signed-out") signedIn = false;
-                const state = raw === "offline" || raw === "signed-out" ? "sleeping" : raw;
-                if (state === "idle" || state === "saving" || state === "saved" || state === "error" || state === "sleeping") paint(b, state);
+                const body = res as { state?: string; signedIn?: boolean; progress?: SaveProgress | null; studioUrl?: string | null; shareUrl?: string | null } | undefined;
+                if (typeof body?.signedIn === "boolean") signedIn = body.signedIn;
+                if (body?.state === "signed-out") signedIn = false;
+                const state = body?.state === "offline" || body?.state === "signed-out" ? "sleeping" : body?.state;
+                if (state === "saving" || state === "saved" || state === "error") applyUpdate(b, state, body?.progress ?? null, body?.studioUrl ?? null, body?.shareUrl ?? null);
+                else if (state === "idle" || state === "sleeping") applyUpdate(b, state, null, null, null);
             });
         }
     }, 2000);

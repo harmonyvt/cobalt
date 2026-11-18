@@ -21,3 +21,9 @@ a:hover { text-decoration: underline; }
 .status { color: #b7b0a4; flex: none; }
 .empty { color: #b7b0a4; }
 .capy { display: inline-block; }
+.card { margin-top: 14px; padding: 10px 12px; background: #1e1b18; border-radius: 12px; }
+.card h2 { margin-top: 0; text-transform: none; letter-spacing: 0; font-size: 13px; color: #f4f1ea; }
+.bar { height: 5px; border-radius: 999px; background: #3a342c; overflow: hidden; margin: 8px 0; }
+.bar span { display: block; height: 100%; width: 0; background: #f4f1ea; }
+.phone { display: flex; gap: 8px; align-items: center; margin-top: 12px; color: #d9d3c7; }
+.code { color: #b7b0a4; font-family: ui-monospace, monospace; font-size: 11px; }

@@ -40,6 +40,17 @@ export type Ext = {
         create(name: string, info: { periodInMinutes?: number; delayInMinutes?: number }): void;
         onAlarm: { addListener(fn: (alarm: { name: string }) => void): void };
     };
+    action?: {
+        setBadgeText(details: { text: string }): Promise<void> | void;
+        setBadgeBackgroundColor(details: { color: string }): Promise<void> | void;
+    };
+    /** Absent on a browser that has no context-menu API (some Safari builds). */
+    contextMenus?: {
+        create(props: { id: string; title: string; contexts: string[] }): void;
+        onClicked: {
+            addListener(fn: (info: { menuItemId?: string | number; srcUrl?: string; linkUrl?: string; pageUrl?: string }, tab?: { id?: number }) => void): void;
+        };
+    };
 };
 
 export function getExt(): Ext | null {

@@ -1925,6 +1925,22 @@ describe("agent and MCP jobs (startAgent, APP-API-CONTRACT 8.11)", () => {
         expect(runs[0]!.sid).toBe(CHAT_SID);
     });
 
+    it("an extension save starts the job card, says it is from the browser, and keeps the 10 s throttle", async () => {
+        const w = await agentWorld();
+        await w.live.putStartToken(KEY, JSON.stringify({ token: START, environment: "sandbox", type: "job" }));
+        await w.live.startAgent(CHAT_SID, { kind: "save", service: "youtube", ref: "dQw4w9WgXcQ", browser: true });
+        expect(w.apple.pushes).toHaveLength(1);
+        const aps = w.apple.pushes[0]!.payload.aps as Record<string, unknown>;
+        expect(aps.alert).toEqual({ title: "capystore", body: "saving from youtube in your browser" });
+        expect(aps["attributes-type"]).toBe("CobaltJobActivityAttributes");
+        expect(aps.attributes).toMatchObject({ kind: "save", title: "from your browser", agent: false });
+        expect(aps["content-state"]).toMatchObject({ phase: "working", headline: "downloading from youtube" });
+        expect(w.run(runsOf(w)[0]!.run)!.agent).toBe("browser");
+        const first = w.apple.pushes[0];
+        await w.live.startAgent(CHAT_SID, { kind: "save", service: "youtube", ref: "other", browser: true });
+        expect(w.apple.pushes).toEqual([first]);
+    });
+
     it("the same phone under two keys gets one island, and its token report from the other key ends it", async () => {
         // seen live: one save, two islands; the one whose run sat under the old key never moved again
         const w = await agentWorld();

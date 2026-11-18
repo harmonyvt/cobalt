@@ -220,8 +220,9 @@ export type LiveHooks = {
     hasActiveRuns(): Promise<boolean>;
     // `POST /studio` from the instant share (`live` field): push-start an activity for the new session
     startShare?(keyId: string, sid: string, raw: unknown, awaitsMake: boolean): Promise<void>;
-    // a save or make the chat agent or an MCP client started: push-start the island on the owner's devices (8.11)
-    startAgent?(sid: string, o: { kind: "save" | "make"; job?: string | null; service: string; ref: string; title?: string | null }): Promise<void>;
+    // a save or make the chat agent or an MCP client started, or a browser extension save (`browser`):
+    // push-start the island on the owner's newest iPhone (8.11)
+    startAgent?(sid: string, o: { kind: "save" | "make"; job?: string | null; service: string; ref: string; title?: string | null; browser?: boolean }): Promise<void>;
 };
 
 // What the merge consumes: the events reduced to the state they describe.
@@ -417,6 +418,7 @@ export function startPayload(a: RunAttributes, state: LiveState, now: number, al
 
 // The lock-screen alert of an agent's push-start (section 8.11); undefined keeps the default.
 export function agentAlert(r: Pick<RunRecord, "agent" | "attributes">): string | undefined {
+    if (r.agent === "browser") return r.attributes.service ? `saving from ${r.attributes.service} in your browser` : "saving from your browser";
     if (r.agent === "save") return r.attributes.service ? `your agent is saving from ${r.attributes.service}` : "your agent is saving a link";
     if (r.agent === "make") return r.attributes.ref ? `your agent is making something from ${r.attributes.ref}` : "your agent is making something";
     return undefined;
@@ -489,7 +491,7 @@ export type RunRecord = {
     awaitsMake?: boolean;
     // Started by the server for a job the chat agent or an MCP client began (`startAgent`, section 8.11): the alert
     // that wakes the island says so.
-    agent?: "save" | "make";
+    agent?: "save" | "make" | "browser";
 };
 // The small per-run index (`live:idx:<key id>:<run>`): everything the caps, the
 // cleanup, hasActiveRuns and the end retries need without reading run records.
@@ -1035,7 +1037,7 @@ export class LiveService implements LiveHooks {
     // for a push-started activity registers exactly as an instant share's does. The run is server-only: the save's
     // "saved" ends a save; a make is pinned to its job, whose result ends it. Never refuses or slows the job:
     // anything off (no start token, the 10 s start window, the run caps) just means no island.
-    async startAgent(sid: string, o: { kind: "save" | "make"; job?: string | null; service: string; ref: string; title?: string | null }): Promise<void> {
+    async startAgent(sid: string, o: { kind: "save" | "make"; job?: string | null; service: string; ref: string; title?: string | null; browser?: boolean }): Promise<void> {
         if (!this.d.apns || !STUDIO_SID_REGEX.test(sid)) return;
         const now = this.d.now();
         const starts = [
@@ -1066,7 +1068,7 @@ export class LiveService implements LiveHooks {
             try {
                 // the run is created and pinned to its job before the start push goes, so an event that races it
                 // (the render's first progress) already finds it
-                const reply = await this.putRun(keyId, run, JSON.stringify(body), { trusted: true, agent: o.kind });
+                const reply = await this.putRun(keyId, run, JSON.stringify(body), { trusted: true, agent: o.browser ? "browser" : o.kind });
                 const b = reply.body as { started?: boolean; reason?: string } | null;
                 if (reply.status === 200) {
                     await this.withRun(run, async () => {
@@ -1085,7 +1087,7 @@ export class LiveService implements LiveHooks {
     }
 
     // `trusted`: the server's own registration for a session another key made (`startAgent`); never from a route.
-    async putRun(keyId: string, run: string, raw: string, opts: { trusted?: boolean; agent?: "save" | "make" } = {}): Promise<LiveReply> {
+    async putRun(keyId: string, run: string, raw: string, opts: { trusted?: boolean; agent?: "save" | "make" | "browser" } = {}): Promise<LiveReply> {
         const b = parseJson(raw);
         const reg = b && parseRegistration(run, b);
         if (!reg) return badRequest();
