@@ -407,6 +407,10 @@ export async function capabilities(
                 // overlays accept `track` 0..edit_overlay_tracks-1 and webp sources (section 39); older servers refuse both.
                 // edit_max_clips is the same constant the validator enforces (section 31.1).
                 edit_overlay_tracks: EDIT_OVERLAY_TRACKS,
+                // overlays may carry hidden: true (section 39.7). Absent on an older server: the app keeps hide local.
+                edit_overlay_hidden: true,
+                // role=alt QuickTime cuts the made route stores (section 68)
+                edit_alt_kinds: [...EDIT_ALT_KINDS],
                 // the most ids one POST /library/status takes (section 37.4)
                 status_ids: STATUS_IDS_MAX,
             },
@@ -2134,8 +2138,9 @@ export async function libraryItemDelete(d: AppDeps, id: string): Promise<StudioR
 export const MAX_MADE_BYTES = 50 * 1024 * 1024;
 export const MAX_MADE_SPEC_BYTES = 512;
 const HEAD_BYTES = 128 * 1024;
-/** Device-made alpha alternates (section 68). One of these per post; they stay private, like a Bria rmbg alt. */
-export const CUT_ALT_KINDS = new Set(["depth_cut", "person_cut", "subject_cut"]);
+/** Device-made alpha alternates (section 68), in the order `limits.edit_alt_kinds` lists them. One per post; they stay private. */
+export const EDIT_ALT_KINDS = ["depth_cut", "person_cut", "subject_cut"] as const;
+export const CUT_ALT_KINDS = new Set<string>(EDIT_ALT_KINDS);
 const sameAltKind = (a: string, b: string) => a === b || (CUT_ALT_KINDS.has(a) && CUT_ALT_KINDS.has(b));
 
 // The pixel size from a JPEG's start-of-frame marker (null when it is not one).

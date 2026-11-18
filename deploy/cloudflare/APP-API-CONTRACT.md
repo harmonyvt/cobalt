@@ -3858,7 +3858,8 @@ Render outcomes (`render.error`): `error.edit.render_failed`, `error.edit.timeou
   (`QueueSnapshot.isActive`). The app shows them as described in `apple/CONTRACT-EDITOR.md` 6.
 - **`GET /capabilities`**: `features.editor` is true exactly while the Worker has the `EDIT_RENDERER` binding and migration 0021 is
   applied; `limits.edit_max_seconds: 600`, `limits.edit_max_clips: 200`, `limits.edit_max_projects: 200`,
-  `limits.edit_overlay_tracks: 64` (imported from `timeline.js`). Missing = false: the app shows no `edit` button and no edits shelf.
+  `limits.edit_overlay_tracks: 64` (imported from `timeline.js`), `limits.edit_overlay_hidden: true` (section 39.7) and
+  `limits.edit_alt_kinds: ["depth_cut", "person_cut", "subject_cut"]` (section 68). Missing = false: the app shows no `edit` button and no edits shelf.
   An older app that still clamps to 8 layers and 50 clips keeps working: it never sends a track past 7 or more than 50 clips.
 - **Gate** (`src/gate.ts`): a `decideEdits` block next to `decideStage`: `/edits` `GET|POST`, `/edits/renders` `GET`,
   `/edits/renders/<rid>` `GET|DELETE`, `/edits/<id>` `GET|PUT|PATCH|DELETE`, `/edits/<id>/render` `POST`, each `lookupThen(req,
@@ -5068,6 +5069,9 @@ chat AI and the MCP get `make.cutout` and `edits.addOverlay`. No migration, no s
 - `GET /capabilities` `limits.edit_overlay_tracks: 64` and `limits.edit_max_clips: 200` (section 31.1). A client that
   does not know the limit sends no `track`, which keeps the old one-lane behaviour. An older app that clamps to 8 layers
   and 50 clips is unchanged: the server still accepts those timelines.
+- `GET /capabilities` `limits.edit_overlay_hidden: true`. The app sends `hidden: true` only when it sees that (or
+  `features.overlay_hidden`). Absent means an older server, which refuses the key, so hide stays a local preview and is
+  stripped before save. `false` is never written.
 
 ### 39.2 webp sources (7TV emotes, animated webps)
 
@@ -7528,4 +7532,7 @@ HEVC-with-alpha (`muxa`, or `hvc1` / `hev1` with depth ≥ 32, a compressor name
 
 The row is `role = alt`, `source = made`, `bucket = originals`, `made_from` the anchor, `made_spec` the spec plus
 `codecs` (the fourcc, or the HEVC RFC 6381 string when the `hvcC` was in the header). It stays **private** even when
-the post is public, the same as a Bria `rmbg` alternate (section 67). No migration, no new secret.
+the post is public, the same as a Bria `rmbg` alternate (section 67).
+
+`GET /capabilities` `limits.edit_alt_kinds` is `["depth_cut", "person_cut", "subject_cut"]`, the same list the route
+accepts (`EDIT_ALT_KINDS`). Absent means this server does not take those uploads. No migration, no new secret.

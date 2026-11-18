@@ -680,7 +680,14 @@ describe("GET /capabilities", () => {
     it("features.editor and the limits: on with the binding and the tables", async () => {
         const r = await w.api("GET", "/capabilities");
         expect(r.json.features.editor).toBe(true);
-        expect(r.json.limits).toMatchObject({ edit_max_seconds: 600, edit_max_clips: 200, edit_max_projects: 200, edit_overlay_tracks: 64 });
+        expect(r.json.limits).toMatchObject({
+            edit_max_seconds: 600,
+            edit_max_clips: 200,
+            edit_max_projects: 200,
+            edit_overlay_tracks: 64,
+            edit_overlay_hidden: true,
+            edit_alt_kinds: ["depth_cut", "person_cut", "subject_cut"],
+        });
         expect(r.json.limits.edit_pitch).toBe(true);
         expect([EDIT_MAX_SECONDS, EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_OVERLAY_TRACKS]).toEqual([600, 200, 200, 64]);
     });
