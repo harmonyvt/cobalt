@@ -108,13 +108,18 @@ extension HTTPCobaltClient: RmbgClient {
         // 202 is the start. `send` does not treat it as a failure; we accept it here.
         let ok = accept.contains(http.statusCode) || http.statusCode == 202
         guard ok else {
-            struct Err: Decodable { struct E: Decodable { var code: String? }; var error: E? }
-            let code = (try? JSONDecoder().decode(Err.self, from: data))?.error?.code ?? "http \(http.statusCode)"
+            let code = (try? JSONDecoder().decode(RmbgErrorWire.self, from: data))?.error?.code ?? "http \(http.statusCode)"
             throw RmbgError(code: code, status: http.statusCode)
         }
         guard let wire = try? JSONDecoder().decode(W.self, from: data) else { throw RmbgError.other("invalid response") }
         return wire
     }
+}
+
+/// The `{ "error": { "code": … } }` body of a refused rmbg call (file scope: a type cannot nest in a generic function).
+private struct RmbgErrorWire: Decodable {
+    struct E: Decodable { var code: String? }
+    var error: E?
 }
 
 extension PreviewClient: RmbgClient {

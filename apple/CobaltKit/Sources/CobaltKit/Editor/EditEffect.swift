@@ -228,7 +228,8 @@ public enum EditDepthModel {
 /// `chromakey` and is the one that is saved.
 public enum EditChroma {
     private static let lock = NSLock()
-    private static var cubes: [EditChromaKey: Data] = [:]
+    // Only touched with `lock` held.
+    nonisolated(unsafe) private static var cubes: [EditChromaKey: Data] = [:]
 
     /// `image` with the key colour taken out. `mask` paints what remains white (the result / mask toggle).
     public static func apply(_ image: CIImage, key: EditChromaKey, mask: Bool) -> CIImage {
