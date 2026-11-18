@@ -6,7 +6,7 @@
 // span and button on the page and that styling was painting a disc around the capybara.
 
 import { getExt, type Ext } from "./lib/browser";
-import { deepAll, mountedHost, relocateHost, type FoundPost, type Scan } from "./lib/find";
+import { deepAll, markRail, mountedHost, pruneRail, relocateHost, type FoundPost, type Scan } from "./lib/find";
 import { describeSave, EMPTY_PROGRESS, type SaveFace, type SaveProgress } from "./lib/progress";
 import { buttonCss, hostCss, pageTheme, shieldHost, type SurfaceKind } from "./lib/surface";
 import { type SiteId, type SpriteState } from "./lib/view";
@@ -128,7 +128,19 @@ export function start(site: SiteId, scan: Scan): void {
         shieldHost(host, found.fit);
     };
 
+    const dropButton = (host: HTMLElement) => {
+        for (const b of buttons) {
+            const node = b.button.getRootNode();
+            if (!(node instanceof ShadowRoot) || node.host !== host) continue;
+            b.untrack();
+            window.clearTimeout(b.hideToast);
+            buttons.delete(b);
+        }
+    };
+
     const ensure = (found: FoundPost) => {
+        // The rail already owns this like control. A second host under the heart is the bug.
+        if (found.fit !== "rail" && found.mount.closest("[data-capystore-rail]")) return;
         // Same rail, new reel: the page URL changed and the button is already in this mount.
         const prev = findHost(found.url) ?? mountedHost(found.mount, HOST);
         if (prev) {
@@ -319,12 +331,23 @@ export function start(site: SiteId, scan: Scan): void {
             const node = b.button.getRootNode();
             if (node instanceof ShadowRoot && !node.host.isConnected) buttons.delete(b);
         }
-        for (const found of scan(document, location.href)) {
+        const foundPosts = scan(document, location.href);
+        for (const found of foundPosts) if (found.fit === "rail") markRail(found.mount, found.url);
+        for (const found of foundPosts) {
             try {
                 ensure(found);
             } catch {
                 // A node the site detached between the scan and the insert.
             }
+        }
+        for (const found of foundPosts) {
+            if (found.fit !== "rail") continue;
+            const keep = mountedHost(found.mount, HOST);
+            for (const host of pruneRail(found.mount, HOST, keep)) dropButton(host);
+        }
+        for (const b of buttons) {
+            const node = b.button.getRootNode();
+            if (node instanceof ShadowRoot && !node.host.isConnected) buttons.delete(b);
         }
         for (const b of buttons) syncTheme(b);
     };

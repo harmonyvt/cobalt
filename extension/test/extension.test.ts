@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { wire } from "../src/background";
 import { badgeColor } from "../src/lib/brand";
 import type { Ext, StorageArea } from "../src/lib/browser";
-import { mountedHost, relocateHost, scanInstagram, scanTwitch, scanX, scanYouTube } from "../src/lib/find";
+import { markRail, mountedHost, pruneRail, relocateHost, scanInstagram, scanTwitch, scanX, scanYouTube } from "../src/lib/find";
 import { describeSave, friendlyError, sizePair } from "../src/lib/progress";
 import { createSave, followSave, pollSave } from "../src/lib/save";
 import { chromeApproveUrl, matchCode, parseRedirect, pkceChallenge, prefersWebAuthFlow, runSignIn, safariApproveUrl } from "../src/lib/signin";
@@ -53,6 +53,7 @@ describe("canonical post URLs", () => {
         expect(canonicalInstagram("/capy/p/Dc2QA4ng-US/?img_index=1", "https://www.instagram.com/")).toBe("https://www.instagram.com/p/Dc2QA4ng-US/");
         expect(canonicalInstagram("/reel/AbCdEfGhijk/", "https://www.instagram.com/")).toBe("https://www.instagram.com/reel/AbCdEfGhijk/");
         expect(canonicalInstagram("/reels/AbCdEfGhijk/", "https://www.instagram.com/reels/")).toBe("https://www.instagram.com/reel/AbCdEfGhijk/");
+        expect(canonicalInstagram("/reels/audio/17890/", "https://www.instagram.com/reels/Df0DRWXgk7j/")).toBeNull();
         expect(canonicalInstagram("/", "https://www.instagram.com/")).toBeNull();
     });
 });
@@ -259,6 +260,45 @@ describe("finding posts in a page", () => {
             ["https://www.instagram.com/reel/Df0DRWXgk7j/", "current"],
             ["https://www.instagram.com/reel/Df2a89TNsKv/", "upcoming"],
         ]);
+    });
+
+    it("puts one button on a live reels viewer, between share and save, and one on each feed reel", () => {
+        const viewerUrl = "https://www.instagram.com/reels/Df0DRWXgk7j/";
+        const viewer = page(viewerUrl, readFileSync(new URL("./fixtures/ig-reels-viewer.html", import.meta.url), "utf8"));
+        const found = scanInstagram(viewer, viewerUrl);
+        expect(found).toHaveLength(1);
+        expect(found[0]!.url).toBe("https://www.instagram.com/reel/Df0DRWXgk7j/");
+        expect(found[0]!.mount.id).toBe("rail");
+        expect(found[0]!.fit).toBe("rail");
+        expect(found[0]!.before?.id).toBe("save-slot");
+        expect(viewer.getElementById("like-button")!.contains(found[0]!.mount)).toBe(false);
+        // A rescan is the same single slot, not a second mount under the heart.
+        const again = scanInstagram(viewer, viewerUrl);
+        expect(again.map((f) => [f.url, (f.mount as HTMLElement).id, f.before?.id])).toEqual([
+            ["https://www.instagram.com/reel/Df0DRWXgk7j/", "rail", "save-slot"],
+        ]);
+        // A button already under the heart, from an earlier inject, is removed. The rail keeps one.
+        const stale = viewer.createElement("span");
+        stale.className = "capystore-save";
+        stale.dataset.url = found[0]!.url;
+        viewer.getElementById("like-button")!.append(stale);
+        const keep = viewer.createElement("span");
+        keep.className = "capystore-save rail";
+        keep.dataset.url = found[0]!.url;
+        found[0]!.mount.insertBefore(keep, found[0]!.before ?? null);
+        markRail(found[0]!.mount, found[0]!.url);
+        markRail(found[0]!.mount, found[0]!.url);
+        expect((found[0]!.mount as HTMLElement).dataset.capystoreRail).toBe(found[0]!.url);
+        expect(pruneRail(found[0]!.mount, "capystore-save", keep)).toEqual([stale]);
+        expect(viewer.querySelectorAll(".capystore-save")).toHaveLength(1);
+        expect(keep.nextElementSibling?.id).toBe("save-slot");
+        expect(viewer.getElementById("like-button")!.querySelector(".capystore-save")).toBeNull();
+
+        const feed = page("https://www.instagram.com/", readFileSync(new URL("./fixtures/ig-feed-reels.html", import.meta.url), "utf8"));
+        const posts = scanInstagram(feed, "https://www.instagram.com/");
+        expect(posts.map((f) => f.url)).toEqual(["https://www.instagram.com/p/AAAAAAAAAAA/", "https://www.instagram.com/reel/FEEDREEL111/"]);
+        expect(posts.every((f) => f.fit !== "rail")).toBe(true);
+        expect(feed.querySelectorAll("article")).toHaveLength(2);
     });
 
     it("does not inject on an Instagram page that only says the post is unavailable", () => {

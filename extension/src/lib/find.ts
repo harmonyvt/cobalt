@@ -284,6 +284,26 @@ export function mountedHost(mount: Element, hostClass: string): HTMLElement | nu
     return null;
 }
 
+// Set on a reels rail once it owns the Save button. Same value twice does not mutate, so a rescan is quiet.
+export function markRail(rail: Element, url: string): void {
+    const el = rail as HTMLElement;
+    // Happy-dom's elements are not the Node HTMLElement, so this checks for the dataset instead.
+    if (!el.dataset || el.dataset.capystoreRail === url) return;
+    el.dataset.capystoreRail = url;
+}
+
+// One host per rail. Anything left in the like column, or a second direct child, is removed.
+export function pruneRail(rail: Element, hostClass: string, keep: Element | null): HTMLElement[] {
+    const removed: HTMLElement[] = [];
+    for (const node of rail.querySelectorAll(`.${hostClass}`)) {
+        const host = node as HTMLElement;
+        if (host === keep) continue;
+        host.remove();
+        removed.push(host);
+    }
+    return removed;
+}
+
 const IG_LINK = 'a[href*="/p/"], a[href*="/reel"], a[href*="/tv/"]';
 const IG_LIKE = 'svg[aria-label="Like"], svg[aria-label="Unlike"], svg[aria-label="Comment"]';
 
@@ -342,39 +362,57 @@ function directChild(rail: Element, el: Element): Element | undefined {
     return [...rail.children].find((c) => c === el || c.contains(el));
 }
 
+// The open reel, else a card's own permalink. The audio disc is not a permalink (canonicalInstagram drops it).
+function urlForRail(rail: Element, pageUrl: string): string | null {
+    const page = canonicalInstagram(pageUrl, pageUrl);
+    let first: string | null = null;
+    for (const link of deepAll(rail, IG_LINK)) {
+        const url = canonicalInstagram(link.getAttribute("href") ?? "", pageUrl);
+        if (!url) continue;
+        if (url === page) return page;
+        if (!first) first = url;
+    }
+    return first ?? page;
+}
+
+function inViewerRail(el: Element | null | undefined, rails: Element[]): boolean {
+    if (!el) return false;
+    return rails.some((rail) => !rail.closest("article") && rail.contains(el));
+}
+
 export function scanInstagram(doc: ParentNode, pageUrl: string): FoundPost[] {
     const out: FoundPost[] = [];
     const seen = new Set<string>();
+    const rails = instagramRails(doc);
     for (const article of doc.querySelectorAll?.("article") ?? []) {
         const link = deepQuery(article, IG_LINK);
         const like = deepQuery(article, IG_LIKE);
         const url = (link ? canonicalInstagram(link.getAttribute("href") ?? "", pageUrl) : null) ?? (like ? canonicalInstagram(pageUrl, pageUrl) : null);
         if (!url || seen.has(url)) continue;
         const mount = like?.parentElement ?? link;
-        if (!mount) continue;
+        // A like that lives in the viewer rail is that rail's button, not a second one under the heart.
+        if (!mount || inViewerRail(mount, rails)) continue;
         seen.add(url);
         out.push({ url, mount, variant: "icon" });
     }
-    const page = canonicalInstagram(pageUrl, pageUrl);
-    for (const rail of instagramRails(doc)) {
+    for (const rail of rails) {
         // A feed post already got its button from the article above. The rail is the reels viewer.
         if (rail.closest("article")) continue;
-        const link = deepQuery(rail, IG_LINK);
-        const fromLink = link ? canonicalInstagram(link.getAttribute("href") ?? "", pageUrl) : null;
-        const url = fromLink ?? page;
+        const url = urlForRail(rail, pageUrl);
         if (!url || seen.has(url)) continue;
         const save = igControls(rail).find((c) => /^(save|saved|remove|bookmark)\b/i.test(igLabel(c)));
         const before = save ? directChild(rail, save) : undefined;
         seen.add(url);
         out.push({ url, mount: rail, variant: "icon", fit: "rail", ...(before ? { before } : {}) });
     }
+    const page = canonicalInstagram(pageUrl, pageUrl);
     if (page && !seen.has(page)) {
         // A removed post still has a permalink and a <main>. Only a like control or a post link is a real anchor.
         const like = deepQuery(doc, IG_LIKE);
         const link = deepQuery(doc, IG_LINK);
         const mount = like?.parentElement ?? link;
         const url = (link ? canonicalInstagram(link.getAttribute("href") ?? "", pageUrl) : null) ?? (like ? page : null);
-        if (url && mount) out.push({ url, mount, variant: "icon" });
+        if (url && mount && !seen.has(url) && !inViewerRail(mount, rails) && !inViewerRail(like, rails)) out.push({ url, mount, variant: "icon" });
     }
     return out;
 }

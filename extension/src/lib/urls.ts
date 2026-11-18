@@ -56,7 +56,9 @@ export function canonicalInstagram(href: string, base: string): string | null {
         kind = parts[1]!;
         id = parts[2]!;
     }
-    if (!kind || !/^[\w-]+$/.test(id)) return null;
+    // /reels/audio/<id>/ is the soundtrack disc on the rail, not a post. The id slot is the word "audio".
+    const notAPost = new Set(["audio", "ar", "tags", "explore", "locations", "guide", "accounts", "directory", "emails", "lite", "stories", "popular", "channel"]);
+    if (!kind || notAPost.has(id) || !/^[\w-]+$/.test(id)) return null;
     const canon = kind === "reels" || kind === "tv" ? "reel" : kind;
     return `https://www.instagram.com/${canon}/${id}/`;
 }
