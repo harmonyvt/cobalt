@@ -175,11 +175,12 @@ export function jobOfSave(a: RunAttributes, s: LiveState, agent?: "save" | "make
             break;
         case "rendering": {
             const fraction = ratio(s.framesDone, s.framesTotal);
+            const removing = s.work === "rmbg";
             state = {
                 ...base,
                 phase: "working",
                 step: at("make"),
-                headline: s.packing ? "packing the webp" : "making the webp",
+                headline: removing ? "removing background" : s.packing ? "packing the webp" : "making the webp",
                 detail: frameDetail(),
                 fraction,
                 compact: typeof s.framesDone === "number" && typeof s.framesTotal === "number" ? `${s.framesDone}/${s.framesTotal}` : undefined,
@@ -191,19 +192,26 @@ export function jobOfSave(a: RunAttributes, s: LiveState, agent?: "save" | "make
                 ...base,
                 phase: "done",
                 step: steps.length,
-                headline: s.resultURL !== undefined ? "webp ready" : "saved",
+                headline: s.work === "rmbg" ? "background removed" : s.resultURL !== undefined ? "webp ready" : "saved",
                 result: resultText({ width: s.resultWidth, height: s.resultHeight, seconds: s.resultSeconds, bytes: s.resultBytes }),
                 link: s.resultURL,
             };
             break;
         case "failed": {
             const lost = s.code === JOB_LOST_CODE;
+            const removing = s.work === "rmbg";
             const railStep = Math.min(steps.length - 1, making ? 0 : s.rail >= 3 ? at("make") : s.rail === 2 && reads ? at("read") : Math.min(s.rail, 1));
             state = {
                 ...base,
                 phase: lost ? "lost" : "failed",
                 step: Math.max(0, railStep),
-                headline: lost ? `lost track of this ${kind === "make" ? "webp" : kind === "upload" ? "upload" : "save"}` : making || s.rail >= 3 ? "couldn't make the webp" : "couldn't save",
+                headline: lost
+                    ? `lost track of this ${removing ? "background removal" : kind === "make" ? "webp" : kind === "upload" ? "upload" : "save"}`
+                    : removing
+                      ? "couldn't remove the background"
+                      : making || s.rail >= 3
+                        ? "couldn't make the webp"
+                        : "couldn't save",
                 detail: reasonText(s.code),
             };
             break;

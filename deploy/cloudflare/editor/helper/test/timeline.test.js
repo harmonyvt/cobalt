@@ -26,8 +26,8 @@ test("exports are the ones 31.3 pins", () => {
         assert.ok(n in T, n);
     }
     assert.equal(T.EDIT_MAX_SECONDS, 600);
-    assert.equal(T.EDIT_MAX_CLIPS, 50);
-    assert.equal(T.EDIT_MAX_JSON_BYTES, 65536);
+    assert.equal(T.EDIT_MAX_CLIPS, 200);
+    assert.equal(T.EDIT_MAX_JSON_BYTES, 80 * 1024);
     assert.equal(T.EDIT_MAX_PROJECTS, 200);
     assert.equal(T.EDIT_QUEUE_MAX, 20);
     assert.equal(T.EDIT_MAX_INPUT_BYTES, 6 * 1024 ** 3);
@@ -133,10 +133,10 @@ test("canvas, empty, too_many_clips, too_long", () => {
     refuses({ ...tl(), canvas: { w: 3840, h: 2160, fps: 30 } }, "error.edit.canvas", "canvas");
     refuses(tl({ main: [] }), "error.edit.empty", "main");
     const many = (/** @type {number} */ n) => Array.from({ length: n }, (_, i) => main({ id: `m${i}`, out: 1 }));
-    assert.ok(T.parseTimeline(tl({ main: many(50) })).ok);
-    refuses(tl({ main: many(51) }), "error.edit.too_many_clips", "main");
-    refuses(tl({ main: many(50), overlay: [over()] }), "error.edit.too_many_clips", "main");
-    assert.ok(T.parseTimeline(tl({ main: many(49), overlay: [over({ at: 0 })] })).ok);
+    assert.ok(T.parseTimeline(tl({ main: many(200) })).ok);
+    refuses(tl({ main: many(201) }), "error.edit.too_many_clips", "main");
+    refuses(tl({ main: many(200), overlay: [over()] }), "error.edit.too_many_clips", "main");
+    assert.ok(T.parseTimeline(tl({ main: many(199), overlay: [over({ at: 0 })] })).ok);
     assert.ok(T.parseTimeline(tl({ main: [main({ out: 600 })] })).ok);
     refuses(tl({ main: [main({ out: 600.05 })] }), "error.edit.too_long", "main");
     assert.ok(T.parseTimeline(tl({ main: [main({ out: 2400, speed: 4 })] })).ok);
@@ -385,4 +385,32 @@ test("a timeline with no key is byte for byte the canonical form it had before k
     assert.equal(T.canonicalJSON(transparent.timeline), before);
     const mp4 = T.parseTimeline({ ...raw, output: "mp4" });
     assert.equal(T.canonicalJSON(mp4.timeline), before);
+});
+
+test("80 KiB still holds 200 clips with every optional key set", () => {
+    const item = "Ab3dEf6hIj9kLm2n";
+    const id = (/** @type {string} */ p, /** @type {number} */ i) => (p + String(i).padStart(3, "0") + "abcdefghijklmnopqrs").slice(0, 24);
+    const overlays = [];
+    for (let slot = 0; overlays.length < T.EDIT_MAX_CLIPS - 1; slot++) {
+        for (let track = 0; track < T.EDIT_OVERLAY_TRACKS && overlays.length < T.EDIT_MAX_CLIPS - 1; track++) {
+            const i = overlays.length;
+            overlays.push({
+                id: id("o", i), item, at: 0.5 + slot * 1.2, in: 0.001, out: 1.001,
+                frame: { x: 0.0001, y: 0.0001, w: 0.9998 }, opacity: 0.1, volume: 0.01, muted: false,
+                pitch: -12, track, hidden: true,
+                key: { color: "#ffffff", similarity: 0.599, blend: 0.499, spill: 0.999 },
+                background: { type: "color", color: "#ffffff" },
+            });
+        }
+    }
+    const main = {
+        id: id("m", 0), item, in: 0.001, out: 20, speed: 0.25,
+        crop: { aspect: "16:9", x: 0.0001, y: 0.0001, w: 0.5624, h: 0.9998 },
+        fit: "fill", volume: 0.01, muted: false, pitch: -12,
+    };
+    const parsed = T.parseTimeline({ version: 1, canvas: { w: 1920, h: 1080, fps: 60 }, main: [main], overlay: overlays, output: "prores" });
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    const bytes = Buffer.byteLength(T.canonicalJSON(parsed.timeline));
+    assert.ok(bytes > 64 * 1024, `expected the old 64 KiB cap to be too small, got ${bytes}`);
+    assert.ok(bytes <= T.EDIT_MAX_JSON_BYTES, `${bytes} exceeds ${T.EDIT_MAX_JSON_BYTES}`);
 });

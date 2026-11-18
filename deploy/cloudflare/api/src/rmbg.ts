@@ -205,7 +205,8 @@ export class RmbgService {
 
     private async note(job: RmbgJob, e: LiveRenderEvent) {
         if (!job.sessionId || !this.d.live) return;
-        await this.d.live.onRender(job.sessionId, job.id, e).catch(() => {});
+        // `work` is what keeps the Live Activity from saying "making the webp" (section 67).
+        await this.d.live.onRender(job.sessionId, job.id, { ...e, work: "rmbg" }).catch(() => {});
     }
 }
 

@@ -792,7 +792,7 @@ const TIMELINE_TYPE = `type Timeline = { version: 1; canvas: { w, h, fps: 30 | 6
   main: { id: string /* unique, letters */; item: string /* a video file id */; in: number; out: number /* source seconds */; speed: number /* 0.25..4 */;
           crop?: { aspect: "free"; x; y; w; h } /* fractions */; fit: "fill" | "fit"; volume: number /* 0..1 */; muted: boolean; pitch?: number /* semitones -12..12 */ }[];
   overlay: { id; item /* a video, gif, photo, webp (7TV emotes too) or cutout file id */; at: number /* output seconds */; in; out /* video: source seconds; picture: in 0, out = seconds shown */;
-             frame: { x; y; w } /* top-left + width, canvas fractions; height follows the picture */; opacity: number; volume; muted; track?: number /* layer 0..7, higher on top */;
+             frame: { x; y; w } /* top-left + width, canvas fractions; height follows the picture */; opacity: number; volume; muted; track?: number /* layer 0..63, higher on top */; hidden?: true /* omitted when shown */;
              key?: { color: "#RRGGBB"; similarity: number /* 0.01..0.6 */; blend: number /* 0..0.5 */; spill: number /* 0..1 */ } /* omitted when absent */;
              background?: { type: "clip" } | { type: "color"; color: "#RRGGBB" } /* transparent is omitted */ }[];
   output?: "webm" | "prores" | "webp" /* mp4 is omitted; it flattens. webm and prores keep alpha */ }

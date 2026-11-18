@@ -536,6 +536,17 @@ describe("the merge rule (nextState)", () => {
             expect(s.packing).toBe(false);
         }
     });
+    it("a background-removal render is marked work=rmbg and a later webp clears it", () => {
+        const removing = nextState(FIX.ready!, stateEventOfRender({ kind: "pending", phase: "decode", framesDone: null, framesTotal: null, work: "rmbg" }), at(s0));
+        expect(removing.work).toBe("rmbg");
+        expect(removing.packing).toBe(false);
+        const done = nextState(removing, stateEventOfRender({ kind: "success", url: "", bytes: 10, width: 64, height: 64, seconds: 2, work: "rmbg" }), at(s0 + 5));
+        expect(done.work).toBe("rmbg");
+        expect(endPayload({ run: "r", input: "link", service: "file", ref: "clip", origin: "app" }, done, at(s0 + 5)).aps.alert).toMatchObject({ title: "background removed" });
+        const webp = nextState(done, stateEventOfRender({ kind: "pending", phase: "decode", framesDone: 1, framesTotal: 2 }), at(s0 + 6));
+        expect(webp.work).toBeUndefined();
+        expect(nextState(FIX.ready!, stateEventOfRender({ kind: "pending", phase: "decode", framesDone: 1, framesTotal: 2 }), at(s0)).work).toBeUndefined();
+    });
     it("save events: fetching -> fetching (waking), reading and storing -> saving", () => {
         const p = (step: any, bytes: number | null, total: number | null, waking = false) => stateEventOfSave({ kind: "progress", progress: { step, bytes, total, waking } });
         expect(p("fetching", 5, 10, true)).toEqual({ t: "fetching", waking: true });

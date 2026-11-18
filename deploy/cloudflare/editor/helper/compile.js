@@ -167,7 +167,11 @@ export function compile(t, sources, opts) {
     /** @type {string[]} */
     const mixIn = ["[am]"];
     for (const j of overlayDrawOrder(t)) {
-        const o = t.overlay[j], om = tm.overlay[j], s = src(o.item);
+        const o = t.overlay[j], om = tm.overlay[j];
+        // A hidden overlay is not a layer: no input, no filter, no audio. Its source is not opened.
+        // Inputs that do play are already trimmed to their window (`inputFor`: `-ss` before `in`, `-t` past `out`).
+        if (o.hidden) continue;
+        const s = src(o.item);
         if (!s) return { code: "error.edit.input_missing", ok: false, path: `overlay[${j}].item` };
         const box = overlayPlacement({ h: s.height, w: s.width }, o.frame, t.canvas);
         const n = inputs++;

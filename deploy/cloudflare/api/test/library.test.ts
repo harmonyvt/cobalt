@@ -7,7 +7,7 @@ import { STATUS_IDS_MAX } from "../src/hidden";
 import { dispatch as decide } from "./dispatch";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
-import { MAX_UPLOAD_BYTES } from "../src/app-routes";
+import { EDIT_ALT_KINDS, MAX_UPLOAD_BYTES } from "../src/app-routes";
 import { SHARE_SET_MAX } from "../src/share-sets";
 import type { GateRequest } from "../src/gate";
 import { KEY_ID_HEADER, PORT_HEADER, SERVICE_HEADER } from "../src/headers";
@@ -1025,10 +1025,12 @@ describe("GET /capabilities", () => {
                 line_wait_ms: 1800000,
                 share_set_max: 10,
                 edit_max_seconds: 600,
-                edit_max_clips: 50,
+                edit_max_clips: 200,
                 edit_max_projects: 200,
                 edit_pitch: true,
-                edit_overlay_tracks: 8,
+                edit_overlay_tracks: 64,
+                edit_overlay_hidden: true,
+                edit_alt_kinds: ["depth_cut", "person_cut", "subject_cut"],
                 status_ids: 200,
             },
             media_base_url: "https://media.capybaraharmony.com/",
@@ -1056,10 +1058,12 @@ describe("GET /capabilities", () => {
             line_wait_ms: LINE_WAIT_MS,
             share_set_max: SHARE_SET_MAX,
             edit_max_seconds: 600,
-            edit_max_clips: 50,
+            edit_max_clips: 200,
             edit_max_projects: 200,
             edit_pitch: true,
-            edit_overlay_tracks: 8,
+            edit_overlay_tracks: 64,
+            edit_overlay_hidden: true,
+            edit_alt_kinds: [...EDIT_ALT_KINDS],
             status_ids: STATUS_IDS_MAX,
         });
     });

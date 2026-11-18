@@ -132,6 +132,9 @@ export type LiveState = {
     resultSeconds?: number;
     failure?: string;
     code?: string;
+    // Set while a Bria background-removal job owns this run (section 67). Absent for a save or a webp,
+    // so those states stay byte for byte what they were.
+    work?: "rmbg";
 };
 
 const INT_KEYS = ["bytes", "total", "framesDone", "framesTotal", "resultBytes", "resultWidth", "resultHeight"] as const;
@@ -144,7 +147,7 @@ const MAX_STR = 300;
 const KEY_ORDER = [
     "stage", "rail", "since", "waking", "packing", "bytes", "total", "framesDone", "framesTotal",
     "title", "duration", "resultURL", "resultBytes", "resultWidth", "resultHeight", "resultSeconds",
-    "failure", "code",
+    "failure", "code", "work",
 ] as const;
 
 export function canonical(s: LiveState): LiveState {
@@ -198,6 +201,7 @@ export function sanitizeState(raw: unknown): LiveState | null {
         if (typeof v !== "string" || v.length > MAX_STR) return null;
         out[k] = v;
     }
+    if (raw.work === "rmbg") out.work = "rmbg";
     return canonical(out as LiveState);
 }
 
@@ -208,11 +212,12 @@ export type LiveSaveEvent =
     | { kind: "failed"; code: string }
     // the save is in the library (only a share-sheet run the server started ends on it: `serverOnly`)
     | { kind: "saved"; bytes: number | null; width: number | null; height: number | null; seconds: number | null };
-export type LiveRenderEvent =
+export type LiveRenderEvent = (
     | { kind: "accepted"; title?: string | null; duration?: number | null }
     | { kind: "pending"; phase: "fetching" | "decode" | "pack" | null; framesDone: number | null; framesTotal: number | null }
     | { kind: "success"; url: string; bytes: number | null; width: number | null; height: number | null; seconds: number | null }
-    | { kind: "failed"; code: string };
+    | { kind: "failed"; code: string }
+) & { work?: "rmbg" };
 export type LiveHooks = {
     onSave(sid: string, e: LiveSaveEvent): Promise<void>;
     onRender(sid: string, job: string, e: LiveRenderEvent): Promise<void>;
@@ -226,13 +231,14 @@ export type LiveHooks = {
 };
 
 // What the merge consumes: the events reduced to the state they describe.
-export type StateEvent =
+export type StateEvent = (
     | { t: "fetching"; waking: boolean }
     | { t: "saving"; bytes: number | null; total: number | null; title?: string | null; duration?: number | null }
     | { t: "rendering"; framesDone: number | null; framesTotal: number | null; packing: boolean; title?: string | null; duration?: number | null }
     | { t: "done"; url: string; bytes: number | null; width: number | null; height: number | null; seconds: number | null }
     | { t: "saved"; bytes: number | null; width: number | null; height: number | null; seconds: number | null }
-    | { t: "failed"; code: string; phase: "saving" | "rendering" };
+    | { t: "failed"; code: string; phase: "saving" | "rendering" }
+) & { work?: "rmbg" | null };
 
 export function stateEventOfSave(e: LiveSaveEvent): StateEvent {
     if (e.kind === "failed") return { t: "failed", code: e.code, phase: "saving" };
@@ -243,23 +249,25 @@ export function stateEventOfSave(e: LiveSaveEvent): StateEvent {
 }
 
 export function stateEventOfRender(e: LiveRenderEvent): StateEvent {
+    // A webp render clears `work`. A background-removal event sets it. Absent means "not a render event".
+    const work = e.work === "rmbg" ? "rmbg" : null;
     switch (e.kind) {
         case "accepted":
-            return { t: "rendering", framesDone: null, framesTotal: null, packing: false, title: e.title, duration: e.duration };
+            return { t: "rendering", framesDone: null, framesTotal: null, packing: false, title: e.title, duration: e.duration, work };
         case "pending":
             if (e.phase === "decode") {
-                return { t: "rendering", framesDone: e.framesDone, framesTotal: e.framesTotal, packing: false };
+                return { t: "rendering", framesDone: e.framesDone, framesTotal: e.framesTotal, packing: false, work };
             }
             if (e.phase === "pack") {
                 // img2webp has no count: done = total = the frames made
                 const n = e.framesTotal ?? e.framesDone;
-                return { t: "rendering", framesDone: n, framesTotal: n, packing: true };
+                return { t: "rendering", framesDone: n, framesTotal: n, packing: true, work };
             }
-            return { t: "rendering", framesDone: null, framesTotal: null, packing: false };
+            return { t: "rendering", framesDone: null, framesTotal: null, packing: false, work };
         case "success":
-            return { t: "done", url: e.url, bytes: e.bytes, width: e.width, height: e.height, seconds: e.seconds };
+            return { t: "done", url: e.url, bytes: e.bytes, width: e.width, height: e.height, seconds: e.seconds, work };
         case "failed":
-            return { t: "failed", code: e.code, phase: "rendering" };
+            return { t: "failed", code: e.code, phase: "rendering", work };
     }
 }
 
@@ -332,6 +340,10 @@ export function nextState(prev: LiveState | null, ev: StateEvent, now: number): 
     }
     if (carriedTitle !== undefined) out.title = carriedTitle.slice(0, MAX_STR);
     if (carriedDuration !== undefined) out.duration = carriedDuration;
+    // null clears it (a webp render after a background removal); absent keeps whatever the run was doing
+    const hinted = ev.work;
+    const work = hinted === "rmbg" ? "rmbg" : hinted === null ? undefined : prev?.work;
+    if (work === "rmbg") out.work = "rmbg";
     return canonical(out);
 }
 
@@ -438,7 +450,7 @@ export function endPayload(a: RunAttributes, state: LiveState, now: number, imme
         aps["dismissal-date"] = secs(now) + (state.resultURL ? DISMISS_DONE_LINK_S : DISMISS_DONE_S);
         aps.alert = {
             // no resultURL: a save the instant share started, now in the library
-            title: state.resultURL === undefined && a.origin === "share" ? "saved to capystore" : "webp ready",
+            title: state.work === "rmbg" ? "background removed" : state.resultURL === undefined && a.origin === "share" ? "saved to capystore" : "webp ready",
             body: typeof state.resultBytes === "number" ? `${a.service} · ${formatBytes(state.resultBytes)}` : a.service,
         };
     } else {

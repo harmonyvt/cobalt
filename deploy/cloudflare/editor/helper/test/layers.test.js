@@ -22,23 +22,38 @@ const tl = (/** @type {any[]} */ overlay) => ({ version: 1, canvas: { w: 720, h:
 
 // ---- the timeline ------------------------------------------------------------------------------------------------
 
-test("track: absent and 0 are the same timeline, byte for byte; 1..7 is kept", () => {
+test("track: absent and 0 are the same timeline, byte for byte; a non-zero track is kept", () => {
     const a = parseTimeline(tl([oc()]));
     const b = parseTimeline(tl([oc({ track: 0 })]));
     assert.ok(a.ok && b.ok);
     assert.equal(canonicalJSON(a.timeline), canonicalJSON(b.timeline));
     assert.ok(!canonicalJSON(a.timeline).includes("track"));
-    const c = parseTimeline(tl([oc({ track: 7 })]));
+    const c = parseTimeline(tl([oc({ track: 63 })]));
     assert.ok(c.ok);
-    assert.match(canonicalJSON(c.timeline), /"opacity":1,"out":2,"track":7,"volume":1/);
-    assert.equal(EDIT_OVERLAY_TRACKS, 8);
+    assert.match(canonicalJSON(c.timeline), /"opacity":1,"out":2,"track":63,"volume":1/);
+    assert.equal(EDIT_OVERLAY_TRACKS, 64);
 });
 
-test("track: a non-integer is bad_request, out of 0..7 is range", () => {
+test("track: a non-integer is bad_request, out of 0..63 is range", () => {
     assert.deepEqual(parseTimeline(tl([oc({ track: 1.5 })])), { ok: false, code: "error.edit.bad_request", path: "overlay[0].track" });
     assert.deepEqual(parseTimeline(tl([oc({ track: "1" })])), { ok: false, code: "error.edit.bad_request", path: "overlay[0].track" });
-    assert.deepEqual(parseTimeline(tl([oc({ track: 8 })])), { ok: false, code: "error.edit.range", path: "overlay[0].track" });
+    assert.deepEqual(parseTimeline(tl([oc({ track: 64 })])), { ok: false, code: "error.edit.range", path: "overlay[0].track" });
     assert.deepEqual(parseTimeline(tl([oc({ track: -1 })])), { ok: false, code: "error.edit.range", path: "overlay[0].track" });
+});
+
+test("hidden: only true is kept, so a missing or false key does not change the fingerprint", () => {
+    const plain = parseTimeline(tl([oc()]));
+    const no = parseTimeline(tl([oc({ hidden: false })]));
+    const yes = parseTimeline(tl([oc({ hidden: true })]));
+    assert.ok(plain.ok && no.ok && yes.ok);
+    assert.equal(canonicalJSON(plain.timeline), canonicalJSON(no.timeline));
+    assert.ok(!canonicalJSON(no.timeline).includes("hidden"));
+    assert.ok(!("hidden" in no.timeline.overlay[0]));
+    assert.equal(yes.timeline.overlay[0].hidden, true);
+    assert.match(canonicalJSON(yes.timeline), /"hidden":true/);
+    assert.notEqual(canonicalJSON(yes.timeline), canonicalJSON(plain.timeline));
+    assert.deepEqual(parseTimeline(tl([oc({ hidden: 1 })])), { ok: false, code: "error.edit.bad_request", path: "overlay[0].hidden" });
+    assert.deepEqual(parseTimeline(tl([oc({ hidden: "true" })])), { ok: false, code: "error.edit.bad_request", path: "overlay[0].hidden" });
 });
 
 test("overlap: refused on one layer, allowed across layers; still sorted by at", () => {

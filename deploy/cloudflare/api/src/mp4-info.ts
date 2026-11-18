@@ -301,6 +301,143 @@ const merge = (a: Mp4Info | null, b: Mp4Info | null): Mp4Info | null => {
     return out;
 };
 
+// ---- QuickTime alpha cuts (section 68): ProRes 4444 or HEVC-with-alpha in a .mov -------------------
+
+export type AlphaCut = {
+    codec: "prores4444" | "hevc_alpha";
+    /** The sample-entry fourcc, or the HEVC RFC 6381 string when an `hvcC` is in the bytes we have. */
+    codecs: string;
+    width?: number;
+    height?: number;
+    duration?: number;
+};
+
+const PRORES_4444 = new Set(["ap4h", "ap4x"]);
+const HEVC_SAMPLE = new Set(["hvc1", "hev1", "muxa"]);
+
+function compressorName(buf: Uint8Array, payload: number): string {
+    if (payload + 43 > buf.length) return "";
+    const n = Math.min(buf[payload + 42] ?? 0, 31);
+    if (n <= 0 || payload + 43 + n > buf.length) return "";
+    return ascii(buf, payload + 43, n);
+}
+
+function includesAscii(buf: Uint8Array, needle: string): boolean {
+    const n = needle.length;
+    if (buf.length < n) return false;
+    outer: for (let i = 0; i + n <= buf.length; i++) {
+        for (let j = 0; j < n; j++) if (buf[i + j] !== needle.charCodeAt(j)) continue outer;
+        return true;
+    }
+    return false;
+}
+
+/** Depth ≥ 32, a compressor name that says alpha, an `auxi` child, or the MPEG auxiliary-alpha URN. */
+function entryHasAlpha(buf: Uint8Array, payload: number, end: number): boolean {
+    const depth = u16(buf, payload + 74);
+    if (depth != null && depth >= 32) return true;
+    if (/alpha/i.test(compressorName(buf, payload))) return true;
+    if (payload + 78 >= end) return false;
+    for (const c of boxesIn(buf, payload + 78, end)) {
+        if (c.type === "auxi") return true;
+        const slice = buf.subarray(c.offset, Math.min(c.offset + c.size, end));
+        if (includesAscii(slice, "auxiliary:alpha")) return true;
+        if (!c.complete) break;
+    }
+    return false;
+}
+
+function cutOfEntry(buf: Uint8Array, entry: RawBox): AlphaCut | null {
+    const payload = entry.offset + entry.header;
+    const end = Math.min(entry.offset + entry.size, buf.length);
+    if (payload + 28 > end) return null;
+    const w = u16(buf, payload + 24);
+    const h = u16(buf, payload + 26);
+    const size: Pick<AlphaCut, "width" | "height"> = {};
+    if (w) size.width = w;
+    if (h) size.height = h;
+    if (PRORES_4444.has(entry.type)) return { codec: "prores4444", codecs: entry.type, ...size };
+    if (!HEVC_SAMPLE.has(entry.type)) return null;
+    // `muxa` is the HEVC-with-alpha sample entry. `hvc1` / `hev1` need an alpha signal of their own.
+    if (entry.type !== "muxa" && !entryHasAlpha(buf, payload, end)) return null;
+    let codecs = entry.type;
+    if (payload + 78 < end) {
+        for (const c of boxesIn(buf, payload + 78, end)) {
+            if (c.type === "hvcC") {
+                const body = buf.subarray(c.offset + c.header, Math.min(c.offset + c.size, end));
+                codecs = hevcCodecs(entry.type === "hev1" ? "hev1" : "hvc1", body) ?? codecs;
+            }
+            if (!c.complete) break;
+        }
+    }
+    return { codec: "hevc_alpha", codecs, ...size };
+}
+
+/** A QuickTime `.mov`: major brand or a compatible brand is `qt  `. */
+export function isQuickTime(bytes: Uint8Array): boolean {
+    if (bytes.length < 8) return false;
+    const f = boxesIn(bytes, 0, bytes.length).find((b) => b.type === "ftyp");
+    if (!f) return false;
+    const start = f.offset + f.header;
+    const end = Math.min(f.offset + f.size, bytes.length);
+    if (ascii(bytes, start, 4) === "qt  ") return true;
+    for (let o = start + 8; o + 4 <= end; o += 4) if (ascii(bytes, o, 4) === "qt  ") return true;
+    return false;
+}
+
+/** ProRes 4444 (`ap4h` / `ap4x`) or HEVC-with-alpha in the boxes `bytes` holds. Null when it is neither. */
+export function alphaCutIn(bytes: Uint8Array): AlphaCut | null {
+    const hit: { duration?: number; cut: AlphaCut | null } = { cut: null };
+    const walk = (start: number, end: number) => {
+        for (const box of boxesIn(bytes, start, end)) {
+            const payload = box.offset + box.header;
+            const boxEnd = Math.min(box.offset + box.size, bytes.length, end);
+            if (box.type === "mvhd" && hit.duration == null) hit.duration = parseMvhd(bytes.subarray(payload, boxEnd));
+            else if (box.type === "stsd" && !hit.cut && payload + 8 <= boxEnd) {
+                for (const entry of boxesIn(bytes, payload + 8, boxEnd)) {
+                    const cut = cutOfEntry(bytes, entry);
+                    if (cut) {
+                        hit.cut = cut;
+                        break;
+                    }
+                    if (!entry.complete) break;
+                }
+            } else if (CONTAINERS.has(box.type)) walk(payload, boxEnd);
+            if (!box.complete) break;
+        }
+    };
+    walk(0, bytes.length);
+    if (!hit.cut) return null;
+    if (hit.duration != null) hit.cut.duration = hit.duration;
+    return hit.cut;
+}
+
+/**
+ * A ranged read of one stored object. Null unless it is a QuickTime file whose video is ProRes 4444 or
+ * HEVC-with-alpha. A second read happens only when `moov` is not in the first window.
+ */
+export async function readQuicktimeAlphaCut(read: RangeRead, window: number): Promise<AlphaCut | null> {
+    let head: { bytes: Uint8Array; size: number } | null;
+    try {
+        head = await read(0, window);
+    } catch {
+        return null;
+    }
+    if (!head || !isQuickTime(head.bytes)) return null;
+    const first = alphaCutIn(head.bytes);
+    if (first) return first;
+    const off = moovOffset(head.bytes, head.size);
+    if (off == null) return null;
+    let more: { bytes: Uint8Array; size: number } | null = null;
+    try {
+        more = await read(off, window);
+    } catch {
+        return null;
+    }
+    if (!more) return null;
+    return alphaCutIn(more.bytes);
+}
+
 // `read(offset, length)` is a ranged read of one object; `size` on the result is the whole object.
 // The second read happens only when `moov` is not in the first window.
 export async function readMp4Info(read: RangeRead, window: number): Promise<Mp4Info | null> {

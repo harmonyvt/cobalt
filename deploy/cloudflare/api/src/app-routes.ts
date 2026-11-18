@@ -90,7 +90,7 @@ import {
     type StudioReply,
 } from "./studio";
 import { serviceFromUrl } from "./webp";
-import { readMp4Info, VIDEO_PROBE_BYTES, VP9_HDR_CODECS, webmInfo, type Mp4Info } from "./mp4-info";
+import { readMp4Info, readQuicktimeAlphaCut, VIDEO_PROBE_BYTES, VP9_HDR_CODECS, webmInfo, type Mp4Info } from "./mp4-info";
 import { sniffSave, type SniffedSave } from "./workbench-rules";
 
 export const MAX_UPLOAD_BYTES = 100_000_000;
@@ -404,8 +404,13 @@ export async function capabilities(
                 edit_max_projects: EDIT_MAX_PROJECTS,
                 // clips accept `pitch` (section 31.16); an older server answers bad_request to the key
                 edit_pitch: true,
-                // overlays accept `track` 0..edit_overlay_tracks-1 and webp sources (section 39); older servers refuse both
+                // overlays accept `track` 0..edit_overlay_tracks-1 and webp sources (section 39); older servers refuse both.
+                // edit_max_clips is the same constant the validator enforces (section 31.1).
                 edit_overlay_tracks: EDIT_OVERLAY_TRACKS,
+                // overlays may carry hidden: true (section 39.7). Absent on an older server: the app keeps hide local.
+                edit_overlay_hidden: true,
+                // role=alt QuickTime cuts the made route stores (section 68)
+                edit_alt_kinds: [...EDIT_ALT_KINDS],
                 // the most ids one POST /library/status takes (section 37.4)
                 status_ids: STATUS_IDS_MAX,
             },
@@ -2133,6 +2138,10 @@ export async function libraryItemDelete(d: AppDeps, id: string): Promise<StudioR
 export const MAX_MADE_BYTES = 50 * 1024 * 1024;
 export const MAX_MADE_SPEC_BYTES = 512;
 const HEAD_BYTES = 128 * 1024;
+/** Device-made alpha alternates (section 68), in the order `limits.edit_alt_kinds` lists them. One per post; they stay private. */
+export const EDIT_ALT_KINDS = ["depth_cut", "person_cut", "subject_cut"] as const;
+export const CUT_ALT_KINDS = new Set<string>(EDIT_ALT_KINDS);
+const sameAltKind = (a: string, b: string) => a === b || (CUT_ALT_KINDS.has(a) && CUT_ALT_KINDS.has(b));
 
 // The pixel size from a JPEG's start-of-frame marker (null when it is not one).
 export function jpegSize(b: Uint8Array): { width: number; height: number } | null {
@@ -2187,15 +2196,21 @@ export async function libraryMade(
         return reject(400, "error.library.bad_request");
     }
     // the type the body must have: a crop and the long image are JPEGs, the PDF is a PDF, an HDR alternate is
-    // AV1 in an mp4 or VP9.2 in a WebM. An alternate uses the upload cap, not the 50 MB made cap.
+    // AV1 in an mp4 or VP9.2 in a WebM, a depth cut is HEVC-with-alpha or ProRes 4444 in a QuickTime .mov.
+    // An alternate uses the upload cap, not the 50 MB made cap.
     const type = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-    let ext: "jpg" | "pdf" | "mp4" | "webm";
+    let ext: "jpg" | "pdf" | "mp4" | "webm" | "mov";
     let maxBytes = MAX_MADE_BYTES;
+    const cutAlt = role === "alt" && typeof spec.kind === "string" && CUT_ALT_KINDS.has(spec.kind);
     if (role === "alt") {
-        if (spec.kind !== "hdr_alt") return reject(400, "error.library.bad_request");
-        if (type === "video/mp4") ext = "mp4";
-        else if (type === "video/webm") ext = "webm";
-        else return reject(400, "error.library.bad_request");
+        if (spec.kind === "hdr_alt") {
+            if (type === "video/mp4") ext = "mp4";
+            else if (type === "video/webm") ext = "webm";
+            else return reject(400, "error.library.bad_request");
+        } else if (cutAlt) {
+            if (type !== "video/quicktime") return reject(400, "error.library.bad_request");
+            ext = "mov";
+        } else return reject(400, "error.library.bad_request");
         maxBytes = MAX_UPLOAD_BYTES;
     } else if (role === "crop") {
         if (type !== "image/jpeg") return reject(400, "error.library.bad_request");
@@ -2295,6 +2310,20 @@ export async function libraryMade(
             width = info?.width ?? null;
             height = info?.height ?? null;
             duration = info?.duration ?? null;
+        } else if (ext === "mov") {
+            const cut = await readQuicktimeAlphaCut(async (offset, length) => {
+                const part = await d.originals.get(key, { range: { offset, length } });
+                if (!part) return null;
+                return { bytes: new Uint8Array(await new Response(part.body).arrayBuffer()), size };
+            }, VIDEO_PROBE_BYTES);
+            if (!cut) {
+                await d.originals.delete(key).catch(() => {});
+                return err(400, "error.library.bad_request");
+            }
+            codecs = cut.codecs;
+            width = cut.width ?? null;
+            height = cut.height ?? null;
+            duration = cut.duration ?? null;
         }
     } catch (e) {
         console.error("[made] reading the head failed", String(e));
@@ -2338,7 +2367,8 @@ export async function libraryMade(
     // leaves it private, which the owner's switch can still fix)
     try {
         const lead = leadOf(postRows);
-        if (lead && effectiveVisibility(lead) === "public") {
+        // A depth cut stays private even on a public post (section 68), the same as a Bria rmbg alternate.
+        if (lead && effectiveVisibility(lead) === "public" && !cutAlt) {
             const fresh = await getRow(d.db, newId);
             if (fresh) await makePublic(d, fresh, keyId);
         }
@@ -2350,7 +2380,11 @@ export async function libraryMade(
     const replaced: string[] = [];
     if (role === "export" || role === "alt") {
         try {
-            const old = postRows.filter((f) => f.role === role && f.id !== newId && (parseJson(f.made_spec) as { kind?: unknown } | null)?.kind === spec.kind);
+            const old = postRows.filter((f) => {
+                if (f.role !== role || f.id === newId) return false;
+                const kind = (parseJson(f.made_spec) as { kind?: unknown } | null)?.kind;
+                return typeof spec.kind === "string" && typeof kind === "string" && sameAltKind(kind, spec.kind);
+            });
             for (const f of old) {
                 try {
                     await removeFile(d, f);
