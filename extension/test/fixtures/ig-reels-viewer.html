@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Instagram reels viewer</title>
+<style>
+  html, body { margin: 0; background: #000; color: #fff; }
+  body { font: 14px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #stage { position: relative; width: 420px; height: 780px; background: #111; }
+  #video { position: absolute; inset: 0; background: linear-gradient(#1c1c1c, #0a0a0a); }
+  /* Live /reels/<id>/ rail: a column of role=button controls. The like graphic is an
+     svg[aria-label=Like] inside the like control, and the count sits under it. The audio
+     disc is an <a href="/reels/audio/...">, which is not the reel. Share sits above Save. */
+  #rail {
+    position: absolute; right: 12px; bottom: 24px;
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
+    z-index: 2;
+  }
+  .slot { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 52px; }
+  .hit {
+    width: 40px; min-height: 40px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: #fff;
+  }
+  .count { font-size: 12px; font-weight: 600; }
+  #audio {
+    width: 28px; height: 28px; border-radius: 6px; border: 2px solid #fff;
+    background: #333; display: block; box-sizing: border-box;
+  }
+  #permalink {
+    position: absolute; left: 16px; bottom: 28px; color: #fff;
+    font-weight: 650; text-decoration: none; max-width: 240px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <div id="stage">
+    <div id="video"></div>
+    <a id="permalink" href="/reel/Df0DRWXgk7j/">a reel</a>
+    <div id="rail">
+      <div class="slot" id="like-slot">
+        <div id="like-button" class="hit" role="button" aria-label="Like">
+          <svg aria-label="Like" viewBox="0 0 24 24" width="24" height="24">
+            <path d="M12 20s-7-4.4-7-9a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 4.6-7 9-7 9z" fill="none" stroke="currentColor" stroke-width="2"/>
+          </svg>
+        </div>
+        <span class="count">966K</span>
+      </div>
+      <div class="slot" id="comment-slot">
+        <div class="hit" role="button" aria-label="Comment">
+          <svg aria-label="Comment" viewBox="0 0 24 24" width="24" height="24"><path d="M5 6h14v9H8l-3 3V6z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        </div>
+        <span class="count">1,204</span>
+      </div>
+      <div class="slot" id="share-slot">
+        <div class="hit" role="button" aria-label="Share">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="24" height="24"><path d="M12 4v10M8 8l4-4 4 4M6 20h12" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        </div>
+        <span class="count">347K</span>
+      </div>
+      <div class="slot" id="save-slot">
+        <div class="hit" role="button" aria-label="Save">
+          <svg aria-label="Save" viewBox="0 0 24 24" width="24" height="24"><path d="M7 4h10v16l-5-3-5 3V4z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        </div>
+      </div>
+      <a id="audio" href="/reels/audio/17890/" aria-label="Audio"></a>
+    </div>
+  </div>
+</main>
+</body>
+</html>

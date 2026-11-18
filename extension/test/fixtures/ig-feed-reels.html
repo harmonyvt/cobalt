@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Instagram feed reels</title>
+<style>
+  html, body { margin: 0; background: #000; color: #fff; font: 14px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  article { width: 470px; border-bottom: 1px solid #262626; padding: 12px 0 16px; }
+  .photo { height: 220px; background: #1a1a1a; margin: 8px 0; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 0 8px; }
+  .row [role="button"] { width: 28px; height: 28px; }
+</style>
+</head>
+<body>
+<article id="photo-post">
+  <a href="/p/AAAAAAAAAAA/">post</a>
+  <div class="photo"></div>
+  <div class="row">
+    <div role="button" aria-label="Like"><svg aria-label="Like" viewBox="0 0 24 24" width="24" height="24"></svg></div>
+    <div role="button" aria-label="Comment"><svg aria-label="Comment" viewBox="0 0 24 24" width="24" height="24"></svg></div>
+    <div role="button" aria-label="Share"></div>
+    <div role="button" aria-label="Save"></div>
+  </div>
+</article>
+<article id="reel-post">
+  <a href="/reel/FEEDREEL111/">reel</a>
+  <div class="photo"></div>
+  <div class="row">
+    <div role="button" aria-label="Like"><svg aria-label="Like" viewBox="0 0 24 24" width="24" height="24"></svg></div>
+    <div role="button" aria-label="Comment"><svg aria-label="Comment" viewBox="0 0 24 24" width="24" height="24"></svg></div>
+    <div role="button" aria-label="Share"></div>
+    <div role="button" aria-label="Save"></div>
+  </div>
+</article>
+</body>
+</html>
