@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { describe, expect, it } from "vitest";
 import { wire } from "../src/background";
 import type { Ext, StorageArea } from "../src/lib/browser";
-import { relocateHost, scanInstagram, scanTwitch, scanX, scanYouTube } from "../src/lib/find";
+import { mountedHost, relocateHost, scanInstagram, scanTwitch, scanX, scanYouTube } from "../src/lib/find";
 import { createSave, followSave, pollSave } from "../src/lib/save";
 import { chromeApproveUrl, matchCode, parseRedirect, pkceChallenge, prefersWebAuthFlow, runSignIn, safariApproveUrl } from "../src/lib/signin";
 import { popupView, publicAuth, spriteCss } from "../src/lib/view";
@@ -72,6 +72,44 @@ describe("finding posts in a page", () => {
         expect(found.map((f) => f.url)).toEqual(["https://x.com/capy/status/111", "https://x.com/third/status/333"]);
         expect(found[0]!.mount.getAttribute("role")).toBe("group");
         expect(found.every((f) => f.url !== HOME)).toBe(true);
+    });
+
+    it("sits in the X action bar after bookmark, not inside the like control under the heart", () => {
+        const doc = page(
+            HOME,
+            `<article data-testid="tweet">
+                <a href="/capy/status/1111111111111111111"><time>1h</time></a>
+                <div id="bar">
+                    <div id="like-cell" role="group" aria-label="Like"><button data-testid="like" aria-label="Like">like</button></div>
+                    <span id="like-count">3.4K</span>
+                    <div id="reply-cell"><button data-testid="reply" aria-label="33 Replies. Reply">reply</button><span>33</span></div>
+                    <div id="repost-cell"><button data-testid="retweet" aria-label="386 Reposts. Repost">repost</button><span>386</span></div>
+                    <div id="share-cell"><button data-testid="share" aria-label="Share">share</button><span>1.9K</span></div>
+                    <div id="bookmark-cell"><button data-testid="bookmark" aria-label="Bookmark">bookmark</button></div>
+                </div>
+                <article data-testid="tweet">
+                    <a href="/other/status/222"><time>2h</time></a>
+                    <div id="quoted-bar">
+                        <button data-testid="reply" aria-label="Reply">reply</button>
+                        <button data-testid="like" aria-label="Like">like</button>
+                        <button data-testid="bookmark" aria-label="Bookmark">bookmark</button>
+                    </div>
+                </article>
+            </article>`,
+        );
+        const found = scanX(doc, HOME);
+        expect(found.map((f) => f.url)).toEqual(["https://x.com/capy/status/1111111111111111111", "https://x.com/other/status/222"]);
+        expect(found[0]!.mount.id).toBe("bar");
+        expect(found[0]!.fit).toBe("row");
+        expect(found[0]!.after?.id).toBe("bookmark-cell");
+        expect(found[0]!.mount.contains(doc.querySelector("#like-cell"))).toBe(true);
+        expect(found[0]!.after?.contains(doc.querySelector('[data-testid="like"]'))).toBe(false);
+        expect(found[1]!.mount.id).toBe("quoted-bar");
+        expect(found[1]!.after?.getAttribute("data-testid")).toBe("bookmark");
+        const host = doc.createElement("span");
+        expect(relocateHost(host, found[0]!.mount, found[0]!.after)).toBe(true);
+        expect(host.previousElementSibling?.id).toBe("bookmark-cell");
+        expect(doc.querySelector("#like-cell")!.contains(host)).toBe(false);
     });
 
     it("reads a YouTube card out of an open shadow root, and the watch-page action row", () => {
@@ -167,6 +205,56 @@ describe("finding posts in a page", () => {
         const reel = page("https://www.instagram.com/reel/CCCCCCCCCCC/", `<main><section><svg aria-label="Like"></svg></section></main>`);
         expect(scanInstagram(reel, "https://www.instagram.com/reel/CCCCCCCCCCC/").map((f) => f.url)).toEqual([
             "https://www.instagram.com/reel/CCCCCCCCCCC/",
+        ]);
+    });
+
+    it("puts one button on a reels rail above Save, and keeps a feed post on its own article", () => {
+        const reels = page(
+            "https://www.instagram.com/reels/Df0DRWXgk7j/",
+            `<main><div id="rail">
+                <div id="like-slot"><button aria-label="Like"><svg aria-hidden="true"></svg></button></div>
+                <div id="comment-slot"><button aria-label="Comment"><svg aria-hidden="true"></svg></button></div>
+                <div id="repost-slot"><button aria-label="Repost"></button></div>
+                <div id="share-slot"><button aria-label="Share"></button></div>
+                <div id="save-slot"><button aria-label="Save"></button></div>
+                <div id="audio"></div>
+            </div></main>`,
+        );
+        const found = scanInstagram(reels, "https://www.instagram.com/reels/Df0DRWXgk7j/");
+        expect(found).toHaveLength(1);
+        expect(found[0]!.url).toBe("https://www.instagram.com/reel/Df0DRWXgk7j/");
+        expect(found[0]!.mount.id).toBe("rail");
+        expect(found[0]!.fit).toBe("rail");
+        expect(found[0]!.before?.id).toBe("save-slot");
+        const host = reels.createElement("span");
+        host.className = "capystore-save";
+        host.dataset.url = found[0]!.url;
+        expect(relocateHost(host, found[0]!.mount, found[0]!.after, found[0]!.before)).toBe(true);
+        expect(host.nextElementSibling?.id).toBe("save-slot");
+        expect(mountedHost(found[0]!.mount, "capystore-save")).toBe(host);
+        // The same rail, the next reel: one host, retargeted, not a second button.
+        const next = scanInstagram(reels, "https://www.instagram.com/reels/Df2a89TNsKv/");
+        expect(next).toHaveLength(1);
+        expect(next[0]!.url).toBe("https://www.instagram.com/reel/Df2a89TNsKv/");
+        expect(next[0]!.mount.id).toBe("rail");
+        const again = mountedHost(next[0]!.mount, "capystore-save");
+        expect(again).toBe(host);
+        again!.dataset.url = next[0]!.url;
+        expect(reels.querySelectorAll(".capystore-save")).toHaveLength(1);
+
+        const paired = page(
+            "https://www.instagram.com/reels/Df0DRWXgk7j/",
+            `<div id="current"><a href="/reel/Df0DRWXgk7j/"></a>
+                <button aria-label="Like"></button><button aria-label="Comment"></button><button aria-label="Save"></button>
+            </div>
+            <div id="upcoming"><a href="/reel/Df2a89TNsKv/"></a>
+                <button aria-label="Like"></button><button aria-label="Comment"></button><button aria-label="Save"></button>
+            </div>`,
+        );
+        const both = scanInstagram(paired, "https://www.instagram.com/reels/Df0DRWXgk7j/");
+        expect(both.map((f) => [f.url, f.mount.id])).toEqual([
+            ["https://www.instagram.com/reel/Df0DRWXgk7j/", "current"],
+            ["https://www.instagram.com/reel/Df2a89TNsKv/", "upcoming"],
         ]);
     });
 

@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Instagram reels</title>
+<style>
+  html, body { margin: 0; background: #000; color: #fff; }
+  body { font: 14px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #stage { position: relative; width: 420px; height: 746px; background: #111; }
+  #video { position: absolute; inset: 0; background: linear-gradient(#1a1a1a, #0a0a0a); }
+  #rail {
+    position: absolute; right: 8px; bottom: 20px;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    z-index: 2;
+  }
+  .slot { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 48px; }
+  .slot button {
+    width: 40px; height: 40px; border: 0; padding: 0; margin: 0;
+    background: transparent; color: #fff; border-radius: 999px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 22px; cursor: pointer;
+  }
+  .slot button:hover { background: rgba(255, 255, 255, 0.12); }
+  .slot span { font-size: 12px; font-weight: 600; }
+  #audio {
+    width: 28px; height: 28px; border-radius: 6px; background: #333;
+    border: 2px solid #fff; box-sizing: border-box;
+  }
+</style>
+</head>
+<body>
+<main>
+  <div id="stage">
+    <div id="video"></div>
+    <!-- Reels rail: labels live on the buttons. The svgs are aria-hidden, so a
+         svg[aria-label=Like] scan never sees this page. -->
+    <div id="rail">
+      <div class="slot" id="like-slot"><button type="button" aria-label="Like"><svg aria-hidden="true" width="24" height="24"></svg></button><span>12K</span></div>
+      <div class="slot" id="comment-slot"><button type="button" aria-label="Comment"><svg aria-hidden="true" width="24" height="24"></svg></button><span>88</span></div>
+      <div class="slot" id="repost-slot"><button type="button" aria-label="Repost"><svg aria-hidden="true" width="24" height="24"></svg></button></div>
+      <div class="slot" id="share-slot"><button type="button" aria-label="Share"><svg aria-hidden="true" width="24" height="24"></svg></button></div>
+      <div class="slot" id="save-slot"><button type="button" aria-label="Save"><svg aria-hidden="true" width="24" height="24"></svg></button></div>
+      <div id="audio" role="img" aria-label="Audio"></div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

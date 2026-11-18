@@ -12,6 +12,10 @@ export type FoundPost = {
     variant: Variant;
     // When set, the host is inserted immediately after this child of `mount` (the Share chip, not the end of the row).
     after?: Element;
+    // When set, the host is inserted immediately before this child of `mount` (above Save on a reels rail).
+    before?: Element;
+    // `row` shares an X action bar. `rail` is one slot in Instagram's vertical reels rail.
+    fit?: "row" | "rail";
 };
 
 export type Scan = (doc: ParentNode, pageUrl: string) => FoundPost[];
@@ -54,6 +58,44 @@ export function deepAll(root: ParentNode, selector: string): Element[] {
     return out;
 }
 
+// Reply, repost, like, bookmark. The first role=group in a post is often only the like control,
+// a column under the heart, so mounting there puts the button on its own row.
+const X_ACTION = '[data-testid="reply"], [data-testid="retweet"], [data-testid="unretweet"], [data-testid="like"], [data-testid="unlike"], [data-testid="bookmark"], [data-testid="removeBookmark"]';
+
+function actionsIn(scope: Element, article: Element): Element[] {
+    return [...scope.querySelectorAll(X_ACTION)].filter((el) => el.closest("article") === article);
+}
+
+function xMount(article: Element): Pick<FoundPost, "mount" | "after" | "fit"> {
+    const actions = actionsIn(article, article);
+    if (actions.length < 2) {
+        const group = [...article.querySelectorAll('[role="group"]')].find((el) => el.closest("article") === article);
+        return { mount: group ?? article };
+    }
+    let node: Element | null = actions[0]!.parentElement;
+    let bar: Element | null = null;
+    while (node && node !== article) {
+        if (actionsIn(node, article).length >= 2) {
+            bar = node;
+            break;
+        }
+        node = node.parentElement;
+    }
+    if (!bar) return { mount: actions[0]!.parentElement ?? article };
+    const cells = [...bar.children];
+    const cellOf = (el: Element | null | undefined) => (el ? cells.find((c) => c === el || c.contains(el)) : undefined);
+    const bookmark = [...bar.querySelectorAll('[data-testid="bookmark"], [data-testid="removeBookmark"]')].find((el) => el.closest("article") === article);
+    const share = [...bar.querySelectorAll("button, [role='button'], a")].find((el) => {
+        if (el.closest("article") !== article) return false;
+        return el.getAttribute("data-testid") === "share" || /^share\b/i.test((el.getAttribute("aria-label") ?? "").trim());
+    });
+    const bookmarkCell = cellOf(bookmark);
+    const shareCell = cellOf(share);
+    const idx = Math.max(bookmarkCell ? cells.indexOf(bookmarkCell) : -1, shareCell ? cells.indexOf(shareCell) : -1);
+    const after = idx >= 0 ? cells[idx] : undefined;
+    return { mount: bar, fit: "row", ...(after ? { after } : {}) };
+}
+
 export function scanX(doc: ParentNode, pageUrl: string): FoundPost[] {
     const marked = [...(doc.querySelectorAll?.('article[data-testid="tweet"]') ?? [])];
     const articles = marked.length ? marked : [...(doc.querySelectorAll?.("article") ?? [])];
@@ -61,8 +103,8 @@ export function scanX(doc: ParentNode, pageUrl: string): FoundPost[] {
     for (const article of articles) {
         const url = xUrl(article, pageUrl);
         if (!url) continue;
-        const mount = article.querySelector('[role="group"]') ?? article;
-        out.push({ url, mount, variant: "icon" });
+        const place = xMount(article);
+        out.push({ url, variant: "icon", ...place });
     }
     return out;
 }
@@ -217,7 +259,12 @@ export function scanTwitch(doc: ParentNode, pageUrl: string): FoundPost[] {
 }
 
 // Move a button that landed on a weak mount (the page, a card) once a tighter anchor exists.
-export function relocateHost(host: HTMLElement, mount: Element, after?: Element | null): boolean {
+export function relocateHost(host: HTMLElement, mount: Element, after?: Element | null, before?: Element | null): boolean {
+    if (before && before.parentElement === mount) {
+        if (host.parentElement === mount && host.nextElementSibling === before) return false;
+        mount.insertBefore(host, before);
+        return true;
+    }
     if (after && after.parentElement === mount) {
         if (host.parentElement === mount && host.previousElementSibling === after) return false;
         mount.insertBefore(host, after.nextSibling);
@@ -228,8 +275,72 @@ export function relocateHost(host: HTMLElement, mount: Element, after?: Element 
     return true;
 }
 
+// A button already sitting in this row or rail. The caller retargets its URL when the reel changes.
+export function mountedHost(mount: Element, hostClass: string): HTMLElement | null {
+    for (const el of mount.children) {
+        const host = el as HTMLElement;
+        if (host.classList?.contains(hostClass)) return host;
+    }
+    return null;
+}
+
 const IG_LINK = 'a[href*="/p/"], a[href*="/reel"], a[href*="/tv/"]';
 const IG_LIKE = 'svg[aria-label="Like"], svg[aria-label="Unlike"], svg[aria-label="Comment"]';
+
+function igLabel(el: Element): string {
+    const own = (el.getAttribute("aria-label") ?? "").trim();
+    if (own) return own;
+    return (el.querySelector("svg[aria-label]")?.getAttribute("aria-label") ?? "").trim();
+}
+
+function insideCapystore(el: Element): boolean {
+    const root = el.getRootNode();
+    if (typeof ShadowRoot !== "undefined" && root instanceof ShadowRoot && (root.host as HTMLElement).classList?.contains("capystore-save")) return true;
+    return !!el.closest(".capystore-save");
+}
+
+// Reels put the words on the button. The svg is aria-hidden, so the like-svg scan never sees the rail.
+function isIgAction(label: string): boolean {
+    if (/capystore/i.test(label)) return false;
+    return /^(like|unlike|comment|comments|repost|share|send|save|saved|remove|bookmark)\b/i.test(label);
+}
+
+function igControls(root: ParentNode): Element[] {
+    const out: Element[] = [];
+    for (const el of deepAll(root, "button, [role='button']")) {
+        if (insideCapystore(el)) continue;
+        if (!isIgAction(igLabel(el))) continue;
+        out.push(el);
+    }
+    return out;
+}
+
+function instagramRails(doc: ParentNode): Element[] {
+    const controls = igControls(doc);
+    const rails: Element[] = [];
+    const claimed = new Set<Element>();
+    for (const seed of controls) {
+        if (claimed.has(seed)) continue;
+        let node: Element | null = seed.parentElement;
+        let rail: Element | null = null;
+        while (node && node.tagName !== "BODY" && node.tagName !== "HTML") {
+            const n = controls.filter((c) => node!.contains(c) && !claimed.has(c)).length;
+            if (n >= 3) {
+                rail = node;
+                break;
+            }
+            node = node.parentElement;
+        }
+        if (!rail) continue;
+        for (const c of controls) if (rail.contains(c)) claimed.add(c);
+        rails.push(rail);
+    }
+    return rails;
+}
+
+function directChild(rail: Element, el: Element): Element | undefined {
+    return [...rail.children].find((c) => c === el || c.contains(el));
+}
 
 export function scanInstagram(doc: ParentNode, pageUrl: string): FoundPost[] {
     const out: FoundPost[] = [];
@@ -245,6 +356,18 @@ export function scanInstagram(doc: ParentNode, pageUrl: string): FoundPost[] {
         out.push({ url, mount, variant: "icon" });
     }
     const page = canonicalInstagram(pageUrl, pageUrl);
+    for (const rail of instagramRails(doc)) {
+        // A feed post already got its button from the article above. The rail is the reels viewer.
+        if (rail.closest("article")) continue;
+        const link = deepQuery(rail, IG_LINK);
+        const fromLink = link ? canonicalInstagram(link.getAttribute("href") ?? "", pageUrl) : null;
+        const url = fromLink ?? page;
+        if (!url || seen.has(url)) continue;
+        const save = igControls(rail).find((c) => /^(save|saved|remove|bookmark)\b/i.test(igLabel(c)));
+        const before = save ? directChild(rail, save) : undefined;
+        seen.add(url);
+        out.push({ url, mount: rail, variant: "icon", fit: "rail", ...(before ? { before } : {}) });
+    }
     if (page && !seen.has(page)) {
         // A removed post still has a permalink and a <main>. Only a like control or a post link is a real anchor.
         const like = deepQuery(doc, IG_LIKE);
