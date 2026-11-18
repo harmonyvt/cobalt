@@ -118,6 +118,9 @@ extension Copy {
         // MARK: open, save, close
 
         static let openingProject = "opening the edit…"
+        static let openingTooLong = "this is taking too long. try again."
+        static let nothingToOpen = "there's no edit to open"
+        static let editClosed = "this edit is closed"
         static let couldntOpen = "couldn't open this edit", projectGone = "this edit was deleted"
         static let closeUnsavedTitle = "close without saving?"
         static let closeUnsavedBody = "your last changes aren't on the server yet."
@@ -203,7 +206,12 @@ extension Copy {
             case .invalid(let problem): return Self.problem(problem)
             case .offline: return renderOffline
             case .unavailable: return "the server can't do that right now"
-            case .other: return "something went wrong"
+            case .other(let word):
+                switch word {
+                case "timed out": return openingTooLong
+                case "missing": return nothingToOpen
+                default: return "something went wrong"
+                }
             }
         }
 
