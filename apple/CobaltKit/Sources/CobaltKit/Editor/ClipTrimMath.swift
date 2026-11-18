@@ -26,7 +26,7 @@ public enum ClipTrimMath {
     }
 
     public static func clampedZoom(_ zoom: Double) -> Double {
-        let z = zoom.isFinite ? zoom : minimumZoom
+        let z = zoom.isNaN ? minimumZoom : zoom      // +inf clamps to the maximum, -inf to the minimum
         return min(maximumZoom, max(minimumZoom, z))
     }
 

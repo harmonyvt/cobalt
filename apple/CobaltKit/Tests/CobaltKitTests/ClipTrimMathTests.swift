@@ -70,9 +70,9 @@ struct ClipTrimMathTests {
         #expect(ClipTrimMath.clampedPlayhead(.nan, duration: 10) == 0)
     }
 
-    @Test func aFasterClipKeepsMoreSourceForTheSameOutput() {
+    @Test @MainActor func aFasterClipKeepsMoreSourceForTheSameOutput() {   // EditSession.clampTrim is main-actor
         #expect(ClipTrimMath.minimumSourceSpan(speed: 1) == 0.1)
-        #expect(ClipTrimMath.minimumSourceSpan(speed: 1.5) == 0.15)
+        #expect(abs(ClipTrimMath.minimumSourceSpan(speed: 1.5) - 0.15) < 1e-9)   // 0.1 * 1.5 is not exactly 0.15 in binary
         #expect(ClipTrimMath.minimumSourceSpan(speed: 2) == 0.2)
         #expect(ClipTrimMath.minimumSourceSpan(speed: 0.5) == 0.1)   // slow still keeps 0.1 s of source
         #expect(ClipTrimMath.minimumSourceSpan(speed: .nan) == 0.1)

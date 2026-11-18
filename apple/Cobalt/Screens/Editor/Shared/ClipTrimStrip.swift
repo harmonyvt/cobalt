@@ -133,7 +133,9 @@ struct ClipTrimStrip: View {
         .frame(height: Metrics.strip)
         .simultaneousGesture(pinch)
         #if os(macOS)
-        .onContinuousHover { phase in hovering = phase == .active }
+        .onContinuousHover { phase in
+            if case .active = phase { hovering = true } else { hovering = false }     // HoverPhase is not Equatable
+        }
         .modifier(ClipTrimScrollZoom(enabled: hovering) { delta in
             zoom = ClipTrimMath.clampedZoom(zoom * delta)
         })
