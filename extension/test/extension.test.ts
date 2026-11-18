@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { wire } from "../src/background";
 import type { Ext, StorageArea } from "../src/lib/browser";
 import { mountedHost, relocateHost, scanInstagram, scanTwitch, scanX, scanYouTube } from "../src/lib/find";
+import { describeSave, friendlyError, sizePair } from "../src/lib/progress";
 import { createSave, followSave, pollSave } from "../src/lib/save";
 import { chromeApproveUrl, matchCode, parseRedirect, pkceChallenge, prefersWebAuthFlow, runSignIn, safariApproveUrl } from "../src/lib/signin";
 import { popupView, publicAuth, spriteCss } from "../src/lib/view";
@@ -352,9 +353,9 @@ describe("saving and polling", () => {
             return Response.json({ status: polls < 2 ? "saving" : "ready", id: "sid" });
         };
         const started = await createSave(fetchImpl, KEY, "https://x.com/capy/status/1");
-        expect(started).toEqual({ kind: "saving", id: "sid", studioUrl: "https://cobalt.capybaraharmony.com/studio/sid" });
+        expect(started).toMatchObject({ kind: "saving", id: "sid", studioUrl: "https://cobalt.capybaraharmony.com/studio/sid" });
         expect(calls[0]!.init.credentials).toBe("omit");
-        expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ url: "https://x.com/capy/status/1", origin: "extension", queue: true });
+        expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ url: "https://x.com/capy/status/1", origin: "extension", queue: true, phone: true });
         expect(String(calls[0]!.init.headers && (calls[0]!.init.headers as Record<string, string>).authorization)).toBe(`Api-Key ${KEY}`);
 
         let t = 0;
@@ -379,7 +380,37 @@ describe("saving and polling", () => {
         expect((await createSave(async () => { throw new Error("offline"); }, KEY, "https://x.com/a/status/1")).kind).toBe("offline");
         expect(await pollSave(async () => json(200, { status: "error", error: { code: "error.studio.busy" } }), KEY, "sid", "https://cobalt.capybaraharmony.com/studio/sid")).toEqual({
             kind: "error",
-            message: "error.studio.busy",
+            message: "Capystore is busy. Try again in a moment.",
+            code: "error.studio.busy",
+        });
+    });
+});
+
+describe("save progress copy", () => {
+    it("names each step the way the button and the toast say it", () => {
+        expect(describeSave("saving", { step: "queued", bytes: null, total: null, waking: false, queueAhead: 2, service: "youtube", code: null, publicUrl: null })).toMatchObject({
+            label: "Queued",
+            ring: "spin",
+            toast: "Saving to Capystore · 2 ahead of you",
+        });
+        expect(describeSave("saving", { step: "fetching", bytes: null, total: null, waking: true, queueAhead: null, service: "youtube", code: null, publicUrl: null }).toast).toBe("Waking the server…");
+        const down = describeSave("saving", { step: "fetching", bytes: 14_200_000, total: 37_600_000, waking: false, queueAhead: null, service: "youtube", code: null, publicUrl: null });
+        expect(down.toast).toBe("Downloading from youtube · 14.2 of 37.6 MB");
+        expect(down.label).toBe("38%");
+        expect(sizePair(14_200_000, 37_600_000)).toBe("14.2 of 37.6 MB");
+        expect(describeSave("saving", { step: "storing", bytes: 81, total: 100, waking: false, queueAhead: null, service: "youtube", code: null, publicUrl: null }).toast).toBe("Storing in your library · 81%");
+        expect(describeSave("saved", { step: null, bytes: null, total: null, waking: false, queueAhead: null, service: "youtube", code: null, publicUrl: null })).toMatchObject({
+            label: "Saved",
+            toast: "Saved to Capystore · Open · Copy link",
+            open: true,
+            copy: true,
+        });
+        expect(friendlyError("error.webp.no_video")).toBe("Couldn't find a video in this post");
+        expect(describeSave("error", { step: null, bytes: null, total: null, waking: false, queueAhead: null, service: null, code: "error.webp.no_video", publicUrl: null })).toMatchObject({
+            label: "Retry",
+            toast: "Couldn't find a video in this post",
+            retry: true,
+            details: true,
         });
     });
 });

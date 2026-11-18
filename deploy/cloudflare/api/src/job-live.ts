@@ -108,11 +108,17 @@ const titleOf = (service: string, ref: string, input: string) => {
 
 // `agent`: the run's `agent` field (live.ts startAgent). A make started by the agent has only the make step; an app run
 // that goes on to the trim and a webp grows "read" and "make" as it gets there, so the steps are always the real ones.
-export function jobOfSave(a: RunAttributes, s: LiveState, agent?: "save" | "make"): Job {
+export function jobOfSave(a: RunAttributes, s: LiveState, agent?: "save" | "make" | "browser"): Job {
     const upload = a.input === "file";
     const making = agent === "make";
+    const browser = agent === "browser";
     const kind: JobKind = making ? "make" : upload ? "upload" : "save";
-    const attributes: JobAttributes = { id: a.run, kind, title: titleOf(a.service, a.ref, a.input), agent: agent !== undefined };
+    const attributes: JobAttributes = {
+        id: a.run,
+        kind,
+        title: browser ? "from your browser" : titleOf(a.service, a.ref, a.input),
+        agent: agent === "save" || agent === "make",
+    };
 
     const reads = s.stage === "reading" || s.stage === "ready";
     const makes = s.stage === "rendering" || (s.stage === "done" && s.resultURL !== undefined) || (s.stage === "failed" && s.rail === 3);

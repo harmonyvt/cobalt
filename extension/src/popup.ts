@@ -1,6 +1,6 @@
 import { getExt } from "./lib/browser";
 import { LIBRARY_URL } from "./lib/save";
-import { popupView, spriteCss, type RecentSave, type SpriteState } from "./lib/view";
+import { currentCard, popupView, spriteCss, type RecentSave, type SpriteState } from "./lib/view";
 
 const ext = getExt();
 if (ext) void init(ext);
@@ -16,6 +16,16 @@ async function init(api: NonNullable<ReturnType<typeof getExt>>) {
     const signIn = document.querySelector<HTMLButtonElement>("#sign-in")!;
     const signOut = document.querySelector<HTMLButtonElement>("#sign-out")!;
     const recent = document.querySelector("#recent")!;
+    const card = document.querySelector<HTMLElement>("#card")!;
+    const cardHeadline = document.querySelector("#card-headline")!;
+    const cardFill = document.querySelector<HTMLElement>("#card-fill")!;
+    const cardLabel = document.querySelector("#card-label")!;
+    const cardOpen = document.querySelector<HTMLButtonElement>("#card-open")!;
+    const cardCopy = document.querySelector<HTMLButtonElement>("#card-copy")!;
+    const cardRetry = document.querySelector<HTMLButtonElement>("#card-retry")!;
+    const cardDetails = document.querySelector<HTMLButtonElement>("#card-details")!;
+    const cardCode = document.querySelector<HTMLElement>("#card-code")!;
+    const phone = document.querySelector<HTMLInputElement>("#phone")!;
     signIn.classList.add("primary");
 
     const draw = (input: { signedIn: boolean; offline: boolean; device: string | null; saving: boolean; recent: RecentSave[] }) => {
@@ -25,6 +35,25 @@ async function init(api: NonNullable<ReturnType<typeof getExt>>) {
         detail.textContent = view.detail;
         signIn.hidden = !view.showSignIn;
         signOut.hidden = !view.showSignOut;
+        const current = currentCard(input.recent);
+        card.hidden = !current;
+        if (current) {
+            cardHeadline.textContent = current.headline;
+            cardLabel.textContent = current.label;
+            cardFill.style.width = current.fraction === null ? "12%" : `${Math.round(current.fraction * 100)}%`;
+            cardOpen.hidden = !current.open;
+            cardCopy.hidden = !current.copy;
+            cardRetry.hidden = !current.retry;
+            cardDetails.hidden = !current.details;
+            cardCode.hidden = true;
+            cardCode.textContent = current.code ?? "";
+            cardOpen.onclick = () => void api.runtime.sendMessage({ type: "open", url: current.studioUrl || "library" });
+            cardCopy.onclick = () => void navigator.clipboard?.writeText(current.shareUrl || current.studioUrl || current.url);
+            cardRetry.onclick = () => void api.runtime.sendMessage({ type: "save", url: current.url });
+            cardDetails.onclick = () => {
+                cardCode.hidden = !cardCode.hidden;
+            };
+        }
         recent.replaceChildren();
         if (input.recent.length === 0) {
             const li = document.createElement("li");
@@ -58,6 +87,7 @@ async function init(api: NonNullable<ReturnType<typeof getExt>>) {
             saving?: boolean;
             recent?: RecentSave[];
             pairing?: string | null;
+            phone?: boolean;
         };
         draw({
             signedIn: bag?.signedIn === true,
@@ -66,6 +96,7 @@ async function init(api: NonNullable<ReturnType<typeof getExt>>) {
             saving: bag?.saving === true,
             recent: Array.isArray(bag?.recent) ? bag.recent : [],
         });
+        phone.checked = bag?.phone !== false;
         if (typeof bag?.pairing === "string") {
             heading.textContent = "Waiting for approval";
             detail.textContent = `Approve only if the Capystore page shows ${bag.pairing}.`;
@@ -85,6 +116,9 @@ async function init(api: NonNullable<ReturnType<typeof getExt>>) {
     });
     document.querySelector("#library")!.addEventListener("click", () => {
         void api.runtime.sendMessage({ type: "open", url: "library" });
+    });
+    phone.addEventListener("change", () => {
+        void api.runtime.sendMessage({ type: "set-phone", on: phone.checked });
     });
     document.querySelector("#options")!.addEventListener("click", () => {
         if (api.runtime.openOptionsPage) void api.runtime.openOptionsPage();

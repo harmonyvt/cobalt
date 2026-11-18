@@ -21,6 +21,19 @@
       <button id="library" type="button">Library</button>
       <button id="options" type="button">Sites</button>
     </div>
+    <section id="card" class="card" hidden>
+      <h2 id="card-headline">Saving</h2>
+      <div class="bar" aria-hidden="true"><span id="card-fill"></span></div>
+      <p id="card-label"></p>
+      <div class="actions">
+        <button id="card-open" type="button" hidden>Open in Studio</button>
+        <button id="card-copy" type="button" hidden>Copy link</button>
+        <button id="card-retry" type="button" hidden>Retry</button>
+        <button id="card-details" type="button" hidden>Details</button>
+      </div>
+      <p id="card-code" class="code" hidden></p>
+    </section>
+    <label class="phone"><input id="phone" type="checkbox" checked> Show saves on my iPhone</label>
     <h2>Recent saves</h2>
     <ul id="recent"></ul>
   </main>

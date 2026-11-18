@@ -1,5 +1,7 @@
 // What the popup shows. The token never appears here.
 
+import { describeSave, EMPTY_PROGRESS, type SaveProgress } from "./progress";
+
 export type SpriteState = "idle" | "saving" | "saved" | "error" | "sleeping";
 
 export type RecentSave = {
@@ -8,7 +10,45 @@ export type RecentSave = {
     at: number;
     studioUrl?: string;
     error?: string;
+    code?: string | null;
+    shareUrl?: string | null;
+    progress?: SaveProgress;
+    site?: string;
 };
+
+export type CurrentCard = {
+    url: string;
+    studioUrl: string | null;
+    shareUrl: string | null;
+    headline: string;
+    fraction: number | null;
+    label: string;
+    open: boolean;
+    copy: boolean;
+    retry: boolean;
+    details: boolean;
+    code: string | null;
+};
+
+export function currentCard(recent: RecentSave[]): CurrentCard | null {
+    const row = recent.find((r) => r.status === "saving") ?? recent[0];
+    if (!row) return null;
+    const progress = row.progress ?? { ...EMPTY_PROGRESS, code: row.code ?? null };
+    const face = describeSave(row.status, progress);
+    return {
+        url: row.url,
+        studioUrl: row.studioUrl ?? null,
+        shareUrl: row.shareUrl ?? progress.publicUrl,
+        headline: face.headline,
+        fraction: face.fraction,
+        label: face.label,
+        open: face.open,
+        copy: face.copy,
+        retry: face.retry,
+        details: face.details,
+        code: progress.code,
+    };
+}
 
 export type PopupInput = {
     signedIn: boolean;

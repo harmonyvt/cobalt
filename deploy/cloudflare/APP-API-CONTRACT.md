@@ -7424,7 +7424,16 @@ to it if the redirect flow throws.
 
 `POST /studio` with `origin: "extension"` (and `queue: true`, so a busy studio waits instead of answering 429).
 The session is not remembered for `GET /studio/recent` (that list stays share-sheet saves only). The extension
-keeps its own recent list and polls `GET /studio/<id>` until `status` is `ready` or `error`.
+keeps its own recent list and polls `GET /studio/<id>` until `status` is `ready` or `error`. That poll already
+carries `step`, `step_bytes`, `step_total`, `waking`, `queue_ahead`, `service` and `error.code`; the extension
+draws them.
+
+`phone` (optional boolean, only read when `origin` is `"extension"`). Absent or `true`: the save also
+push-starts the existing job Live Activity on the owner's newest iPhone, the same `startAgent` path as a chat
+or MCP save (section 8.11), including that path's 10-second per-phone start throttle. The lock-screen alert is
+`saving from <service> in your browser`. The card is the existing `CobaltJobActivityAttributes` / `JobLiveState`
+card, with its title line `from your browser`. `false`: no activity. Any other type is
+`400 error.studio.invalid_params` and nothing is created. No new table.
 
 ### 65.6 Where it shows
 

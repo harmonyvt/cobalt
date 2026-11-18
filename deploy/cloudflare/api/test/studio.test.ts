@@ -1711,6 +1711,19 @@ describe("live hooks (what the studio tells the live service)", () => {
             await st.create(KEY_ID, body({ url: LINK }));
             expect(agent).toEqual([]);
         });
+
+        it("an extension save asks for the same island unless the iPhone toggle is off", async () => {
+            const s = setup();
+            const agent: unknown[] = [];
+            const { live } = fakeLive({ startAgent: async (sid, o) => void agent.push({ sid, ...o }) });
+            const st = s.make({ live });
+            const { id } = asBody(await st.create(KEY_ID, body({ url: LINK, origin: "extension" })));
+            expect(agent).toEqual([{ sid: id, kind: "save", service: "x", ref: "2105237035271258436", title: null, browser: true }]);
+            agent.length = 0;
+            await st.create(KEY_ID, body({ url: LINK, origin: "extension", phone: false }));
+            expect(agent).toEqual([]);
+            expect((await st.create(KEY_ID, body({ url: LINK, origin: "extension", phone: "yes" }))).status).toBe(400);
+        });
     });
 
     describe("saves", () => {
