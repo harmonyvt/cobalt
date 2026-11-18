@@ -24,6 +24,17 @@ public enum EditSourceAsset: @unchecked Sendable {
     }
 }
 
+/// Hints for the live effects preview. They change the picture on the device and are not saved.
+public struct EditPreviewHints: Sendable, Equatable {
+    public var maskOverlayID: String?
+    public var splitOverlayID: String?
+
+    public init(maskOverlayID: String? = nil, splitOverlayID: String? = nil) {
+        self.maskOverlayID = maskOverlayID
+        self.splitOverlayID = splitOverlayID
+    }
+}
+
 /// What `EditComposition.build` makes: the composition, how the picture is made, the audio mix, and the timing it was built from.
 public struct EditPlayable: @unchecked Sendable {
     public let composition: AVComposition
@@ -31,12 +42,18 @@ public struct EditPlayable: @unchecked Sendable {
     public let videoComposition: AVVideoComposition
     public let audioMix: AVAudioMix
     public let timing: EditTiming
+    /// The preview was drawn at half size because more than 8 videos overlap. The render on the server is full size.
+    public let proxy: Bool
 
-    public init(composition: AVComposition, videoComposition: AVVideoComposition, audioMix: AVAudioMix, timing: EditTiming) {
+    public init(
+        composition: AVComposition, videoComposition: AVVideoComposition, audioMix: AVAudioMix, timing: EditTiming,
+        proxy: Bool = false
+    ) {
         self.composition = composition
         self.videoComposition = videoComposition
         self.audioMix = audioMix
         self.timing = timing
+        self.proxy = proxy
     }
 
     /// A player item with the picture and the sound set, and the pitch kept at any speed.
@@ -57,7 +74,8 @@ public enum EditComposition {
     /// is here plays the copy's sound instead of the source's (scaled for speed the same way); one whose copy is not here yet
     /// plays the source's sound unshifted.
     public static func build(
-        _ t: EditTimeline, assets: [String: EditSourceAsset], shifted: [EditPitchKey: URL] = [:]
+        _ t: EditTimeline, assets: [String: EditSourceAsset], shifted: [EditPitchKey: URL] = [:],
+        preview: EditPreviewHints = EditPreviewHints()
     ) async throws -> EditPlayable {
         let t = EditJSON.rounded(t)
         // a clip's `out` is clamped to its file's length, as the renderer does
@@ -137,7 +155,7 @@ public enum EditComposition {
         // overlays: videos on their layer's track, gifs and photos drawn by the compositor
         for (j, o) in t.overlay.enumerated() {
             guard let asset = assets[o.item] else { throw EditError.other("source:\(o.item)") }
-            let layer = min(max(0, o.track), EditValidation.maxOverlayTracks - 1)
+            let layer = max(0, o.track)
             switch asset {
             case .video(let avAsset, let display, let hasAudio):
                 guard let sourceVideo = try await avAsset.loadTracks(withMediaType: .video).first else {
@@ -187,7 +205,11 @@ public enum EditComposition {
             }
         }
 
-        let plan = EditRenderPlan(timeline: t, timing: timing, main: mainInfo, overlay: overlayInfo)
+        let peak = videoPeak(timing: timing, info: overlayInfo)
+        let proxy = peak > EditOverlap.comfortableVideos
+        let plan = EditRenderPlan(
+            timeline: t, timing: timing, main: mainInfo, overlay: overlayInfo, proxy: proxy,
+            previewMaskID: preview.maskOverlayID, previewSplitID: preview.splitOverlayID)
 
         // the picture: one instruction per stretch with the same main clip and the same overlays
         let end = CMTimeMaximum(CMTime(value: Int64(timing.frames), timescale: fps), composition.duration)
@@ -215,7 +237,10 @@ public enum EditComposition {
         let video = AVMutableVideoComposition()
         video.customVideoCompositorClass = EditCompositor.self
         video.frameDuration = CMTime(value: 1, timescale: fps)
-        video.renderSize = CGSize(width: t.canvas.w, height: t.canvas.h)
+        let scale = proxy ? 0.5 : 1.0
+        video.renderSize = CGSize(
+            width: max(2, Int(Double(t.canvas.w) * scale) / 2 * 2),
+            height: max(2, Int(Double(t.canvas.h) * scale) / 2 * 2))
         video.instructions = instructions
         video.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
         video.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
@@ -236,7 +261,22 @@ public enum EditComposition {
         }
         mix.inputParameters = parameters
 
-        return EditPlayable(composition: composition, videoComposition: video, audioMix: mix, timing: timing)
+        return EditPlayable(composition: composition, videoComposition: video, audioMix: mix, timing: timing, proxy: proxy)
+    }
+
+    /// How many video overlays share the busiest output frame.
+    private static func videoPeak(timing: EditTiming, info: [EditRenderPlan.OverlayClip]) -> Int {
+        var best = 0
+        for (j, slot) in timing.overlay.enumerated() where j < info.count {
+            guard case .video = info[j].source else { continue }
+            var n = 0
+            for (k, other) in timing.overlay.enumerated() where k < info.count {
+                guard case .video = info[k].source else { continue }
+                if slot.start < other.start + other.frames, other.start < slot.start + slot.frames { n += 1 }
+            }
+            if n > best { best = n }
+        }
+        return best
     }
 
     // MARK: inserting
@@ -328,12 +368,24 @@ final class EditRenderPlan: @unchecked Sendable {
     let timing: EditTiming
     let main: [MainClip]
     let overlay: [OverlayClip]
+    /// Draw overlay video frames smaller before they are placed. Set when more than 8 videos overlap.
+    let proxy: Bool
+    /// The overlay whose greenscreen preview shows the mask instead of the picture.
+    let previewMaskID: String?
+    /// The overlay whose preview is split, original on the left and the effect on the right.
+    let previewSplitID: String?
 
-    init(timeline: EditTimeline, timing: EditTiming, main: [MainClip], overlay: [OverlayClip]) {
+    init(
+        timeline: EditTimeline, timing: EditTiming, main: [MainClip], overlay: [OverlayClip], proxy: Bool = false,
+        previewMaskID: String? = nil, previewSplitID: String? = nil
+    ) {
         self.timeline = timeline
         self.timing = timing
         self.main = main
         self.overlay = overlay
+        self.proxy = proxy
+        self.previewMaskID = previewMaskID
+        self.previewSplitID = previewSplitID
     }
 
     /// The EXIF orientation a track's `preferredTransform` stands for (a portrait iPhone clip is `(0, 1, -1, 0)`: `.right`).

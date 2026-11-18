@@ -56,9 +56,15 @@ public enum EditProblem: Sendable, Equatable {
 
 public enum EditValidation {
     public static let maxSeconds = 600.0
+    /// The clip ceiling when the server does not send `limits.edit_max_clips`. A server that sends one (200 on the
+    /// companion) is used instead; `check` takes it.
     public static let maxClips = 50
-    /// Overlay layers (APP-API-CONTRACT 39.1): `track` is 0..<maxOverlayTracks.
+    /// The layer ceiling when a caller does not pass the server's `limits.edit_overlay_tracks`. The old hard clamp of 8
+    /// is this fallback, not a cap on a server that advertises more.
     public static let maxOverlayTracks = 8
+    /// A capabilities payload cannot ask for a million lanes or clips. 64 and 200 pass. Above this, the number is cut.
+    public static let safetyOverlayTracks = 256
+    public static let safetyMaxClips = 2_000
     public static let minClipSeconds = 0.1
     /// Slack on `x + w <= 1` and `out <= duration` (31.2).
     static let frameSlack = 0.001
@@ -66,7 +72,10 @@ public enum EditValidation {
 
     /// Every problem the server would find in `t`, given the library rows it names; `[]` = ok. `sources` is by library file id;
     /// an id missing from it (or one that is not `available`) is a deleted file.
-    public static func check(_ t: EditTimeline, sources: [String: EditSource]) -> [EditProblem] {
+    /// `maxClips` and `maxOverlayTracks` are the server's limits when the session has them, otherwise the old 50 and 8.
+    public static func check(
+        _ t: EditTimeline, sources: [String: EditSource], maxClips: Int = maxClips, maxOverlayTracks: Int = maxOverlayTracks
+    ) -> [EditProblem] {
         var problems: [EditProblem] = []
         let t = EditJSON.rounded(t)
 
@@ -104,11 +113,12 @@ public enum EditValidation {
         if canvasOK, timing.seconds > maxSeconds { problems.append(.tooLong) }
 
         // overlays: ranges, order, overlap (per layer, 39.1), the end
-        var previousEnd = [Int](repeating: 0, count: maxOverlayTracks)
+        let layerLimit = max(1, maxOverlayTracks)
+        var previousEnd: [Int: Int] = [:]
         for (j, o) in t.overlay.enumerated() {
             let p = "overlay[\(j)]"
             let source = sources[o.item]
-            let trackOK = (0..<maxOverlayTracks).contains(o.track)
+            let trackOK = (0..<layerLimit).contains(o.track)
             if !trackOK { problems.append(.range(path: "\(p).track")) }
             if !(o.at >= 0) { problems.append(.range(path: "\(p).at")) }
             if !(o.`in` >= 0) {
@@ -135,13 +145,13 @@ public enum EditValidation {
             guard j < timing.overlay.count else { continue }
             let clip = timing.overlay[j]
             let k = trackOK ? o.track : 0
-            if (j > 0 && o.at < t.overlay[j - 1].at) || clip.start < previousEnd[k] {
+            if (j > 0 && o.at < t.overlay[j - 1].at) || clip.start < (previousEnd[k] ?? 0) {
                 problems.append(.overlayOverlap(path: p))
             }
             if canvasOK, clip.start + clip.frames > timing.frames {
                 problems.append(.overlayPastEnd(path: p))
             }
-            previousEnd[k] = max(previousEnd[k], clip.start + clip.frames)
+            previousEnd[k] = max(previousEnd[k] ?? 0, clip.start + clip.frames)
         }
 
         problems.append(contentsOf: checkSources(t, sources: sources))

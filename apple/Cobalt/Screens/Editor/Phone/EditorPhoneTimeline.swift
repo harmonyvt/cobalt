@@ -34,16 +34,17 @@ struct EditorPhoneTimeline: View {
     static let bottomSpace: CGFloat = 40
     /// Layers shown before `+N more`.
     static let foldedLayers = 3
+    /// Expanded stacks taller than this scroll, so a dozen layers don't push the tools off the screen.
+    static let maxVisibleLanes = 8
 
     /// The layers in use (the highest layer with an overlay, plus one when there is room for a new one while expanded).
     private var usedLayers: Int { (session.timeline.overlay.map(\.track).max() ?? 0) + 1 }
-    /// Lanes drawn: every used layer when expanded, else at most three.
+    /// Lanes drawn: every used layer when expanded, else at most three. Any count, not a cap of 8.
     private var laneCount: Int { showAllLayers ? usedLayers : min(Self.foldedLayers, usedLayers) }
+    private var visibleLanes: Int { min(laneCount, Self.maxVisibleLanes) }
     private var hiddenOverlays: Int { session.timeline.overlay.filter { $0.track >= laneCount }.count }
-    private var mainY: CGFloat { Self.topY + CGFloat(laneCount) * Self.laneStep + Self.mainGap - 4 }
+    private var mainY: CGFloat { Self.topY + CGFloat(visibleLanes) * Self.laneStep + Self.mainGap - 4 }
     private var height: CGFloat { mainY + Self.mainHeight + Self.bottomSpace }
-    /// The top of layer `track`'s lane (L1 nearest the main lane).
-    private func laneY(_ track: Int) -> CGFloat { Self.topY + CGFloat(laneCount - 1 - track) * Self.laneStep }
 
     var body: some View {
         GeometryReader { geo in
@@ -135,6 +136,20 @@ struct EditorPhoneTimeline: View {
     }
 
     private func overlayLane(width: CGFloat) -> some View {
+        let stack = overlayStack(width: width)
+            .frame(width: width, height: CGFloat(laneCount) * Self.laneStep, alignment: .topLeading)
+        return Group {
+            if laneCount > visibleLanes {
+                ScrollView(.vertical, showsIndicators: true) { stack }
+                    .frame(width: width, height: CGFloat(visibleLanes) * Self.laneStep)
+                    .offset(y: Self.topY)
+            } else {
+                stack.offset(y: Self.topY)
+            }
+        }
+    }
+
+    private func overlayStack(width: CGFloat) -> some View {
         let spans = session.overlaySpans
         return ZStack(alignment: .topLeading) {
             if session.timeline.overlay.isEmpty {
@@ -142,7 +157,7 @@ struct EditorPhoneTimeline: View {
                     .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
                     .foregroundStyle(CobaltColor.caption)
                     .padding(.leading, 14)
-                    .padding(.top, laneY(0) + 7)
+                    .padding(.top, 7)
                     .accessibilityHidden(true)
             } else if session.overlayTrackLimit > 1 {
                 ForEach(0..<laneCount, id: \.self) { track in
@@ -150,7 +165,7 @@ struct EditorPhoneTimeline: View {
                         .font(Font.cobalt(9, .medium, relativeTo: .caption2))
                         .foregroundStyle(CobaltColor.caption.opacity(0.7))
                         .padding(.leading, 4)
-                        .padding(.top, laneY(track) + 8)
+                        .padding(.top, layerContentY(track) + 8)
                         .accessibilityHidden(true)
                 }
             }
@@ -162,13 +177,16 @@ struct EditorPhoneTimeline: View {
         }
     }
 
+    /// Y of a layer inside the overlay stack (L1 nearest the main lane, at the bottom of the stack).
+    private func layerContentY(_ track: Int) -> CGFloat { CGFloat(laneCount - 1 - track) * Self.laneStep }
+
     @ViewBuilder
     private func overlayBlock(index: Int, overlay: EditOverlay, span: TimelineSpan, width: CGFloat) -> some View {
         let startX = x(span.start, width: width)
         if onScreen(start: startX, length: max(2, scale.x(span.length)), width: width) {
             EditorPhoneOverlayClip(
                 session: session, index: index, overlay: overlay, span: span, scale: scale, originX: startX,
-                y: laneY(overlay.track), laneCount: laneCount)
+                y: layerContentY(overlay.track), laneCount: laneCount)
         }
     }
 
@@ -528,7 +546,7 @@ struct EditorPhoneOverlayClip: View {
         ZStack(alignment: .topLeading) {
             TimelineOverlayClipView(
                 overlay: overlay, source: source, seconds: span.length, width: width, height: height, isSelected: selected,
-                missing: session.isMissing(item: overlay.item), actions: actions)
+                missing: session.isMissing(item: overlay.item), showsEffect: session.showsEffect(overlay), actions: actions)
             if selected {
                 if source?.kind == .video { leadingHandle }
                 trailingHandle

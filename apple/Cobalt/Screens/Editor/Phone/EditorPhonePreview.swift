@@ -17,6 +17,7 @@ struct EditorPhonePreview: View {
         }
         .padding(.horizontal, Metrics.gutter)
         .padding(.vertical, 6)
+        EditorPreviewCrowdedNote(session: session)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Editor.previewA11y)

@@ -29,6 +29,16 @@ public final class EditSession {
     public private(set) var timing: EditTiming
     /// What the server would refuse (or render with a problem); `[]` = ready to render.
     public private(set) var problems: [EditProblem]
+    /// Layers the owner locked on this device. Never written to the project.
+    public private(set) var lockedTracks: Set<Int> = []
+    /// The overlay whose effects menu replaces the Mac inspector. The phone uses its own sheet.
+    public var effectsFor: String?
+    /// Greenscreen the canvas is previewing, before Apply. Not saved.
+    public var effectDraft: EditEffectDraft?
+    /// "fx" on a clip whose file a cut or Bria replaced. A greenscreen shows from its `key` alone.
+    public private(set) var effectMarks: [String: EditEffectKind] = [:]
+    /// The line on the effects card while a cut or a background-removal job is running.
+    public var effectStatus: String?
     public private(set) var saveState: SaveState = .saved
     /// File id -> download progress (0...1) while a clip's file is being fetched.
     public private(set) var loadingSources: [String: Double] = [:]
@@ -120,7 +130,10 @@ public final class EditSession {
         self.timeline = rounded
         self.sources = sources
         self.timing = EditTiming(rounded, sourceDurations: Self.durations(of: sources))
-        self.problems = EditValidation.check(rounded, sources: sources)
+        self.problems = EditValidation.check(
+            rounded, sources: sources,
+            maxClips: max(1, context.capabilities.limits.editMaxClips),
+            maxOverlayTracks: max(1, context.capabilities.limits.editOverlayTracks))
         self.ctx = context
         self.cache = cache
         self.onProject = onProject
@@ -273,7 +286,7 @@ public final class EditSession {
         commit(key: nil) { t in
             var at = min(max(0, index ?? t.main.count), t.main.count)
             for file in videos {
-                guard t.main.count + t.overlay.count < EditValidation.maxClips + 1 else { break }       // one past: the problem shows
+                guard t.main.count + t.overlay.count < self.clipLimit + 1 else { break }       // one past: the problem shows
                 guard let duration = file.duration else { continue }
                 let clip = EditClip.added(item: file.id, duration: duration)
                 if firstID == nil { firstID = clip.id }
@@ -349,7 +362,10 @@ public final class EditSession {
         switch selection {
         case .none: return
         case .main(let id): commit(key: nil) { $0.main.removeAll { $0.id == id } }
-        case .overlay(let id): commit(key: nil) { $0.overlay.removeAll { $0.id == id } }
+        case .overlay(let id):
+            if let track = timeline.overlay.first(where: { $0.id == id })?.track, lockedTracks.contains(track) { return }
+            commit(key: nil) { $0.overlay.removeAll { $0.id == id } }
+            effectMarks[id] = nil
         }
     }
 
@@ -393,9 +409,214 @@ public final class EditSession {
 
     // MARK: - Overlay
 
-    /// The overlay layers this server takes (`limits.edit_overlay_tracks`, APP-API-CONTRACT 39.1): 1 on an older server.
+    /// The overlay layers this server takes (`limits.edit_overlay_tracks`). 1 when the key is absent: that server refuses
+    /// `track`. A server that sends 64 is 64. The old 8 is only `EditValidation.maxOverlayTracks`, for a check with no limit.
     public var overlayTrackLimit: Int {
-        min(EditValidation.maxOverlayTracks, max(1, ctx.capabilities.limits.editOverlayTracks))
+        max(1, ctx.capabilities.limits.editOverlayTracks)
+    }
+
+    /// Main + overlay clips this server takes (`limits.edit_max_clips`). 50 when the key is absent.
+    public var clipLimit: Int {
+        max(1, ctx.capabilities.limits.editMaxClips)
+    }
+
+    /// The server stores `hidden: true`. When it does not, hide stays on the device and the save leaves the key out.
+    public var sendsHidden: Bool { ctx.capabilities.limits.editOverlayHidden }
+
+    /// More than about 8 videos share one moment. The preview is drawn smaller and a note says the render is fine.
+    public var previewCrowded: Bool {
+        EditOverlap.peak(in: timeline, timing: timing, video: { sources[$0.item]?.kind == .video }) > EditOverlap.comfortableVideos
+    }
+
+    public func showsEffect(_ overlay: EditOverlay) -> Bool {
+        overlay.hasKey || effectMarks[overlay.id] != nil
+    }
+
+    public func isTrackLocked(_ track: Int) -> Bool { lockedTracks.contains(track) }
+
+    public func setTrackLocked(_ track: Int, _ locked: Bool) {
+        if locked { lockedTracks.insert(track) } else { lockedTracks.remove(track) }
+    }
+
+    /// Hide or show every overlay on a layer. Sent only when `sendsHidden` is true.
+    public func setLayerHidden(_ track: Int, _ hidden: Bool) {
+        commit(key: nil) { t in
+            for i in t.overlay.indices where t.overlay[i].track == track {
+                t.overlay[i].hidden = hidden
+            }
+        }
+    }
+
+    /// A layer is hidden when it has overlays and every one of them is hidden.
+    public func layerHidden(_ track: Int) -> Bool {
+        let rows = timeline.overlay.filter { $0.track == track }
+        return !rows.isEmpty && rows.allSatisfy(\.hidden)
+    }
+
+    public func openEffects(_ id: String) {
+        guard timeline.overlay.contains(where: { $0.id == id }) else { return }
+        effectsFor = id
+    }
+
+    /// Closes the effects menu and drops the unsaved preview.
+    public func closeEffects() {
+        effectsFor = nil
+        effectDraft = nil
+        effectStatus = nil
+        scheduleRebuild()
+    }
+
+    /// The live preview. Not an edit: Apply is what writes the timeline.
+    public func setEffectDraft(_ draft: EditEffectDraft?) {
+        effectDraft = draft
+        scheduleRebuild(delay: 0.12)
+    }
+
+    /// Greenscreen: writes `key` (and background, and the edit's output). The list of effects maps to those fields.
+    public func applyGreenscreen(id: String, key: EditChromaKey, background: EditOverlayBackground?, output: EditKeyedOutput?) {
+        guard let key = key.normalized() else { return }
+        commit(key: nil) { t in
+            guard let i = t.overlay.firstIndex(where: { $0.id == id }) else { return }
+            t.overlay[i].key = key
+            t.overlay[i].background = background
+            t.output = output?.stored
+        }
+        effectMarks[id] = .greenscreen
+        effectDraft = nil
+        effectStatus = nil
+    }
+
+    /// Person or subject: an alpha .mov uploaded as `role = alt`. Depth returns the stub message and changes nothing.
+    /// Nil means it landed; a string is the line to show (an old server that refuses the upload, a clip with no subject).
+    public func applyCut(id: String, kind: EditCutKind, soften: Double) async -> String? {
+        if kind == .depthCut {
+            return "depth cutout needs depth anything v2 small (\(EditDepthModel.approximateMegabytes) mb). it isn't in this build. person and subject work on this device."
+        }
+        guard let overlay = timeline.overlay.first(where: { $0.id == id }),
+              let source = sources[overlay.item], source.kind == .video else { return "that isn't a video" }
+        effectStatus = "cutting out…"
+        do {
+            let asset = try await cache.asset(for: source)
+            guard case .video(let av, _, _) = asset else { effectStatus = nil; return "that isn't a video" }
+            let movie = try await EditMaskExport.movie(
+                source: av.url, kind: kind, start: overlay.`in`, end: overlay.out, soften: soften)
+            guard let client = ctx.client as? any CobaltClient else { effectStatus = nil; return "you're offline · try again" }
+            let spec = try JSONSerialization.data(withJSONObject: ["kind": kind.rawValue])
+            let uploaded = try await client.uploadMade(
+                item: overlay.item, role: .alt, file: movie, contentType: "video/quicktime",
+                name: "\(kind.rawValue).mov", spec: spec, progress: { _ in })
+            await cache.register(local: movie, for: uploaded.file.id)
+            let made = EditSource(
+                id: uploaded.file.id, name: uploaded.file.name, kind: .video,
+                contentType: uploaded.file.contentType ?? "video/quicktime",
+                width: uploaded.file.width, height: uploaded.file.height,
+                duration: uploaded.file.duration ?? (overlay.out - overlay.`in`),
+                bytes: uploaded.file.bytes, posterURL: uploaded.file.posterURL)
+            sources[made.id] = made
+            commit(key: nil) { t in
+                guard let i = t.overlay.firstIndex(where: { $0.id == id }) else { return }
+                t.overlay[i].item = made.id
+                t.overlay[i].key = nil
+            }
+            effectMarks[id] = kind.effect
+            effectDraft = nil
+            effectStatus = nil
+            _ = startLoad(made.id)
+            return nil
+        } catch let e as EditMaskError {
+            effectStatus = nil
+            switch e {
+            case .depthUnavailable:
+                return "depth cutout needs depth anything v2 small (\(EditDepthModel.approximateMegabytes) mb). it isn't in this build."
+            case .tooLong: return "that clip is over 60s · trim it first"
+            case .empty: return "nothing was left · try another method"
+            case .noVideo: return "that isn't a video"
+            case .failed: return "couldn't cut that out · try again"
+            }
+        } catch let e as CobaltError {
+            effectStatus = nil
+            if case .api(let code, let status) = e, status == 400 || code.contains("bad_request") {
+                return "this server can't store that cut yet"
+            }
+            if case .network = e { return "you're offline · try again" }
+            return "couldn't upload the cut · try again"
+        } catch {
+            effectStatus = nil
+            return "couldn't cut that out · try again"
+        }
+    }
+
+    /// The section 67 quote, or nil when this server has no remove-background route.
+    public func backgroundQuote(for id: String) async -> RmbgQuote? {
+        guard let item = timeline.overlay.first(where: { $0.id == id })?.item,
+              let client = ctx.client as? any RmbgClient else { return nil }
+        return try? await client.rmbgQuote(of: item)
+    }
+
+    /// Bria (section 67). Shows the quote's price on the card, then polls the job. The result is a ProRes alternate.
+    /// Nil means the overlay now points at it.
+    public func removeVideoBackground(id: String, spill: Double) async -> String? {
+        guard let overlay = timeline.overlay.first(where: { $0.id == id }),
+              let source = sources[overlay.item], source.kind == .video else { return "that isn't a video" }
+        guard let client = ctx.client as? any RmbgClient else {
+            return "this server can't remove a video background yet"
+        }
+        effectStatus = "checking the price…"
+        do {
+            let quote = try await client.rmbgQuote(of: source.id)
+            if quote.tooLong {
+                effectStatus = nil
+                return "that clip is over \(Int(quote.maxSeconds))s"
+            }
+            effectStatus = "removing the background · \(Self.priceLine(quote))"
+            let started = try await client.rmbgStart(of: source.id, spill: min(1, max(0, spill)))
+            var job = started
+            for _ in 0..<90 {
+                if job.state == .success, let item = job.itemID {
+                    let made = EditSource(
+                        id: item, name: "background removed.mov", kind: .video, contentType: "video/quicktime",
+                        duration: job.seconds ?? quote.seconds)
+                    sources[made.id] = made
+                    commit(key: nil) { t in
+                        guard let i = t.overlay.firstIndex(where: { $0.id == id }) else { return }
+                        t.overlay[i].item = made.id
+                        t.overlay[i].key = nil
+                    }
+                    effectMarks[id] = .removeBackground
+                    effectDraft = nil
+                    effectStatus = nil
+                    _ = startLoad(made.id)
+                    return nil
+                }
+                if job.state == .error {
+                    effectStatus = nil
+                    return "couldn't remove the background · try again"
+                }
+                try await Task.sleep(for: .seconds(2))
+                guard !isClosed else { return nil }
+                job = try await client.rmbgStatus(of: source.id, job: started.id)
+                effectStatus = "removing the background · \(Self.priceLine(quote))"
+            }
+            effectStatus = nil
+            return "that's still running · it'll show up in your library"
+        } catch let e as RmbgError {
+            effectStatus = nil
+            switch e {
+            case .tooLong: return "that clip is over 60s"
+            case .notVideo: return "that isn't a video"
+            case .off: return "this server can't remove a video background yet"
+            case .offline: return "you're offline · try again"
+            case .notFound: return "that video is gone from your library"
+            default: return "couldn't remove the background · try again"
+            }
+        } catch {
+            effectStatus = nil
+            return "couldn't remove the background · try again"
+        }
+    }
+
+    private func problems(of t: EditTimeline) -> [EditProblem] {
+        EditValidation.check(t, sources: sources, maxClips: clipLimit, maxOverlayTracks: overlayTrackLimit)
     }
 
     /// Puts a video, gif or photo (a webp, an emote, a cutout) over the main track at frame `k` (nil = the playhead), on layer
@@ -427,7 +648,7 @@ public final class EditSession {
     /// Where an overlay put at `k` (nil = the playhead) on layer `track` (nil = the lowest one with room) would start, the frames
     /// it has and its layer; nil when it cannot go there.
     func overlayRoom(for file: EditSource, atFrame k: Int?, track: Int? = nil) -> (start: Int, room: Int, track: Int)? {
-        guard file.available, file.kind != .unsupported, timeline.main.count + timeline.overlay.count < EditValidation.maxClips,
+        guard file.available, file.kind != .unsupported, timeline.main.count + timeline.overlay.count < clipLimit,
               timing.frames > 0 else { return nil }
         let start = min(max(0, k ?? playhead), timing.frames - 1)
         let layers = track.map { [$0] } ?? Array(0..<overlayTrackLimit)
@@ -475,6 +696,8 @@ public final class EditSession {
     /// False when it does not fit there (nothing changes).
     @discardableResult
     public func moveOverlay(id: String, toFrame k: Int, track: Int? = nil) -> Bool {
+        if let current = timeline.overlay.first(where: { $0.id == id })?.track, lockedTracks.contains(current) { return false }
+        if let track, lockedTracks.contains(track) { return false }
         if let track, !(0..<overlayTrackLimit).contains(track) { return false }
         var moved = false
         commit(key: "move:\(id)") { t in
@@ -514,6 +737,7 @@ public final class EditSession {
     @discardableResult
     public func setOverlayTrack(id: String, _ track: Int) -> Bool {
         guard let i = timeline.overlay.firstIndex(where: { $0.id == id }), i < timing.overlay.count else { return false }
+        if lockedTracks.contains(timeline.overlay[i].track) || lockedTracks.contains(track) { return false }
         if timeline.overlay[i].track == track { return true }
         let me = timing.overlay[i]
         let gap = Self.layerGap(timeline, timing: timing, excluding: i, track: track, anchor: me.start)
@@ -523,6 +747,7 @@ public final class EditSession {
 
     /// How long it stays up, 0.1 s to the room it has (the next overlay, the end, the file's own length for a video).
     public func setOverlayLength(id: String, seconds: Double) {
+        if let track = timeline.overlay.first(where: { $0.id == id })?.track, lockedTracks.contains(track) { return }
         commit(key: "length:\(id)") { t in
             guard let i = t.overlay.firstIndex(where: { $0.id == id }) else { return }
             let timing = EditTiming(t)
@@ -540,6 +765,7 @@ public final class EditSession {
 
     /// A video overlay's in and out (source seconds); its start on the timeline stays.
     public func trimOverlay(id: String, in newIn: Double?, out newOut: Double?) {
+        if let track = timeline.overlay.first(where: { $0.id == id })?.track, lockedTracks.contains(track) { return }
         commit(key: "otrim:\(id)") { t in
             guard let i = t.overlay.firstIndex(where: { $0.id == id }), self.sources[t.overlay[i].item]?.kind == .video else { return }
             let timing = EditTiming(t)
@@ -779,7 +1005,7 @@ public final class EditSession {
     /// quiet if no end comes, not on every tick.
     private func afterChange(inGesture: Bool = false) {
         timing = EditTiming(timeline, sourceDurations: Self.durations(of: sources))
-        problems = EditValidation.check(timeline, sources: sources)
+        problems = problems(of: timeline)
         switch selection {
         case .none: break
         case .main(let id): if !timeline.main.contains(where: { $0.id == id }) { selection = .none }
@@ -838,7 +1064,7 @@ public final class EditSession {
         guard changed else { return }
         sources[id] = s
         timing = EditTiming(timeline, sourceDurations: Self.durations(of: sources))
-        problems = EditValidation.check(timeline, sources: sources)
+        problems = problems(of: timeline)
         if playhead > max(0, timing.frames - 1) { playhead = max(0, timing.frames - 1) }
     }
 
@@ -852,6 +1078,11 @@ public final class EditSession {
 
     static func minFrames(fps: Int) -> Int { max(1, Int((Self.minSeconds * Double(fps) - 1e-9).rounded(.up))) }
 
+    /// "$0.0225/s · $0.0900" for the effects card. The price is the quote's, which section 67 fixes at $0.0225 a second.
+    private static func priceLine(_ quote: RmbgQuote) -> String {
+        String(format: "$%.4f/s · $%.4f", quote.usdPerSecond, quote.estimateUSD)
+    }
+
     /// Rounded, and with the overlays made safe: sorted by start (ties keep their order), on a known layer, inside the canvas,
     /// never overlapping another of their layer (in frames), inside the main track. An overlay with under 0.1 s of room is dropped.
     private func normalized(_ input: EditTimeline) -> EditTimeline {
@@ -863,9 +1094,10 @@ public final class EditSession {
             .sorted { $0.element.at != $1.element.at ? $0.element.at < $1.element.at : $0.offset < $1.offset }
             .map(\.element)
         var kept: [EditOverlay] = []
-        var previousEnd = [Int](repeating: 0, count: EditValidation.maxOverlayTracks)
+        let layerLimit = overlayTrackLimit
+        var previousEnd: [Int: Int] = [:]
         for var o in t.overlay {
-            o.track = min(max(0, o.track), EditValidation.maxOverlayTracks - 1)
+            o.track = min(max(0, o.track), layerLimit - 1)
             if let display = sources[o.item]?.display, display.w > 0, display.h > 0 {
                 o.frame = EditGeometry.clampInside(o.frame, display: display, canvas: t.canvas)
             } else {
@@ -873,7 +1105,7 @@ public final class EditSession {
             }
             let wantedStart = EditMath.roundHalfUp(o.at * fps)
             let wantedFrames = max(1, EditMath.roundHalfUp((o.out - o.`in`) * fps))
-            let start = max(previousEnd[o.track], max(0, wantedStart))
+            let start = max(previousEnd[o.track] ?? 0, max(0, wantedStart))
             var frames = wantedFrames
             if start + frames > total { frames = total - start }
             guard frames >= minFrames else { continue }
@@ -986,8 +1218,10 @@ public final class EditSession {
         repeat {
             flushAgain = false
             let snapshot = timeline
-            // a server that does not know pitch refuses the key: it gets the timeline with every pitch at 0 (left out)
-            let sent = ctx.capabilities.limits.editPitch ? snapshot : EditJSON.withoutPitch(snapshot)
+            // a server that does not know pitch refuses the key: it gets the timeline with every pitch at 0 (left out).
+            // one that does not advertise `hidden` must not be sent the key either (it would refuse the save).
+            var sent = ctx.capabilities.limits.editPitch ? snapshot : EditJSON.withoutPitch(snapshot)
+            if !sendsHidden { sent = EditJSON.withoutHidden(sent) }
             let title = pendingTitle
             saveState = .saving
             saveCalls += 1
@@ -1101,7 +1335,7 @@ public final class EditSession {
             lastKey = nil
             dirty = false
             timing = EditTiming(timeline, sourceDurations: Self.durations(of: sources))
-            problems = EditValidation.check(timeline, sources: sources)
+            problems = problems(of: timeline)
             saveState = .saved
             onProject(p)
             scheduleRebuild()
@@ -1214,13 +1448,21 @@ public final class EditSession {
             return
         }
         var playing = snapshot
-        playing.overlay = snapshot.overlay.filter { assets[$0.item] != nil }          // an overlay whose file is missing is not drawn
+        playing.overlay = snapshot.overlay.filter { assets[$0.item] != nil && !$0.hidden }
+        if let draft = effectDraft, draft.kind == .greenscreen,
+           let i = playing.overlay.firstIndex(where: { $0.id == draft.overlayID }) {
+            playing.overlay[i].key = draft.key.normalized()
+            playing.overlay[i].background = draft.background
+        }
         // clips with a pitch play their shifted copy once it is made, the source's sound until then
         let wanted = pitchKeys(playing)
         let ready = pitchCopies.filter { wanted.contains($0.key) }
         schedulePitchCopies(wanted.subtracting(ready.keys))
         do {
-            let built = try await EditComposition.build(playing, assets: assets, shifted: ready)
+            let hints = EditPreviewHints(
+                maskOverlayID: effectDraft?.showMask == true ? effectDraft?.overlayID : nil,
+                splitOverlayID: effectDraft?.split == true ? effectDraft?.overlayID : nil)
+            let built = try await EditComposition.build(playing, assets: assets, shifted: ready, preview: hints)
             guard generation == rebuildGeneration, !isClosed else { return }
             builds += 1
             let wasPlaying = isPlaying

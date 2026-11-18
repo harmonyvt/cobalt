@@ -8,6 +8,7 @@ import SwiftUI
 struct EditorPhoneOverlaySheet: View {
     let session: EditSession
     var pitchEnabled = true
+    var onEffects: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
     @State private var original: EditOverlay?
@@ -15,9 +16,10 @@ struct EditorPhoneOverlaySheet: View {
     @State private var cutoutOf: EditSource?
     @State private var croppingImage: EditSource?
 
-    init(session: EditSession, pitchEnabled: Bool = true) {
+    init(session: EditSession, pitchEnabled: Bool = true, onEffects: @escaping () -> Void = {}) {
         self.session = session
         self.pitchEnabled = pitchEnabled
+        self.onEffects = onEffects
         let overlay = session.selectedOverlay
         _original = State(initialValue: overlay)
         _overlayID = State(initialValue: overlay?.id ?? "")
@@ -34,7 +36,9 @@ struct EditorPhoneOverlaySheet: View {
                         EditorOverlayLayerRows(
                             session: session, overlay: overlay,
                             removeBackground: { cutoutOf = session.source(for: overlay.item) },
-                            crop: { croppingImage = session.source(for: overlay.item) })
+                            crop: { croppingImage = session.source(for: overlay.item) },
+                            openEffects: session.source(for: overlay.item)?.kind == .video ? { onEffects() } : nil)
+                        EditorLayersList(session: session)
                         lengthSection(overlay)
                         sizeSection(overlay)
                         opacitySection(overlay)

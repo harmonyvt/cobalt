@@ -72,10 +72,13 @@ public final class EditCompositor: NSObject, AVVideoCompositing, @unchecked Send
                     overlayVideos[j] = self.lastFrames[trackID]   // an overlay file that ends early holds its last frame
                 }
             }
-            let image = EditFrameComposer.compose(plan: plan, frame: k, main: main, overlayVideos: overlayVideos)
-            let canvas = plan.timeline.canvas
+            var image = EditFrameComposer.compose(plan: plan, frame: k, main: main, overlayVideos: overlayVideos)
+            let bw = CVPixelBufferGetWidth(output), bh = CVPixelBufferGetHeight(output)
+            if bw > 0, bh > 0, abs(image.extent.width - CGFloat(bw)) > 1 || abs(image.extent.height - CGFloat(bh)) > 1 {
+                image = EditFrameComposer.scale(image, to: PixelSize(w: bw, h: bh))
+            }
             Self.context.render(
-                image, to: output, bounds: CGRect(x: 0, y: 0, width: canvas.w, height: canvas.h), colorSpace: nil)
+                image, to: output, bounds: CGRect(x: 0, y: 0, width: bw, height: bh), colorSpace: nil)
             request.finish(withComposedVideoFrame: output)
         }
     }
@@ -104,6 +107,7 @@ enum EditFrameComposer {
             let t = plan.timing.overlay[j]
             guard k >= t.start, k < t.start + t.frames else { continue }
             let o = plan.timeline.overlay[j]
+            if o.hidden { continue }
             var source: CIImage?
             switch plan.overlay[j].source {
             case .video(_, let orientation):
@@ -117,7 +121,21 @@ enum EditFrameComposer {
             case .photo(let image):
                 source = plan.overlay[j].images.first ?? ciImage(image)
             }
-            if let source, let drawn = drawOverlay(source, overlay: o, canvas: canvas) { out = drawn.composited(over: out) }
+            if var source {
+                if plan.proxy, source.extent.width > 960 || source.extent.height > 960 {
+                    let long = max(source.extent.width, source.extent.height)
+                    let s = 960 / long
+                    source = scale(source, to: PixelSize(
+                        w: max(2, Int((source.extent.width * s).rounded())),
+                        h: max(2, Int((source.extent.height * s).rounded()))))
+                }
+                let original = source
+                if let key = o.key?.normalized() {
+                    source = EditChroma.apply(source, key: key, mask: plan.previewMaskID == o.id)
+                    if plan.previewSplitID == o.id { source = EditChroma.split(original: original, keyed: source) }
+                }
+                if let drawn = drawOverlay(source, overlay: o, canvas: canvas, under: out) { out = drawn }
+            }
         }
         return out.cropped(to: rect)
     }
@@ -176,8 +194,9 @@ enum EditFrameComposer {
             translationX: CGFloat(g.place.x), y: CGFloat(canvas.h - (g.place.y + g.scaled.h))))
     }
 
-    /// An overlay at its rectangle, its alpha times the overlay's opacity.
-    static func drawOverlay(_ image: CIImage, overlay: EditOverlay, canvas: EditCanvas) -> CIImage? {
+    /// An overlay at its rectangle, its alpha times the overlay's opacity, composited over `under` (so a colour or a blur
+    /// can sit behind just this overlay).
+    static func drawOverlay(_ image: CIImage, overlay: EditOverlay, canvas: EditCanvas, under: CIImage? = nil) -> CIImage? {
         let display = PixelSize(w: Int(image.extent.width.rounded()), h: Int(image.extent.height.rounded()))
         guard display.w > 0, display.h > 0 else { return nil }
         let r = EditGeometry.overlay(display: display, frame: overlay.frame, canvas: canvas)
@@ -188,7 +207,24 @@ enum EditFrameComposer {
                 "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(max(0, overlay.opacity))),
             ])
         }
-        return c.transformed(by: CGAffineTransform(translationX: CGFloat(r.x), y: CGFloat(canvas.h - r.y - r.h)))
+        let placed = c.transformed(by: CGAffineTransform(translationX: CGFloat(r.x), y: CGFloat(canvas.h - r.y - r.h)))
+        guard let under else { return placed }
+        var base = under
+        let plate = CGRect(x: r.x, y: canvas.h - r.y - r.h, width: r.w, height: r.h)
+        switch overlay.background {
+        case .color(let raw):
+            if let rgb = EditChromaKey(color: raw).rgb {
+                let color = CIImage(color: CIColor(red: rgb.r, green: rgb.g, blue: rgb.b)).cropped(to: plate)
+                base = color.composited(over: base)
+            }
+        case .blur:
+            let crop = under.cropped(to: plate)
+            let blurred = crop.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 18]).cropped(to: plate)
+            base = blurred.composited(over: base)
+        case .clip, nil:
+            break
+        }
+        return placed.composited(over: base)
     }
 
     /// Scales to exactly `size` with Lanczos (a no-op when it is that size already).

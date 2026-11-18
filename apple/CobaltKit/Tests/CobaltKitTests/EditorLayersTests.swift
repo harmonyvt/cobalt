@@ -202,6 +202,6 @@ struct EditLayersCapabilityTests {
         let off = try caps(#","features":{"editor":true}"#)
         #expect(off.limits.editOverlayTracks == 1 && !off.cutout && !off.cutoutAuto)
         let odd = try caps(#","features":{"cutout_auto":true},"limits":{"edit_overlay_tracks":99}"#)
-        #expect(odd.limits.editOverlayTracks == 8 && !odd.cutoutAuto)
+        #expect(odd.limits.editOverlayTracks == 99 && !odd.cutoutAuto)
     }
 }

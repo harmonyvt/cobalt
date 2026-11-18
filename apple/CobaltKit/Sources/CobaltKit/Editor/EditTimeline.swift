@@ -5,18 +5,21 @@ import Foundation
 // and reads exactly the server's canonical form: numbers rounded as 31.2 says, keys sorted, no whitespace, `crop` left out when
 // absent. `EditJSON.encode(EditJSON.decode(bytes)) == bytes` for any canonical document.
 
-/// One timeline: a main track of video clips, overlays on up to 8 layers above it (APP-API-CONTRACT 39.1).
+/// One timeline: a main track of video clips, overlays on the layers the server allows (APP-API-CONTRACT 39.1).
 public struct EditTimeline: Sendable, Equatable, Codable {
     public var version: Int                     // 1
     public var canvas: EditCanvas
     public var main: [EditClip]
     public var overlay: [EditOverlay]
+    /// `output` (section 66): webm, prores or webp. Nil is mp4, and the key is left out so an older project keeps its bytes.
+    public var output: EditKeyedOutput? = nil
 
-    public init(version: Int = 1, canvas: EditCanvas, main: [EditClip], overlay: [EditOverlay] = []) {
+    public init(version: Int = 1, canvas: EditCanvas, main: [EditClip], overlay: [EditOverlay] = [], output: EditKeyedOutput? = nil) {
         self.version = version
         self.canvas = canvas
         self.main = main
         self.overlay = overlay
+        self.output = output?.stored
     }
 
     /// Version 1, no overlay.
@@ -202,13 +205,20 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
     public var muted: Bool                      // true by default
     /// Semitones, -12...12 in steps of 0.5 (31.16); a gif or photo has no sound and ignores it. Left out of the JSON at 0.
     public var pitch: Double = 0
-    /// The layer, 0...7 (APP-API-CONTRACT 39.1): a higher layer is drawn on top; overlays on one layer never overlap. 0 is left
-    /// out of the JSON, so a one-layer timeline keeps its bytes.
+    /// The layer (APP-API-CONTRACT 39.1): a higher layer is drawn on top; overlays on one layer never overlap. 0 is left
+    /// out of the JSON, so a one-layer timeline keeps its bytes. The server's `limits.edit_overlay_tracks` is the ceiling.
     public var track: Int = 0
+    /// Hidden from the preview and, when the server says `limits.edit_overlay_hidden`, sent as `hidden: true`. False is omitted.
+    public var hidden: Bool = false
+    /// Greenscreen (section 66). Absent is left out of the JSON.
+    public var key: EditChromaKey? = nil
+    /// What sits behind the keyed subject. Nil is transparent and is left out. Blur is kept on the device and not sent.
+    public var background: EditOverlayBackground? = nil
 
     public init(
         id: String, item: String, at: Double, in inPoint: Double, out: Double, frame: EditFrame, opacity: Double = 1,
-        volume: Double = 1, muted: Bool = true, pitch: Double = 0, track: Int = 0
+        volume: Double = 1, muted: Bool = true, pitch: Double = 0, track: Int = 0, hidden: Bool = false,
+        key: EditChromaKey? = nil, background: EditOverlayBackground? = nil
     ) {
         self.id = id
         self.item = item
@@ -221,7 +231,13 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
         self.muted = muted
         self.pitch = pitch
         self.track = track
+        self.hidden = hidden
+        self.key = key
+        self.background = background
     }
+
+    /// An effect is on this overlay when it carries a greenscreen `key`. A cut that replaced the file is marked on the session.
+    public var hasKey: Bool { key?.normalized() != nil }
 
     /// 31.2: video `0` and min(duration, the rest of the timeline); a gif or photo `0` and 3 s (held to the rest of the
     /// timeline, 0.1 s at least). The frame is `x 0.6 y 0.05 w 0.35`: `EditSession` clamps it inside the canvas, where the
@@ -241,7 +257,9 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
     /// How long it is up, in output seconds.
     public var length: Double { out - `in` }
 
-    private enum CodingKeys: String, CodingKey { case id, item, at, `in`, out, frame, opacity, volume, muted, pitch, track }
+    private enum CodingKeys: String, CodingKey {
+        case id, item, at, `in`, out, frame, opacity, volume, muted, pitch, track, hidden, key, background
+    }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -256,6 +274,13 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
         muted = try c.decode(Bool.self, forKey: .muted)
         pitch = try c.decodeIfPresent(Double.self, forKey: .pitch) ?? 0
         track = try c.decodeIfPresent(Int.self, forKey: .track) ?? 0
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        key = try c.decodeIfPresent(EditChromaKey.self, forKey: .key)?.normalized()
+        if let wire = try c.decodeIfPresent(EditBackgroundWire.self, forKey: .background) {
+            background = EditOverlayBackground(wire: wire)
+        } else {
+            background = nil
+        }
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -271,6 +296,10 @@ public struct EditOverlay: Sendable, Equatable, Codable, Identifiable {
         try c.encode(muted, forKey: .muted)
         if pitch != 0 { try c.encode(pitch, forKey: .pitch) }
         if track != 0 { try c.encode(track, forKey: .track) }
+        // `hidden: true` only. False is omitted so a project that shows every layer keeps its bytes.
+        if hidden { try c.encode(true, forKey: .hidden) }
+        if let key = key?.normalized() { try c.encode(key, forKey: .key) }
+        if let wire = background?.wire { try c.encode(wire, forKey: .background) }
     }
 }
 
@@ -355,7 +384,15 @@ public enum EditJSON {
             out.overlay[i].frame.x = fraction(out.overlay[i].frame.x)
             out.overlay[i].frame.y = fraction(out.overlay[i].frame.y)
             out.overlay[i].frame.w = fraction(out.overlay[i].frame.w)
+            if let key = out.overlay[i].key {
+                out.overlay[i].key = EditChromaKey(
+                    color: EditChromaKey.hex(key.color) ?? key.color,
+                    similarity: round(key.similarity, to: 1_000),
+                    blend: round(key.blend, to: 1_000),
+                    spill: round(key.spill, to: 1_000))
+            }
         }
+        if out.output == .mp4 { out.output = nil }
         return out
     }
 
@@ -379,6 +416,14 @@ public enum EditJSON {
         var out = t
         for i in out.main.indices { out.main[i].pitch = 0 }
         for i in out.overlay.indices { out.overlay[i].pitch = 0 }
+        return out
+    }
+
+    /// The timeline with every overlay shown: what goes to a server that does not advertise `limits.edit_overlay_hidden`.
+    /// `hidden: true` would be an unknown key and the save would be refused.
+    public static func withoutHidden(_ t: EditTimeline) -> EditTimeline {
+        var out = t
+        for i in out.overlay.indices { out.overlay[i].hidden = false }
         return out
     }
 

@@ -297,7 +297,7 @@ public enum GalleryMake: Sendable, Equatable {
 // MARK: - Roles, kinds, specs
 
 /// What a library row or a store record is within a post (`role` on `GET /library?v=3`).
-public enum GalleryRole: String, Sendable, Codable { case item, slideshow, crop, export }
+public enum GalleryRole: String, Sendable, Codable { case item, slideshow, crop, export, alt }
 
 /// A post's kind (`kind` on `GET /library?v=3`; `StoredMedia.kind` on the device).
 public enum MediaKind: String, Sendable, Codable { case video, photo, gallery, webp }

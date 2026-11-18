@@ -7,6 +7,7 @@ enum EditorPhoneSheet: Identifiable, Equatable {
     case clip(EditorPhoneClipSection)
     case overlay
     case volume
+    case effects
     case add(EditorPhoneAddMode)
     case render
     /// "post" (APP-API-CONTRACT 52.6): the post-frame sheet on the main clip.
@@ -17,6 +18,7 @@ enum EditorPhoneSheet: Identifiable, Equatable {
         case .clip(let section): return "clip-\(section.rawValue)"
         case .overlay: return "overlay"
         case .volume: return "volume"
+        case .effects: return "effects"
         case .add(let mode): return "add-\(mode.rawValue)"
         case .render: return "render"
         case .post(let target): return "post-\(target.itemID)"
@@ -59,7 +61,7 @@ struct EditorPhoneScreen: View {
         }
         .background(CobaltColor.bg.ignoresSafeArea())
         .sheet(item: $sheet) { current in
-            EditorPhoneSheetContent(model: model, session: session, sheet: current, close: { sheet = nil })
+            EditorPhoneSheetContent(model: model, session: session, sheet: current, close: { sheet = nil }, switchTo: { sheet = $0 })
                 .environment(host)
                 .cobaltRoot(model: model)
         }
@@ -103,6 +105,7 @@ private struct EditorPhoneSheetContent: View {
     let session: EditSession
     let sheet: EditorPhoneSheet
     let close: () -> Void
+    let switchTo: (EditorPhoneSheet) -> Void
 
     var body: some View {
         switch sheet {
@@ -112,10 +115,15 @@ private struct EditorPhoneSheetContent: View {
                 .presentationDragIndicator(.hidden)
                 .interactiveDismissDisabled()
         case .overlay:
-            EditorPhoneOverlaySheet(session: session, pitchEnabled: model.capabilities.limits.editPitch)
+            EditorPhoneOverlaySheet(
+                session: session, pitchEnabled: model.capabilities.limits.editPitch, onEffects: { switchTo(.effects) })
                 .presentationDetents([.medium, .large])
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
                 .interactiveDismissDisabled()
+        case .effects:
+            EditorPhoneEffectsSheet(session: session)
+                .presentationDetents([.medium, .large])
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
         case .volume:
             EditorPhoneVolumeSheet(session: session)
                 .presentationDetents([.height(210), .medium])
