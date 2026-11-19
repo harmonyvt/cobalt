@@ -1,0 +1,42 @@
+{
+  "name": "v2-touch",
+  "note": "The second clip starts on the frame the first one ends. That is not an overlap.",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "a",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 2,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "b",
+        "item": "BBBBBBBBBBBBBBBB",
+        "lane": 2,
+        "at": 1,
+        "in": 0,
+        "out": 1
+      }
+    ]
+  },
+  "to_v1": {
+    "ok": false,
+    "code": "error.edit.needs_timeline_v2",
+    "path": "clips[0].frame"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":1920,\"w\":1080},\"clips\":[{\"at\":0,\"id\":\"a\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":2,\"out\":1},{\"at\":1,\"id\":\"b\",\"in\":0,\"item\":\"BBBBBBBBBBBBBBBB\",\"lane\":2,\"out\":1}],\"version\":2}"
+  },
+  "clip_count": 2,
+  "cover_item": "AAAAAAAAAAAAAAAA",
+  "timing_frames": 60
+}

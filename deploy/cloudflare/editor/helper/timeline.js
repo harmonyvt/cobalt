@@ -24,8 +24,11 @@ export const EDIT_CANVASES = [
     [1280, 720],
 ];
 export const EDIT_SOURCE_TYPES = ["video/mp4", "video/quicktime", "video/x-m4v", "image/gif", "image/jpeg", "image/png", "image/webp"];
-/** Overlay layers (section 39): an overlay's optional `track` is 0..EDIT_OVERLAY_TRACKS - 1; absent means 0. */
+/** Overlay layers (section 39): an overlay's optional `track` is 0..EDIT_OVERLAY_TRACKS - 1; absent means 0.
+ * Timeline v2 lanes use the same ceiling: `lane` is 0..EDIT_OVERLAY_TRACKS - 1 (section 69). */
 export const EDIT_OVERLAY_TRACKS = 64;
+/** The timeline version this server writes when a client sends version 2, and the value of `limits.edit_timeline_version`. */
+export const EDIT_TIMELINE_VERSION = 2;
 
 /** Smallest cropped width and height in pixels (section 10: api/helper/crop.js, copied because the image has no monorepo). */
 export const MIN_CROP_PX = 64;
@@ -49,6 +52,12 @@ export const EDIT_CROP_ASPECTS = ["free", "9:16", "1:1", "4:5", "16:9"];
  *            key?: ChromaKey, background?: KeyBackground}} OverlayClip
  * @typedef {{version: 1, canvas: {w: number, h: number, fps: number}, main: MainClip[], overlay: OverlayClip[],
  *            output?: Exclude<EditOutput, "mp4">}} Timeline
+ * @typedef {{id: string, item: string, lane: number, at: number, in: number, out: number, speed?: number, crop?: EditCrop,
+ *            fit?: "fill" | "fit", frame?: {x: number, y: number, w: number}, opacity?: number, volume?: number,
+ *            muted?: boolean, pitch?: number, hidden?: boolean, key?: ChromaKey, background?: KeyBackground}} LaneClip
+ * @typedef {{version: 2, canvas: {w: number, h: number, fps: number}, clips: LaneClip[],
+ *            output?: Exclude<EditOutput, "mp4">}} TimelineV2
+ * @typedef {Timeline | TimelineV2} EditTimeline
  * @typedef {{id: string, content_type: string | null, source?: string | null, width: number | null, height: number | null,
  *            duration: number | null, bytes: number | null, deleted?: boolean | number | null}} SourceRow
  * @typedef {{ok: false, code: string, path: string, items?: string[]}} Failure
@@ -134,6 +143,9 @@ export function parseTimeline(raw) {
         }
     }
     if (!isObj(t)) return bad("");
+    // version 2 is the equal-lanes timeline (section 69). A v1 body that says version 2 fails inside that parser
+    // (it has `main`, not `clips`). Version 1 below is unchanged, so a stored v1 timeline stays byte for byte.
+    if (t.version === 2) return parseTimelineV2(t);
     let f = keysOk(t, ["version", "canvas", "main", "overlay"], ["output"], "");
     if (f) return f;
     if (t.version !== 1) return bad("version");
@@ -442,6 +454,7 @@ export function canonicalJSON(v) {
  *            overlay: {id: string, start: number, frames: number, samples: number}[]}}
  */
 export function timing(t) {
+    if (t.version === 2) return timingV2(t);
     const F = t.canvas.fps;
     const spf = EDIT_SAMPLE_RATE / F;
     let n = 0;
@@ -493,6 +506,7 @@ export function overlayDrawOrder(t) {
  * @returns {{ok: true, timeline: Timeline} | Failure}
  */
 export function checkSources(timeline, rows) {
+    if (timeline.version === 2) return checkSourcesV2(timeline, rows);
     /** @type {Map<string, SourceRow>} */
     const byId = rows instanceof Map ? rows : Array.isArray(rows) ? new Map(rows.map((r) => [r.id, r])) : new Map(Object.entries(rows));
     /** @type {{item: string, path: string}[]} */
@@ -617,4 +631,463 @@ export function overlayPlacement(display, frame, canvas) {
     const ox = clamp(roundHalfUp(frame.x * W), 0, W - ow);
     const oy = clamp(roundHalfUp(frame.y * H), 0, H - oh);
     return { h: oh, w: ow, x: ox, y: oy };
+}
+
+// --- timeline v2: equal lanes (section 69) -----------------------------------------------------------------------
+
+/**
+ * @typedef {{ok: true, timeline: TimelineV2} | Failure} V2Parse
+ * @typedef {{ok: true, timeline: Timeline} | Failure} V1Parse
+ */
+
+/**
+ * How many clips a timeline holds. v1 is main + overlay; v2 is `clips`.
+ * @param {EditTimeline} t
+ */
+export function clipCount(t) {
+    return t.version === 2 ? t.clips.length : t.main.length + t.overlay.length;
+}
+
+/**
+ * The library item whose poster covers the project. v1 is `main[0]`. v2 is the lane-0 clip with the smallest `at`
+ * (array order breaks a tie), or, when lane 0 is empty, that clip on the lowest lane.
+ * @param {EditTimeline} t @returns {string | null}
+ */
+export function coverItem(t) {
+    if (t.version !== 2) return t.main[0]?.item ?? null;
+    if (t.clips.length === 0) return null;
+    const lane = t.clips.some((c) => c.lane === 0) ? 0 : Math.min(...t.clips.map((c) => c.lane));
+    /** @type {LaneClip | null} */
+    let best = null;
+    let bestAt = Infinity;
+    let bestI = Infinity;
+    t.clips.forEach((c, i) => {
+        if (c.lane !== lane) return;
+        if (c.at < bestAt || (c.at === bestAt && i < bestI)) {
+            best = c;
+            bestAt = c.at;
+            bestI = i;
+        }
+    });
+    return best ? best.item : null;
+}
+
+/**
+ * Indexes of v2 clips in draw order: bottom lane first, then by `at`, then by array order.
+ * @param {TimelineV2} t @returns {number[]}
+ */
+export function clipDrawOrder(t) {
+    return t.clips.map((c, i) => ({ at: c.at, i, lane: c.lane })).sort((a, b) => a.lane - b.lane || a.at - b.at || a.i - b.i).map((x) => x.i);
+}
+
+/** Nominal speed of a v2 clip (omitted means 1). @param {LaneClip} c */
+const clipSpeedOf = (c) => c.speed ?? 1;
+
+/**
+ * Structure, types, ranges and overlap of a version-2 timeline. Same rounding and ranges as v1 (section 69).
+ * @param {Record<string, unknown>} t @returns {V2Parse}
+ */
+function parseTimelineV2(t) {
+    let f = keysOk(t, ["version", "canvas", "clips"], ["output"], "");
+    if (f) return f;
+    /** @type {Exclude<EditOutput, "mp4"> | null} */
+    let output = null;
+    if (t.output !== undefined) {
+        if (t.output !== "mp4" && t.output !== "webm" && t.output !== "prores" && t.output !== "webp") return bad("output");
+        if (t.output !== "mp4") output = /** @type {Exclude<EditOutput, "mp4">} */ (t.output);
+    }
+    const cv = t.canvas;
+    if (!isObj(cv)) return bad("canvas");
+    f = keysOk(cv, ["w", "h", "fps"], [], "canvas");
+    if (f) return f;
+    if (!Number.isInteger(cv.w)) return bad("canvas.w");
+    if (!Number.isInteger(cv.h)) return bad("canvas.h");
+    if (!Number.isInteger(cv.fps)) return bad("canvas.fps");
+    if (!EDIT_CANVASES.some(([w, h]) => w === cv.w && h === cv.h)) return fail("error.edit.canvas", "canvas");
+    if (cv.fps !== 30 && cv.fps !== 60) return fail("error.edit.canvas", "canvas.fps");
+    const canvas = { fps: /** @type {number} */ (cv.fps), h: /** @type {number} */ (cv.h), w: /** @type {number} */ (cv.w) };
+
+    if (!Array.isArray(t.clips)) return bad("clips");
+    if (t.clips.length === 0) return fail("error.edit.empty", "clips");
+    if (t.clips.length > EDIT_MAX_CLIPS) return fail("error.edit.too_many_clips", "clips");
+
+    const ids = new Set();
+    /** @param {unknown} id @param {string} path */
+    const idOk = (id, path) => {
+        if (typeof id !== "string" || !ID_RE.test(id) || ids.has(id)) return bad(path);
+        ids.add(id);
+        return null;
+    };
+    /** @type {LaneClip[]} */
+    const clips = [];
+    for (let i = 0; i < t.clips.length; i++) {
+        const r = parseClipV2(t.clips[i], `clips[${i}]`, idOk);
+        if (!r.ok) return r;
+        clips.push(r.clip);
+    }
+    /** @type {TimelineV2} */
+    const timeline = { canvas, clips, version: 2, ...(output ? { output } : {}) };
+    const tf = checkTimingV2(timeline);
+    if (tf) return tf;
+    return { ok: true, timeline };
+}
+
+/**
+ * @param {unknown} c @param {string} p @param {(id: unknown, path: string) => Failure | null} idOk
+ * @returns {{ok: true, clip: LaneClip} | Failure}
+ */
+function parseClipV2(c, p, idOk) {
+    if (!isObj(c)) return bad(p);
+    let f = keysOk(c, ["id", "item", "lane", "at", "in", "out"], ["speed", "crop", "fit", "frame", "opacity", "volume", "muted", "pitch", "key", "background", "hidden"], p);
+    if (f) return f;
+    f = idOk(c.id, `${p}.id`);
+    if (f) return f;
+    if (typeof c.item !== "string" || !ITEM_RE.test(c.item)) return bad(`${p}.item`);
+    if (!Number.isInteger(c.lane)) return bad(`${p}.lane`);
+    const lane = /** @type {number} */ (c.lane) + 0;
+    if (lane < 0 || lane >= EDIT_OVERLAY_TRACKS) return range(`${p}.lane`);
+    for (const k of ["at", "in", "out"]) if (!isNum(c[k])) return bad(`${p}.${k}`);
+    const at = /** @type {number} */ (c.at), rin = /** @type {number} */ (c.in), rout = /** @type {number} */ (c.out);
+    if (at < 0 || at > SECONDS_BOUND) return range(`${p}.at`);
+    if (rin < 0 || rin > SECONDS_BOUND) return range(`${p}.in`);
+    if (rout < 0 || rout > SECONDS_BOUND) return range(`${p}.out`);
+    const cin = roundTo(rin, 3), cout = roundTo(rout, 3);
+    if (!(cin < cout)) return range(`${p}.out`);
+
+    /** @type {number} */
+    let speed = 1;
+    if (c.speed !== undefined) {
+        if (!isNum(c.speed)) return bad(`${p}.speed`);
+        const rs = /** @type {number} */ (c.speed);
+        if (rs < 0) return range(`${p}.speed`);
+        speed = roundTo(roundHalfUp(rs / 0.05) * 0.05, 2);
+        if (speed < 0.25 || speed > 4) return range(`${p}.speed`);
+    }
+    if ((cout - cin) / speed < 0.1 - 1e-9) return range(`${p}.out`);
+
+    /** @type {"fill" | "fit" | undefined} */
+    let fit;
+    if (c.fit !== undefined) {
+        if (c.fit !== "fill" && c.fit !== "fit") return bad(`${p}.fit`);
+        if (c.fit === "fit") fit = "fit";
+    }
+    /** @type {EditCrop | undefined} */
+    let crop;
+    if (c.crop !== undefined) {
+        const cr = parseCrop(c.crop, `${p}.crop`);
+        if (!cr.ok) return cr;
+        crop = cr.crop;
+    }
+    /** @type {{x: number, y: number, w: number} | undefined} */
+    let frame;
+    if (c.frame !== undefined) {
+        if (!isObj(c.frame)) return bad(`${p}.frame`);
+        f = keysOk(c.frame, ["x", "y", "w"], [], `${p}.frame`);
+        if (f) return f;
+        for (const k of ["x", "y", "w"]) if (!isNum(c.frame[k])) return bad(`${p}.frame.${k}`);
+        const fx = /** @type {number} */ (c.frame.x), fy = /** @type {number} */ (c.frame.y), fw = /** @type {number} */ (c.frame.w);
+        if (fx < 0) return range(`${p}.frame.x`);
+        if (fy < 0) return range(`${p}.frame.y`);
+        frame = { w: roundTo(clamp(fw, -1, 2), 4), x: roundTo(clamp(fx, 0, 2), 4), y: roundTo(clamp(fy, 0, 2), 4) };
+        if (frame.w < 0.05 || frame.w > 1) return range(`${p}.frame.w`);
+        if (frame.x + frame.w > 1 + EDIT_EPS) return range(`${p}.frame.x`);
+    }
+    /** @type {number | undefined} */
+    let opacity;
+    if (c.opacity !== undefined) {
+        if (!isNum(c.opacity)) return bad(`${p}.opacity`);
+        const op = /** @type {number} */ (c.opacity);
+        if (op < 0.1 - 1e-9 || op > 1) return range(`${p}.opacity`);
+        const q = roundTo(op, 2);
+        if (q !== 1) opacity = q;
+    }
+    /** @type {number | undefined} */
+    let volume;
+    if (c.volume !== undefined) {
+        if (!isNum(c.volume)) return bad(`${p}.volume`);
+        const vol = /** @type {number} */ (c.volume);
+        if (vol < 0 || vol > 1) return range(`${p}.volume`);
+        const q = roundTo(vol, 2);
+        if (q !== 1) volume = q;
+    }
+    if (c.muted !== undefined && typeof c.muted !== "boolean") return bad(`${p}.muted`);
+    const muted = c.muted === true;
+    const pt = parsePitch(c, p);
+    if (!pt.ok) return pt;
+    const keyed = parseOverlayKey(c.key, `${p}.key`);
+    if (!keyed.ok) return keyed;
+    const bg = parseOverlayBackground(c.background, `${p}.background`);
+    if (!bg.ok) return bg;
+    if (c.hidden !== undefined && typeof c.hidden !== "boolean") return bad(`${p}.hidden`);
+    const hidden = c.hidden === true;
+    return {
+        ok: true,
+        clip: sortKeys({
+            ...(hidden ? { hidden: true } : {}),
+            ...(pt.pitch !== 0 ? { pitch: pt.pitch } : {}),
+            at: roundTo(at, 3),
+            ...(crop ? { crop } : {}),
+            ...(fit ? { fit } : {}),
+            ...(frame ? { frame } : {}),
+            id: /** @type {string} */ (c.id),
+            in: cin,
+            item: c.item,
+            lane,
+            ...(muted ? { muted: true } : {}),
+            ...(opacity !== undefined ? { opacity } : {}),
+            out: cout,
+            ...(speed !== 1 ? { speed } : {}),
+            ...(volume !== undefined ? { volume } : {}),
+            ...(keyed.key ? { key: keyed.key } : {}),
+            ...(bg.background ? { background: bg.background } : {}),
+        }),
+    };
+}
+
+/**
+ * Edit length is the latest clip end. Two clips on one lane may not share a frame. A gap is allowed.
+ * @param {TimelineV2} t @returns {Failure | null}
+ */
+function checkTimingV2(t) {
+    const tm = timingV2(t);
+    if (tm.frames > EDIT_MAX_SECONDS * tm.fps) return fail("error.edit.too_long", "clips");
+    /** @type {Map<number, {i: number, start: number, end: number}[]>} */
+    const lanes = new Map();
+    for (let i = 0; i < t.clips.length; i++) {
+        const row = tm.clips[i];
+        const lane = t.clips[i].lane;
+        const list = lanes.get(lane) ?? [];
+        list.push({ end: row.start + row.frames, i, start: row.start });
+        lanes.set(lane, list);
+    }
+    for (const list of lanes.values()) {
+        list.sort((a, b) => a.start - b.start || a.i - b.i);
+        for (let j = 1; j < list.length; j++) {
+            if (list[j].start < list[j - 1].end) return fail("error.edit.overlay_overlap", `clips[${list[j].i}]`);
+        }
+    }
+    return null;
+}
+
+/**
+ * @param {TimelineV2} t
+ * @returns {{fps: number, frames: number, seconds: number,
+ *            clips: {id: string, lane: number, start: number, frames: number, speed: number, samples: number}[]}}
+ */
+function timingV2(t) {
+    const F = t.canvas.fps;
+    const spf = EDIT_SAMPLE_RATE / F;
+    let n = 0;
+    const clips = t.clips.map((c) => {
+        const speed = clipSpeedOf(c);
+        const frames = Math.max(1, roundHalfUp(((c.out - c.in) / speed) * F));
+        const start = roundHalfUp(c.at * F);
+        const end = start + frames;
+        if (end > n) n = end;
+        return { frames, id: c.id, lane: c.lane, samples: frames * spf, speed: ((c.out - c.in) * F) / frames, start };
+    });
+    return { clips, fps: F, frames: n, seconds: n / F };
+}
+
+/**
+ * @param {Map<string, SourceRow> | SourceRow[] | Record<string, SourceRow>} rows
+ * @returns {Map<string, SourceRow>}
+ */
+function sourceMap(rows) {
+    return rows instanceof Map ? rows : Array.isArray(rows) ? new Map(rows.map((r) => [r.id, r])) : new Map(Object.entries(rows));
+}
+
+/**
+ * The source checks for a v2 timeline. Pictures and GIFs are allowed on every lane, including lane 0.
+ * A video's `out` clamps inside the 0.05 s slack the way a v1 clip does. There is no `not_video` check.
+ * @param {TimelineV2} timeline @param {Map<string, SourceRow> | SourceRow[] | Record<string, SourceRow>} rows
+ * @returns {{ok: true, timeline: TimelineV2} | Failure}
+ */
+function checkSourcesV2(timeline, rows) {
+    const byId = sourceMap(rows);
+    /** @type {{item: string, path: string}[]} */
+    const refs = timeline.clips.map((c, i) => ({ item: c.item, path: `clips[${i}].item` }));
+    /** @param {(r: {item: string, path: string}) => boolean} badRow @param {string} code @returns {Failure | null} */
+    const scan = (badRow, code) => {
+        const hit = refs.filter(badRow);
+        return hit.length === 0 ? null : { ok: false, code, path: hit[0].path, items: [...new Set(hit.map((h) => h.item))] };
+    };
+    const row = (/** @type {string} */ id) => /** @type {SourceRow} */ (byId.get(id));
+    let f = scan((r) => !byId.has(r.item) || !!row(r.item).deleted, "error.edit.source_missing");
+    if (f) return f;
+    f = scan((r) => sourceKind(row(r.item).content_type) === null, "error.edit.unsupported_source");
+    if (f) return f;
+    let bytes = 0;
+    for (const id of new Set(refs.map((r) => r.item))) bytes += Number(row(id).bytes) || 0;
+    if (bytes > EDIT_MAX_INPUT_BYTES) return fail("error.edit.too_large", "clips");
+
+    const t = /** @type {TimelineV2} */ (JSON.parse(JSON.stringify(timeline)));
+    const { w: W, h: H } = t.canvas;
+    for (let i = 0; i < t.clips.length; i++) {
+        const c = t.clips[i], r = row(c.item), p = `clips[${i}]`;
+        const kind = /** @type {string} */ (sourceKind(r.content_type));
+        const speed = clipSpeedOf(c);
+        if (kind === "video") {
+            const d = Number(r.duration);
+            if (r.duration != null && d > 0) {
+                if (c.out > d + EDIT_END_SLACK + 1e-9) return fail("error.edit.past_source_end", `${p}.out`);
+                if (c.out > d) {
+                    c.out = roundTo(Math.floor(d * 1000 + 1e-9) / 1000, 3);
+                    if (!(c.in < c.out) || (c.out - c.in) / speed < 0.1 - 1e-9) return range(`${p}.out`);
+                }
+            }
+        } else {
+            if (c.in !== 0) return range(`${p}.in`);
+            if (c.out < 0.1 || c.out > 600) return range(`${p}.out`);
+        }
+        if (c.crop && r.width && r.height && cropToPixels(c.crop, r.width, r.height) === null) return range(`${p}.crop`);
+        if (c.frame && r.width && r.height) {
+            const disp = c.crop ? cropToPixels(c.crop, r.width, r.height) : { h: r.height, w: r.width };
+            if (disp) {
+                const fh = ((c.frame.w * W) / H) * (disp.h / disp.w);
+                if (c.frame.y + fh > 1 + EDIT_EPS) return range(`${p}.frame.y`);
+            }
+        }
+    }
+    const tf = checkTimingV2(t);
+    if (tf) return tf;
+    return { ok: true, timeline: t };
+}
+
+/**
+ * A parsed v1 timeline as v2. Main clips become lane 0, placed at the frame the main track already gives them
+ * (`at` = that start, in seconds, rounded to 0.001). Overlay track N becomes lane N + 1. Track 63 would be lane 64,
+ * which is outside the 64 lanes, so that timeline does not convert (it stays v1 and still renders).
+ * @param {Timeline} timeline @returns {V2Parse}
+ */
+export function timelineV1ToV2(timeline) {
+    if (!timeline || timeline.version !== 1) return bad("version");
+    const tm = timing(timeline);
+    /** @type {Record<string, unknown>[]} */
+    const clips = [];
+    for (let i = 0; i < timeline.main.length; i++) {
+        const c = timeline.main[i];
+        clips.push({
+            id: c.id,
+            item: c.item,
+            lane: 0,
+            at: roundTo(tm.main[i].start / tm.fps, 3),
+            in: c.in,
+            out: c.out,
+            ...(c.speed !== 1 ? { speed: c.speed } : {}),
+            ...(c.crop ? { crop: c.crop } : {}),
+            ...(c.fit !== "fill" ? { fit: c.fit } : {}),
+            ...(c.volume !== 1 ? { volume: c.volume } : {}),
+            ...(c.muted ? { muted: true } : {}),
+            ...(c.pitch ? { pitch: c.pitch } : {}),
+        });
+    }
+    for (let i = 0; i < timeline.overlay.length; i++) {
+        const o = timeline.overlay[i];
+        const lane = (o.track ?? 0) + 1;
+        if (lane >= EDIT_OVERLAY_TRACKS) return range(`overlay[${i}].track`);
+        clips.push({
+            id: o.id,
+            item: o.item,
+            lane,
+            at: o.at,
+            in: o.in,
+            out: o.out,
+            frame: o.frame,
+            ...(o.opacity !== 1 ? { opacity: o.opacity } : {}),
+            ...(o.volume !== 1 ? { volume: o.volume } : {}),
+            ...(o.muted ? { muted: true } : {}),
+            ...(o.pitch ? { pitch: o.pitch } : {}),
+            ...(o.hidden ? { hidden: true } : {}),
+            ...(o.key ? { key: o.key } : {}),
+            ...(o.background ? { background: o.background } : {}),
+        });
+    }
+    return parseTimelineV2({ version: 2, canvas: timeline.canvas, clips, ...(timeline.output ? { output: timeline.output } : {}) });
+}
+
+/**
+ * A parsed v2 timeline as v1, when nothing would be dropped. Lane 0, back to back from time 0, with no frame, key,
+ * background, hide, or partial opacity, becomes `main` (and, when `kinds` says so, only if that item is a video).
+ * Lane N (N ≥ 1) with a frame, speed 1 and no crop becomes overlay track N − 1. Anything else refuses: the caller
+ * keeps the v2 document and does not invent a v1 one.
+ * `kinds` maps an item id to "video", "gif" or "photo". A missing kind is not treated as a picture.
+ * @param {TimelineV2} timeline
+ * @param {Map<string, string | null | undefined> | Record<string, string | null | undefined> | null} [kinds]
+ * @returns {V1Parse}
+ */
+export function timelineV2ToV1(timeline, kinds = null) {
+    if (!timeline || timeline.version !== 2) return bad("version");
+    /** @type {Map<string, string | null | undefined> | null} */
+    const kindOf = kinds == null ? null : kinds instanceof Map ? kinds : new Map(Object.entries(kinds));
+    const F = timeline.canvas.fps;
+    /** @type {{i: number, c: LaneClip}[]} */
+    const lane0 = [];
+    /** @type {{i: number, c: LaneClip}[]} */
+    const overs = [];
+    for (let i = 0; i < timeline.clips.length; i++) {
+        const c = timeline.clips[i];
+        const p = `clips[${i}]`;
+        if (c.lane === 0) {
+            if (c.frame) return fail("error.edit.needs_timeline_v2", `${p}.frame`);
+            if (c.opacity !== undefined && c.opacity !== 1) return fail("error.edit.needs_timeline_v2", `${p}.opacity`);
+            if (c.hidden) return fail("error.edit.needs_timeline_v2", `${p}.hidden`);
+            if (c.key) return fail("error.edit.needs_timeline_v2", `${p}.key`);
+            if (c.background) return fail("error.edit.needs_timeline_v2", `${p}.background`);
+            if (kindOf) {
+                const k = kindOf.get(c.item);
+                if (k != null && k !== "video") return fail("error.edit.needs_timeline_v2", `${p}.item`);
+            }
+            lane0.push({ c, i });
+        } else {
+            if (!c.frame) return fail("error.edit.needs_timeline_v2", `${p}.frame`);
+            if (c.crop) return fail("error.edit.needs_timeline_v2", `${p}.crop`);
+            if (c.speed !== undefined && c.speed !== 1) return fail("error.edit.needs_timeline_v2", `${p}.speed`);
+            if (c.fit !== undefined && c.fit !== "fill") return fail("error.edit.needs_timeline_v2", `${p}.fit`);
+            overs.push({ c, i });
+        }
+    }
+    if (lane0.length === 0) return fail("error.edit.needs_timeline_v2", "clips");
+    lane0.sort((a, b) => a.c.at - b.c.at || a.i - b.i);
+    let n = 0;
+    for (const { c, i } of lane0) {
+        const start = roundHalfUp(c.at * F);
+        if (start !== n) return fail("error.edit.needs_timeline_v2", `clips[${i}].at`);
+        const frames = Math.max(1, roundHalfUp(((c.out - c.in) / clipSpeedOf(c)) * F));
+        n += frames;
+    }
+    const main = lane0.map(({ c }) => ({
+        id: c.id,
+        item: c.item,
+        in: c.in,
+        out: c.out,
+        speed: clipSpeedOf(c),
+        ...(c.crop ? { crop: c.crop } : {}),
+        fit: c.fit ?? "fill",
+        volume: c.volume ?? 1,
+        muted: c.muted === true,
+        ...(c.pitch ? { pitch: c.pitch } : {}),
+    }));
+    overs.sort((a, b) => a.c.at - b.c.at || a.i - b.i);
+    const overlay = overs.map(({ c }) => ({
+        id: c.id,
+        item: c.item,
+        at: c.at,
+        in: c.in,
+        out: c.out,
+        frame: c.frame,
+        opacity: c.opacity ?? 1,
+        volume: c.volume ?? 1,
+        muted: c.muted === true,
+        ...(c.pitch ? { pitch: c.pitch } : {}),
+        ...(c.lane - 1 !== 0 ? { track: c.lane - 1 } : {}),
+        ...(c.hidden ? { hidden: true } : {}),
+        ...(c.key ? { key: c.key } : {}),
+        ...(c.background ? { background: c.background } : {}),
+    }));
+    // parseTimeline canonicalises. An overlay that runs past the main track, or any other v1 rule, means this
+    // document is not a v1 timeline: one code, so a caller never receives a partial conversion.
+    const parsed = parseTimeline({ version: 1, canvas: timeline.canvas, main, overlay, ...(timeline.output ? { output: timeline.output } : {}) });
+    if (!parsed.ok) return fail("error.edit.needs_timeline_v2", parsed.path || "clips");
+    return parsed;
 }

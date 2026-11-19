@@ -158,7 +158,8 @@ describe("POST /edits", () => {
             [{ timeline: timeline(), extra: 1 }, "extra"],
             [{ title: "x" }, "timeline"],
             [{ timeline: "nope" }, ""],
-            [{ timeline: { ...timeline(), version: 2 } }, "version"],
+            [{ timeline: { ...timeline(), version: 3 } }, "version"],
+            [{ timeline: { ...timeline(), version: 2 } }, "main"],
         ];
         for (const [body, path] of cases) {
             const r = await w.api("POST", "/edits", body);
@@ -686,6 +687,7 @@ describe("GET /capabilities", () => {
             edit_max_projects: 200,
             edit_overlay_tracks: 64,
             edit_overlay_hidden: true,
+            edit_timeline_version: 2,
             edit_alt_kinds: ["depth_cut", "person_cut", "subject_cut"],
         });
         expect(r.json.limits.edit_pitch).toBe(true);

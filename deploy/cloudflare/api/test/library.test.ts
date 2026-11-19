@@ -1030,6 +1030,7 @@ describe("GET /capabilities", () => {
                 edit_pitch: true,
                 edit_overlay_tracks: 64,
                 edit_overlay_hidden: true,
+                edit_timeline_version: 2,
                 edit_alt_kinds: ["depth_cut", "person_cut", "subject_cut"],
                 status_ids: 200,
             },
@@ -1063,6 +1064,7 @@ describe("GET /capabilities", () => {
             edit_pitch: true,
             edit_overlay_tracks: 64,
             edit_overlay_hidden: true,
+            edit_timeline_version: 2,
             edit_alt_kinds: [...EDIT_ALT_KINDS],
             status_ids: STATUS_IDS_MAX,
         });

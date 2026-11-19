@@ -99,7 +99,8 @@ test("bad_request: shapes, types, unknown and missing keys, ids, version", () =>
     refuses(null, "error.edit.bad_request", "");
     refuses([], "error.edit.bad_request", "");
     refuses("{not json", "error.edit.bad_request", "");
-    refuses({ ...tl(), version: 2 }, "error.edit.bad_request", "version");
+    refuses({ ...tl(), version: 3 }, "error.edit.bad_request", "version");
+    refuses({ ...tl(), version: 2 }, "error.edit.bad_request", "main");
     refuses({ ...tl(), extra: 1 }, "error.edit.bad_request", "extra");
     const { overlay, ...noOverlay } = tl();
     refuses(noOverlay, "error.edit.bad_request", "overlay");

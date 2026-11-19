@@ -1,0 +1,102 @@
+{
+  "name": "v1-rich-roundtrip",
+  "note": "Crop, fit, pitch, mute, a keyed overlay on track 5, a second overlay on track 0, and output webm. Round trip keeps every field.",
+  "input": {
+    "version": 1,
+    "canvas": {
+      "w": 1280,
+      "h": 720,
+      "fps": 60
+    },
+    "main": [
+      {
+        "id": "m1",
+        "item": "AAAAAAAAAAAAAAAA",
+        "in": 0.1,
+        "out": 2.333,
+        "speed": 1.35,
+        "fit": "fit",
+        "volume": 0.5,
+        "muted": false,
+        "pitch": 1.2,
+        "crop": {
+          "aspect": "16:9",
+          "x": 0,
+          "y": 0,
+          "w": 1,
+          "h": 1
+        }
+      },
+      {
+        "id": "m2",
+        "item": "BBBBBBBBBBBBBBBB",
+        "in": 0,
+        "out": 1.111,
+        "speed": 0.25,
+        "fit": "fill",
+        "volume": 1,
+        "muted": true
+      }
+    ],
+    "overlay": [
+      {
+        "id": "o1",
+        "item": "CCCCCCCCCCCCCCCC",
+        "at": 0.5,
+        "in": 0,
+        "out": 0.4,
+        "frame": {
+          "x": 0.1,
+          "y": 0.1,
+          "w": 0.2
+        },
+        "opacity": 0.4,
+        "volume": 0,
+        "muted": false,
+        "track": 5,
+        "hidden": true,
+        "key": {
+          "color": "#00b140",
+          "similarity": 0.2,
+          "blend": 0.05,
+          "spill": 0.4
+        },
+        "background": {
+          "type": "color",
+          "color": "#112233"
+        }
+      },
+      {
+        "id": "o2",
+        "item": "DDDDDDDDDDDDDDDD",
+        "at": 0.5,
+        "in": 0,
+        "out": 0.2,
+        "frame": {
+          "x": 0,
+          "y": 0,
+          "w": 0.5
+        },
+        "opacity": 1,
+        "volume": 1,
+        "muted": true
+      }
+    ],
+    "output": "webm"
+  },
+  "to_v2": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":60,\"h\":720,\"w\":1280},\"clips\":[{\"at\":0,\"crop\":{\"aspect\":\"16:9\",\"h\":1,\"w\":1,\"x\":0,\"y\":0},\"fit\":\"fit\",\"id\":\"m1\",\"in\":0.1,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":0,\"out\":2.333,\"pitch\":1,\"speed\":1.35,\"volume\":0.5},{\"at\":1.65,\"id\":\"m2\",\"in\":0,\"item\":\"BBBBBBBBBBBBBBBB\",\"lane\":0,\"muted\":true,\"out\":1.111,\"speed\":0.25},{\"at\":0.5,\"background\":{\"color\":\"#112233\",\"type\":\"color\"},\"frame\":{\"w\":0.2,\"x\":0.1,\"y\":0.1},\"hidden\":true,\"id\":\"o1\",\"in\":0,\"item\":\"CCCCCCCCCCCCCCCC\",\"key\":{\"blend\":0.05,\"color\":\"#00B140\",\"similarity\":0.2,\"spill\":0.4},\"lane\":6,\"opacity\":0.4,\"out\":0.4,\"volume\":0},{\"at\":0.5,\"frame\":{\"w\":0.5,\"x\":0,\"y\":0},\"id\":\"o2\",\"in\":0,\"item\":\"DDDDDDDDDDDDDDDD\",\"lane\":1,\"muted\":true,\"out\":0.2}],\"output\":\"webm\",\"version\":2}"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":60,\"h\":720,\"w\":1280},\"main\":[{\"crop\":{\"aspect\":\"16:9\",\"h\":1,\"w\":1,\"x\":0,\"y\":0},\"fit\":\"fit\",\"id\":\"m1\",\"in\":0.1,\"item\":\"AAAAAAAAAAAAAAAA\",\"muted\":false,\"out\":2.333,\"pitch\":1,\"speed\":1.35,\"volume\":0.5},{\"fit\":\"fill\",\"id\":\"m2\",\"in\":0,\"item\":\"BBBBBBBBBBBBBBBB\",\"muted\":true,\"out\":1.111,\"speed\":0.25,\"volume\":1}],\"output\":\"webm\",\"overlay\":[{\"at\":0.5,\"background\":{\"color\":\"#112233\",\"type\":\"color\"},\"frame\":{\"w\":0.2,\"x\":0.1,\"y\":0.1},\"hidden\":true,\"id\":\"o1\",\"in\":0,\"item\":\"CCCCCCCCCCCCCCCC\",\"key\":{\"blend\":0.05,\"color\":\"#00B140\",\"similarity\":0.2,\"spill\":0.4},\"muted\":false,\"opacity\":0.4,\"out\":0.4,\"track\":5,\"volume\":0},{\"at\":0.5,\"frame\":{\"w\":0.5,\"x\":0,\"y\":0},\"id\":\"o2\",\"in\":0,\"item\":\"DDDDDDDDDDDDDDDD\",\"muted\":true,\"opacity\":1,\"out\":0.2,\"volume\":1}],\"version\":1}"
+  },
+  "clip_count": 4,
+  "cover_item": "AAAAAAAAAAAAAAAA",
+  "timing_frames": 366,
+  "to_v1": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":60,\"h\":720,\"w\":1280},\"main\":[{\"crop\":{\"aspect\":\"16:9\",\"h\":1,\"w\":1,\"x\":0,\"y\":0},\"fit\":\"fit\",\"id\":\"m1\",\"in\":0.1,\"item\":\"AAAAAAAAAAAAAAAA\",\"muted\":false,\"out\":2.333,\"pitch\":1,\"speed\":1.35,\"volume\":0.5},{\"fit\":\"fill\",\"id\":\"m2\",\"in\":0,\"item\":\"BBBBBBBBBBBBBBBB\",\"muted\":true,\"out\":1.111,\"speed\":0.25,\"volume\":1}],\"output\":\"webm\",\"overlay\":[{\"at\":0.5,\"background\":{\"color\":\"#112233\",\"type\":\"color\"},\"frame\":{\"w\":0.2,\"x\":0.1,\"y\":0.1},\"hidden\":true,\"id\":\"o1\",\"in\":0,\"item\":\"CCCCCCCCCCCCCCCC\",\"key\":{\"blend\":0.05,\"color\":\"#00B140\",\"similarity\":0.2,\"spill\":0.4},\"muted\":false,\"opacity\":0.4,\"out\":0.4,\"track\":5,\"volume\":0},{\"at\":0.5,\"frame\":{\"w\":0.5,\"x\":0,\"y\":0},\"id\":\"o2\",\"in\":0,\"item\":\"DDDDDDDDDDDDDDDD\",\"muted\":true,\"opacity\":1,\"out\":0.2,\"volume\":1}],\"version\":1}"
+  }
+}

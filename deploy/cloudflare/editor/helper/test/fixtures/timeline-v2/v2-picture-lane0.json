@@ -1,0 +1,37 @@
+{
+  "name": "v2-picture-lane0",
+  "note": "A picture on lane 0, held for 3s (in 0, out is how long it stays). With kinds saying photo, it is not a v1 main clip.",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "p",
+        "item": "HHHHHHHHHHHHHHHH",
+        "lane": 0,
+        "at": 0,
+        "in": 0,
+        "out": 3
+      }
+    ]
+  },
+  "kinds": {
+    "HHHHHHHHHHHHHHHH": "photo"
+  },
+  "to_v1": {
+    "ok": false,
+    "code": "error.edit.needs_timeline_v2",
+    "path": "clips[0].item"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":1920,\"w\":1080},\"clips\":[{\"at\":0,\"id\":\"p\",\"in\":0,\"item\":\"HHHHHHHHHHHHHHHH\",\"lane\":0,\"out\":3}],\"version\":2}"
+  },
+  "clip_count": 1,
+  "cover_item": "HHHHHHHHHHHHHHHH",
+  "timing_frames": 90
+}

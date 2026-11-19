@@ -1,0 +1,27 @@
+{
+  "name": "v2-too-long",
+  "note": "The latest clip end is past 600s.",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "a",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 0,
+        "at": 599,
+        "in": 0,
+        "out": 2
+      }
+    ]
+  },
+  "parse": {
+    "ok": false,
+    "code": "error.edit.too_long",
+    "path": "clips"
+  }
+}

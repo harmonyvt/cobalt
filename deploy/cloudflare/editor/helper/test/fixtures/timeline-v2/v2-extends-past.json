@@ -1,0 +1,51 @@
+{
+  "name": "v2-extends-past",
+  "note": "Lane 1 runs past the end of lane 0. v1 would call that overlay_past_end, so the conversion refuses.",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "m",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 0,
+        "at": 0,
+        "in": 0,
+        "out": 2
+      },
+      {
+        "id": "o",
+        "item": "BBBBBBBBBBBBBBBB",
+        "lane": 1,
+        "at": 1,
+        "in": 0,
+        "out": 2,
+        "frame": {
+          "x": 0.1,
+          "y": 0.1,
+          "w": 0.3
+        }
+      }
+    ]
+  },
+  "kinds": {
+    "AAAAAAAAAAAAAAAA": "video",
+    "BBBBBBBBBBBBBBBB": "video"
+  },
+  "to_v1": {
+    "ok": false,
+    "code": "error.edit.needs_timeline_v2",
+    "path": "overlay[0]"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":1920,\"w\":1080},\"clips\":[{\"at\":0,\"id\":\"m\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":0,\"out\":2},{\"at\":1,\"frame\":{\"w\":0.3,\"x\":0.1,\"y\":0.1},\"id\":\"o\",\"in\":0,\"item\":\"BBBBBBBBBBBBBBBB\",\"lane\":1,\"out\":2}],\"version\":2}"
+  },
+  "clip_count": 2,
+  "cover_item": "AAAAAAAAAAAAAAAA",
+  "timing_frames": 90
+}

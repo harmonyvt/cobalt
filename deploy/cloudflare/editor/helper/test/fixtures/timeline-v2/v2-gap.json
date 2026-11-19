@@ -1,0 +1,42 @@
+{
+  "name": "v2-gap",
+  "note": "Lane 0 has a gap from 1s to 3s. The edit is 4s. The gap is black. It is not a v1 main track.",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "a",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 0,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "b",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 0,
+        "at": 3,
+        "in": 0,
+        "out": 1
+      }
+    ]
+  },
+  "to_v1": {
+    "ok": false,
+    "code": "error.edit.needs_timeline_v2",
+    "path": "clips[1].at"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":1920,\"w\":1080},\"clips\":[{\"at\":0,\"id\":\"a\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":0,\"out\":1},{\"at\":3,\"id\":\"b\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":0,\"out\":1}],\"version\":2}"
+  },
+  "clip_count": 2,
+  "cover_item": "AAAAAAAAAAAAAAAA",
+  "timing_frames": 120
+}
