@@ -396,6 +396,23 @@ struct EditSessionHistoryTests {
         #expect(!rig.session.canRedo)
     }
 
+    @Test func aTrimDragIsOneUndoStepUntilTheGestureEnds() async throws {
+        let rig = try await Rig()
+        defer { rig.finish() }
+        let pier = rig.clip(PreviewEditorIDs.pier).id
+        let original = rig.clip(PreviewEditorIDs.pier).`in`
+        rig.session.trim(clip: pier, in: 1, out: nil)
+        rig.session.trim(clip: pier, in: 2, out: nil)
+        rig.session.trim(clip: pier, in: 3, out: nil)
+        rig.session.undo()
+        #expect(rig.clip(PreviewEditorIDs.pier).`in` == original)
+        rig.session.redo()
+        rig.session.endGesture()
+        rig.session.trim(clip: pier, in: 4, out: nil)
+        rig.session.undo()
+        #expect(rig.clip(PreviewEditorIDs.pier).`in` == 3)
+    }
+
     @Test func aDragIsOneUndoStepUntilTheGestureEnds() async throws {
         let rig = try await Rig()
         defer { rig.finish() }
