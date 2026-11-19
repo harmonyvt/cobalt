@@ -571,6 +571,42 @@ describe("show_edit", () => {
         await expect(run("show_edit", { id: "Edit0000000000000009" })).rejects.toThrow(/no such project/);
     });
 
+    it("a greenscreen, a hidden layer and a background-removal alternate come through as track, hidden and fx", async () => {
+        seedSources();
+        file({ id: "SrcR", name: "clip.mov", content_type: "video/quicktime", visibility: "private" });
+        db.raw.prepare("UPDATE media_items SET made_spec = ?, role = 'alt', source = 'made' WHERE id = 'SrcR'").run(JSON.stringify({ kind: "rmbg", model: "bria", spill: 0.2 }));
+        file({ id: "SrcP", name: "sticker.png", content_type: "image/png" });
+        const key = { color: "#00B140", similarity: 0.3, blend: 0.1, spill: 0.2 };
+        answers["edits.get"] = got({
+            timeline: {
+                version: 1,
+                canvas: { w: 1080, h: 1920, fps: 30 },
+                main: [{ id: "c1", item: "SrcA", in: 0, out: 8, speed: 1, fit: "fit", volume: 1, muted: false }],
+                overlay: [
+                    { id: "o1", item: "SrcP", at: 1, in: 0, out: 2, frame: { x: 0, y: 0, w: 0.4 }, opacity: 1, volume: 1, muted: true, track: 12, hidden: true, key },
+                    { id: "o2", item: "SrcR", at: 3, in: 0, out: 2, frame: { x: 0.1, y: 0.1, w: 0.4 }, opacity: 1, volume: 1, muted: true, track: 2 },
+                    { id: "o3", item: "SrcD", at: 5, in: 0, out: 1.5, frame: { x: 0, y: 0, w: 0.3 }, opacity: 1, volume: 1, muted: true },
+                ],
+            },
+            sources: {
+                SrcA: { id: "SrcA", name: "intro.mp4", kind: "video", duration: 20, poster_url: null },
+                SrcP: { id: "SrcP", name: "sticker.png", kind: "photo", poster_url: null },
+                SrcR: { id: "SrcR", name: "clip.mov", kind: "video", duration: 4, poster_url: null },
+                SrcD: { id: "SrcD", name: "spin.gif", kind: "gif", poster_url: null },
+            },
+        });
+        const r = await run("show_edit", { id: EDIT_ID });
+        EditOut.parse(r.out);
+        const [green, removed, gif] = r.out.project.overlay;
+        expect(green).toMatchObject({ id: "o1", name: "sticker.png", track: 12, hidden: true, fx: true, kind: "image" });
+        expect(removed).toMatchObject({ id: "o2", name: "clip.mov", track: 2, hidden: false, fx: true, kind: "video" });
+        expect(gif).toMatchObject({ id: "o3", track: 0, hidden: false, fx: false, kind: "gif" });
+        expect(r.text).toContain("L13 hidden");
+        expect(r.text).toContain("fx");
+        expect(r.out.project.main[0].fx).toBe(false);
+        expect(batches).toBe(1);
+    });
+
     it("a bare answer (no timeline, no sources) does not crash", async () => {
         answers["edits.get"] = { id: EDIT_ID, title: "Empty", revision: 1, duration: 0, render: null, timeline: {}, sources: {} };
         const r = await run("show_edit", { id: EDIT_ID });

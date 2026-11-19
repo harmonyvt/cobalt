@@ -70,6 +70,8 @@ export type FileFacts = {
     has_poster: boolean;
     width: number | null;
     height: number | null;
+    // the file is a cutout or a background-removal / person / subject / depth alternate
+    effect: boolean;
 };
 export type PostsRead = {
     // by post key; a hidden or deleted post is not here
@@ -85,7 +87,7 @@ export type PostsRead = {
 // D1 allows 100 bound parameters a statement; every list here is one JSON parameter read with json_each instead, so
 // there is nothing to chunk, and the whole read is ONE batch (one round trip).
 const FILES_SQL = `SELECT m.id, m.name, m.link, m.poster, m.url, m.content_type, m.bucket, m.r2_key, m.source, m.role, m.item_index,
-        m.duration, m.width, m.height, m.bytes, m.visibility, m.created_at, ${POST_KEY_SQL} AS post_key
+        m.duration, m.width, m.height, m.bytes, m.visibility, m.created_at, m.made_spec, ${POST_KEY_SQL} AS post_key
     FROM media_items m WHERE m.deleted_at IS NULL`;
 const IN_LIST = (n: number) => `(SELECT value FROM json_each(?${n}))`;
 
@@ -152,6 +154,17 @@ export async function readPosts(op: Pick<OpContext, "db" | "mediaBaseUrl" | "sha
     const mediaPrefix = op.mediaBaseUrl.endsWith("/") ? op.mediaBaseUrl : `${op.mediaBaseUrl}/`;
     const hasPoster = (f: { poster: string | null }) => !!f.poster && f.poster.startsWith(mediaPrefix);
     const kindOfType = (ct: string | null): "video" | "image" => (ct && ct.toLowerCase().startsWith("video/") ? "video" : "image");
+// made_spec.kind values whose file is an effect the timeline marks (a cutout, or a Bria / on-device alternate)
+const EFFECT_ALT_KINDS = new Set(["cutout", "rmbg", "depth_cut", "person_cut", "subject_cut"]);
+const effectOf = (spec: unknown): boolean => {
+    if (typeof spec !== "string" || spec.length === 0 || spec.length > 2000) return false;
+    try {
+        const kind = (JSON.parse(spec) as { kind?: unknown }).kind;
+        return typeof kind === "string" && EFFECT_ALT_KINDS.has(kind);
+    } catch {
+        return false;
+    }
+};
     const built = postsFrom(fileRows as never, [], [], op.mediaBaseUrl);
     const share = op.shareBaseUrl ? (op.shareBaseUrl.endsWith("/") ? op.shareBaseUrl : `${op.shareBaseUrl}/`) : null;
     for (const p of built) {
@@ -185,6 +198,7 @@ export async function readPosts(op: Pick<OpContext, "db" | "mediaBaseUrl" | "sha
                 has_poster: hasPoster(f),
                 width: num(f.width),
                 height: num(f.height),
+                effect: effectOf((f as { made_spec?: unknown }).made_spec),
             });
         }
     }

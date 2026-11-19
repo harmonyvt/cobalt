@@ -10,7 +10,10 @@ import { rotateMcpLink, setMcpMode } from "../src/mcp-link";
 import { claudeUiDomain, serveMcpRequest, widgetCsp } from "../src/mcp-app/server";
 import { VIEWS } from "../src/mcp-app/shapes";
 import type { AppTool, Widget } from "../src/mcp-app/types";
-import { MCP_RESULT_MAX, type McpCaller } from "../src/mcp";
+import { EDIT_MAX_CLIPS, EDIT_OVERLAY_TRACKS } from "../../editor/helper/timeline.js";
+import { parseEditTimeline } from "../src/edits";
+import { MCP_RESULT_MAX, mcpToolList, type McpCaller } from "../src/mcp";
+import { freeTrack } from "../src/registry/ops/editor";
 import { opBase, REGISTRY } from "../src/registry/index";
 import { forCall } from "../src/registry/context";
 import { OpError } from "../src/registry/op";
@@ -542,6 +545,53 @@ describe("the real app tools through the official client", () => {
             const token = await signPreviewToken(INTERNAL, { k: keyId, i: "CatSecret000002", e: NOW + 3_600_000, p: 0 });
             return { url: previewUrl(API, token) };
         }
+
+        it("editor tools advertise the server's clip and layer limits, and the validator matches the app", () => {
+            const tools = mcpToolList(REGISTRY, { search: false, box: false, mcp: true });
+            const text = (n: string) => tools.find((t) => t.name === n)!.description;
+            for (const name of ["edits_create", "edits_update", "edits_addOverlay"]) {
+                const d = text(name);
+                expect(d, name).toContain(String(EDIT_MAX_CLIPS));
+                expect(d, name).toContain(`0..${EDIT_OVERLAY_TRACKS - 1}`);
+                expect(d, name).toMatch(/hidden/);
+                expect(d, name).not.toMatch(/50 clips|0\.\.7/);
+            }
+            expect(text("edits_create")).toMatch(/library_removeBackground/);
+            expect(text("edits_create")).toMatch(/renderer skips it/);
+            expect(text("edits_addOverlay")).toMatch(/lowest free layer of 64/);
+            const track = tools.find((t) => t.name === "edits_addOverlay")!.inputSchema;
+            expect(JSON.stringify(track)).toContain(`"maximum":${EDIT_OVERLAY_TRACKS - 1}`);
+
+            const item = "ItemAAAAAAAAAAAA";
+            const main = { id: "m", item, in: 0, out: 30, speed: 1, fit: "fill" as const, volume: 1, muted: false };
+            const ov = (id: string, extra: Record<string, unknown> = {}) => ({
+                id, item, at: 0, in: 0, out: 1, frame: { x: 0, y: 0, w: 0.2 }, opacity: 1, volume: 0, muted: true, ...extra,
+            });
+            const tl = (overlay: unknown[]) => ({ version: 1, canvas: { w: 1080, h: 1920, fps: 30 }, main: [main], overlay });
+            const create = REGISTRY.byCall("edits.create")!.input;
+            const update = REGISTRY.byCall("edits.update")!.input;
+            const agree = (overlay: unknown[]) => {
+                const timeline = tl(overlay);
+                const parsed = parseEditTimeline(timeline);
+                expect(create.safeParse({ timeline }).success, JSON.stringify(parsed)).toBe(parsed.ok);
+                expect(update.safeParse({ id: "Edit000000000001", timeline }).success).toBe(parsed.ok);
+                return parsed;
+            };
+            const key = { color: "#00B140", similarity: 0.3, blend: 0.1, spill: 0.2 };
+            const kept = agree([ov("a", { track: EDIT_OVERLAY_TRACKS - 1, hidden: true, key })]);
+            expect(kept.ok && kept.timeline.overlay[0]).toMatchObject({ track: EDIT_OVERLAY_TRACKS - 1, hidden: true, key: { color: "#00B140" } });
+            const shown = agree([ov("a", { hidden: false })]);
+            expect(shown.ok && "hidden" in shown.timeline.overlay[0]).toBe(false);
+            expect(agree([ov("a", { track: EDIT_OVERLAY_TRACKS })]).ok).toBe(false);
+            expect(agree([ov("a", { hidden: "yes" })]).ok).toBe(false);
+            const many = Array.from({ length: EDIT_MAX_CLIPS - 1 }, (_, i) => ov(`o${i}`, { at: i * 0.1, out: 0.1 }));
+            expect(agree(many).ok).toBe(true);
+            expect(agree([...many, ov("over", { at: 20, out: 0.1 })]).ok).toBe(false);
+
+            const busy = (n: number) => Array.from({ length: n }, (_, track) => ({ id: `b${track}`, at: 0, in: 0, out: 2, track }));
+            expect(freeTrack(busy(8), 0, 2, 30)).toBe(8);
+            expect(freeTrack(busy(EDIT_OVERLAY_TRACKS), 0, 2, 30)).toBeNull();
+        });
 
         it("a hidden post's link is a 404 whatever the token says", async () => {
             const p = await shown("key-1");

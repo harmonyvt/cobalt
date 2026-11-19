@@ -73,7 +73,8 @@ VIEWS.edit = (d) => {
     prev.append(still, vid);
     const boxes = ovs.map((o, i) => {
         const f = o.frame;
-        if (!f) return null;
+        // a hidden overlay is not drawn: the renderer skips it
+        if (!f || o.hidden) return null;
         const c = OV_COLORS[i % OV_COLORS.length];
         const bh = num(f.h) ? f.h : num(cv.w) && num(cv.h) ? (f.w * cv.w) / cv.h : f.w;
         const b = h("div", { class: "ovb" + (f.y < 0.08 ? " below" : ""), "aria-hidden": "true" }, safeUrl(o.poster_url) ? h("img", { src: o.poster_url, alt: "" }) : null, h("span", { text: o.name }));
@@ -244,22 +245,39 @@ VIEWS.edit = (d) => {
     const pct = (x) => (clamp(x / total, 0, 1) * 100).toFixed(3) + "%";
     const spanPct = (a, b) => (clamp((b - a) / total, 0, 1) * 100).toFixed(3) + "%";
     const live = []; // [el, start, end]
-    // overlays: stacked into as few rows as they need
+    // overlays: one lane per layer when the timeline names tracks (0 at the bottom, higher on top).
+    // A payload with no track (an older answer) still packs clips that do not overlap into as few rows as they need.
+    const trackOf = (o) => (Number.isInteger(o.track) && o.track >= 0 ? o.track : null);
+    const tracked = ovs.some((o) => trackOf(o) !== null);
     const rows = [];
-    ovs.map((o, i) => ({ o, i })).sort((a, b) => a.o.start - b.o.start).forEach(({ o, i }) => {
-        let rw = rows.find((x) => x.end <= o.start);
-        if (!rw) rows.push((rw = { end: 0, items: [] }));
-        rw.end = o.end;
-        rw.items.push({ o, i });
-    });
-    if (!rows.length) rows.push({ items: [] });
+    if (tracked) {
+        const maxTrack = ovs.reduce((m, o) => Math.max(m, trackOf(o) ?? 0), 0);
+        for (let track = maxTrack; track >= 0; track--) {
+            rows.push({
+                label: maxTrack === 0 ? "overlay" : "L" + (track + 1),
+                track,
+                items: ovs.map((o, i) => ({ o, i })).filter(({ o }) => (trackOf(o) ?? 0) === track),
+            });
+        }
+    } else {
+        ovs.map((o, i) => ({ o, i })).sort((a, b) => a.o.start - b.o.start).forEach(({ o, i }) => {
+            let rw = rows.find((x) => x.end <= o.start);
+            if (!rw) rows.push((rw = { end: 0, items: [] }));
+            rw.end = o.end;
+            rw.items.push({ o, i });
+        });
+        if (!rows.length) rows.push({ items: [] });
+    }
     const labs = h("div", { class: "labs", "aria-hidden": "true" }, h("div", { class: "h-r" }));
     rows.forEach((rw, ri) => {
-        labs.appendChild(h("div", { class: "h-o", text: ri ? "" : "overlay" }));
+        labs.appendChild(h("div", { class: "h-o", text: tracked ? rw.label : ri ? "" : "overlay" }));
         const lane = h("div", { class: "clane h-o" });
+        if (rw.track !== undefined) lane.setAttribute("data-track", String(rw.track));
         if (!rw.items.length) lane.appendChild(h("span", { class: "note", style: "padding:0 6px;font-size:9.5px", text: "none" }));
         rw.items.forEach(({ o, i }) => {
-            const e = h("div", { class: "cclip", title: `${o.name} · ${o.kind} · ${o.start}–${o.end} s`, text: `${o.name} · ${o.kind}` });
+            const mark = `${o.name} · ${o.kind}${o.hidden ? " · hidden" : ""}`;
+            const e = h("div", { class: "cclip" + (o.hidden ? " hid" : "") + (o.fx ? " hasfx" : ""), title: `${mark} · ${o.start}–${o.end} s`, text: mark });
+            if (o.fx) e.appendChild(h("i", { class: "fx", text: "fx" }));
             e.style.left = pct(o.start);
             e.style.width = spanPct(o.start, o.end);
             e.style.background = OV_COLORS[i % OV_COLORS.length];
@@ -280,6 +298,7 @@ VIEWS.edit = (d) => {
         const span = num(c.in) && num(c.out) ? ` · ${dur(c.in)}–${dur(c.out)}` : "";
         const sp = num(c.speed) && c.speed !== 1 ? ` ×${c.speed}` : "";
         e.appendChild(h("span", { class: "lbl", text: c.name + span + sp }));
+        if (c.fx) e.appendChild(h("i", { class: "fx", text: "fx" }));
         lm.appendChild(e);
         live.push([e, c.start, c.end]);
     });
@@ -309,7 +328,10 @@ VIEWS.edit = (d) => {
         boxes.forEach((b, i) => b && b.classList.toggle("on", mode !== "render" && t >= ovs[i].start && t < ovs[i].end));
         underList.replaceChildren();
         if (m) underList.appendChild(h("li", null, h("i", { class: "sw", style: `background:${MAIN_COLORS[main.findIndex((c) => c.id === m.id) % MAIN_COLORS.length]}` }), h("span", { class: "n", text: m.name }), h("span", { class: "r", text: `main · ${dur(m.in + (t - m.start) * m.speed, 1)}` })));
-        act.forEach(({ o, i }) => underList.appendChild(h("li", null, h("i", { class: "sw", style: `background:${OV_COLORS[i % OV_COLORS.length]}` }), h("span", { class: "n", text: o.name }), h("span", { class: "r", text: `${o.kind} · ${dur(t - o.start, 1)}` }))));
+        act.forEach(({ o, i }) => {
+            const layer = Number.isInteger(o.track) ? `L${o.track + 1} · ` : "";
+            underList.appendChild(h("li", null, h("i", { class: "sw", style: `background:${OV_COLORS[i % OV_COLORS.length]}` }), h("span", { class: "n", text: o.name + (o.fx ? " fx" : "") + (o.hidden ? " · hidden" : "") }), h("span", { class: "r", text: `${o.kind} · ${layer}${dur(t - o.start, 1)}` })));
+        });
         if (!underList.children.length) underList.appendChild(h("li", { class: "note", text: "nothing under the playhead" }));
         for (const b of [pbtn, playBtn2]) {
             b.replaceChildren(ic(playing ? "pause" : "play", b === pbtn ? 14 : 13));
@@ -361,6 +383,6 @@ VIEWS.edit = (d) => {
 
     sync(true);
     update();
-    w.appendChild(h("div", { class: "wbody" }, h("div", { class: "ctop" }, prev, side), h("div", { class: "ctracks" }, labs, area)));
+    w.appendChild(h("div", { class: "wbody" }, h("div", { class: "ctop" }, prev, side), h("div", { class: "ctracks" + (rows.length > 8 ? " many" : "") }, labs, area)));
     return w;
 };

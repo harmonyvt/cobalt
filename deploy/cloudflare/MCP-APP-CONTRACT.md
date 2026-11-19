@@ -96,8 +96,9 @@ optional and the defaults stay widget-sized.
   and the list in `projects` (up to 100). A project carries its raw `timeline` (what `edits_update` takes back; its
   `sources`, with names and pictures, are not passed on). For the timeline player each main clip also has `video_url`
   (the source file: public, or `null` with `private: true`; then its signed links are in `_meta` under `file_id`), `media_kind`, `poster_url`, `src_w`, `src_h`, `file_id`
-  next to `in`, `out`, `speed`, `muted`; each overlay has `in`, `out`, `frame {x, y, w, h}` (fractions of the canvas; `h` from the
-  source's shape), `opacity`, `url`, `media_kind`, `poster_url`, `private`, `file_id`; the render has `video_url` once it is done
+  next to `in`, `out`, `speed`, `muted`, and `fx` (true when that file is a cutout or a background-removal alternate);
+  each overlay has `in`, `out`, `frame {x, y, w, h}` (fractions of the canvas; `h` from the
+  source's shape), `opacity`, `url`, `media_kind`, `poster_url`, `private`, `file_id`, `track` (layer 0..63, higher on top; 0 when the timeline omits it), `hidden` (true when the renderer skips it; false when it is shown) and `fx` (a greenscreen `key`, or the file is a cutout / `library_removeBackground` alternate); the render has `video_url` once it is done
   (and `file_id`; `private` renders have their links in `_meta` like a clip). `preview_expires_at` says when the signed links end.
 - `list_collections { name?: string, limit?: 1..500 = 20 }`: collections carry `link_ids` and `post_ids`.
 - `list_share_links { collection?: string, query?: string, limit?: 1..500 = 20 }`: links carry `post_ids` and a private
@@ -144,8 +145,8 @@ Not in this step: deletes, status changes, rendering an edit, rerolling links (t
 - **Timeline (`edit`)**: a real preview on top plays the source under the playhead (the video seeks to
   `in + (t - start) * speed`, speed is the playback rate, the source switches at clip boundaries, one clock for the playhead);
   scrubbing the tracks seeks; each overlay in range is drawn as a dashed box at its frame `{x, y, w, h}`; the main track is a
-  filmstrip (the clip's poster repeated, since there are no frames), overlay lanes are thin and stacked, a timecode, frame
-  step and play buttons. A finished render with a `video_url` can be played instead ("render" in the switch).
+  filmstrip (the clip's poster repeated, since there are no frames), overlay lanes are one per layer (`L1`..`L64`, higher on top; a single layer stays labelled `overlay`) and scroll once there are more than 8, a timecode, frame
+  step and play buttons. A hidden overlay is dimmed and marked `hidden` and is not drawn on the preview (the renderer skips it). A clip or overlay with an effect (a greenscreen `key`, or a cutout / background-removal alternate) wears a small `fx` tag. A finished render with a `video_url` can be played instead ("render" in the switch).
 - The bridge is the MCP Apps one: JSON-RPC over `postMessage` (`ui/initialize`, `ui/notifications/initialized`,
   tool input and tool result notifications, `tools/call`, open link, size changes, host context). Message names and
   shapes come from `node_modules/@modelcontextprotocol/ext-apps` (its spec types), not from memory. `window.openai` is
