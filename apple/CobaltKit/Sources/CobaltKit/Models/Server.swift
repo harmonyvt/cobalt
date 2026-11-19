@@ -38,8 +38,11 @@ public struct Capabilities: Sendable, Codable, Equatable {
         /// 64; the old ceiling of 8 is only what `EditValidation` uses when nobody passes a limit.
         public var editOverlayTracks: Int = 1
         /// `limits.edit_overlay_hidden`: the server stores optional per-overlay `hidden: true` (omitted when false).
-        /// False when absent: the app still hides a layer in the preview, and strips `hidden` before the save.
+        /// False when absent: the app still hides a layer in the preview, and strips `hidden` before a version 1 save.
         public var editOverlayHidden: Bool = false
+        /// `limits.edit_timeline_version` (APP-API-CONTRACT 69). 2 means a save may be the equal-lanes document.
+        /// Absent means this server only speaks version 1, so the app keeps saving version 1.
+        public var editTimelineVersion: Int = 1
 
         public static let fork = Limits(
             maxWebpSeconds: 10, minWebpSeconds: 0.5, webpWidths: [320, 480], renderFPS: 15,

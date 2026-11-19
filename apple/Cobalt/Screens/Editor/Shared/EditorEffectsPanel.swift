@@ -350,5 +350,13 @@ struct EditorPreviewCrowdedNote: View {
                 .padding(.horizontal, 8)
                 .accessibilityLabel(Copy.Editor.previewCrowded)
         }
+        if !session.previewSkips.isEmpty {
+            Text(Copy.Editor.previewSkipped(session.previewSkips.count))
+                .font(CobaltType.captionSmall)
+                .foregroundStyle(CobaltColor.caption)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 8)
+                .accessibilityLabel(Copy.Editor.previewSkipped(session.previewSkips.count))
+        }
     }
 }

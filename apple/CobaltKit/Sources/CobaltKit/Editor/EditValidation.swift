@@ -76,6 +76,7 @@ public enum EditValidation {
     public static func check(
         _ t: EditTimeline, sources: [String: EditSource], maxClips: Int = maxClips, maxOverlayTracks: Int = maxOverlayTracks
     ) -> [EditProblem] {
+        if t.version >= 2 { return checkLanes(t, sources: sources, maxClips: maxClips) }
         var problems: [EditProblem] = []
         let t = EditJSON.rounded(t)
 
@@ -189,6 +190,91 @@ public enum EditValidation {
         var out: [EditProblem] = []
         if !missing.isEmpty { out.append(.sourceMissing(missing)) }
         if !notVideo.isEmpty { out.append(.notVideo(notVideo)) }
+        if !unsupported.isEmpty { out.append(.unsupportedSource(unsupported)) }
+        out.append(contentsOf: problems)
+        return out
+    }
+
+    /// Version 2 (section 69): pictures and GIFs are allowed on every lane, including lane 0. A gap is allowed. Two clips
+    /// on one lane may not share a frame. The edit length is the latest clip end.
+    static func checkLanes(_ raw: EditTimeline, sources: [String: EditSource], maxClips: Int) -> [EditProblem] {
+        var problems: [EditProblem] = []
+        let t = EditJSON.rounded(raw)
+        let canvasOK = t.canvas.isValidSize && EditCanvas.fpsChoices.contains(t.canvas.fps)
+        if !canvasOK { problems.append(.canvas) }
+        if t.clips.isEmpty { problems.append(.empty) }
+        if t.clips.count > maxClips { problems.append(.tooManyClips) }
+        for (index, clip) in t.clips.enumerated() {
+            let path = "clips[\(index)]"
+            if !(0..<EditLanes.laneLimit).contains(clip.lane) { problems.append(.range(path: "\(path).lane")) }
+            if !(clip.speed >= 0.25 && clip.speed <= 4) { problems.append(.range(path: "\(path).speed")) }
+            if !(clip.at >= 0) { problems.append(.range(path: "\(path).at")) }
+            if !(clip.`in` >= 0) {
+                problems.append(.range(path: "\(path).in"))
+            } else if !(clip.out > clip.`in`) {
+                problems.append(.range(path: "\(path).out"))
+            } else if clip.speed > 0, (clip.out - clip.`in`) / clip.speed < minClipSeconds - 1e-9 {
+                problems.append(.range(path: "\(path).out"))
+            }
+            if !(clip.volume >= 0 && clip.volume <= 1) { problems.append(.range(path: "\(path).volume")) }
+            if !(clip.opacity >= 0.1 && clip.opacity <= 1) { problems.append(.range(path: "\(path).opacity")) }
+            if !EditJSON.pitchRange.contains(clip.pitch) { problems.append(.range(path: "\(path).pitch")) }
+            if let crop = clip.crop, !cropIsValid(crop) { problems.append(.range(path: "\(path).crop")) }
+            if let crop = clip.crop, cropIsValid(crop), let display = sources[clip.item]?.display,
+               EditGeometry.cropPixels(crop, display: display) == nil {
+                problems.append(.range(path: "\(path).crop"))
+            }
+            if let frame = clip.frame {
+                if !(frame.w >= 0.05 && frame.w <= 1) {
+                    problems.append(.range(path: "\(path).frame.w"))
+                } else if !(frame.x >= 0) || frame.x + frame.w > 1 + frameSlack {
+                    problems.append(.range(path: "\(path).frame.x"))
+                } else if !(frame.y >= 0) {
+                    problems.append(.range(path: "\(path).frame.y"))
+                } else if let display = sources[clip.item]?.display, canvasOK,
+                          frame.y + EditGeometry.overlayHeightFraction(display: display, frame: frame, canvas: t.canvas) > 1 + frameSlack {
+                    problems.append(.range(path: "\(path).frame.y"))
+                }
+            }
+            if let kind = sources[clip.item]?.kind, kind == .gif || kind == .photo {
+                if clip.`in` != 0 || clip.out > maxSeconds { problems.append(.range(path: "\(path).out")) }
+            }
+        }
+        let timing = EditTiming(t)
+        if canvasOK, timing.seconds > maxSeconds { problems.append(.tooLong) }
+        var lanes: [Int: [(index: Int, start: Int, end: Int)]] = [:]
+        for (index, row) in timing.laneClips.enumerated() {
+            lanes[row.lane, default: []].append((index, row.start, row.start + row.frames))
+        }
+        for list in lanes.values {
+            let sorted = list.sorted { lhs, rhs in
+                lhs.start != rhs.start ? lhs.start < rhs.start : lhs.index < rhs.index
+            }
+            for index in sorted.indices.dropFirst() where sorted[index].start < sorted[index - 1].end {
+                problems.append(.overlayOverlap(path: "clips[\(sorted[index].index)]"))
+            }
+        }
+        problems.append(contentsOf: checkLaneSources(t, sources: sources))
+        return problems
+    }
+
+    static func checkLaneSources(_ t: EditTimeline, sources: [String: EditSource]) -> [EditProblem] {
+        var missing: [String] = [], unsupported: [String] = []
+        var problems: [EditProblem] = []
+        func note(_ id: String, in list: inout [String]) { if !list.contains(id) { list.append(id) } }
+        for (index, clip) in t.clips.enumerated() {
+            guard let source = sources[clip.item], source.available else { note(clip.item, in: &missing); continue }
+            switch source.kind {
+            case .video:
+                if let duration = source.duration, clip.out > duration + sourceSlack {
+                    problems.append(.pastSourceEnd(path: "clips[\(index)].out"))
+                }
+            case .unsupported: note(clip.item, in: &unsupported)
+            case .gif, .photo: break
+            }
+        }
+        var out: [EditProblem] = []
+        if !missing.isEmpty { out.append(.sourceMissing(missing)) }
         if !unsupported.isEmpty { out.append(.unsupportedSource(unsupported)) }
         out.append(contentsOf: problems)
         return out

@@ -126,6 +126,7 @@ extension EditSession {
         case .saving, .unsaved: return Copy.Editor.saveSaving
         case .failed: return Copy.Editor.saveRetrying
         case .conflict: return Copy.Editor.saveConflict
+        case .needsUpdate: return Copy.Editor.saveUpdate
         }
     }
 

@@ -44,6 +44,7 @@ extension Copy {
             "saved · \(clips) clip\(clips == 1 ? "" : "s") · \(duration)"
         }
         static let saveSaving = "saving…", saveRetrying = "not saved · retrying", saveConflict = "changed on another device"
+        static let saveUpdate = "update needed"
 
         // MARK: bin
 
@@ -203,6 +204,7 @@ extension Copy {
             case .invalid(let problem): return Self.problem(problem)
             case .offline: return renderOffline
             case .unavailable: return "the server can't do that right now"
+            case .needsTimelineV2: return saveUpdate
             case .other: return "something went wrong"
             }
         }
@@ -466,6 +468,7 @@ extension Copy {
         static let layerLockNote = "lock stays on this device"
         static let layerHiddenNote = "this server doesn't hide layers yet · hidden here, still in the render"
         static let previewCrowded = "lots of videos at once — preview may stutter, render is fine"
+        static func previewSkipped(_ n: Int) -> String { n == 1 ? "skipped a clip" : "skipped \(n) clips" }
 
         // MARK: icon names (added for the icon-first controls: what a long press shows and VoiceOver reads)
 

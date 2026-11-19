@@ -38,6 +38,13 @@ public struct EditPitchKey: Hashable, Sendable {
         self = key
     }
 
+    /// nil for a version 2 clip with no pitch.
+    public init?(lane clip: EditLaneClip) {
+        let key = EditPitchKey(item: clip.item, in: clip.`in`, out: clip.out, pitch: clip.pitch)
+        guard key.halfSteps != 0 else { return nil }
+        self = key
+    }
+
     /// nil for an overlay with no pitch.
     public init?(overlay: EditOverlay) {
         let key = EditPitchKey(item: overlay.item, in: overlay.`in`, out: overlay.out, pitch: overlay.pitch)

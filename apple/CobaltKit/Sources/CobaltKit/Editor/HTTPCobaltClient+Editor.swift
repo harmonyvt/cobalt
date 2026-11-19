@@ -12,7 +12,7 @@ extension HTTPCobaltClient: EditorClient {
     }
 
     public func createEditProject(title: String?, timeline: EditTimeline) async throws -> EditProject {
-        let req = try editRequest("POST", "/edits", timeout: 30)
+        let req = try editRequest("POST", "/edits", timeout: 30, timelineVersion: true)
         let body = try Self.editBody(CreateBody(title: title, timeline: EditJSON.rounded(timeline)))
         let (data, http) = try await editSend(req, body: body)
         struct Wire: Decodable { var project: EditProject }
@@ -20,7 +20,7 @@ extension HTTPCobaltClient: EditorClient {
     }
 
     public func editProject(id: String) async throws -> (EditProject, [String: EditSource]) {
-        let req = try editRequest("GET", "/edits/\(Self.encode(id))", timeout: 20)
+        let req = try editRequest("GET", "/edits/\(Self.encode(id))", timeout: 20, timelineVersion: true)
         let (data, http) = try await editSend(req)
         struct Wire: Decodable {
             var project: EditProject
@@ -35,7 +35,7 @@ extension HTTPCobaltClient: EditorClient {
     }
 
     public func saveEditProject(id: String, timeline: EditTimeline, baseRevision: Int, title: String?) async throws -> EditProject {
-        let req = try editRequest("PUT", "/edits/\(Self.encode(id))", timeout: 30)
+        let req = try editRequest("PUT", "/edits/\(Self.encode(id))", timeout: 30, timelineVersion: true)
         let body = try Self.editBody(SaveBody(timeline: EditJSON.rounded(timeline), baseRevision: baseRevision, title: title))
         let (data, http) = try await editSend(req, body: body)
         struct Wire: Decodable { var project: EditProject }
@@ -43,7 +43,7 @@ extension HTTPCobaltClient: EditorClient {
     }
 
     public func renameEditProject(id: String, title: String) async throws -> EditProject {
-        let req = try editRequest("PATCH", "/edits/\(Self.encode(id))", timeout: 20)
+        let req = try editRequest("PATCH", "/edits/\(Self.encode(id))", timeout: 20, timelineVersion: true)
         let (data, http) = try await editSend(req, body: try Self.editBody(RenameBody(title: title)))
         struct Wire: Decodable { var project: EditProject }
         return try editAnswer(Wire.self, data, http).project
@@ -56,7 +56,7 @@ extension HTTPCobaltClient: EditorClient {
     }
 
     public func renderEdit(id: String, revision: Int, notify: Bool) async throws -> EditRender {
-        let req = try editRequest("POST", "/edits/\(Self.encode(id))/render", timeout: 45)
+        let req = try editRequest("POST", "/edits/\(Self.encode(id))/render", timeout: 45, timelineVersion: true)
         let body = try Self.editBody(RenderBody(revision: revision, notify: notify ? true : nil))
         let (data, http) = try await editSend(req, body: body)
         struct Wire: Decodable { var render: EditRender }
@@ -134,8 +134,14 @@ extension HTTPCobaltClient: EditorClient {
 
     // MARK: plumbing
 
-    private func editRequest(_ method: String, _ path: String, query: [(String, String)] = [], timeout: TimeInterval) throws -> URLRequest {
-        do { return try makeRequest(method, path, query: query, keyed: true, timeout: timeout) } catch { throw EditError.from(error) }
+    private func editRequest(
+        _ method: String, _ path: String, query: [(String, String)] = [], timeout: TimeInterval, timelineVersion: Bool = false
+    ) throws -> URLRequest {
+        do {
+            var req = try makeRequest(method, path, query: query, keyed: true, timeout: timeout)
+            if timelineVersion { req.setValue("2", forHTTPHeaderField: EditLanes.versionHeader) }
+            return req
+        } catch { throw EditError.from(error) }
     }
 
     private func editSend(_ req: URLRequest, body: Data? = nil) async throws -> (Data, HTTPURLResponse) {
@@ -159,11 +165,15 @@ extension HTTPCobaltClient: EditorClient {
             var path: String?
             var items: [String]?
             var project: Lossy<EditProject>?
+            var title: String?
+            var projectId: String?
         }
         guard let body = try? CobaltJSON.decoder().decode(Body.self, from: data), let code = body.error?.code else {
             return status == 503 ? .unavailable : .other("http \(status)")
         }
-        let mapped = EditError(code: code, path: body.path, items: body.items ?? [], project: body.project?.value)
+        let mapped = EditError(
+            code: code, path: body.path, items: body.items ?? [], project: body.project?.value,
+            title: body.title, projectID: body.projectId)
         if case .other = mapped, status == 503 { return .unavailable }
         return mapped
     }

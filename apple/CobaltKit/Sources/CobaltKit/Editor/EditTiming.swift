@@ -29,13 +29,16 @@ public struct EditTiming: Sendable, Equatable {
         public var frames: Int
         public var speed: Double
         public var samples: Int             // audio samples at 48 kHz
+        /// The lane, when this timing came from a version 2 timeline. 0 for a version 1 main clip.
+        public var lane: Int
 
-        public init(id: String, start: Int, frames: Int, speed: Double, samples: Int) {
+        public init(id: String, start: Int, frames: Int, speed: Double, samples: Int, lane: Int = 0) {
             self.id = id
             self.start = start
             self.frames = frames
             self.speed = speed
             self.samples = samples
+            self.lane = lane
         }
     }
 
@@ -46,11 +49,21 @@ public struct EditTiming: Sendable, Equatable {
     public var seconds: Double              // N / F
     public var main: [Clip]
     public var overlay: [Clip]
+    /// One entry per `timeline.clips`, same order, when the timeline is version 2. Empty for version 1.
+    public var laneClips: [Clip]
 
     /// Timing of a timeline. The timeline is rounded first (31.2), as the server's parser leaves it.
-    /// `sourceDurations` (library file id -> seconds, as probed): a main clip's `out` is clamped to its file's length, as the
+    /// `sourceDurations` (library file id -> seconds, as probed): a video clip's `out` is clamped to its file's length, as the
     /// renderer does (31.2 allows `out` 0.05 s past it), so later clips start where the render starts them.
+    ///
+    /// Version 1 packs the main track. Version 2 places every clip at its `at`, and the edit length is the latest clip end
+    /// (a gap, and any time before the first clip, is black). Lane 0 is still `main` and every higher lane is `overlay`, in
+    /// the same order as `timeline.main` and `timeline.overlay`, so the current timeline UI can keep using those arrays.
     public init(_ timeline: EditTimeline, sourceDurations: [String: Double] = [:]) {
+        if timeline.version >= 2 {
+            self = Self.lanes(timeline, sourceDurations: sourceDurations)
+            return
+        }
         let t = EditJSON.rounded(timeline)
         let fps = max(1, t.canvas.fps)
         self.fps = fps
@@ -75,8 +88,48 @@ public struct EditTiming: Sendable, Equatable {
         }
         self.main = main
         self.overlay = overlay
+        self.laneClips = []
         self.frames = start
         self.seconds = Double(start) / Double(fps)
+    }
+
+    /// Version 2 timing (section 69). `laneClips` lines up with `timeline.clips`.
+    private static func lanes(_ timeline: EditTimeline, sourceDurations: [String: Double]) -> EditTiming {
+        let t = EditJSON.rounded(timeline)
+        let fps = max(1, t.canvas.fps)
+        let samplesPerFrame = sampleRate / fps
+        var laneClips: [Clip] = []
+        var end = 0
+        for clip in t.clips {
+            var out = clip.out
+            if let limit = sourceDurations[clip.item], limit > clip.`in`, out > limit { out = limit }
+            let span = out - clip.`in`
+            let nominal = clip.speed > 0 ? clip.speed : 1
+            let frames = max(1, EditMath.roundHalfUp(span / nominal * Double(fps)))
+            let start = max(0, EditMath.roundHalfUp(clip.at * Double(fps)))
+            let effective = span * Double(fps) / Double(frames)
+            laneClips.append(Clip(
+                id: clip.id, start: start, frames: frames, speed: effective, samples: frames * samplesPerFrame, lane: clip.lane))
+            end = max(end, start + frames)
+        }
+        let lane0 = t.clips.enumerated().filter { $0.element.lane == 0 }.sorted { a, b in
+            a.element.at != b.element.at ? a.element.at < b.element.at : a.offset < b.offset
+        }
+        let higher = t.clips.enumerated().filter { $0.element.lane > 0 }.sorted { a, b in
+            a.element.at != b.element.at ? a.element.at < b.element.at : a.offset < b.offset
+        }
+        return EditTiming(
+            fps: fps, frames: end, seconds: Double(end) / Double(fps),
+            main: lane0.map { laneClips[$0.offset] }, overlay: higher.map { laneClips[$0.offset] }, laneClips: laneClips)
+    }
+
+    private init(fps: Int, frames: Int, seconds: Double, main: [Clip], overlay: [Clip], laneClips: [Clip]) {
+        self.fps = fps
+        self.frames = frames
+        self.seconds = seconds
+        self.main = main
+        self.overlay = overlay
+        self.laneClips = laneClips
     }
 
     /// `k / fps`.
