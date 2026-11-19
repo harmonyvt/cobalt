@@ -5,7 +5,8 @@ import ImageIO
 
 // Sources on the device (apple/CONTRACT-EDITOR.md 3.4): the preview plays local files, so every library file a timeline names
 // is fetched once into Caches/editor/<id>.<ext> (or taken from the offline store's copy when it is kept on this device) and kept
-// there; the least recently used files go past 2 GB. A GIF is decoded once with ImageIO, a photo once with its orientation applied.
+// there; the least recently used files go past 2 GB. A file a session has pinned (the open edit) is never one of them, and a
+// copy served from memory has its last-used time refreshed. A GIF is decoded once with ImageIO, a photo once with its orientation applied.
 
 public actor EditSourceCache {
     /// The most the cache keeps on disk.
@@ -18,9 +19,15 @@ public actor EditSourceCache {
     private var progresses: [String: Double] = [:]
     private var fetching: [String: Task<URL, Error>] = [:]
     private var decoded: [String: EditSourceAsset] = [:]
+    /// Library file id -> the file `asset(for:)` decoded (a download in this folder, or a registered local copy).
+    private var files: [String: URL] = [:]
     /// Library file id -> the decoded video's length in seconds (what `measure` answers; kept when `dropDecoded` drops the rest).
     private var lengths: [String: Double] = [:]
     private var shifting: [EditPitchKey: Task<URL, Error>] = [:]
+    /// Session -> the library file ids it still plays. `trim` will not delete their files.
+    private var pinIDs: [UUID: Set<String>] = [:]
+    /// Session -> standardized paths pinned directly (a file the session holds that is not a library id).
+    private var pinPaths: [UUID: Set<String>] = [:]
 
     /// - Parameters:
     ///   - directory: where the downloads live (`Caches/editor` in the app; a temp folder in tests).
@@ -62,14 +69,72 @@ public actor EditSourceCache {
 
     /// The decoded file for a library file: a local copy first, else a download. Throws `EditError` (`.offline` with no network,
     /// `.notFound` for a file the server no longer has, `.other` for a file that cannot be read).
+    /// A copy served from memory refreshes the file's last-used time. A file that is gone is fetched again.
     public func asset(for source: EditSource) async throws -> EditSourceAsset {
         guard source.available, source.kind != .unsupported else { throw EditError.other("unsupported") }
-        if let cached = decoded[source.id] { return cached }
+        if let cached = decoded[source.id] {
+            if let url = files[source.id] {
+                if FileManager.default.isReadableFile(atPath: url.path) {
+                    noteUse(of: url)
+                    return cached
+                }
+                decoded[source.id] = nil
+            } else {
+                return cached
+            }
+        }
         let url = try await file(for: source)
         let (asset, length) = try await Self.decode(url, source: source)
         decoded[source.id] = asset
+        files[source.id] = url
         if let length { lengths[source.id] = length }
         return asset
+    }
+
+    /// The file behind a library id, once `asset(for:)` has read it (or it was registered). Nil before that.
+    public func fileURL(for id: String) -> URL? {
+        if let url = files[id], FileManager.default.fileExists(atPath: url.path) { return url }
+        if let url = local[id], FileManager.default.fileExists(atPath: url.path) { return url }
+        return nil
+    }
+
+    /// The file is on disk and can be read. False before it has been fetched.
+    public func isReadable(_ id: String) -> Bool {
+        guard let url = files[id] ?? local[id] else { return false }
+        return FileManager.default.isReadableFile(atPath: url.path)
+    }
+
+    /// Drops the decoded copy so the next `asset(for:)` reads the file again (or downloads it, when it is gone).
+    public func invalidate(_ id: String) { decoded[id] = nil }
+
+    /// Refreshes last-used on a file this folder owns. A registered original outside the folder is left alone.
+    public func touch(_ id: String) {
+        guard let url = files[id] ?? local[id] else { return }
+        noteUse(of: url)
+    }
+
+    /// `trim` will not delete this library file while `owner` holds the pin. Call again after the file is fetched if the
+    /// first call was before `asset(for:)` remembered the path: the id is kept and resolved at trim time.
+    public func pin(owner: UUID, id: String) {
+        var ids = pinIDs[owner] ?? []
+        ids.insert(id)
+        pinIDs[owner] = ids
+        if let url = files[id] ?? local[id] { rememberPin(owner, url) }
+    }
+
+    /// `trim` will not delete this file while `owner` holds the pin.
+    public func pin(owner: UUID, file url: URL) { rememberPin(owner, url) }
+
+    /// Drops every pin `owner` holds. Files can be trimmed again once nothing else pins them.
+    public func unpinOwner(_ owner: UUID) {
+        pinIDs[owner] = nil
+        pinPaths[owner] = nil
+    }
+
+    private func rememberPin(_ owner: UUID, _ url: URL) {
+        var paths = pinPaths[owner] ?? []
+        paths.insert(url.standardizedFileURL.path)
+        pinPaths[owner] = paths
     }
 
     /// A library video whose length (or size) the server does not know: uploads have none in `media_items`, a few saves too.
@@ -130,13 +195,17 @@ public actor EditSourceCache {
     // MARK: the file
 
     private func file(for source: EditSource) async throws -> URL {
-        if let url = local[source.id], FileManager.default.fileExists(atPath: url.path) { return url }
-        if let provider, let url = await provider(source.id), FileManager.default.fileExists(atPath: url.path) { return url }
+        if let url = local[source.id] {
+            if FileManager.default.isReadableFile(atPath: url.path) { return url }
+            local[source.id] = nil
+        }
+        if let provider, let url = await provider(source.id), FileManager.default.isReadableFile(atPath: url.path) { return url }
         let dest = directory.appendingPathComponent("\(source.id).\(Self.fileExtension(of: source))")
-        if FileManager.default.fileExists(atPath: dest.path) {
+        if FileManager.default.isReadableFile(atPath: dest.path) {
             touch(dest)
             return dest
         }
+        if FileManager.default.fileExists(atPath: dest.path) { try? FileManager.default.removeItem(at: dest) }
         if let running = fetching[source.id] { return try await running.value }
         let id = source.id
         let provide = client
@@ -190,7 +259,29 @@ public actor EditSourceCache {
         try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
     }
 
-    /// Removes the least recently used downloads until the folder fits `limitBytes`.
+    /// Last-used, for a file this folder owns. A registered original that lives somewhere else is not restamped.
+    private func noteUse(of url: URL) {
+        let path = url.standardizedFileURL.path
+        let root = directory.standardizedFileURL.path
+        guard path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/") else { return }
+        touch(url)
+    }
+
+    /// Paths `trim` must keep: registered locals, `keep`, and anything a session has pinned.
+    private func protectedPaths(keeping keep: Set<URL>) -> Set<String> {
+        var held = Set(local.values.map { $0.standardizedFileURL.path })
+        for url in keep { held.insert(url.standardizedFileURL.path) }
+        for paths in pinPaths.values { held.formUnion(paths) }
+        for ids in pinIDs.values {
+            for id in ids {
+                if let url = files[id] ?? local[id] { held.insert(url.standardizedFileURL.path) }
+            }
+        }
+        return held
+    }
+
+    /// Removes the least recently used downloads until the folder fits `limitBytes`. Never a registered local file, a file
+    /// in `keep`, or a file a session has pinned (the open edit's clips).
     func trim(keeping keep: Set<URL> = [], limit: Int64 = EditSourceCache.limitBytes) {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
@@ -202,9 +293,9 @@ public actor EditSourceCache {
         var total = entries.reduce(Int64(0)) { $0 + $1.size }
         guard total > limit else { return }
         entries.sort { $0.date < $1.date }
-        let held = Set(local.values).union(keep)
+        let held = protectedPaths(keeping: keep)
         for entry in entries where total > limit {
-            if held.contains(entry.url) { continue }
+            if held.contains(entry.url.standardizedFileURL.path) { continue }
             if (try? fm.removeItem(at: entry.url)) != nil { total -= entry.size }
         }
     }

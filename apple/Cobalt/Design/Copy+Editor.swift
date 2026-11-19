@@ -119,6 +119,9 @@ extension Copy {
         // MARK: open, save, close
 
         static let openingProject = "opening the edit…"
+        static let openingTooLong = "this is taking too long. try again."
+        static let nothingToOpen = "there's no edit to open"
+        static let editClosed = "this edit is closed"
         static let couldntOpen = "couldn't open this edit", projectGone = "this edit was deleted"
         static let closeUnsavedTitle = "close without saving?"
         static let closeUnsavedBody = "your last changes aren't on the server yet."
@@ -205,7 +208,12 @@ extension Copy {
             case .offline: return renderOffline
             case .unavailable: return "the server can't do that right now"
             case .needsTimelineV2: return saveUpdate
-            case .other: return "something went wrong"
+            case .other(let word):
+                switch word {
+                case "timed out": return openingTooLong
+                case "missing": return nothingToOpen
+                default: return "something went wrong"
+                }
             }
         }
 
@@ -310,11 +318,7 @@ extension Copy {
         }
 
         /// "0:09.0": tenths (the transport and the playhead).
-        static func clockTenths(_ seconds: Double) -> String {
-            let tenths = max(0, Int(seconds.isFinite ? (seconds * 10).rounded() : 0))
-            let whole = tenths / 10
-            return "\(whole / 60):" + twoDigits(whole % 60) + ".\(tenths % 10)"
-        }
+        static func clockTenths(_ seconds: Double) -> String { ClipTrimMath.clockTenths(seconds) }
 
         /// "0:08.75": hundredths (the trim fields).
         static func clockCentis(_ seconds: Double) -> String {
@@ -473,6 +477,16 @@ extension Copy {
         // MARK: icon names (added for the icon-first controls: what a long press shows and VoiceOver reads)
 
         static let lengthShorter = "a tenth shorter", lengthLonger = "a tenth longer"
+
+        // MARK: trim that scrubs
+
+        static let setInAtPlayhead = "set in at playhead", setOutAtPlayhead = "set out at playhead"
+        static let loop = "loop"
+        static func zoomChip(_ zoom: Double) -> String { "\(trimmedNumber(zoom, places: 0))×" }
+        /// "0:03.2 – 0:11.8 · 8.6 s" (source in, source out, source length).
+        static func trimReadout(_ inPoint: Double, _ outPoint: Double) -> String {
+            ClipTrimMath.readout(in: inPoint, out: outPoint)
+        }
 
         // MARK: numbers
 

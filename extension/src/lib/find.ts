@@ -319,10 +319,16 @@ function insideCapystore(el: Element): boolean {
     return !!el.closest(".capystore-save");
 }
 
-// Reels put the words on the button. The svg is aria-hidden, so the like-svg scan never sees the rail.
+// The post's own icons. "Share Post" is the share control on a video. "Comment Options"
+// is a comment menu, so it is not an action. A comment's Like matches, and it does not
+// start a row because a row is anchored on Save.
 function isIgAction(label: string): boolean {
     if (/capystore/i.test(label)) return false;
-    return /^(like|unlike|comment|comments|repost|share|send|save|saved|remove|bookmark)\b/i.test(label);
+    return /^(like|unlike|comments?|repost|share(?: post)?|send|save|saved|remove|bookmark)$/i.test(label);
+}
+
+function isSaveLabel(label: string): boolean {
+    return /^(save|saved|remove|bookmark)$/i.test(label);
 }
 
 function igControls(root: ParentNode): Element[] {
@@ -335,27 +341,58 @@ function igControls(root: ParentNode): Element[] {
     return out;
 }
 
-function instagramRails(doc: ParentNode): Element[] {
-    const controls = igControls(doc);
-    const rails: Element[] = [];
-    const claimed = new Set<Element>();
-    for (const seed of controls) {
-        if (claimed.has(seed)) continue;
-        let node: Element | null = seed.parentElement;
-        let rail: Element | null = null;
+// One action row per Save. The row is the smallest box that also holds Like, and it
+// never climbs into a parent that contains an <article>. The home feed's column holds
+// every post's Save; treating that column as a Reels rail put one button in the gap
+// above the first post and swallowed the rest.
+function actionRows(doc: ParentNode): Element[] {
+    const rows: Element[] = [];
+    for (const save of igControls(doc)) {
+        if (!isSaveLabel(igLabel(save))) continue;
+        if (rows.some((row) => row.contains(save))) continue;
+        const article = save.closest("article");
+        let node: Element | null = save.parentElement;
+        let row: Element | null = null;
         while (node && node.tagName !== "BODY" && node.tagName !== "HTML") {
-            const n = controls.filter((c) => node!.contains(c) && !claimed.has(c)).length;
-            if (n >= 3) {
-                rail = node;
+            if (node.querySelector("article")) break;
+            if (article && node === article) break;
+            if (igControls(node).some((c) => /^(like|unlike)$/i.test(igLabel(c)))) {
+                row = node;
                 break;
             }
             node = node.parentElement;
         }
-        if (!rail) continue;
-        for (const c of controls) if (rail.contains(c)) claimed.add(c);
-        rails.push(rail);
+        if (row && !rows.includes(row)) rows.push(row);
     }
-    return rails;
+    return rows;
+}
+
+// A Reels viewer stacks one control per slot. A feed action row keeps Like/Comment/Share
+// together in one child and Save in the other, so it is not a column.
+function isColumnRail(row: Element): boolean {
+    const slots = [...row.children].filter((child) => igControls(child).length > 0);
+    if (slots.length < 3) return false;
+    return slots.every((slot) => {
+        const all = igControls(slot);
+        const outer = all.filter((c) => !all.some((other) => other !== c && other.contains(c)));
+        return outer.length === 1;
+    });
+}
+
+// In the icon group, after Share. A flat row gets the button immediately before Save.
+function iconGroup(row: Element): { mount: Element; before?: Element } {
+    const children = [...row.children];
+    const save = igControls(row).find((c) => isSaveLabel(igLabel(c)));
+    const saveChild = save ? children.find((c) => c === save || c.contains(save)) : undefined;
+    const group = children.find((child) => {
+        if (!saveChild || child === saveChild) return false;
+        const controls = igControls(child);
+        if (controls.length < 2) return false;
+        return !controls.some((c) => isSaveLabel(igLabel(c)));
+    });
+    if (group) return { mount: group };
+    if (saveChild && saveChild.parentElement === row) return { mount: row, before: saveChild };
+    return { mount: row };
 }
 
 function directChild(rail: Element, el: Element): Element | undefined {
@@ -380,39 +417,92 @@ function inViewerRail(el: Element | null | undefined, rails: Element[]): boolean
     return rails.some((rail) => !rail.closest("article") && rail.contains(el));
 }
 
+// /p/CODE and /reel/CODE are the same post. A comment link (/p/CODE/c/…) and the
+// audio disc are not a second post.
+function postCode(url: string): string {
+    return /\/(?:p|reel|tv)\/([^/?#]+)/.exec(url)?.[1] ?? url;
+}
+
+function cleanPostHref(href: string, pageUrl: string): boolean {
+    if (!canonicalInstagram(href, pageUrl)) return false;
+    let path = "";
+    try {
+        path = new URL(href, pageUrl).pathname;
+    } catch {
+        return false;
+    }
+    const parts = path.split("/").filter(Boolean);
+    const kind = parts.findIndex((part) => part === "p" || part === "reel" || part === "reels" || part === "tv");
+    return kind >= 0 && parts.length === kind + 2;
+}
+
+// The post's own permalink. A clean /p/ or /reel/ link wins over a comment or liked_by link.
+// The audio disc is dropped by canonicalInstagram. The first clean link is the header timestamp.
+function preferredPostUrl(scope: ParentNode, pageUrl: string): string | null {
+    const clean: string[] = [];
+    const any: string[] = [];
+    for (const link of deepAll(scope, IG_LINK)) {
+        const href = link.getAttribute("href") ?? "";
+        const url = canonicalInstagram(href, pageUrl);
+        if (!url) continue;
+        if (!any.includes(url)) any.push(url);
+        if (cleanPostHref(href, pageUrl) && !clean.includes(url)) clean.push(url);
+    }
+    const pool = clean.length ? clean : any;
+    // Document order. The header timestamp is the post; a later caption link is someone else's.
+    return pool[0] ?? null;
+}
+
 export function scanInstagram(doc: ParentNode, pageUrl: string): FoundPost[] {
     const out: FoundPost[] = [];
     const seen = new Set<string>();
-    const rails = instagramRails(doc);
+    const fresh = (url: string) => !seen.has(postCode(url));
+    const take = (url: string) => seen.add(postCode(url));
+    const rows = actionRows(doc);
+    const rails = rows.filter((row) => isColumnRail(row) && !row.closest("article"));
     for (const article of doc.querySelectorAll?.("article") ?? []) {
-        const link = deepQuery(article, IG_LINK);
-        const like = deepQuery(article, IG_LIKE);
-        const url = (link ? canonicalInstagram(link.getAttribute("href") ?? "", pageUrl) : null) ?? (like ? canonicalInstagram(pageUrl, pageUrl) : null);
-        if (!url || seen.has(url)) continue;
-        const mount = like?.parentElement ?? link;
-        // A like that lives in the viewer rail is that rail's button, not a second one under the heart.
+        const row = rows.find((candidate) => article.contains(candidate));
+        const svg = deepQuery(article, IG_LIKE);
+        const url = preferredPostUrl(article, pageUrl) ?? (svg ? canonicalInstagram(pageUrl, pageUrl) : null);
+        if (!url || !fresh(url)) continue;
+        if (row) {
+            if (inViewerRail(row, rails)) continue;
+            take(url);
+            out.push({ url, variant: "icon", ...iconGroup(row) });
+            continue;
+        }
+        // An older card has the heart svg and no Save button. The parent of that svg is the row.
+        const mount = svg?.parentElement ?? deepQuery(article, IG_LINK);
         if (!mount || inViewerRail(mount, rails)) continue;
-        seen.add(url);
+        take(url);
         out.push({ url, mount, variant: "icon" });
     }
-    for (const rail of rails) {
-        // A feed post already got its button from the article above. The rail is the reels viewer.
-        if (rail.closest("article")) continue;
-        const url = urlForRail(rail, pageUrl);
-        if (!url || seen.has(url)) continue;
-        const save = igControls(rail).find((c) => /^(save|saved|remove|bookmark)\b/i.test(igLabel(c)));
-        const before = save ? directChild(rail, save) : undefined;
-        seen.add(url);
-        out.push({ url, mount: rail, variant: "icon", fit: "rail", ...(before ? { before } : {}) });
+    for (const row of rows) {
+        if (row.closest("article")) continue;
+        const column = isColumnRail(row);
+        const page = canonicalInstagram(pageUrl, pageUrl);
+        const url = (column ? urlForRail(row, pageUrl) : null) ?? preferredPostUrl(row, pageUrl) ?? page;
+        if (!url || !fresh(url)) continue;
+        if (column) {
+            const save = igControls(row).find((c) => isSaveLabel(igLabel(c)));
+            const before = save ? directChild(row, save) : undefined;
+            take(url);
+            out.push({ url, mount: row, variant: "icon", fit: "rail", ...(before ? { before } : {}) });
+            continue;
+        }
+        // A post page (/p/ or /reel/) has the same horizontal row as the feed, and no <article>.
+        take(url);
+        out.push({ url, variant: "icon", ...iconGroup(row) });
     }
     const page = canonicalInstagram(pageUrl, pageUrl);
-    if (page && !seen.has(page)) {
+    if (page && fresh(page)) {
         // A removed post still has a permalink and a <main>. Only a like control or a post link is a real anchor.
         const like = deepQuery(doc, IG_LIKE);
         const link = deepQuery(doc, IG_LINK);
         const mount = like?.parentElement ?? link;
-        const url = (link ? canonicalInstagram(link.getAttribute("href") ?? "", pageUrl) : null) ?? (like ? page : null);
-        if (url && mount && !seen.has(url) && !inViewerRail(mount, rails) && !inViewerRail(like, rails)) out.push({ url, mount, variant: "icon" });
+        const fromLink = link ? canonicalInstagram(link.getAttribute("href") ?? "", pageUrl) : null;
+        const url = fromLink ?? (like ? page : null);
+        if (url && mount && fresh(url) && !inViewerRail(mount, rails) && !inViewerRail(like, rails)) out.push({ url, mount, variant: "icon" });
     }
     return out;
 }

@@ -34,6 +34,7 @@ const FIX = {
     "edit.list": { tool: "show_edit", args: {}, out: F.editList },
     "edit.long": { tool: "show_edit", args: { id: "edit-long" }, out: F.editLong },
     "edit.short": { tool: "show_edit", args: { id: "edit-short" }, out: F.editShort },
+    "edit.layers": { tool: "show_edit", args: { id: "edit-layers" }, out: F.editLayers },
     "collections.grid": { tool: "list_collections", args: {}, out: F.collectionsOut },
     "collections.empty": { tool: "list_collections", args: {}, out: () => ({ view: "collections", total: 0, collections: [] }) },
     "links.list": { tool: "list_share_links", args: {}, out: () => F.linksOut() },

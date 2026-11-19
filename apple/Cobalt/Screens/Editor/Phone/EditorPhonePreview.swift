@@ -9,19 +9,41 @@ struct EditorPhonePreview: View {
     let session: EditSession
 
     // Session replay (APP-API-CONTRACT 58): media is always masked.
-    var body: some View { mediaBody.mediaMask() }
+    var body: some View {
+        mediaBody
+            .mediaMask()
+            .sheet(item: effectsSheet) { _ in
+                EditorPhoneEffectsSheet(session: session)
+                    .presentationDetents([.medium, .large])
+                    .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+            }
+    }
 
     @ViewBuilder private var mediaBody: some View {
-        EditorCanvasView(session: session) { size in
-            EditorPhoneCanvasLayer(session: session, size: size)
+        VStack(spacing: 6) {
+            EditorCanvasView(session: session) { size in
+                EditorPhoneCanvasLayer(session: session, size: size)
+            }
+            EditorPreviewCrowdedNote(session: session)
         }
         .padding(.horizontal, Metrics.gutter)
         .padding(.vertical, 6)
-        EditorPreviewCrowdedNote(session: session)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Editor.previewA11y)
     }
+
+    /// The hint's "effects" sets `effectsFor`. The phone has no inspector, so the same sheet the tool tray uses comes up here.
+    private var effectsSheet: Binding<EditorPhoneEffectTarget?> {
+        Binding(
+            get: { session.effectsFor.map(EditorPhoneEffectTarget.init(id:)) },
+            set: { if $0 == nil, session.effectsFor != nil { session.closeEffects() } })
+    }
+}
+
+/// `effectsFor` as a sheet item. Closing the sheet clears it.
+private struct EditorPhoneEffectTarget: Identifiable {
+    let id: String
 }
 
 /// What sits on the canvas: a tap target for play and pause, a pinch for the selected overlay's size, and (while that overlay

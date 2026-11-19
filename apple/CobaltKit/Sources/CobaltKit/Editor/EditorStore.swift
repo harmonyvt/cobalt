@@ -217,11 +217,20 @@ public final class EditorStore {
 
     // MARK: open and close
 
-    /// Opens a project: reads it with its files and shows the editor. A project already open is closed first (its autosave
-    /// flushed).
+    /// Opens a project. Same as `open(_:isCurrent:)` with a check that is always true.
     public func open(_ projectID: String) async throws(EditError) {
+        try await open(projectID, isCurrent: { true })
+    }
+
+    /// Opens a project: reads it with its files and shows the editor. A project already open is closed first (its autosave
+    /// flushed). `isCurrent` is read again immediately before the session is published, with no await in between, so a
+    /// close or a newer open that returns false cannot leave this project on screen after the owner has gone.
+    ///
+    /// The check is a parameter, not a default value: a default closure on a main-actor method is a Swift 6 error.
+    public func open(_ projectID: String, isCurrent: @MainActor () -> Bool) async throws(EditError) {
         guard isAvailable, let client = editorClient else { throw .off }
         if let current = session, current.project.id == projectID { return }
+        guard isCurrent() else { throw .other("cancelled") }
         guard !opening else { return }
         opening = true
         defer { opening = false }
@@ -238,6 +247,8 @@ public final class EditorStore {
         summary.timeline = nil
         upsert(summary)
         if let r = project.render { mergeRenders([r]) }
+        // No await after this check: a dismiss on the main actor cannot land between it and `session =`.
+        guard isCurrent() else { throw .other("cancelled") }
         session = EditSession(
             project: summary, timeline: timeline, sources: sources, context: ctx, cache: cache,
             onProject: { [weak self] p in self?.upsert(p) },

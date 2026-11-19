@@ -46,10 +46,12 @@ public struct EditPlayable: @unchecked Sendable {
     public let proxy: Bool
     /// Clips the preview left out because their file could not be read. The picture keeps the last good frame under them.
     public let skippedClipIDs: [String]
+    /// Clips left out of the picture, or main clips drawn as a gap. The rest of the composition still plays.
+    public let issues: [EditPreviewIssue]
 
     public init(
         composition: AVComposition, videoComposition: AVVideoComposition, audioMix: AVAudioMix, timing: EditTiming,
-        proxy: Bool = false, skippedClipIDs: [String] = []
+        proxy: Bool = false, skippedClipIDs: [String] = [], issues: [EditPreviewIssue] = []
     ) {
         self.composition = composition
         self.videoComposition = videoComposition
@@ -57,6 +59,7 @@ public struct EditPlayable: @unchecked Sendable {
         self.timing = timing
         self.proxy = proxy
         self.skippedClipIDs = skippedClipIDs
+        self.issues = issues
     }
 
     /// A player item with the picture and the sound set, and the pitch kept at any speed.
@@ -70,8 +73,9 @@ public struct EditPlayable: @unchecked Sendable {
 }
 
 public enum EditComposition {
-    /// Builds exactly 31.5. Throws `EditError.other("source:<file id>")` for a clip whose file is not on the device (or is not
-    /// the kind of file the track needs), `EditError.other("empty")` for a timeline with no main clip.
+    /// Builds exactly 31.5. A main clip whose file is missing or cannot be read becomes a gap (a checker labelled "missing")
+    /// instead of failing the build; an overlay that fails is left out. Both are reported on `issues` and the rest plays.
+    /// Throws `EditError.other("empty")` for a timeline with no main clip.
     ///
     /// `shifted`: pre-shifted copies of clips' sound (31.16, `EditPitchShifter`, by `EditPitchKey`). A clip with a pitch whose copy
     /// is here plays the copy's sound instead of the source's (scaled for speed the same way); one whose copy is not here yet
@@ -108,108 +112,150 @@ public enum EditComposition {
         var overlayInfo: [EditRenderPlan.OverlayClip] = []
         var mainVolumes: [(at: CMTime, volume: Float)] = []
         var overlayVolumes: [Int: [(at: CMTime, volume: Float)]] = [:]
+        var issues: [EditPreviewIssue] = []
 
-        // main clips, back to back
+        // main clips, back to back. One clip's file failing leaves a gap and the others play.
         for (i, clip) in t.main.enumerated() {
-            guard case .video(let asset, let display, let hasAudio)? = assets[clip.item] else {
-                throw EditError.other("source:\(clip.item)")
-            }
-            guard let sourceVideo = try await asset.loadTracks(withMediaType: .video).first else {
-                throw EditError.other("source:\(clip.item)")
-            }
-            let videoRange = try await sourceVideo.load(.timeRange)
-            let transform = try await sourceVideo.load(.preferredTransform)
-            if mainVideo == nil {
-                mainVideo = composition.addMutableTrack(withMediaType: .video, preferredTrackID: 1)
-            }
-            guard let videoTrack = mainVideo else { throw EditError.other("source:\(clip.item)") }
             let timingClip = timing.main[i]
             let at = CMTime(value: Int64(timingClip.start), timescale: fps)
             let target = CMTime(value: Int64(timingClip.frames), timescale: fps)
-            try insertScaled(
-                into: videoTrack, from: sourceVideo, sourceRange: videoRange, in: clip.`in`,
-                out: min(clip.out, durations[clip.item] ?? clip.out), at: at, target: target)
-            let clipOut = min(clip.out, durations[clip.item] ?? clip.out)
-            var pitched: (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)?
-            if hasAudio, !clip.muted, let key = EditPitchKey(clip: clip), let url = shifted[key] {
-                pitched = await shiftedTrack(url)
-            }
-            if let pitched {
-                if mainAudio == nil {
-                    mainAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 2)
+            do {
+                guard case .video(let asset, let display, let hasAudio)? = assets[clip.item] else {
+                    throw EditError.other("source:\(clip.item)")
                 }
-                if let audioTrack = mainAudio {
-                    // the copy starts at the clip's `in`: its 0...(out - in) stands for the source's in...out
-                    try insertScaled(
-                        into: audioTrack, from: pitched.track, sourceRange: pitched.range, in: 0, out: clipOut - clip.`in`,
-                        at: at, target: target)
-                }
-            } else if hasAudio, let sourceAudio = try await asset.loadTracks(withMediaType: .audio).first {
-                let audioRange = try await sourceAudio.load(.timeRange)
-                if mainAudio == nil {
-                    mainAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 2)
-                }
-                if let audioTrack = mainAudio {
-                    try insertScaled(
-                        into: audioTrack, from: sourceAudio, sourceRange: audioRange, in: clip.`in`,
-                        out: clipOut, at: at, target: target)
-                }
-            }
-            mainVolumes.append((at, clip.muted ? 0 : Float(clip.volume)))
-            mainInfo.append(EditRenderPlan.MainClip(
-                display: display, orientation: EditRenderPlan.orientation(of: transform), trackID: videoTrack.trackID))
-        }
-
-        // overlays: videos on their layer's track, gifs and photos drawn by the compositor
-        for (j, o) in t.overlay.enumerated() {
-            guard let asset = assets[o.item] else { throw EditError.other("source:\(o.item)") }
-            let layer = max(0, o.track)
-            switch asset {
-            case .video(let avAsset, let display, let hasAudio):
-                guard let sourceVideo = try await avAsset.loadTracks(withMediaType: .video).first else {
-                    throw EditError.other("source:\(o.item)")
+                guard let sourceVideo = try await asset.loadTracks(withMediaType: .video).first else {
+                    throw EditError.other("source:\(clip.item)")
                 }
                 let videoRange = try await sourceVideo.load(.timeRange)
                 let transform = try await sourceVideo.load(.preferredTransform)
-                if overlayVideo[layer] == nil {
-                    overlayVideo[layer] = composition.addMutableTrack(
-                        withMediaType: .video, preferredTrackID: CMPersistentTrackID(3 + 2 * layer))
+                if mainVideo == nil {
+                    mainVideo = composition.addMutableTrack(withMediaType: .video, preferredTrackID: 1)
                 }
-                guard let videoTrack = overlayVideo[layer] else { throw EditError.other("source:\(o.item)") }
-                let clip = timing.overlay[j]
-                let at = CMTime(value: Int64(clip.start), timescale: fps)
-                let length = CMTime(value: Int64(clip.frames), timescale: fps)
-                try insertPlain(into: videoTrack, from: sourceVideo, sourceRange: videoRange, in: o.`in`, length: length, at: at)
-                var pitched: (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)?
-                if hasAudio, !o.muted, let key = EditPitchKey(overlay: o), let url = shifted[key] {
-                    pitched = await shiftedTrack(url)
-                }
-                func audioTrack() -> AVMutableCompositionTrack? {
-                    if overlayAudio[layer] == nil {
-                        overlayAudio[layer] = composition.addMutableTrack(
-                            withMediaType: .audio, preferredTrackID: CMPersistentTrackID(4 + 2 * layer))
+                guard let videoTrack = mainVideo else { throw EditError.other("source:\(clip.item)") }
+                try insertScaled(
+                    into: videoTrack, from: sourceVideo, sourceRange: videoRange, in: clip.`in`,
+                    out: min(clip.out, durations[clip.item] ?? clip.out), at: at, target: target)
+                let clipOut = min(clip.out, durations[clip.item] ?? clip.out)
+                // sound is separate: a clip with no readable audio still shows its picture
+                do {
+                    var pitched: (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)?
+                    if hasAudio, !clip.muted, let key = EditPitchKey(clip: clip), let url = shifted[key] {
+                        pitched = await shiftedTrack(url)
                     }
-                    return overlayAudio[layer]
-                }
-                if let pitched {
-                    if let audioTrack = audioTrack() {
-                        try insertPlain(into: audioTrack, from: pitched.track, sourceRange: pitched.range, in: 0, length: length, at: at)
-                        overlayVolumes[layer, default: []].append((at, Float(o.volume)))
+                    if let pitched {
+                        if mainAudio == nil {
+                            mainAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 2)
+                        }
+                        if let audioTrack = mainAudio {
+                            // the copy starts at the clip's `in`: its 0...(out - in) stands for the source's in...out
+                            try insertScaled(
+                                into: audioTrack, from: pitched.track, sourceRange: pitched.range, in: 0, out: clipOut - clip.`in`,
+                                at: at, target: target)
+                        }
+                    } else if hasAudio, let sourceAudio = try await asset.loadTracks(withMediaType: .audio).first {
+                        let audioRange = try await sourceAudio.load(.timeRange)
+                        if mainAudio == nil {
+                            mainAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 2)
+                        }
+                        if let audioTrack = mainAudio {
+                            try insertScaled(
+                                into: audioTrack, from: sourceAudio, sourceRange: audioRange, in: clip.`in`,
+                                out: clipOut, at: at, target: target)
+                        }
                     }
-                } else if hasAudio, !o.muted, let sourceAudio = try await avAsset.loadTracks(withMediaType: .audio).first {
-                    let audioRange = try await sourceAudio.load(.timeRange)
-                    if let audioTrack = audioTrack() {
-                        try insertPlain(into: audioTrack, from: sourceAudio, sourceRange: audioRange, in: o.`in`, length: length, at: at)
-                        overlayVolumes[layer, default: []].append((at, Float(o.volume)))
-                    }
+                    mainVolumes.append((at, clip.muted ? 0 : Float(clip.volume)))
+                } catch {
+                    mainVolumes.append((at, 0))
                 }
-                overlayInfo.append(EditRenderPlan.OverlayClip(
-                    display: display,
-                    source: .video(trackID: videoTrack.trackID, orientation: EditRenderPlan.orientation(of: transform))))
-            case .gif(let frames, let delays, let display):
-                overlayInfo.append(EditRenderPlan.OverlayClip(display: display, source: .gif(frames: frames, delays: delays)))
-            case .photo(let image, let display):
-                overlayInfo.append(EditRenderPlan.OverlayClip(display: display, source: .photo(image)))
+                mainInfo.append(EditRenderPlan.MainClip(
+                    display: display, orientation: EditRenderPlan.orientation(of: transform), trackID: videoTrack.trackID))
+            } catch {
+                if mainVideo == nil {
+                    mainVideo = composition.addMutableTrack(withMediaType: .video, preferredTrackID: 1)
+                }
+                guard let videoTrack = mainVideo else { throw error }
+                videoTrack.insertEmptyTimeRange(CMTimeRange(start: at, duration: target))
+                mainInfo.append(EditRenderPlan.MainClip(
+                    display: PixelSize(w: 0, h: 0), orientation: .up, trackID: videoTrack.trackID, missing: true))
+                issues.append(EditPreviewIssue(clipID: clip.id, lane: .main, reason: EditPreviewFailure.reason(error)))
+            }
+        }
+        if let track = mainVideo {
+            let end = CMTime(value: Int64(timing.frames), timescale: fps)
+            let have = track.timeRange.end
+            // empty edits at the end of a track do not count (a track of only empty edits has no length), so the tail is
+            // filled with a real clip, or a missing last clip is cut off and an all-missing timeline plays 0 s
+            let from = have.isNumeric ? have : .zero
+            if from < end {
+                let tail = CMTimeRange(start: from, duration: CMTimeSubtract(end, from))
+                do {
+                    try await EditGapFiller.fill(track, tail)
+                } catch {
+                    track.insertEmptyTimeRange(tail)
+                }
+            }
+        }
+
+        // overlays: videos on their layer's track, gifs and photos drawn by the compositor. One that fails is left out.
+        for (j, o) in t.overlay.enumerated() {
+            do {
+                guard let asset = assets[o.item] else { throw EditError.other("source:\(o.item)") }
+                let layer = max(0, o.track)
+                switch asset {
+                case .video(let avAsset, let display, let hasAudio):
+                    guard let sourceVideo = try await avAsset.loadTracks(withMediaType: .video).first else {
+                        throw EditError.other("source:\(o.item)")
+                    }
+                    let videoRange = try await sourceVideo.load(.timeRange)
+                    let transform = try await sourceVideo.load(.preferredTransform)
+                    if overlayVideo[layer] == nil {
+                        overlayVideo[layer] = composition.addMutableTrack(
+                            withMediaType: .video, preferredTrackID: CMPersistentTrackID(3 + 2 * layer))
+                    }
+                    guard let videoTrack = overlayVideo[layer] else { throw EditError.other("source:\(o.item)") }
+                    let clip = timing.overlay[j]
+                    let at = CMTime(value: Int64(clip.start), timescale: fps)
+                    let length = CMTime(value: Int64(clip.frames), timescale: fps)
+                    try insertPlain(into: videoTrack, from: sourceVideo, sourceRange: videoRange, in: o.`in`, length: length, at: at)
+                    // the picture is in; a bad audio insert leaves this overlay silent instead of dropping it
+                    do {
+                        var pitched: (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)?
+                        if hasAudio, !o.muted, let key = EditPitchKey(overlay: o), let url = shifted[key] {
+                            pitched = await shiftedTrack(url)
+                        }
+                        func audioTrack() -> AVMutableCompositionTrack? {
+                            if overlayAudio[layer] == nil {
+                                overlayAudio[layer] = composition.addMutableTrack(
+                                    withMediaType: .audio, preferredTrackID: CMPersistentTrackID(4 + 2 * layer))
+                            }
+                            return overlayAudio[layer]
+                        }
+                        if let pitched {
+                            if let audioTrack = audioTrack() {
+                                try insertPlain(into: audioTrack, from: pitched.track, sourceRange: pitched.range, in: 0, length: length, at: at)
+                                overlayVolumes[layer, default: []].append((at, Float(o.volume)))
+                            }
+                        } else if hasAudio, !o.muted, let sourceAudio = try await avAsset.loadTracks(withMediaType: .audio).first {
+                            let audioRange = try await sourceAudio.load(.timeRange)
+                            if let audioTrack = audioTrack() {
+                                try insertPlain(into: audioTrack, from: sourceAudio, sourceRange: audioRange, in: o.`in`, length: length, at: at)
+                                overlayVolumes[layer, default: []].append((at, Float(o.volume)))
+                            }
+                        }
+                    } catch {
+                        // silent overlay; the picture stays
+                    }
+                    overlayInfo.append(EditRenderPlan.OverlayClip(
+                        display: display,
+                        source: .video(trackID: videoTrack.trackID, orientation: EditRenderPlan.orientation(of: transform))))
+                case .gif(let frames, let delays, let display):
+                    overlayInfo.append(EditRenderPlan.OverlayClip(display: display, source: .gif(frames: frames, delays: delays)))
+                case .photo(let image, let display):
+                    overlayInfo.append(EditRenderPlan.OverlayClip(display: display, source: .photo(image)))
+                }
+            } catch {
+                overlayInfo.append(EditRenderPlan.OverlayClip(display: PixelSize(w: 0, h: 0), source: .missing))
+                issues.append(EditPreviewIssue(clipID: o.id, lane: .overlay, reason: EditPreviewFailure.reason(error)))
             }
         }
 
@@ -269,7 +315,8 @@ public enum EditComposition {
         }
         mix.inputParameters = parameters
 
-        return EditPlayable(composition: composition, videoComposition: video, audioMix: mix, timing: timing, proxy: proxy)
+        return EditPlayable(
+            composition: composition, videoComposition: video, audioMix: mix, timing: timing, proxy: proxy, issues: issues)
     }
 
     /// How many video overlays share the busiest output frame.
@@ -380,16 +427,21 @@ public enum EditComposition {
         let fps = Int32(timing.fps)
         let composition = AVMutableComposition()
         var skipped: [String] = []
+        var issues: [EditPreviewIssue] = []
+        func skip(_ clip: EditLaneClip, _ reason: String) {
+            skipped.append(clip.id)
+            issues.append(EditPreviewIssue(clipID: clip.id, lane: clip.lane == 0 ? .main : .overlay, reason: reason))
+        }
         var media: [String: EditRenderPlan.LanePicture] = [:]
         var videoClips: [(id: String, start: Int, end: Int)] = []
         for (index, clip) in t.clips.enumerated() where !clip.hidden {
             guard index < timing.laneClips.count else { continue }
             let row = timing.laneClips[index]
-            guard let asset = assets[clip.item] else { skipped.append(clip.id); continue }
+            guard let asset = assets[clip.item] else { skip(clip, EditPreviewFailure.fileMissing); continue }
             switch asset {
             case .video(let avAsset, _, _):
                 guard (try? await avAsset.loadTracks(withMediaType: .video).first) != nil else {
-                    skipped.append(clip.id); continue
+                    skip(clip, EditPreviewFailure.couldntRead); continue
                 }
                 videoClips.append((clip.id, row.start, row.start + row.frames))
             case .gif(let frames, let delays, let display):
@@ -504,7 +556,7 @@ public enum EditComposition {
         mix.inputParameters = parameters
         return EditPlayable(
             composition: composition, videoComposition: video, audioMix: mix, timing: timing, proxy: proxy,
-            skippedClipIDs: skipped)
+            skippedClipIDs: skipped, issues: issues)
     }
 }
 
@@ -516,12 +568,16 @@ final class EditRenderPlan: @unchecked Sendable {
         let display: PixelSize
         let orientation: CGImagePropertyOrientation
         let trackID: CMPersistentTrackID
+        /// No picture for this span: the compositor draws a checker labelled "missing" and does not ask the track for a frame.
+        var missing: Bool = false
     }
 
     enum OverlaySource {
         case video(trackID: CMPersistentTrackID, orientation: CGImagePropertyOrientation)
         case gif(frames: [CGImage], delays: [Double])
         case photo(CGImage)
+        /// Left out of the picture. The slot stays so indices still match the timeline.
+        case missing
     }
 
     /// One version 2 clip's picture. Videos name the composition track interval colouring assigned them.
@@ -547,7 +603,7 @@ final class EditRenderPlan: @unchecked Sendable {
             self.display = display
             self.source = source
             switch source {
-            case .video: images = []
+            case .video, .missing: images = []
             case .gif(let frames, _): images = frames.map(EditFrameComposer.ciImage)
             case .photo(let image): images = [EditFrameComposer.ciImage(image)]
             }
@@ -566,6 +622,8 @@ final class EditRenderPlan: @unchecked Sendable {
     let previewSplitID: String?
     /// Version 2 pictures by clip id. Empty for a version 1 plan.
     let lanes: [String: LanePicture]
+    /// One plate for every missing main span, made once. Nil when every main clip has a picture.
+    let missingPlate: CIImage?
 
     init(
         timeline: EditTimeline, timing: EditTiming, main: [MainClip], overlay: [OverlayClip], proxy: Bool = false,
@@ -579,6 +637,7 @@ final class EditRenderPlan: @unchecked Sendable {
         self.previewMaskID = previewMaskID
         self.previewSplitID = previewSplitID
         self.lanes = lanes
+        self.missingPlate = main.contains(where: \.missing) ? EditFrameComposer.missingPlate(canvas: timeline.canvas) : nil
     }
 
     /// The EXIF orientation a track's `preferredTransform` stands for (a portrait iPhone clip is `(0, 1, -1, 0)`: `.right`).
@@ -623,7 +682,10 @@ final class EditInstruction: NSObject, AVVideoCompositionInstructionProtocol, @u
         self.overlayIndices = overlayIndices
         self.laneIDs = []
         self.rendersLanes = false
-        var ids: [NSValue] = [NSNumber(value: plan.main[mainIndex].trackID)]
+        var ids: [NSValue] = []
+        if mainIndex < plan.main.count, !plan.main[mainIndex].missing {
+            ids.append(NSNumber(value: plan.main[mainIndex].trackID))
+        }
         for j in overlayIndices where j < plan.overlay.count {
             if case .video(let trackID, _) = plan.overlay[j].source { ids.append(NSNumber(value: trackID)) }
         }

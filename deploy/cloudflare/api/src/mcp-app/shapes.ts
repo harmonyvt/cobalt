@@ -2,6 +2,7 @@
 // the widgets read. One file, so the tools and the widgets cannot drift. Every object is loose (extra fields pass), every
 // "may be missing" value is nullable, and every result carries `view`, the widget view that draws it.
 import * as z from "zod";
+import { EDIT_OVERLAY_TRACKS } from "../../../editor/helper/timeline.js";
 
 export const VIEWS = ["search", "post", "edit", "collections", "links", "webp", "upload", "save", "terminal", "swarm", "board"] as const;
 export type View = (typeof VIEWS)[number];
@@ -109,6 +110,8 @@ export const EditClip = z.looseObject({
     src_h: z.number().nullable(),
     // the source file's id; when it is `private` its signed preview link is in the result's _meta under this id
     file_id: z.string().nullable(),
+    // the file is a cutout or a background-removal alternate
+    fx: z.boolean().optional(),
 });
 export const EditOverlay = z.looseObject({
     id: z.string(),
@@ -130,6 +133,12 @@ export const EditOverlay = z.looseObject({
     private: z.boolean(),
     // the source file's id (its signed preview link is in the result's _meta under this id when `private`)
     file_id: z.string().nullable(),
+    // layer 0..EDIT_OVERLAY_TRACKS-1 (higher on top). 0 when the timeline omits track
+    track: z.number().int().min(0).max(EDIT_OVERLAY_TRACKS - 1).optional(),
+    // true when the renderer skips this overlay (omitted or false when it is shown)
+    hidden: z.boolean().optional(),
+    // greenscreen key, or the file is a cutout / background-removal alternate
+    fx: z.boolean().optional(),
 });
 export const EditRender = z.looseObject({
     status: z.enum(["queued", "running", "done", "error"]),

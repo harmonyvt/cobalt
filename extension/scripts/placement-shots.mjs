@@ -46,7 +46,13 @@ try {
     await page.route("https://x.com/**", (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html("x-action-bar.html") }));
     await page.route("https://www.instagram.com/**", (route) => {
         const path = new URL(route.request().url()).pathname;
-        const body = path.startsWith("/reels/") ? html("ig-reels-rail.html") : path.startsWith("/reel/") ? html("ig-reel-single.html") : html("ig-feed.html");
+        const body = path.startsWith("/reels/")
+            ? html("ig-reels-rail.html")
+            : path.startsWith("/reel/")
+              ? html("ig-reel-single.html")
+              : path.startsWith("/p/")
+                ? html("ig-post.html")
+                : html("ig-home-feed.html");
         return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body });
     });
 
@@ -54,6 +60,7 @@ try {
     await shotReels(page);
     if (mode === "after") {
         await shotFeed(page);
+        await shotPost(page);
         await shotReelSingle(page);
     }
     console.log("shots ok", mode);
@@ -145,13 +152,49 @@ async function shotReels(page) {
 }
 
 async function shotFeed(page) {
+    await page.setViewportSize({ width: 560, height: 1280 });
     await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded" });
-    await page.waitForFunction(() => document.querySelectorAll("article .capystore-save").length === 2, null, { timeout: 10000 });
-    const urls = await page.evaluate(() => [...document.querySelectorAll(".capystore-save")].map((el) => el.dataset.url));
-    if (urls.join(",") !== "https://www.instagram.com/p/AAAAAAAAAAA/,https://www.instagram.com/reel/BBBBBBBBBBB/") {
-        throw new Error(`feed urls: ${urls.join(",")}`);
+    await page.waitForFunction(() => document.querySelectorAll("article .capystore-save").length === 3, null, { timeout: 10000 });
+    const placed = await page.evaluate(() => {
+        const hosts = [...document.querySelectorAll(".capystore-save")];
+        const feed = document.querySelector("#feed");
+        return {
+            urls: hosts.map((el) => el.dataset.url),
+            inFeedGap: [...feed.children].some((el) => el.classList.contains("capystore-save")),
+            inStories: !!document.querySelector("#stories .capystore-save"),
+            photo: !!document.querySelector("#photo-icons > .capystore-save"),
+            video: document.querySelector("#video-save")?.previousElementSibling?.classList.contains("capystore-save") === true,
+            carousel: !!document.querySelector("#carousel-icons > .capystore-save"),
+            inBurst: !!document.querySelector(".burst .capystore-save"),
+            inComments: !!document.querySelector(".comments .capystore-save"),
+        };
+    });
+    const want = [
+        "https://www.instagram.com/p/PHOTOCODE11/",
+        "https://www.instagram.com/reel/FEEDVID1111/",
+        "https://www.instagram.com/p/CAROUSEL111/",
+    ];
+    if (placed.urls.join(",") !== want.join(",") || placed.inFeedGap || placed.inStories || !placed.photo || !placed.video || !placed.carousel || placed.inBurst || placed.inComments) {
+        throw new Error(`feed placement: ${JSON.stringify(placed)}`);
     }
-    await page.locator("body").screenshot({ path: `${outDir}/ig-feed-after.png` });
+    await page.locator("#feed").screenshot({ path: `${outDir}/ig-home-feed.png` });
+}
+
+async function shotPost(page) {
+    await page.setViewportSize({ width: 560, height: 900 });
+    await page.goto("https://www.instagram.com/p/POSTPAGE01/", { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#post-icons > .capystore-save", { timeout: 10000 });
+    const info = await page.evaluate(() => ({
+        count: document.querySelectorAll(".capystore-save").length,
+        url: document.querySelector(".capystore-save")?.dataset.url,
+        inIcons: !!document.querySelector("#post-icons > .capystore-save"),
+        inComments: !!document.querySelector("#post-comments .capystore-save"),
+        rail: document.querySelector(".capystore-save")?.classList.contains("rail") === true,
+    }));
+    if (info.count !== 1 || info.url !== "https://www.instagram.com/p/POSTPAGE01/" || !info.inIcons || info.inComments || info.rail) {
+        throw new Error(`post page: ${JSON.stringify(info)}`);
+    }
+    await page.locator("#post").screenshot({ path: `${outDir}/ig-post.png` });
 }
 
 async function shotReelSingle(page) {

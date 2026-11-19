@@ -357,7 +357,8 @@ struct EditorPhoneMainClip: View {
             TimelineMainClipView(
                 clip: clip, number: index + 1, source: session.source(for: clip.item), seconds: span.length,
                 width: width, height: height, isSelected: selected, loading: session.loadingSources[clip.item],
-                failed: session.sourceFailures[clip.item] != nil, missing: session.isMissing(item: clip.item), actions: actions)
+                failed: session.sourceFailures[clip.item] != nil, missing: session.isMissing(item: clip.item),
+                problem: session.previewIssues[clip.id], actions: actions)
             if selected, !lifted {
                 EditorPhoneTrimHandles(session: session, index: index, clip: clip, scale: scale, width: width, height: height)
             }
@@ -546,7 +547,8 @@ struct EditorPhoneOverlayClip: View {
         ZStack(alignment: .topLeading) {
             TimelineOverlayClipView(
                 overlay: overlay, source: source, seconds: span.length, width: width, height: height, isSelected: selected,
-                missing: session.isMissing(item: overlay.item), showsEffect: session.showsEffect(overlay), actions: actions)
+                missing: session.isMissing(item: overlay.item), showsEffect: session.showsEffect(overlay),
+                problem: session.previewIssues[overlay.id], actions: actions)
             if selected {
                 if source?.kind == .video { leadingHandle }
                 trailingHandle

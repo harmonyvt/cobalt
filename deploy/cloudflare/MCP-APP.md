@@ -34,7 +34,7 @@ Compact by default so they fit a phone chat: one-line headers, dense rows, and e
 "show N more" button (a grid shows its first row). The expand button in each header asks the host for full screen, the roomy
 view with everything shown. Private posts, thumbnails and timeline sources play through signed one-hour links (a lock badge says
 so); if a link ran out, "refresh preview" in the widget asks again. The timeline has a real preview player: scrub the tracks,
-press play, overlays are boxed where they sit on the frame, and a finished render can be played instead. The box tools
+press play, overlays are boxed where they sit on the frame, and a finished render can be played instead. Overlay layers follow the server (64, `L1` at the bottom): more than 8 lanes scroll, a hidden overlay is dimmed, and an effect (greenscreen, cutout, or a background-removal alternate) wears a small `fx` tag. The box tools
 (`box_run`, `box_pull`, `box_save`) draw a terminal: the command, its output with colours (the last 8 lines first), the exit
 code and time, and how long until the idle box is wiped.
 

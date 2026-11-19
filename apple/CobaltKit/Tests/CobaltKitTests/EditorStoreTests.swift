@@ -164,6 +164,17 @@ struct EditorOpenTests {
         #expect(rig.store.session === session)
     }
 
+    @Test func anOpenTheOwnerAlreadyLeftDoesNotPublishASession() async {
+        let rig = StoreRig()
+        do {
+            try await rig.store.open(PreviewEditorIDs.beach, isCurrent: { false })
+            Issue.record("a superseded open should throw")
+        } catch {
+            #expect(error == .other("cancelled"))
+        }
+        #expect(rig.store.session == nil)
+    }
+
     @Test func aMissingProjectThrowsNotFound() async {
         let rig = StoreRig()
         do {

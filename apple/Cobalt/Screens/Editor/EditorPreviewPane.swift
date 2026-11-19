@@ -6,6 +6,8 @@ import SwiftUI
 /// on the canvas; with the crop tool and a main clip selected the canvas gives way to that clip's source and its crop frame.
 struct EditorPreviewPane: View {
     let session: EditSession
+    /// The selected clip's source player. The trim bar under the composition uses it.
+    let clipTrim: ClipTrimPreview
 
     // Session replay (APP-API-CONTRACT 58): media is always masked.
     var body: some View { mediaBody.mediaMask() }
@@ -13,6 +15,9 @@ struct EditorPreviewPane: View {
     @ViewBuilder private var mediaBody: some View {
         VStack(spacing: 12) {
             stage
+            if let (_, clip) = session.selectedMain {
+                ClipTrimBar(session: session, clip: clip, preview: clipTrim)
+            }
             EditorPreviewCrowdedNote(session: session)
             EditorTransport(session: session)
         }

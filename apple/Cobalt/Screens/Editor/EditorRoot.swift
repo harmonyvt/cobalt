@@ -126,28 +126,62 @@ struct EditorRoot: View {
 // MARK: - the opening screen
 
 /// Before the session exists: a skeleton of the editor while `GET /edits/<id>` answers, and the failure with `try again` and
-/// `close` (apple/CONTRACT-EDITOR.md 4.7).
+/// `close` (apple/CONTRACT-EDITOR.md 4.7). Idle with no session is not this skeleton: that is a closed edit, and it says so
+/// with `close` instead of spinning.
 struct EditorOpeningView: View {
     let model: AppModel
+    /// Previews show the skeleton while `previewEditor` is still opening. The launcher is idle then; the real window is not.
+    var previewWaiting = false
+
+    @Environment(\.dismiss) private var dismiss
 
     private var launcher: EditorLauncher { .shared }
 
+    private var presentation: EditorWindowPresentation {
+        let decided = EditorWindowLoad.presentation(hasSession: false, phase: launcher.state, now: Date())
+        if previewWaiting, case .dismiss = decided { return .loading }
+        return decided
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            skeletonBar
-            Spacer(minLength: 0)
-            content
-            Spacer(minLength: 0)
-            skeletonTimeline
+        Group {
+            if case .dismiss = presentation {
+                closed
+            } else {
+                VStack(spacing: 0) {
+                    skeletonBar
+                    Spacer(minLength: 0)
+                    content
+                    Spacer(minLength: 0)
+                    skeletonTimeline
+                }
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(EditorColor.panel)
         .accessibilityElement(children: .contain)
     }
 
+    /// The edit is already gone (or the window was restored with nothing to open). Not the opening skeleton.
+    private var closed: some View {
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 14) {
+                Text(Copy.Editor.editClosed)
+                    .font(CobaltType.bodyMedium)
+                    .foregroundStyle(CobaltColor.text)
+                Button(Copy.Editor.close) { closeOpening() }
+                    .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            CloseButton(cancels: true) { closeOpening() }
+                .padding(14)
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
-        switch launcher.state {
-        case .failed(_, let error):
+        switch presentation {
+        case .failed(let error):
             VStack(spacing: 14) {
                 Image(systemName: Symbol.Editor.missing)
                     .font(.system(size: 22, weight: .semibold))
@@ -165,7 +199,7 @@ struct EditorOpeningView: View {
                     .frame(maxWidth: 360)
             }
             .padding(24)
-        default:
+        case .loading, .editor, .dismiss:
             VStack(spacing: 12) {
                 ProgressView()
                 Text(Copy.Editor.openingProject)
@@ -180,22 +214,23 @@ struct EditorOpeningView: View {
         HStack {
             RoundedRectangle(cornerRadius: 5).fill(EditorColor.field).frame(width: 140, height: 14)
             Spacer()
-            if showsClose {
-                CloseButton(cancels: true) { launcher.dismiss() }
-            }
+            CloseButton(cancels: true) { closeOpening() }
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
         .background(EditorColor.bar)
     }
 
-    /// The close, top right: always once it failed; while it opens only on iOS (the Mac window has its own red button).
-    private var showsClose: Bool {
-        switch launcher.state {
-        case .failed: return true
-        case .opening: return !Platform.isMac
-        case .idle: return false
-        }
+    /// Leaves the opening screen. On the Mac the window is closed here too: `dismiss()` of this view is not the window,
+    /// and the presenter's `dismissWindow` can be swallowed by the traffic-light button.
+    private func closeOpening() {
+        launcher.dismiss()
+        #if os(macOS)
+        EditorWindowCloser.closeWindow()
+        #endif
+        // The cover (iPhone, iPad). On the Mac this is the editor window's dismiss, after `close()` has already run,
+        // so a `performClose` from it cannot be swallowed by the traffic-light button.
+        dismiss()
     }
 
     private var skeletonTimeline: some View {
@@ -239,14 +274,35 @@ private struct EditorWindowGuard: NSViewRepresentable {
         var onClosed: (@MainActor () -> Void)?
         private var observer: (any NSObjectProtocol)?
 
+        private weak var hooked: NSWindow?
+        /// The red button's own target and action, as AppKit set them, to hand back when this probe leaves.
+        private weak var originalTarget: AnyObject?
+        private var originalAction: Selector?
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            guard let window else { return }
+            if let window {
+                install(on: window)
+            } else {
+                // Leaving the hierarchy (the session closed, the skeleton took over). Give the red button back to the
+                // window. While this probe owns it, `performClose` — what `dismissWindow` calls — runs our action and
+                // the window never closes.
+                remove()
+            }
+        }
+
+        private func install(on window: NSWindow) {
+            if hooked !== window { remove() }
+            hooked = window
             if let button = window.standardWindowButton(.closeButton) {
+                if button.target !== self {
+                    originalTarget = button.target
+                    originalAction = button.action
+                }
                 button.target = self
                 button.action = #selector(closeClicked)
             }
-            if let observer { NotificationCenter.default.removeObserver(observer) }
+            guard observer == nil else { return }
             observer = NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification, object: window, queue: .main
             ) { [weak self] _ in
@@ -254,14 +310,106 @@ private struct EditorWindowGuard: NSViewRepresentable {
             }
         }
 
-        private func windowClosed() {
+        private func remove() {
+            if let hooked { restoreCloseButton(hooked) }
+            hooked = nil
             if let observer { NotificationCenter.default.removeObserver(observer) }
             observer = nil
+        }
+
+        /// Hands the traffic-light button back exactly as AppKit had it. Our action must not stay installed once this
+        /// probe has left, or a later `dismissWindow` clicks it and the window stays up. Not `performClose(_:)` as the
+        /// action: `performClose` clicks the close button, so that loops until the stack runs out (the app crashed).
+        private func restoreCloseButton(_ window: NSWindow) {
+            guard let button = window.standardWindowButton(.closeButton), button.target === self else { return }
+            button.target = originalTarget
+            button.action = originalAction
+            originalTarget = nil
+            originalAction = nil
+        }
+
+        private func windowClosed() {
+            // The window is going away. Put the button back first, so a reused window does not keep this probe as its target.
+            if let hooked { restoreCloseButton(hooked) }
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+            hooked = nil
             onClosed?()
         }
 
         @objc private func closeClicked() {
             MainActor.assumeIsolated { onCloseButton?() }
+        }
+    }
+}
+
+/// Finds the editor window and closes it with `NSWindow.close()`, not `performClose`. `dismissWindow` uses `performClose`,
+/// which clicks the close button; while the editor's guard owns that button the click never closes the window.
+@MainActor
+enum EditorWindowCloser {
+    static weak var window: NSWindow?
+
+    static func closeWindow() {
+        var seen = Set<ObjectIdentifier>()
+        for window in candidates() {
+            let key = ObjectIdentifier(window)
+            guard seen.insert(key).inserted else { continue }
+            window.close()
+        }
+    }
+
+    private static func candidates() -> [NSWindow] {
+        var list: [NSWindow] = []
+        if let window { list.append(window) }
+        for window in NSApp.windows where isEditor(window) {
+            list.append(window)
+        }
+        return list
+    }
+
+    private static func isEditor(_ window: NSWindow) -> Bool {
+        if let held = Self.window, held === window { return true }
+        if window.identifier?.rawValue == EditorWindowID.editor { return true }
+        return window.title == Copy.Editor.title
+    }
+}
+
+/// Remembers the editor window (its title is the project's while a session is up, so the title is not a stable id) and
+/// hears `willClose` while the opening skeleton is showing. `EditorWindowGuard` is not in the hierarchy then.
+struct EditorWindowAnchor: NSViewRepresentable {      // internal: EditorPresenter uses it too
+    let onClosedWhileIdle: @MainActor () -> Void
+
+    func makeNSView(context: Context) -> Marker {
+        let view = Marker()
+        view.onClosedWhileIdle = onClosedWhileIdle
+        return view
+    }
+
+    func updateNSView(_ view: Marker, context: Context) {
+        view.onClosedWhileIdle = onClosedWhileIdle
+    }
+
+    final class Marker: NSView {
+        var onClosedWhileIdle: (@MainActor () -> Void)?
+        private var observer: (any NSObjectProtocol)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else {
+                if let observer { NotificationCenter.default.removeObserver(observer) }
+                observer = nil
+                return
+            }
+            MainActor.assumeIsolated { EditorWindowCloser.window = window }
+            if window.identifier == nil {
+                window.identifier = NSUserInterfaceItemIdentifier(EditorWindowID.editor)
+            }
+            guard observer == nil else { return }
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onClosedWhileIdle?() }
+            }
         }
     }
 }
