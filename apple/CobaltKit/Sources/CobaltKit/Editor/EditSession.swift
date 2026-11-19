@@ -342,8 +342,19 @@ public final class EditSession {
 
     /// Splits the clip under the playhead. A selected clip that contains the playhead wins; otherwise the lane 0 clip.
     public func splitAtPlayhead() {
-        if let id = clipUnderPlayhead(preferring: selection) {
-            split(clip: id, atFrame: playhead)
+        let selected: String? = switch selection {
+        case .main(let id), .overlay(let id): id
+        case .none: nil
+        }
+        if let selected, contains(selected, frame: playhead) {
+            split(clip: selected, atFrame: playhead)
+            return
+        }
+        if timeline.version >= 2,
+           let row = timing.laneClips.first(where: { row in
+               timeline.clips.first(where: { $0.id == row.id })?.lane == 0 && playhead >= row.start && playhead < row.start + row.frames
+           }) {
+            split(clip: row.id, atFrame: playhead)
             return
         }
         guard let (index, _) = timing.clip(atFrame: playhead) else { return }
@@ -411,13 +422,13 @@ public final class EditSession {
         case .none: return
         case .main(let id):
             if timeline.version >= 2 {
-                applyLane(EditLanes.delete(timeline, id: id, closeLane0: true, locked: lockedLanes))
+                applyLane(EditLanes.delete(timeline, id: id, closeLane0: true, locked: lockedLanes), clampForV1: true)
             } else {
                 commit(key: nil) { $0.main.removeAll { $0.id == id } }
             }
         case .overlay(let id):
             if timeline.version >= 2 {
-                applyLane(EditLanes.delete(timeline, id: id, closeLane0: true, locked: lockedLanes))
+                applyLane(EditLanes.delete(timeline, id: id, closeLane0: true, locked: lockedLanes), clampForV1: true)
                 effectMarks[id] = nil
                 return
             }
@@ -796,8 +807,12 @@ public final class EditSession {
             let latest = gap.to - me.frames
             guard latest >= gap.from else { return }
             let start = min(max(k, gap.from), latest)
-            t.overlay[i].at = Double(start) / Double(timing.fps)
-            t.overlay[i].track = layer
+            // one write: on a version 2 timeline `overlay` is a view sorted by time, so after a write to `at` the index can
+            // name another overlay and a second write to `track` would move that one
+            var placed = t.overlay[i]
+            placed.at = Double(start) / Double(timing.fps)
+            placed.track = layer
+            t.overlay[i] = placed
             moved = true
         }
         return moved
@@ -1034,11 +1049,16 @@ public final class EditSession {
         applyLane(EditLanes.moveLayer(timeline, id: id, by: delta, locked: lockedLanes))
     }
 
+    /// `clampForV1`: a delete. On an older server the overlays are cut at the end of lane 0 first, as `commit` does and
+    /// as version 1 always did, so a delete that leaves an overlay running past the end (or nothing on lane 0) goes through
+    /// instead of being refused. Moves are checked as they are.
     @discardableResult
-    private func applyLane(_ change: EditLaneChange, key: String? = nil) -> Bool {
+    private func applyLane(_ change: EditLaneChange, key: String? = nil, clampForV1: Bool = false) -> Bool {
         switch change {
         case .done(let success):
-            guard allowsSave(success.timeline) else {
+            let checked = clampForV1 && !savesTimelineV2 ? normalized(success.timeline, clampOverlays: true) : success.timeline
+            // the last clip deleted: as version 1 that is an empty main track, which `problems` keeps from saving (`.empty`)
+            guard allowsSave(checked) || (clampForV1 && checked.clips.isEmpty) else {
                 laneRefusal = EditLanes.needsServerMessage
                 return false
             }

@@ -23,7 +23,7 @@ extension EditLanes {
     }
 
     public static func parseJSON(_ any: Any) -> EditParseResult {
-        let value = JSONValue(any)
+        let value = ParseValue(any)
         if case .string(let text) = value, let data = text.data(using: .utf8) { return parse(data) }
         guard case .object(let root) = value else { return .failed(code: "error.edit.bad_request", path: "") }
         if root["version"]?.int == 2 { return parseV2(root) }
@@ -110,13 +110,13 @@ extension EditLanes {
 
 // MARK: - values
 
-private enum JSONValue {
+private enum ParseValue {
     case null
     case bool(Bool)
     case number(Double)
     case string(String)
-    case array([JSONValue])
-    case object([String: JSONValue])
+    case array([ParseValue])
+    case object([String: ParseValue])
 
     init(_ any: Any) {
         if any is NSNull { self = .null; return }
@@ -130,13 +130,13 @@ private enum JSONValue {
             return
         }
         if let value = any as? String { self = .string(value); return }
-        if let value = any as? [Any] { self = .array(value.map(JSONValue.init)); return }
-        if let value = any as? [String: Any] { self = .object(value.mapValues(JSONValue.init)); return }
+        if let value = any as? [Any] { self = .array(value.map(ParseValue.init)); return }
+        if let value = any as? [String: Any] { self = .object(value.mapValues(ParseValue.init)); return }
         self = .null
     }
 
-    var object: [String: JSONValue]? { if case .object(let value) = self { return value }; return nil }
-    var array: [JSONValue]? { if case .array(let value) = self { return value }; return nil }
+    var object: [String: ParseValue]? { if case .object(let value) = self { return value }; return nil }
+    var array: [ParseValue]? { if case .array(let value) = self { return value }; return nil }
     var string: String? { if case .string(let value) = self { return value }; return nil }
     var bool: Bool? { if case .bool(let value) = self { return value }; return nil }
     var number: Double? { if case .number(let value) = self { return value }; return nil }
@@ -156,7 +156,7 @@ private func matches(_ pattern: NSRegularExpression, _ text: String) -> Bool {
 }
 
 private func keysOK(
-    _ object: [String: JSONValue], required: [String], optional: [String], prefix: String
+    _ object: [String: ParseValue], required: [String], optional: [String], prefix: String
 ) -> EditParseResult? {
     let dot = prefix.isEmpty ? "" : "."
     for key in object.keys where !required.contains(key) && !optional.contains(key) {
@@ -168,7 +168,7 @@ private func keysOK(
     return nil
 }
 
-private func parseCanvas(_ value: JSONValue?) -> Step<EditCanvas> {
+private func parseCanvas(_ value: ParseValue?) -> Step<EditCanvas> {
     guard let object = value?.object else { return .failed(code: "error.edit.bad_request", path: "canvas") }
     if let failure = keysOK(object, required: ["w", "h", "fps"], optional: [], prefix: "canvas") {
         return .failed(code: failure.code, path: failure.path)
@@ -183,13 +183,13 @@ private func parseCanvas(_ value: JSONValue?) -> Step<EditCanvas> {
     return .value(EditCanvas(w: w, h: h, fps: fps))
 }
 
-private func takeID(_ object: [String: JSONValue], path: String, seen: inout Set<String>) -> String? {
+private func takeID(_ object: [String: ParseValue], path: String, seen: inout Set<String>) -> String? {
     guard let id = object["id"]?.string, matches(idPattern, id), !seen.contains(id) else { return nil }
     seen.insert(id)
     return id
 }
 
-private func parsePitch(_ object: [String: JSONValue], path: String) -> Step<Double> {
+private func parsePitch(_ object: [String: ParseValue], path: String) -> Step<Double> {
     guard object["pitch"] != nil else { return .value(0) }
     guard let raw = object["pitch"]?.number else { return .failed(code: "error.edit.bad_request", path: "\(path).pitch") }
     let quant = Double(EditMath.roundHalfUp(raw / 0.5)) * 0.5
@@ -204,7 +204,7 @@ private func snapSpeed(_ raw: Double) -> Double {
     return held == 0 ? 0 : held
 }
 
-private func parseCrop(_ value: JSONValue?, path: String) -> Step<EditCrop> {
+private func parseCrop(_ value: ParseValue?, path: String) -> Step<EditCrop> {
     guard let object = value?.object else { return .failed(code: "error.edit.bad_request", path: path) }
     if let failure = keysOK(object, required: ["aspect", "x", "y", "w", "h"], optional: [], prefix: path) {
         return .failed(code: failure.code, path: failure.path)
@@ -226,7 +226,7 @@ private func parseCrop(_ value: JSONValue?, path: String) -> Step<EditCrop> {
     return .value(EditCrop(aspect: kind, x: x, y: y, w: w, h: h))
 }
 
-private func parseKey(_ value: JSONValue?, path: String) -> Step<EditChromaKey?> {
+private func parseKey(_ value: ParseValue?, path: String) -> Step<EditChromaKey?> {
     guard let value else { return .value(nil) }
     guard let object = value.object else { return .failed(code: "error.edit.bad_request", path: path) }
     if let failure = keysOK(object, required: ["color", "similarity", "blend", "spill"], optional: [], prefix: path) {
@@ -248,7 +248,7 @@ private func parseKey(_ value: JSONValue?, path: String) -> Step<EditChromaKey?>
         spill: EditJSON.round(spill, to: 1_000)))
 }
 
-private func parseBackground(_ value: JSONValue?, path: String) -> Step<EditOverlayBackground?> {
+private func parseBackground(_ value: ParseValue?, path: String) -> Step<EditOverlayBackground?> {
     guard let value else { return .value(nil) }
     guard let object = value.object else { return .failed(code: "error.edit.bad_request", path: path) }
     switch object["type"]?.string {
@@ -272,7 +272,7 @@ private func parseBackground(_ value: JSONValue?, path: String) -> Step<EditOver
     }
 }
 
-private func parseFrame(_ value: JSONValue?, path: String) -> Step<EditFrame> {
+private func parseFrame(_ value: ParseValue?, path: String) -> Step<EditFrame> {
     guard let object = value?.object else { return .failed(code: "error.edit.bad_request", path: path) }
     if let failure = keysOK(object, required: ["x", "y", "w"], optional: [], prefix: path) {
         return .failed(code: failure.code, path: failure.path)
@@ -290,7 +290,7 @@ private func parseFrame(_ value: JSONValue?, path: String) -> Step<EditFrame> {
     return .value(frame)
 }
 
-private func readOutput(_ root: [String: JSONValue]) -> Step<EditKeyedOutput?> {
+private func readOutput(_ root: [String: ParseValue]) -> Step<EditKeyedOutput?> {
     switch root["output"] {
     case nil: return .value(nil)
     case .string("mp4"): return .value(nil)
@@ -301,7 +301,7 @@ private func readOutput(_ root: [String: JSONValue]) -> Step<EditKeyedOutput?> {
     }
 }
 
-private func parseV1(_ root: [String: JSONValue]) -> EditParseResult {
+private func parseV1(_ root: [String: ParseValue]) -> EditParseResult {
     if let failure = keysOK(root, required: ["version", "canvas", "main", "overlay"], optional: ["output"], prefix: "") {
         return failure
     }
@@ -332,7 +332,7 @@ private func parseV1(_ root: [String: JSONValue]) -> EditParseResult {
     return .ok(timeline)
 }
 
-private func parseV2(_ root: [String: JSONValue]) -> EditParseResult {
+private func parseV2(_ root: [String: ParseValue]) -> EditParseResult {
     if let failure = keysOK(root, required: ["version", "canvas", "clips"], optional: ["output"], prefix: "") {
         return failure
     }
@@ -354,7 +354,7 @@ private func parseV2(_ root: [String: JSONValue]) -> EditParseResult {
     return .ok(timeline)
 }
 
-private func parseMain(_ value: JSONValue, path: String, seen: inout Set<String>) -> Step<EditClip> {
+private func parseMain(_ value: ParseValue, path: String, seen: inout Set<String>) -> Step<EditClip> {
     guard let object = value.object else { return .failed(code: "error.edit.bad_request", path: path) }
     if let failure = keysOK(
         object, required: ["id", "item", "in", "out", "speed", "fit", "volume", "muted"], optional: ["crop", "pitch"], prefix: path
@@ -398,7 +398,7 @@ private func parseMain(_ value: JSONValue, path: String, seen: inout Set<String>
         fit: object["fit"]?.string == "fit" ? .fit : .fill, volume: EditJSON.level(volumeIn), muted: muted, pitch: pitch))
 }
 
-private func parseOverlay(_ value: JSONValue, path: String, seen: inout Set<String>) -> Step<EditOverlay> {
+private func parseOverlay(_ value: ParseValue, path: String, seen: inout Set<String>) -> Step<EditOverlay> {
     guard let object = value.object else { return .failed(code: "error.edit.bad_request", path: path) }
     if let failure = keysOK(
         object, required: ["id", "item", "at", "in", "out", "frame", "opacity", "volume", "muted"],
@@ -458,7 +458,7 @@ private func parseOverlay(_ value: JSONValue, path: String, seen: inout Set<Stri
         key: key, background: background))
 }
 
-private func parseLane(_ value: JSONValue, path: String, seen: inout Set<String>) -> Step<EditLaneClip> {
+private func parseLane(_ value: ParseValue, path: String, seen: inout Set<String>) -> Step<EditLaneClip> {
     guard let object = value.object else { return .failed(code: "error.edit.bad_request", path: path) }
     if let failure = keysOK(
         object, required: ["id", "item", "lane", "at", "in", "out"],
