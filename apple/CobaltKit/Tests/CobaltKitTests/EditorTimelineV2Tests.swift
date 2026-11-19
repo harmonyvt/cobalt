@@ -73,22 +73,23 @@ struct EditTimelineV2FixtureTests {
                 #expect(got.1 == expect["path"] as? String, "\(name)")
             }
             if let toV2 = raw["to_v2"] as? [String: Any] {
-                let timeline = try #require(timeline(of: parsed), name)
-                let converted = EditLanes.v1ToV2(timeline)
+                let v1 = try #require(timeline(of: parsed), "\(name)")
+                let converted = EditLanes.v1ToV2(v1)
                 if toV2["ok"] as? Bool == true {
                     let v2 = try #require(timeline(of: converted), "\(name) \(converted)")
                     #expect(EditLanes.canonical(v2) == toV2["canonical"] as? String, "\(name) to v2")
                 } else {
-                    let got = try #require(failure(of: converted), name)
+                    let got = try #require(failure(of: converted), "\(name)")
                     #expect(got.0 == toV2["code"] as? String && got.1 == toV2["path"] as? String, "\(name) to v2")
                 }
             }
             if let toV1 = raw["to_v1"] as? [String: Any] {
                 let source: EditTimeline
                 if let toV2 = raw["to_v2"] as? [String: Any], toV2["ok"] as? Bool == true {
-                    source = try #require(timeline(of: EditLanes.v1ToV2(try #require(timeline(of: parsed)))))
+                    let v1 = try #require(timeline(of: parsed), "\(name)")
+                    source = try #require(timeline(of: EditLanes.v1ToV2(v1)), "\(name)")
                 } else {
-                    source = try #require(timeline(of: parsed), name)
+                    source = try #require(timeline(of: parsed), "\(name)")
                 }
                 var kinds: [String: String?]?
                 if let listed = raw["kinds"] as? [String: String] { kinds = listed.mapValues { $0 } }

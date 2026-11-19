@@ -130,10 +130,10 @@ enum EditFrameComposer {
             }
             if plan.proxy, source.extent.width > 960 || source.extent.height > 960 {
                 let long = max(source.extent.width, source.extent.height)
-                let scale = 960 / long
+                let factor = 960 / long
                 source = scale(source, to: PixelSize(
-                    w: max(2, Int((source.extent.width * scale).rounded())),
-                    h: max(2, Int((source.extent.height * scale).rounded()))))
+                    w: max(2, Int((source.extent.width * factor).rounded())),
+                    h: max(2, Int((source.extent.height * factor).rounded()))))
             }
             let oriented = orientLane(source, picture)
             if let key = clip.key?.normalized() {
