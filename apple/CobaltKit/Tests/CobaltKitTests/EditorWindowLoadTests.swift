@@ -36,7 +36,8 @@ struct EditorWindowLoadTests {
 
     @Test func aBlankIdFailsImmediatelyAndNeverLoads() {
         var load = EditorOpenAttempt()
-        #expect(load.begin("   ", now: start) == .rejected(1))
+        let blank = load.begin("   ", now: start)      // a mutating call cannot sit inside #expect
+        #expect(blank == .rejected(1))
         #expect(load.phase == .failed("", .other("missing")))
         #expect(EditorWindowLoad.presentation(hasSession: false, phase: load.phase, now: start) == .failed(.other("missing")))
         #expect(EditorWindowLoad.presentation(hasSession: false, phase: .opening("  ", start), now: start) == .failed(.other("missing")))
@@ -74,9 +75,11 @@ struct EditorWindowLoadTests {
             return
         }
         #expect(id == "cats" && second == 2)
-        #expect(load.finish(first, projectID: "beach", result: .failed(.offline)) == false)
+        let staleFirst = load.finish(first, projectID: "beach", result: .failed(.offline))
+        #expect(staleFirst == false)
         #expect(load.phase == .opening("cats", start))
-        #expect(load.finish(second, projectID: "cats", result: .opened))
+        let secondLanded = load.finish(second, projectID: "cats", result: .opened)
+        #expect(secondLanded)
         #expect(load.phase == .idle)
     }
 
@@ -88,7 +91,8 @@ struct EditorWindowLoadTests {
         }
         load.dismiss()
         #expect(load.phase == .idle)
-        #expect(load.finish(mine, projectID: "beach", result: .opened) == false)
+        let staleMine = load.finish(mine, projectID: "beach", result: .opened)
+        #expect(staleMine == false)
         #expect(load.phase == .idle)
         #expect(EditorWindowLoad.presentation(hasSession: false, phase: load.phase, now: start) == .dismiss)
     }

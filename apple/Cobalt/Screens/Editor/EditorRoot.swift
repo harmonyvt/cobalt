@@ -275,6 +275,9 @@ private struct EditorWindowGuard: NSViewRepresentable {
         private var observer: (any NSObjectProtocol)?
 
         private weak var hooked: NSWindow?
+        /// The red button's own target and action, as AppKit set them, to hand back when this probe leaves.
+        private weak var originalTarget: AnyObject?
+        private var originalAction: Selector?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -292,6 +295,10 @@ private struct EditorWindowGuard: NSViewRepresentable {
             if hooked !== window { remove() }
             hooked = window
             if let button = window.standardWindowButton(.closeButton) {
+                if button.target !== self {
+                    originalTarget = button.target
+                    originalAction = button.action
+                }
                 button.target = self
                 button.action = #selector(closeClicked)
             }
@@ -304,23 +311,26 @@ private struct EditorWindowGuard: NSViewRepresentable {
         }
 
         private func remove() {
-            if let hooked { Self.restoreCloseButton(hooked) }
+            if let hooked { restoreCloseButton(hooked) }
             hooked = nil
             if let observer { NotificationCenter.default.removeObserver(observer) }
             observer = nil
         }
 
-        /// The traffic-light button's default: `performClose` on the window. Our action must not stay installed once this
-        /// probe has left, or a later `dismissWindow` clicks it and the window stays up.
-        private static func restoreCloseButton(_ window: NSWindow) {
-            guard let button = window.standardWindowButton(.closeButton) else { return }
-            button.target = window
-            button.action = #selector(NSWindow.performClose(_:))
+        /// Hands the traffic-light button back exactly as AppKit had it. Our action must not stay installed once this
+        /// probe has left, or a later `dismissWindow` clicks it and the window stays up. Not `performClose(_:)` as the
+        /// action: `performClose` clicks the close button, so that loops until the stack runs out (the app crashed).
+        private func restoreCloseButton(_ window: NSWindow) {
+            guard let button = window.standardWindowButton(.closeButton), button.target === self else { return }
+            button.target = originalTarget
+            button.action = originalAction
+            originalTarget = nil
+            originalAction = nil
         }
 
         private func windowClosed() {
             // The window is going away. Put the button back first, so a reused window does not keep this probe as its target.
-            if let hooked { Self.restoreCloseButton(hooked) }
+            if let hooked { restoreCloseButton(hooked) }
             if let observer { NotificationCenter.default.removeObserver(observer) }
             observer = nil
             hooked = nil
@@ -366,7 +376,7 @@ enum EditorWindowCloser {
 
 /// Remembers the editor window (its title is the project's while a session is up, so the title is not a stable id) and
 /// hears `willClose` while the opening skeleton is showing. `EditorWindowGuard` is not in the hierarchy then.
-private struct EditorWindowAnchor: NSViewRepresentable {
+struct EditorWindowAnchor: NSViewRepresentable {      // internal: EditorPresenter uses it too
     let onClosedWhileIdle: @MainActor () -> Void
 
     func makeNSView(context: Context) -> Marker {
