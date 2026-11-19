@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import CoreText
 import CoreVideo
 import Foundation
 import ImageIO
@@ -54,12 +55,16 @@ public final class EditCompositor: NSObject, AVVideoCompositing, @unchecked Send
             let k = max(0, Int((request.compositionTime.seconds * Double(plan.timing.fps)).rounded()))
             let opts: [CIImageOption: Any] = [.colorSpace: NSNull()]
             var main: CIImage?
-            let mainTrack = plan.main[instruction.mainIndex].trackID
-            if let buffer = request.sourceFrame(byTrackID: mainTrack) {
-                main = CIImage(cvPixelBuffer: buffer, options: opts)
-                self.lastFrames[mainTrack] = main
-            } else {
-                main = self.lastFrames[mainTrack]
+            let mainMeta = plan.main[instruction.mainIndex]
+            // a missing span draws the plate; the previous clip's last frame must not fill the gap
+            if !mainMeta.missing {
+                let mainTrack = mainMeta.trackID
+                if let buffer = request.sourceFrame(byTrackID: mainTrack) {
+                    main = CIImage(cvPixelBuffer: buffer, options: opts)
+                    self.lastFrames[mainTrack] = main
+                } else {
+                    main = self.lastFrames[mainTrack]
+                }
             }
             var overlayVideos: [Int: CIImage] = [:]
             for j in instruction.overlayIndices where j < plan.overlay.count {
@@ -96,10 +101,14 @@ enum EditFrameComposer {
         let rect = CGRect(x: 0, y: 0, width: canvas.w, height: canvas.h)
         var out = CIImage(color: CIColor.black).cropped(to: rect)
 
-        if let (index, _) = plan.timing.clip(atFrame: k), let main, index < plan.timeline.main.count, index < plan.main.count {
-            let clip = plan.timeline.main[index]
-            let oriented = squarePixels(orient(main, plan.main[index].orientation), display: plan.main[index].display)
-            if let drawn = drawMain(oriented, clip: clip, canvas: canvas) { out = drawn.composited(over: out) }
+        if let (index, _) = plan.timing.clip(atFrame: k), index < plan.timeline.main.count, index < plan.main.count {
+            if plan.main[index].missing, let plate = plan.missingPlate {
+                out = plate.composited(over: out)
+            } else if let main {
+                let clip = plan.timeline.main[index]
+                let oriented = squarePixels(orient(main, plan.main[index].orientation), display: plan.main[index].display)
+                if let drawn = drawMain(oriented, clip: clip, canvas: canvas) { out = drawn.composited(over: out) }
+            }
         }
 
         for j in plan.timeline.overlayDrawOrder {
@@ -110,6 +119,8 @@ enum EditFrameComposer {
             if o.hidden { continue }
             var source: CIImage?
             switch plan.overlay[j].source {
+            case .missing:
+                source = nil
             case .video(_, let orientation):
                 source = overlayVideos[j].map { squarePixels(orient($0, orientation), display: plan.overlay[j].display) }
             case .gif(let frames, let delays):
@@ -160,6 +171,41 @@ enum EditFrameComposer {
 
     static func ciImage(_ image: CGImage) -> CIImage {
         CIImage(cgImage: image, options: [.colorSpace: NSNull()])
+    }
+
+    /// A checker the size of the canvas, with the word "missing" in the middle. One per composition, not per frame.
+    static func missingPlate(canvas: EditCanvas) -> CIImage {
+        let w = max(2, canvas.w), h = max(2, canvas.h)
+        let bounds = CGRect(x: 0, y: 0, width: w, height: h)
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return CIImage(color: CIColor.black).cropped(to: bounds)
+        }
+        let cell = 48
+        for y in stride(from: 0, to: h, by: cell) {
+            for x in stride(from: 0, to: w, by: cell) {
+                let light = ((x / cell) + (y / cell)).isMultiple(of: 2)
+                ctx.setFillColor(light ? CGColor(gray: 0.28, alpha: 1) : CGColor(gray: 0.16, alpha: 1))
+                ctx.fill(CGRect(x: x, y: y, width: cell, height: cell))
+            }
+        }
+        let size = max(18, CGFloat(min(w, h)) / 14)
+        let font = CTFontCreateWithName("Helvetica-Bold" as CFString, size, nil)
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0.95, alpha: 1),
+        ]
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "missing", attributes: attributes))
+        let text = CTLineGetBoundsWithOptions(line, [])
+        ctx.textPosition = CGPoint(
+            x: (CGFloat(w) - text.width) / 2 - text.origin.x,
+            y: (CGFloat(h) - text.height) / 2 - text.origin.y)
+        CTLineDraw(line, ctx)
+        guard let image = ctx.makeImage() else { return CIImage(color: CIColor.black).cropped(to: bounds) }
+        return CIImage(cgImage: image, options: [.colorSpace: NSNull()]).cropped(to: bounds)
     }
 
     /// The GIF frame on screen `seconds` after the overlay started: the GIF loops end to start for as long as the overlay lasts.

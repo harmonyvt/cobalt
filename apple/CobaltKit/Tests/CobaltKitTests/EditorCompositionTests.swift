@@ -63,15 +63,47 @@ struct EditorCompositionTests {
         for (got, want) in zip(breaks, [0, 3, 6, 12, 16.5, 22]) { #expect(abs(got - want) < 1e-3) }
         #expect(breaks.count == 6)
         #expect(abs(vc.instructions.last!.timeRange.end.seconds - 26) < 0.1)
+        #expect(playable.issues.isEmpty)
     }
 
-    @Test func aTimelineWithAMissingFileIsRefused() async {
-        do {
-            _ = try await EditComposition.build(PreviewData.editorBeachTimeline(), assets: [:])
-            Issue.record("should have thrown")
-        } catch {
-            #expect(EditError.from(error) == .other("source:\(PreviewEditorIDs.pier)"))
-        }
+    @Test func aTimelineWithNoFilesBuildsAGapPerClip() async throws {
+        let playable = try await EditComposition.build(PreviewData.editorBeachTimeline(), assets: [:])
+        #expect(playable.timing.frames == 780)
+        #expect(playable.composition.duration.seconds > 20)
+        let ids = Set(playable.issues.map(\.clipID))
+        #expect(ids == ["cPier0001", "cSurf0001", "cSunset01", "cFrnd0001", "cDance001"])
+        #expect(playable.issues.allSatisfy { $0.reason == EditPreviewFailure.fileMissing })
+        #expect(playable.issues.filter { $0.lane == .main }.count == 4)
+        #expect(playable.issues.filter { $0.lane == .overlay }.count == 1)
+    }
+
+    @Test func oneBadOverlayIsLeftOutAndTheMainClipStays() async throws {
+        var timeline = EditTimeline.new(
+            canvas: EditCanvas(w: 1080, h: 1920, fps: 30),
+            main: [EditClip(id: "cOne00001", item: PreviewEditorIDs.pier, in: 0, out: 4)])
+        timeline.overlay = [
+            EditOverlay(id: "cOver0001", item: "missing-overlay", at: 0, in: 0, out: 2, frame: EditFrame(x: 0, y: 0, w: 1)),
+        ]
+        let decoded = try await assets(for: [sources[PreviewEditorIDs.pier]!])
+        let playable = try await EditComposition.build(timeline, assets: decoded)
+        #expect(playable.issues.map(\.clipID) == ["cOver0001"])
+        #expect(playable.issues.first?.lane == .overlay)
+        #expect(playable.composition.tracks(withMediaType: .video).count == 1)
+        #expect(abs(playable.composition.duration.seconds - 4) < 0.25)
+    }
+
+    @Test func aMissingMainClipIsAGapAndTheOtherClipStays() async throws {
+        let timeline = EditTimeline(
+            canvas: EditCanvas(w: 1080, h: 1920, fps: 30),
+            main: [
+                EditClip(id: "cOne00001", item: PreviewEditorIDs.pier, in: 0, out: 2),
+                EditClip(id: "cTwo00001", item: "gone", in: 0, out: 2),
+            ])
+        let decoded = try await assets(for: [sources[PreviewEditorIDs.pier]!])
+        let playable = try await EditComposition.build(timeline, assets: decoded)
+        #expect(playable.issues.map(\.clipID) == ["cTwo00001"])
+        #expect(playable.issues.first?.lane == .main)
+        #expect(abs(playable.composition.duration.seconds - 4) < 0.25)
     }
 
     @Test func aFrameIsRenderedFromTheRealCompositor() async throws {
@@ -178,6 +210,19 @@ struct EditFrameComposerTests {
         #expect(Int(fixed.extent.width) == 1920 && Int(fixed.extent.height) == 1080)
         let same = EditFrameComposer.squarePixels(narrow, display: PixelSize(w: 960, h: 1080))
         #expect(same.extent == narrow.extent)
+    }
+
+    @Test func aMissingMainClipDrawsThePlateNotTheSourceFrame() {
+        let clip = EditClip(id: "cOne00001", item: PreviewEditorIDs.pier, in: 0, out: 8)
+        let t = EditTimeline(canvas: EditCanvas(w: 1080, h: 1920, fps: 30), main: [clip])
+        let plan = EditRenderPlan(
+            timeline: t, timing: EditTiming(t),
+            main: [EditRenderPlan.MainClip(display: PixelSize(w: 1280, h: 720), orientation: .up, trackID: 1, missing: true)])
+        let px = pixels(EditFrameComposer.compose(plan: plan, frame: 10, main: red(), overlayVideos: [:]))
+        let corner = at(px, 2, 2)
+        // the checker, not the red source frame and not an empty black canvas
+        #expect(corner.r > 25 && corner.r < 120)
+        #expect(abs(corner.r - corner.g) < 12 && abs(corner.g - corner.b) < 12)
     }
 
     @Test func aGifLoopsForAsLongAsTheOverlayLasts() {
