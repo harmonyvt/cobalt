@@ -219,7 +219,7 @@ test("start: refusals come back as 400/409 with a code and a path", { skip }, as
     let r = await start(tl([mc({ speed: 9 })]));
     assert.deepEqual([r.status, r.body.error.code, r.body.path], [400, "error.edit.range", "main[0].speed"]);
     r = await start({ ...tl([mc()]), version: 2 });
-    assert.deepEqual([r.status, r.body.error.code, r.body.path], [400, "error.edit.bad_request", "version"]);
+    assert.deepEqual([r.status, r.body.error.code, r.body.path], [400, "error.edit.bad_request", "main"]);
     // an input that was never uploaded
     r = await start(tl([mc({ item: "ZZZZZZZZZZZZZZZZ" })]), [...inputs, { n: 2, item: "ZZZZZZZZZZZZZZZZ", kind: "video" }]);
     assert.deepEqual([r.status, r.body.error.code, r.body.path, r.body.items], [409, "error.edit.input_missing", "main[0].item", ["ZZZZZZZZZZZZZZZZ"]]);

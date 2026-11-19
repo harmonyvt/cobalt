@@ -1,0 +1,27 @@
+{
+  "name": "v2-lane-64",
+  "note": "Lane 64 is out of range. The ceiling is the same 64 lanes as overlay tracks (0..63).",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "x",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 64,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      }
+    ]
+  },
+  "parse": {
+    "ok": false,
+    "code": "error.edit.range",
+    "path": "clips[0].lane"
+  }
+}

@@ -19,14 +19,17 @@ import {
     EDIT_QUEUE_MAX,
     canonicalJSON,
     checkSources,
+    clipCount,
+    coverItem,
     parseTimeline,
+    timelineV2ToV1,
     timing,
 } from "../../editor/helper/timeline.js";
 
 // ---- the validator, as this file uses it ------------------------------------------------------------------
 
 export type Crop = { aspect: string; x: number; y: number; w: number; h: number };
-export type MainClip = { id: string; item: string; in: number; out: number; speed: number; crop?: Crop; fit: string; volume: number; muted: boolean; pitch?: number };
+export type MainClip = { id: string; item: string; in: number; out: number; speed: number; crop?: Crop; fit: "fill" | "fit"; volume: number; muted: boolean; pitch?: number };
 export type OverlayClip = {
     id: string;
     item: string;
@@ -39,7 +42,28 @@ export type OverlayClip = {
     muted: boolean;
     pitch?: number;
 };
-export type Timeline = { version: 1; canvas: { w: number; h: number; fps: number }; main: MainClip[]; overlay: OverlayClip[] };
+export type TimelineV1 = { version: 1; canvas: { w: number; h: number; fps: number }; main: MainClip[]; overlay: OverlayClip[]; output?: string };
+export type LaneClip = {
+    id: string;
+    item: string;
+    lane: number;
+    at: number;
+    in: number;
+    out: number;
+    speed?: number;
+    crop?: Crop;
+    fit?: "fill" | "fit";
+    frame?: { x: number; y: number; w: number };
+    opacity?: number;
+    volume?: number;
+    muted?: boolean;
+    pitch?: number;
+    hidden?: boolean;
+    key?: { color: string; similarity: number; blend: number; spill: number };
+    background?: { type: string; color?: string };
+};
+export type TimelineV2 = { version: 2; canvas: { w: number; h: number; fps: number }; clips: LaneClip[]; output?: string };
+export type Timeline = TimelineV1 | TimelineV2;
 export type Validation = { ok: true; timeline?: Timeline } | { ok: false; code: string; path: string; items?: string[] };
 
 // What `checkSources` wants of a library row (31.3).
@@ -129,6 +153,8 @@ const VALIDATION_STATUS: Record<string, number> = {
     "error.edit.unsupported_source": 409,
     "error.edit.past_source_end": 409,
     "error.edit.too_large": 413,
+    // a stored v2 timeline an older client must not be handed as a lossy v1 (section 69)
+    "error.edit.needs_timeline_v2": 409,
 };
 
 function validationReply(v: { code: string; path?: string; items?: string[] }): StudioReply {
@@ -326,9 +352,9 @@ function projectSummary(p: ProjectRow, cover: string | null, render: RenderRow |
     };
 }
 
-const projectShape = (p: ProjectRow, cover: string | null, render: RenderRow | null) => {
+const projectShape = (p: ProjectRow, cover: string | null, render: RenderRow | null, timeline: Timeline) => {
     const { render: r, ...rest } = projectSummary(p, cover, render);
-    return { ...rest, timeline: JSON.parse(p.timeline) as Timeline, render: r };
+    return { ...rest, timeline, render: r };
 };
 
 async function getProjectRow(db: D1Database, id: string): Promise<ProjectRow | null> {
@@ -340,11 +366,35 @@ async function getProjectRow(db: D1Database, id: string): Promise<ProjectRow | n
         .first<ProjectRow>();
 }
 
-async function loadProject(db: D1Database, id: string) {
+type LoadedProject =
+    | { kind: "ok"; project: ReturnType<typeof projectShape> }
+    | { kind: "missing" }
+    | { kind: "unreadable"; id: string; title: string; path: string };
+
+// The timeline a response may carry. Stored JSON is never rewritten here. A client that does not advertise
+// version 2 receives a v1 conversion when one loses nothing, and otherwise no timeline at all (section 69).
+async function timelineForClient(db: D1Database, row: ProjectRow, acceptV2: boolean): Promise<{ ok: true; timeline: Timeline } | { ok: false; path: string }> {
+    const stored = JSON.parse(row.timeline) as Timeline;
+    if (stored.version !== 2 || acceptV2) return { ok: true, timeline: stored };
+    const rows = await mediaRows(db, timelineItems(stored));
+    const kinds = new Map<string, string | null>();
+    for (const item of timelineItems(stored)) {
+        const media = rows.get(item);
+        const kind = media ? sourceKind(media.content_type) : "unsupported";
+        kinds.set(item, kind === "unsupported" ? null : kind);
+    }
+    const conv = timelineV2ToV1(stored as never, kinds) as { ok: true; timeline: Timeline } | { ok: false; path?: string };
+    if (!conv.ok) return { ok: false, path: conv.path || "clips" };
+    return { ok: true, timeline: conv.timeline };
+}
+
+async function loadProject(db: D1Database, id: string, acceptV2 = true): Promise<LoadedProject> {
     const row = await getProjectRow(db, id);
-    if (!row) return null;
+    if (!row) return { kind: "missing" };
+    const shown = await timelineForClient(db, row, acceptV2);
+    if (!shown.ok) return { kind: "unreadable", id: row.id, title: row.title, path: shown.path };
     const [cover, render] = await Promise.all([coverUrl(db, row.cover_item), newestRender(db, id)]);
-    return projectShape(row, cover, render);
+    return { kind: "ok", project: projectShape(row, cover, render, shown.timeline) };
 }
 
 // ---- library rows ---------------------------------------------------------------------------------------------
@@ -362,8 +412,15 @@ type MediaRow = {
     deleted_at: number | null;
 };
 
-// The distinct item ids of a timeline in order: main first, then overlay.
-export const timelineItems = (t: Pick<Timeline, "main" | "overlay">): string[] => [...new Set([...t.main.map((c) => c.item), ...t.overlay.map((c) => c.item)])];
+// The distinct item ids of a timeline. v1: main first, then overlay. v2: clip order.
+export const timelineItems = (t: Timeline): string[] =>
+    t.version === 2 ? [...new Set(t.clips.map((c) => c.item))] : [...new Set([...t.main.map((c) => c.item), ...t.overlay.map((c) => c.item)])];
+
+/** A client that sends this header or `?timeline_version=2` can read a stored version-2 timeline (section 69). */
+export function acceptsTimelineV2(request: Request, searchParams: URLSearchParams): boolean {
+    if (searchParams.get("timeline_version") === "2") return true;
+    return request.headers.get("x-cobalt-timeline-version")?.trim() === "2";
+}
 
 async function mediaRows(db: D1Database, ids: string[]): Promise<Map<string, MediaRow>> {
     const out = new Map<string, MediaRow>();
@@ -424,6 +481,19 @@ const sourceRowsFor = (rows: Map<string, MediaRow>): SourceRow[] =>
 // `h = w x canvas.w / canvas.h x srcH / srcW`, where the library row knows the picture's size. (The render
 // checks it again on the probed size, always.)
 function overlayFits(t: Timeline, rows: Map<string, MediaRow>): { ok: true } | { ok: false; path: string } {
+    if (t.version === 2) {
+        for (let i = 0; i < t.clips.length; i++) {
+            const c = t.clips[i]!;
+            if (!c.frame) continue;
+            const src = rows.get(c.item);
+            if (!src || !src.width || !src.height || src.width <= 0 || src.height <= 0) continue;
+            const sw = c.crop && c.crop.w > 0 ? src.width * c.crop.w : src.width;
+            const sh = c.crop && c.crop.h > 0 ? src.height * c.crop.h : src.height;
+            const h = ((c.frame.w * t.canvas.w) / t.canvas.h) * (sh / sw);
+            if (c.frame.y + h > 1.001) return { ok: false, path: `clips[${i}].frame` };
+        }
+        return { ok: true };
+    }
     for (let i = 0; i < t.overlay.length; i++) {
         const o = t.overlay[i]!;
         const src = rows.get(o.item);
@@ -499,15 +569,15 @@ export async function editsKeyed(
             case "create":
                 return await createProject(d, request);
             case "get":
-                return await getProject(d, params.id ?? "");
+                return await getProject(d, params.id ?? "", acceptsTimelineV2(request, searchParams));
             case "update":
-                return await updateProject(d, request, params.id ?? "");
+                return await updateProject(d, request, params.id ?? "", acceptsTimelineV2(request, searchParams));
             case "rename":
-                return await renameProject(d, request, params.id ?? "");
+                return await renameProject(d, request, params.id ?? "", acceptsTimelineV2(request, searchParams));
             case "delete":
                 return await deleteProject(d, params.id ?? "");
             case "render":
-                return await startRender(d, request, params.id ?? "");
+                return await startRender(d, request, params.id ?? "", acceptsTimelineV2(request, searchParams));
             case "renders":
                 return await listRenders(d, searchParams);
             case "render_get":
@@ -525,6 +595,18 @@ export async function editsKeyed(
 }
 
 const notFound = () => err(404, "error.edit.not_found");
+
+// No timeline: an older client must not be given a v1 document that drops lanes, gaps or a picture on lane 0.
+const needsTimelineV2 = (id: string, title: string, path: string): StudioReply => ({
+    status: 409,
+    body: { status: "error", error: { code: "error.edit.needs_timeline_v2" }, path, project_id: id, title },
+});
+
+function projectReply(loaded: LoadedProject, status: number): StudioReply {
+    if (loaded.kind === "missing") return notFound();
+    if (loaded.kind === "unreadable") return needsTimelineV2(loaded.id, loaded.title, loaded.path);
+    return ok(status, { project: loaded.project });
+}
 
 // GET /edits
 async function listProjects(d: EditsDeps): Promise<StudioReply> {
@@ -581,20 +663,22 @@ async function createProject(d: EditsDeps, request: Request): Promise<StudioRepl
             t.timeline.canvas.h,
             t.timeline.canvas.fps,
             t.frames,
-            t.timeline.main.length + t.timeline.overlay.length,
-            t.timeline.main[0]?.item ?? null,
+            clipCount(t.timeline as never),
+            coverItem(t.timeline as never),
             d.keyId,
             now,
         )
         .run();
-    const project = await loadProject(d.db, id);
-    return project ? ok(201, { project }) : generic();
+    const loaded = await loadProject(d.db, id, true);
+    return loaded.kind === "ok" ? ok(201, { project: loaded.project }) : generic();
 }
 
 // GET /edits/<id>
-async function getProject(d: EditsDeps, id: string): Promise<StudioReply> {
-    const project = await loadProject(d.db, id);
-    if (!project) return notFound();
+async function getProject(d: EditsDeps, id: string, acceptV2: boolean): Promise<StudioReply> {
+    const loaded = await loadProject(d.db, id, acceptV2);
+    if (loaded.kind === "missing") return notFound();
+    if (loaded.kind === "unreadable") return needsTimelineV2(loaded.id, loaded.title, loaded.path);
+    const project = loaded.project;
     const items = timelineItems(project.timeline);
     const rows = await mediaRows(d.db, items);
     const sources: Record<string, ReturnType<typeof sourceShape>> = {};
@@ -602,14 +686,17 @@ async function getProject(d: EditsDeps, id: string): Promise<StudioReply> {
     return ok(200, { project, sources });
 }
 
-// 409 error.edit.conflict carries the current project (31.12)
-async function conflict(d: EditsDeps, id: string): Promise<StudioReply> {
-    const project = await loadProject(d.db, id);
-    return project ? err(409, "error.edit.conflict", { project }) : notFound();
+// 409 error.edit.conflict carries the current project (31.12). A v2 project the client cannot read is
+// error.edit.needs_timeline_v2 instead, so the client has no timeline to save back over it.
+async function conflict(d: EditsDeps, id: string, acceptV2: boolean): Promise<StudioReply> {
+    const loaded = await loadProject(d.db, id, acceptV2);
+    if (loaded.kind === "missing") return notFound();
+    if (loaded.kind === "unreadable") return needsTimelineV2(loaded.id, loaded.title, loaded.path);
+    return err(409, "error.edit.conflict", { project: loaded.project });
 }
 
 // PUT /edits/<id>
-async function updateProject(d: EditsDeps, request: Request, id: string): Promise<StudioReply> {
+async function updateProject(d: EditsDeps, request: Request, id: string, acceptV2: boolean): Promise<StudioReply> {
     const b = await readBody(request, ["timeline", "base_revision", "title"]);
     if (!b.ok) return b.reply;
     if (!isRevision(b.body.base_revision)) return badRequest("base_revision");
@@ -620,7 +707,7 @@ async function updateProject(d: EditsDeps, request: Request, id: string): Promis
     if (!t.ok) return t.reply;
     const cur = await getProjectRow(d.db, id);
     if (!cur) return notFound();
-    if (cur.revision !== b.body.base_revision) return conflict(d, id);
+    if (cur.revision !== b.body.base_revision) return conflict(d, id, acceptV2);
     // the revision check is repeated in the statement: two saves that both read revision n cannot both win
     const res = await d.db
         .prepare(
@@ -635,32 +722,36 @@ async function updateProject(d: EditsDeps, request: Request, id: string): Promis
             t.timeline.canvas.h,
             t.timeline.canvas.fps,
             t.frames,
-            t.timeline.main.length + t.timeline.overlay.length,
-            t.timeline.main[0]?.item ?? null,
+            clipCount(t.timeline as never),
+            coverItem(t.timeline as never),
             d.keyId,
             d.now(),
             id,
             cur.revision,
         )
         .run();
-    if (Number(res.meta?.changes ?? 0) === 0) return conflict(d, id);
-    const project = await loadProject(d.db, id);
-    return project ? ok(200, { project }) : notFound();
+    if (Number(res.meta?.changes ?? 0) === 0) return conflict(d, id, acceptV2);
+    // The body just stored is the timeline this client wrote, so the answer shows that version, not a down-conversion.
+    return projectReply(await loadProject(d.db, id, true), 200);
 }
 
 // PATCH /edits/<id>
-async function renameProject(d: EditsDeps, request: Request, id: string): Promise<StudioReply> {
+async function renameProject(d: EditsDeps, request: Request, id: string, acceptV2: boolean): Promise<StudioReply> {
     const b = await readBody(request, ["title"]);
     if (!b.ok) return b.reply;
     const title = bodyTitle(b.body);
     if (!title.ok || title.title === undefined) return badRequest("title");
+    const cur = await getProjectRow(d.db, id);
+    if (!cur) return notFound();
+    // Refuse before writing when the answer could not carry the timeline. A retry after the app is updated still has the old title.
+    const shown = await timelineForClient(d.db, cur, acceptV2);
+    if (!shown.ok) return needsTimelineV2(cur.id, cur.title, shown.path);
     const res = await d.db
         .prepare("UPDATE edit_projects SET title = ?1, revision = revision + 1, updated_key = ?2, updated_at = ?3 WHERE id = ?4 AND deleted_at IS NULL")
         .bind(title.title, d.keyId, d.now(), id)
         .run();
     if (Number(res.meta?.changes ?? 0) === 0) return notFound();
-    const project = await loadProject(d.db, id);
-    return project ? ok(200, { project }) : notFound();
+    return projectReply(await loadProject(d.db, id, acceptV2), 200);
 }
 
 // DELETE /edits/<id>: a soft delete; its queued renders are cancelled, a running one finishes and files its video.
@@ -681,7 +772,7 @@ async function deleteProject(d: EditsDeps, id: string): Promise<StudioReply> {
 }
 
 // POST /edits/<id>/render
-async function startRender(d: EditsDeps, request: Request, id: string): Promise<StudioReply> {
+async function startRender(d: EditsDeps, request: Request, id: string, acceptV2: boolean): Promise<StudioReply> {
     const b = await readBody(request, ["revision", "notify"]);
     if (!b.ok) return b.reply;
     if (!isRevision(b.body.revision)) return badRequest("revision");
@@ -689,7 +780,7 @@ async function startRender(d: EditsDeps, request: Request, id: string): Promise<
     const notify = b.body.notify === true;
     const row = await getProjectRow(d.db, id);
     if (!row) return notFound();
-    if (row.revision !== b.body.revision) return conflict(d, id);
+    if (row.revision !== b.body.revision) return conflict(d, id, acceptV2);
 
     // the same revision already in the line or running: that render (idempotent)
     const existing = await d.db
@@ -709,7 +800,7 @@ async function startRender(d: EditsDeps, request: Request, id: string): Promise<
     if (hidden.length > 0) return { status: 409, body: { status: "error", error: { code: "error.hidden" }, ids: hidden } };
     let inputBytes = 0;
     for (const r of rows.values()) inputBytes += r.bytes ?? 0;
-    if (inputBytes > EDIT_MAX_INPUT_BYTES) return validationReply({ code: "error.edit.too_large", path: "main" });
+    if (inputBytes > EDIT_MAX_INPUT_BYTES) return validationReply({ code: "error.edit.too_large", path: p.timeline.version === 2 ? "clips" : "main" });
 
     const busy = await d.db
         .prepare("SELECT COUNT(*) AS n FROM edit_renders WHERE status IN ('queued', 'preparing', 'rendering', 'finishing')")

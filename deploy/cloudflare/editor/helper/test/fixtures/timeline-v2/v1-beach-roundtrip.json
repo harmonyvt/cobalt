@@ -1,0 +1,73 @@
+{
+  "name": "v1-beach-roundtrip",
+  "note": "The section 31.2 beach timeline. Main clips become lane 0 at the frames the main track already uses; the overlay becomes lane 1. v2 then v1 is the same canonical JSON.",
+  "input": {
+    "canvas": {
+      "fps": 30,
+      "h": 1920,
+      "w": 1080
+    },
+    "main": [
+      {
+        "crop": {
+          "aspect": "9:16",
+          "h": 1,
+          "w": 0.3164,
+          "x": 0.3,
+          "y": 0
+        },
+        "fit": "fill",
+        "id": "cA1b2C3d4",
+        "in": 2,
+        "item": "Ab3dEf6hIj9kLm2n",
+        "muted": false,
+        "out": 9.5,
+        "speed": 1.5,
+        "volume": 1
+      },
+      {
+        "fit": "fill",
+        "id": "cE5f6G7h8",
+        "in": 0,
+        "item": "Qr5tUv8xYz1bCd4f",
+        "muted": false,
+        "out": 4,
+        "speed": 1,
+        "volume": 0.7
+      }
+    ],
+    "overlay": [
+      {
+        "at": 3,
+        "frame": {
+          "w": 0.35,
+          "x": 0.6,
+          "y": 0.05
+        },
+        "id": "cI9j0K1l2",
+        "in": 0,
+        "item": "Gh7jKl0nOp3rSt6v",
+        "muted": true,
+        "opacity": 1,
+        "out": 3,
+        "volume": 1
+      }
+    ],
+    "version": 1
+  },
+  "to_v2": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":1920,\"w\":1080},\"clips\":[{\"at\":0,\"crop\":{\"aspect\":\"9:16\",\"h\":1,\"w\":0.3164,\"x\":0.3,\"y\":0},\"id\":\"cA1b2C3d4\",\"in\":2,\"item\":\"Ab3dEf6hIj9kLm2n\",\"lane\":0,\"out\":9.5,\"speed\":1.5},{\"at\":5,\"id\":\"cE5f6G7h8\",\"in\":0,\"item\":\"Qr5tUv8xYz1bCd4f\",\"lane\":0,\"out\":4,\"volume\":0.7},{\"at\":3,\"frame\":{\"w\":0.35,\"x\":0.6,\"y\":0.05},\"id\":\"cI9j0K1l2\",\"in\":0,\"item\":\"Gh7jKl0nOp3rSt6v\",\"lane\":1,\"muted\":true,\"out\":3}],\"version\":2}"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":1920,\"w\":1080},\"main\":[{\"crop\":{\"aspect\":\"9:16\",\"h\":1,\"w\":0.3164,\"x\":0.3,\"y\":0},\"fit\":\"fill\",\"id\":\"cA1b2C3d4\",\"in\":2,\"item\":\"Ab3dEf6hIj9kLm2n\",\"muted\":false,\"out\":9.5,\"speed\":1.5,\"volume\":1},{\"fit\":\"fill\",\"id\":\"cE5f6G7h8\",\"in\":0,\"item\":\"Qr5tUv8xYz1bCd4f\",\"muted\":false,\"out\":4,\"speed\":1,\"volume\":0.7}],\"overlay\":[{\"at\":3,\"frame\":{\"w\":0.35,\"x\":0.6,\"y\":0.05},\"id\":\"cI9j0K1l2\",\"in\":0,\"item\":\"Gh7jKl0nOp3rSt6v\",\"muted\":true,\"opacity\":1,\"out\":3,\"volume\":1}],\"version\":1}"
+  },
+  "clip_count": 3,
+  "cover_item": "Ab3dEf6hIj9kLm2n",
+  "timing_frames": 270,
+  "to_v1": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":1920,\"w\":1080},\"main\":[{\"crop\":{\"aspect\":\"9:16\",\"h\":1,\"w\":0.3164,\"x\":0.3,\"y\":0},\"fit\":\"fill\",\"id\":\"cA1b2C3d4\",\"in\":2,\"item\":\"Ab3dEf6hIj9kLm2n\",\"muted\":false,\"out\":9.5,\"speed\":1.5,\"volume\":1},{\"fit\":\"fill\",\"id\":\"cE5f6G7h8\",\"in\":0,\"item\":\"Qr5tUv8xYz1bCd4f\",\"muted\":false,\"out\":4,\"speed\":1,\"volume\":0.7}],\"overlay\":[{\"at\":3,\"frame\":{\"w\":0.35,\"x\":0.6,\"y\":0.05},\"id\":\"cI9j0K1l2\",\"in\":0,\"item\":\"Gh7jKl0nOp3rSt6v\",\"muted\":true,\"opacity\":1,\"out\":3,\"volume\":1}],\"version\":1}"
+  }
+}

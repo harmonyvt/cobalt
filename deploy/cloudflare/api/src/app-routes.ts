@@ -25,7 +25,7 @@ import { SHARE_SET_MAX } from "./share-sets";
 import { deleteAboutObjects } from "./about-store";
 import { chatVideoReady } from "./chat-video";
 import { postFrameReady } from "./post-frame";
-import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS, EDIT_OVERLAY_TRACKS } from "../../editor/helper/timeline.js";
+import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS, EDIT_OVERLAY_TRACKS, EDIT_TIMELINE_VERSION } from "../../editor/helper/timeline.js";
 import { version as apiVersion } from "../../../../api/package.json";
 
 import { background } from "./background";
@@ -409,6 +409,8 @@ export async function capabilities(
                 edit_overlay_tracks: EDIT_OVERLAY_TRACKS,
                 // overlays may carry hidden: true (section 39.7). Absent on an older server: the app keeps hide local.
                 edit_overlay_hidden: true,
+                // equal lanes (section 69). Absent means this server only speaks timeline version 1.
+                edit_timeline_version: EDIT_TIMELINE_VERSION,
                 // role=alt QuickTime cuts the made route stores (section 68)
                 edit_alt_kinds: [...EDIT_ALT_KINDS],
                 // the most ids one POST /library/status takes (section 37.4)

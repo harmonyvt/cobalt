@@ -1,0 +1,35 @@
+{
+  "name": "v2-overlap",
+  "note": "Two clips on lane 2 share frames. Refused. Touching at a frame boundary is a different file.",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "a",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 2,
+        "at": 0,
+        "in": 0,
+        "out": 2
+      },
+      {
+        "id": "b",
+        "item": "BBBBBBBBBBBBBBBB",
+        "lane": 2,
+        "at": 1,
+        "in": 0,
+        "out": 1
+      }
+    ]
+  },
+  "parse": {
+    "ok": false,
+    "code": "error.edit.overlay_overlap",
+    "path": "clips[1]"
+  }
+}

@@ -7536,3 +7536,138 @@ the post is public, the same as a Bria `rmbg` alternate (section 67).
 
 `GET /capabilities` `limits.edit_alt_kinds` is `["depth_cut", "person_cut", "subject_cut"]`, the same list the route
 accepts (`EDIT_ALT_KINDS`). Absent means this server does not take those uploads. No migration, no new secret.
+
+## 69. Timeline v2: equal lanes (addendum, 2026-11-19)
+
+Every clip is the same kind of clip. Version 1 (section 31, layers in section 39) stays accepted forever and still
+renders on the old graph, so a project that has not been saved as v2 keeps its canonical JSON, its render fingerprint
+and its cached render. Nothing is rewritten on read. `edit_projects.timeline` is still JSON TEXT. No migration.
+
+`GET /capabilities` `limits.edit_timeline_version` is `2` (`EDIT_TIMELINE_VERSION`). Absent means this server only
+speaks version 1.
+
+### 69.1 The document
+
+```json
+{ "version": 2,
+  "canvas": { "w": 1080, "h": 1920, "fps": 30 },
+  "clips": [
+    { "id": "cA1b2C3d4", "item": "Ab3dEf6hIj9kLm2n", "lane": 0, "at": 0, "in": 2, "out": 9.5, "speed": 1.5 },
+    { "id": "cI9j0K1l2", "item": "Gh7jKl0nOp3rSt6v", "lane": 1, "at": 3, "in": 0, "out": 3,
+      "frame": { "x": 0.6, "y": 0.05, "w": 0.35 }, "muted": true } ] }
+```
+
+`version`, `canvas` and `clips` are required. `output` (`webm`, `prores`, `webp`) is optional and means what section 66
+says; `mp4` is omitted. Any other key, a wrong type, or `version` other than 1 or 2 is `400 error.edit.bad_request`.
+
+Each clip requires `id`, `item`, `lane`, `at`, `in`, `out`. The optional fields are the union of a v1 main clip and a
+v1 overlay, with the same ranges and the same rounding (31.2, 31.16, 39, 66):
+
+| field | when it is stored | rule |
+|---|---|---|
+| `lane` | always, including `0` | integer `0..63` (`EDIT_OVERLAY_TRACKS`). `0` is the bottom. Out of range is `error.edit.range` |
+| `at` | always, including `0` | seconds on the output, `≥ 0`, rounded to 0.001 |
+| `in`, `out` | always | source seconds, `0 ≤ in < out`, rounded to 0.001. Output length is `(out − in) / speed` and must be `≥ 0.1` |
+| `speed` | when it is not `1` | `0.25..4`, a multiple of `0.05`, as a v1 main clip |
+| `crop` | when present | the v1 main crop |
+| `fit` | when it is `"fit"` | `"fill"` (the default) or `"fit"`. Used only when `frame` is absent |
+| `frame` | when present | the v1 overlay frame. When it is set, it places the clip; `fit` does not |
+| `opacity` | when it is not `1` | `0.1..1`, rounded to 0.01 |
+| `volume` | when it is not `1` | `0..1`, rounded to 0.01 |
+| `muted` | when `true` | omitted means sound plays. A picture has no sound either way |
+| `pitch` | when it is not `0` | semitones, as 31.16 |
+| `key`, `background` | when present | the section 66 greenscreen. `background.type` `"clip"` shows whatever is already under this clip (lower lanes, then black) |
+| `hidden` | when `true` | the renderer skips the clip. It still occupies its lane |
+
+There is no `effects` key. The in-app effects list (`apple/CONTRACT-EDITOR.md` section 14, `EditEffects`) is still
+`key`, `background` and `hidden`, and a v2 clip may carry them on any lane, including lane 0.
+
+`clips` has 1..200 entries (`error.edit.empty` on `clips`, `error.edit.too_many_clips` on `clips`). Ids are unique
+across the list. Lanes are the same 64 as overlay tracks: a clip on lane 0 and a clip on lane 63 use two of them, and
+lane numbers do not have to be packed. Two clips on one lane whose frame ranges overlap are
+`error.edit.overlay_overlap` (path of the later one). Touching at a frame boundary is allowed. A gap is allowed.
+
+The edit length is the latest clip end, including a gap before the first clip and any hole in the middle. Over 600 s
+is `error.edit.too_long` (path `clips`). A frame with no clip on any lane is black.
+
+Pictures and GIFs are allowed on every lane, including lane 0. A picture or GIF still has `in` = 0 and `out` = how
+long it stays up, `0.1..600`. That check needs the file's type, so it runs in `checkSources` (when a render starts),
+the same place a v1 overlay is checked. Parse, which is what a save runs, only requires `(out − in) / speed ≥ 0.1`.
+A video on any lane follows the v1 trim rules, including the 0.05 s slack. There is no `error.edit.not_video` for a
+v2 timeline.
+
+Canonical JSON is the same recipe as 31.2: keys sorted by code point, no whitespace, defaults omitted as the table
+says, numbers in the shortest round-trip form. The array order is the order the client sent. Draw order is not stored:
+bottom lane first, then `at`, then array order (`clipDrawOrder`).
+
+`clip_count` is `clips.length`. `cover_item` is the lane-0 clip with the smallest `at` (array order breaks a tie that
+the overlap rule already forbids), or, when lane 0 is empty, that clip on the lowest lane. Both are written on
+`POST /edits` and `PUT /edits/<id>` from the timeline just saved. Existing rows are not recomputed.
+
+### 69.2 Converting
+
+`timelineV1ToV2` and `timelineV2ToV1` in `editor/helper/timeline.js` are pure. The server does not call the first one
+on a save: a v1 body is stored as v1 until a client saves a v2 body.
+
+v1 → v2: each main clip becomes lane 0. Its `at` is the output time the main track already gave it (`start / fps`,
+rounded to 0.001), so the frames do not move. Overlay track N becomes lane N + 1. Track 63 would be lane 64, which
+does not exist, so that timeline does not convert (`error.edit.range` at `overlay[i].track`). It stays v1 and still
+renders. Tracks 0..62 plus the main track fill lanes 0..63.
+
+v2 → v1, only when nothing would be dropped:
+
+- Lane 0 is one or more videos, back to back from time 0, with no `frame`, no `key`, no `background`, no `hidden`,
+  and opacity 1. Those become `main`, in `at` order. A gap, a late start, a picture, or a GIF on lane 0 refuses.
+- Each higher lane has a `frame`, speed 1 and no crop. Lane N becomes overlay track N − 1.
+- An overlay that would run past the main track refuses (v1's `overlay_past_end`).
+
+Anything else returns `{ ok: false, code: "error.edit.needs_timeline_v2", path }`. The path names the field that does
+not fit (`clips[i].at`, `clips[i].frame`, `clips[i].item`, `clips[i].key`, …). A caller must not invent a partial v1
+document from a refusal.
+
+### 69.3 What an older client is shown
+
+A client advertises v2 by sending the header `X-Cobalt-Timeline-Version: 2` or the query `timeline_version=2` on
+`GET /edits/<id>`, `PATCH /edits/<id>`, `PUT /edits/<id>` and `POST /edits/<id>/render`.
+
+- The stored timeline is what those routes return when the client advertised v2, and what `POST` and `PUT` return
+  after a save (the client just wrote that version).
+- Without the advertisement, a stored v1 timeline is returned as stored. A stored v2 timeline is returned as v1 when
+  `timelineV2ToV1` succeeds, including when the library row says a lane-0 item is a video. A missing row is not treated
+  as a picture.
+- When the conversion refuses, the route answers `409 error.edit.needs_timeline_v2` with `path`, `project_id` and
+  `title`, and no `timeline`. An older client shows that this edit needs a newer app and does not `PUT`. A rename in
+  that case changes nothing, so a retry after the app is updated still has the old title. A conflict
+  (`error.edit.conflict`) is the same: if the current project cannot be shown, the answer is
+  `error.edit.needs_timeline_v2` rather than a project the client could save back.
+
+`GET /edits` has never included the timeline. It is unchanged.
+
+### 69.4 Rendering
+
+`compile` branches on `version`. A v1 timeline takes the graph it took before this section (the golden
+`editor/helper/test/fixtures/argv.json` is that graph). A v2 timeline is a black `color` source for the edit length,
+then every clip that is not `hidden`, bottom lane to top, through the overlay chain: crop, scale into `frame` or
+(with no frame) `fit`/`fill` across the canvas, greenscreen, opacity, speed and pitch, and the sound of every
+non-muted video mixed on top of a silent bed. A picture or a GIF on any lane, including lane 0, is held or looped for
+its output length. A gap, and any time before the first clip, is the black base.
+
+### 69.5 Fixtures
+
+`deploy/cloudflare/editor/helper/test/fixtures/timeline-v2/` is the shared set. `index.json` lists the cases. Each
+other file is one timeline and the parse result both sides must match: `input`, `parse` (`ok` plus `canonical`, or
+`code` and `path`), and when present `to_v2`, `to_v1`, `kinds`, `timing_frames`, `clip_count`, `cover_item`. The
+server test `editor/helper/test/timeline-v2.test.js` runs them. The Swift app loads the same directory for its parity
+tests; it does not copy the JSON.
+
+The cases cover a v1 round trip (beach, and a timeline with crop, pitch, a keyed overlay and `output`), track 63
+refusing to convert, a gap, a picture on lane 0, all 64 lanes, an overlap, lane 64, a key on lane 0, and a higher
+lane that runs past lane 0.
+
+### 69.6 Not in this section
+
+The chat and MCP tool text (`TIMELINE_TYPE`, `edits.addOverlay`) still describe version 1. `parseEditTimeline` already
+accepts a v2 body, so a v2 document sent to `edits.create` or `edits.update` is stored. A read that does not send the
+header is the older-client rule above: a lossless project comes back as v1 (and a later update would store v1), and
+any other v2 project is `error.edit.needs_timeline_v2`. The timeline widget still reads `main` and `overlay`. Teaching
+the tools, the widget and the app model about lanes is a later change. `SAFETY_*` is untouched.

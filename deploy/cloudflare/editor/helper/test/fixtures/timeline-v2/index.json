@@ -1,0 +1,19 @@
+{
+  "path": "deploy/cloudflare/editor/helper/test/fixtures/timeline-v2",
+  "readme": "One JSON file per case. Swift and the server test both load these. index.json is the list; the other files are the cases. See APP-API-CONTRACT.md section 69.",
+  "cases": [
+    "v1-beach-roundtrip",
+    "v1-rich-roundtrip",
+    "v1-track-63",
+    "v2-gap",
+    "v2-picture-lane0",
+    "v2-64-lanes",
+    "v2-overlap",
+    "v2-lane-64",
+    "v2-touch",
+    "v2-cover-fallback",
+    "v2-too-long",
+    "v2-lane0-key",
+    "v2-extends-past"
+  ]
+}

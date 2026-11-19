@@ -1,0 +1,46 @@
+{
+  "name": "v2-lane0-key",
+  "note": "A greenscreen key on lane 0. Effects are key, background and hidden, on any lane. Lane 0 with a key is not a v1 main clip.",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "k",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 0,
+        "at": 0,
+        "in": 0,
+        "out": 2,
+        "key": {
+          "color": "#00B140",
+          "similarity": 0.2,
+          "blend": 0.05,
+          "spill": 0.4
+        },
+        "background": {
+          "type": "clip"
+        }
+      }
+    ]
+  },
+  "kinds": {
+    "AAAAAAAAAAAAAAAA": "video"
+  },
+  "to_v1": {
+    "ok": false,
+    "code": "error.edit.needs_timeline_v2",
+    "path": "clips[0].key"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":1920,\"w\":1080},\"clips\":[{\"at\":0,\"background\":{\"type\":\"clip\"},\"id\":\"k\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"key\":{\"blend\":0.05,\"color\":\"#00B140\",\"similarity\":0.2,\"spill\":0.4},\"lane\":0,\"out\":2}],\"version\":2}"
+  },
+  "clip_count": 1,
+  "cover_item": "AAAAAAAAAAAAAAAA",
+  "timing_frames": 60
+}

@@ -1,0 +1,54 @@
+{
+  "name": "v1-track-63",
+  "note": "Overlay track 63 would be lane 64, past the 64-lane ceiling, so this v1 timeline does not convert. It still parses and renders as v1.",
+  "input": {
+    "version": 1,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "main": [
+      {
+        "id": "m",
+        "item": "AAAAAAAAAAAAAAAA",
+        "in": 0,
+        "out": 4,
+        "speed": 1,
+        "fit": "fill",
+        "volume": 1,
+        "muted": false
+      }
+    ],
+    "overlay": [
+      {
+        "id": "o",
+        "item": "BBBBBBBBBBBBBBBB",
+        "at": 0,
+        "in": 0,
+        "out": 1,
+        "frame": {
+          "x": 0.1,
+          "y": 0.1,
+          "w": 0.3
+        },
+        "opacity": 1,
+        "volume": 1,
+        "muted": true,
+        "track": 63
+      }
+    ]
+  },
+  "to_v2": {
+    "ok": false,
+    "code": "error.edit.range",
+    "path": "overlay[0].track"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":1920,\"w\":1080},\"main\":[{\"fit\":\"fill\",\"id\":\"m\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"muted\":false,\"out\":4,\"speed\":1,\"volume\":1}],\"overlay\":[{\"at\":0,\"frame\":{\"w\":0.3,\"x\":0.1,\"y\":0.1},\"id\":\"o\",\"in\":0,\"item\":\"BBBBBBBBBBBBBBBB\",\"muted\":true,\"opacity\":1,\"out\":1,\"track\":63,\"volume\":1}],\"version\":1}"
+  },
+  "clip_count": 2,
+  "cover_item": "AAAAAAAAAAAAAAAA",
+  "timing_frames": 120
+}

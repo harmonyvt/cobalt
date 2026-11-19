@@ -1,0 +1,50 @@
+{
+  "name": "v2-cover-fallback",
+  "note": "No lane 0 clip. The cover is the earliest clip on the lowest lane (lane 2, at 0).",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 720,
+      "h": 720,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "hi",
+        "item": "BBBBBBBBBBBBBBBB",
+        "lane": 5,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "lo",
+        "item": "CCCCCCCCCCCCCCCC",
+        "lane": 2,
+        "at": 0.5,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "first",
+        "item": "DDDDDDDDDDDDDDDD",
+        "lane": 2,
+        "at": 0,
+        "in": 0,
+        "out": 0.4
+      }
+    ]
+  },
+  "to_v1": {
+    "ok": false,
+    "code": "error.edit.needs_timeline_v2",
+    "path": "clips[0].frame"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":720,\"w\":720},\"clips\":[{\"at\":0,\"id\":\"hi\",\"in\":0,\"item\":\"BBBBBBBBBBBBBBBB\",\"lane\":5,\"out\":1},{\"at\":0.5,\"id\":\"lo\",\"in\":0,\"item\":\"CCCCCCCCCCCCCCCC\",\"lane\":2,\"out\":1},{\"at\":0,\"id\":\"first\",\"in\":0,\"item\":\"DDDDDDDDDDDDDDDD\",\"lane\":2,\"out\":0.4}],\"version\":2}"
+  },
+  "clip_count": 3,
+  "cover_item": "DDDDDDDDDDDDDDDD",
+  "timing_frames": 45
+}

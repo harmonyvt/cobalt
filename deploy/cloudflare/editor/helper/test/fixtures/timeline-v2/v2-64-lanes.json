@@ -1,0 +1,538 @@
+{
+  "name": "v2-64-lanes",
+  "note": "Lanes 0 through 63 at the same time. Different lanes may overlap. 64 clips, under the 200 clip cap.",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 720,
+      "h": 720,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "l0",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 0,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l1",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 1,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l2",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 2,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l3",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 3,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l4",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 4,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l5",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 5,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l6",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 6,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l7",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 7,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l8",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 8,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l9",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 9,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l10",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 10,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l11",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 11,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l12",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 12,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l13",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 13,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l14",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 14,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l15",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 15,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l16",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 16,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l17",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 17,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l18",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 18,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l19",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 19,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l20",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 20,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l21",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 21,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l22",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 22,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l23",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 23,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l24",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 24,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l25",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 25,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l26",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 26,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l27",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 27,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l28",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 28,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l29",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 29,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l30",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 30,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l31",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 31,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l32",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 32,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l33",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 33,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l34",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 34,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l35",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 35,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l36",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 36,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l37",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 37,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l38",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 38,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l39",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 39,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l40",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 40,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l41",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 41,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l42",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 42,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l43",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 43,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l44",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 44,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l45",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 45,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l46",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 46,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l47",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 47,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l48",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 48,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l49",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 49,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l50",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 50,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l51",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 51,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l52",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 52,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l53",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 53,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l54",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 54,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l55",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 55,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l56",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 56,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l57",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 57,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l58",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 58,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l59",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 59,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l60",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 60,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l61",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 61,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l62",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 62,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      },
+      {
+        "id": "l63",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 63,
+        "at": 0,
+        "in": 0,
+        "out": 1
+      }
+    ]
+  },
+  "to_v1": {
+    "ok": false,
+    "code": "error.edit.needs_timeline_v2",
+    "path": "clips[1].frame"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":720,\"w\":720},\"clips\":[{\"at\":0,\"id\":\"l0\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":0,\"out\":1},{\"at\":0,\"id\":\"l1\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":1,\"out\":1},{\"at\":0,\"id\":\"l2\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":2,\"out\":1},{\"at\":0,\"id\":\"l3\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":3,\"out\":1},{\"at\":0,\"id\":\"l4\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":4,\"out\":1},{\"at\":0,\"id\":\"l5\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":5,\"out\":1},{\"at\":0,\"id\":\"l6\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":6,\"out\":1},{\"at\":0,\"id\":\"l7\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":7,\"out\":1},{\"at\":0,\"id\":\"l8\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":8,\"out\":1},{\"at\":0,\"id\":\"l9\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":9,\"out\":1},{\"at\":0,\"id\":\"l10\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":10,\"out\":1},{\"at\":0,\"id\":\"l11\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":11,\"out\":1},{\"at\":0,\"id\":\"l12\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":12,\"out\":1},{\"at\":0,\"id\":\"l13\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":13,\"out\":1},{\"at\":0,\"id\":\"l14\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":14,\"out\":1},{\"at\":0,\"id\":\"l15\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":15,\"out\":1},{\"at\":0,\"id\":\"l16\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":16,\"out\":1},{\"at\":0,\"id\":\"l17\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":17,\"out\":1},{\"at\":0,\"id\":\"l18\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":18,\"out\":1},{\"at\":0,\"id\":\"l19\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":19,\"out\":1},{\"at\":0,\"id\":\"l20\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":20,\"out\":1},{\"at\":0,\"id\":\"l21\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":21,\"out\":1},{\"at\":0,\"id\":\"l22\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":22,\"out\":1},{\"at\":0,\"id\":\"l23\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":23,\"out\":1},{\"at\":0,\"id\":\"l24\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":24,\"out\":1},{\"at\":0,\"id\":\"l25\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":25,\"out\":1},{\"at\":0,\"id\":\"l26\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":26,\"out\":1},{\"at\":0,\"id\":\"l27\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":27,\"out\":1},{\"at\":0,\"id\":\"l28\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":28,\"out\":1},{\"at\":0,\"id\":\"l29\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":29,\"out\":1},{\"at\":0,\"id\":\"l30\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":30,\"out\":1},{\"at\":0,\"id\":\"l31\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":31,\"out\":1},{\"at\":0,\"id\":\"l32\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":32,\"out\":1},{\"at\":0,\"id\":\"l33\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":33,\"out\":1},{\"at\":0,\"id\":\"l34\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":34,\"out\":1},{\"at\":0,\"id\":\"l35\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":35,\"out\":1},{\"at\":0,\"id\":\"l36\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":36,\"out\":1},{\"at\":0,\"id\":\"l37\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":37,\"out\":1},{\"at\":0,\"id\":\"l38\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":38,\"out\":1},{\"at\":0,\"id\":\"l39\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":39,\"out\":1},{\"at\":0,\"id\":\"l40\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":40,\"out\":1},{\"at\":0,\"id\":\"l41\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":41,\"out\":1},{\"at\":0,\"id\":\"l42\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":42,\"out\":1},{\"at\":0,\"id\":\"l43\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":43,\"out\":1},{\"at\":0,\"id\":\"l44\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":44,\"out\":1},{\"at\":0,\"id\":\"l45\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":45,\"out\":1},{\"at\":0,\"id\":\"l46\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":46,\"out\":1},{\"at\":0,\"id\":\"l47\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":47,\"out\":1},{\"at\":0,\"id\":\"l48\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":48,\"out\":1},{\"at\":0,\"id\":\"l49\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":49,\"out\":1},{\"at\":0,\"id\":\"l50\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":50,\"out\":1},{\"at\":0,\"id\":\"l51\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":51,\"out\":1},{\"at\":0,\"id\":\"l52\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":52,\"out\":1},{\"at\":0,\"id\":\"l53\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":53,\"out\":1},{\"at\":0,\"id\":\"l54\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":54,\"out\":1},{\"at\":0,\"id\":\"l55\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":55,\"out\":1},{\"at\":0,\"id\":\"l56\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":56,\"out\":1},{\"at\":0,\"id\":\"l57\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":57,\"out\":1},{\"at\":0,\"id\":\"l58\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":58,\"out\":1},{\"at\":0,\"id\":\"l59\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":59,\"out\":1},{\"at\":0,\"id\":\"l60\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":60,\"out\":1},{\"at\":0,\"id\":\"l61\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":61,\"out\":1},{\"at\":0,\"id\":\"l62\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":62,\"out\":1},{\"at\":0,\"id\":\"l63\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":63,\"out\":1}],\"version\":2}"
+  },
+  "clip_count": 64,
+  "cover_item": "AAAAAAAAAAAAAAAA",
+  "timing_frames": 30
+}

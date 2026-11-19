@@ -13,7 +13,7 @@
 // the whole file; timestamps are relative to that seek, so the filter times are `in - seek`.
 
 import { chromaChain, colorUnderlay } from "./chroma.js";
-import { EDIT_SAMPLE_RATE, mainPlacement, overlayDrawOrder, overlayPlacement, timing } from "./timeline.js";
+import { EDIT_SAMPLE_RATE, clipDrawOrder, cropToPixels, mainPlacement, overlayDrawOrder, overlayPlacement, timing } from "./timeline.js";
 import { orientationFilters } from "./probe.js";
 
 /** Seconds of decoding before `in` (a held source frame older than this is not found; a keyframe interval is usually 1-2 s). */
@@ -115,6 +115,7 @@ const toStereo = (channels) =>
  * @returns {Compiled | {ok: false, code: string, path: string}}
  */
 export function compile(t, sources, opts) {
+    if (t.version === 2) return compileV2(t, sources, opts);
     const src = (/** @type {string} */ item) => (sources instanceof Map ? sources.get(item) : sources[item]);
     const F = t.canvas.fps;
     const { w: W, h: H } = t.canvas;
@@ -255,4 +256,170 @@ export function compile(t, sources, opts) {
         opts.output,
     ];
     return { args, audioLabel, filter, inputArgs, ok: true, outputArgs, timing: tm, videoLabel };
+}
+
+/**
+ * Version 2: a black base the length of the edit, then every clip as a layer, bottom lane to top (section 69).
+ * The v1 graph above is not used, so a stored v1 timeline still compiles to the same argv.
+ * @param {import("./timeline.js").TimelineV2} t
+ * @param {Record<string, import("./probe.js").Source> | Map<string, import("./probe.js").Source>} sources
+ * @param {{output: string, progress?: boolean, loglevel?: string, format?: "mp4" | "webm" | "prores" | "webp"}} opts
+ * @returns {Compiled | {ok: false, code: string, path: string}}
+ */
+function compileV2(t, sources, opts) {
+    const src = (/** @type {string} */ item) => (sources instanceof Map ? sources.get(item) : sources[item]);
+    const F = t.canvas.fps;
+    const { w: W, h: H } = t.canvas;
+    const tm = timing(t);
+    const N = tm.frames;
+    const spf = EDIT_SAMPLE_RATE / F;
+    /** @type {string[]} */
+    const inputArgs = [];
+    /** @type {string[]} */
+    const chains = [];
+    let inputs = 0;
+    // The base is the gap: any output frame no clip covers stays black, and the edit is exactly N frames.
+    chains.push(`color=c=black:s=${W}x${H}:r=${F}:d=${dec(N / F + 1)},format=yuv420p,fps=${F}:round=up:start_time=0,trim=end_frame=${N},setpts=PTS-STARTPTS[base]`);
+    chains.push(`anullsrc=r=48000:cl=stereo,atrim=end_sample=${N * spf},asetpts=PTS-STARTPTS[abase]`);
+    let vLast = "[base]";
+    /** @type {string[]} */
+    const mixIn = ["[abase]"];
+
+    for (const i of clipDrawOrder(t)) {
+        const c = t.clips[i];
+        const cm = tm.clips[i];
+        if (c.hidden) continue;
+        const s = src(c.item);
+        if (!s) return { code: "error.edit.input_missing", ok: false, path: `clips[${i}].item` };
+        const n = inputs++;
+        const len = cm.frames / F;
+        const inp = inputFor(s, F, { in: c.in, out: c.out, seconds: len });
+        inputArgs.push(...inp.args);
+        const inT = c.in - inp.seek, outT = c.out - inp.seek;
+        const fit = c.fit === "fit" ? "fit" : "fill";
+        /** @type {{x: number, y: number, w: number, h: number} | null} */
+        let box = null;
+        /** @type {ReturnType<typeof mainPlacement>} */
+        let pl = null;
+        if (c.frame) {
+            const display = croppedDisplay(s, c.crop);
+            if (!display) return { code: "error.edit.range", ok: false, path: `clips[${i}].crop` };
+            box = overlayPlacement(display, c.frame, t.canvas);
+        } else {
+            pl = mainPlacement({ h: s.height, w: s.width }, c.crop ?? null, fit, t.canvas);
+            if (!pl) return { code: "error.edit.range", ok: false, path: `clips[${i}].crop` };
+        }
+        const place = box
+            ? `scale=${box.w}:${box.h}:flags=bicubic:out_color_matrix=bt709:out_range=tv`
+            : `scale=${pl.scaled.w}:${pl.scaled.h}:flags=bicubic:out_color_matrix=bt709:out_range=tv`;
+        const v = [...decodeSteps(s)];
+        const cropFilter = () => {
+            if (!c.crop) return;
+            const px = cropToPixels(c.crop, s.width, s.height);
+            if (px) v.push(`crop=${px.w}:${px.h}:${px.x}:${px.y}`);
+        };
+        const canvasFit = () => {
+            if (!pl) return;
+            const cr = pl.crop;
+            if (c.crop || cr.w !== s.width || cr.h !== s.height) v.push(`crop=${cr.w}:${cr.h}:${cr.x}:${cr.y}`);
+            v.push(place, "setsar=1");
+            if (fit === "fit") {
+                if (pl.scaled.w !== W || pl.scaled.h !== H) v.push(`pad=${W}:${H}:${pl.place.x}:${pl.place.y}:black`);
+            } else if (pl.scaled.w !== W || pl.scaled.h !== H) v.push(`crop=${W}:${H}:${-pl.place.x}:${-pl.place.y}`);
+        };
+        if (s.kind === "gif") {
+            if (c.frame) cropFilter();
+            if (c.frame) v.push(place);
+            else canvasFit();
+            v.push("format=yuva420p", "loop=loop=-1:size=32767", `trim=duration=${dec(len, 6)}`, "setpts=PTS-STARTPTS");
+        } else if (s.kind === "video") {
+            v.push(`trim=end=${dec(outT, 6)}`, `setpts=(PTS-${dec(inT, 6)}/TB)/${dec(cm.speed, 9)}`);
+        }
+        v.push(`fps=${F}:round=up:start_time=0`, `tpad=stop_mode=clone:stop_duration=${dec(len + 1)}`, `trim=end_frame=${cm.frames}`);
+        if (s.kind !== "gif") {
+            if (c.frame) {
+                cropFilter();
+                v.push(place);
+            } else canvasFit();
+            v.push("format=yuva420p");
+        }
+        const opacity = c.opacity ?? 1;
+        if (opacity < 1) v.push(`colorchannelmixer=aa=${dec(opacity, 2)}`);
+        v.push(`setpts=PTS-STARTPTS+${cm.start}/(${F}*TB)`);
+        chains.push(`[${n}:v:0]${v.join(",")}[ov${i}]`);
+        let ovLabel = `[ov${i}]`;
+        const bw = box ? box.w : W;
+        const bh = box ? box.h : H;
+        if (c.key) {
+            chains.push(`[ov${i}]${chromaChain(c.key, "yuva420p")}[k${i}]`);
+            ovLabel = `[k${i}]`;
+            if (c.background?.type === "color") {
+                chains.push(`${colorUnderlay(c.background.color, bw, bh, F, len)},format=yuv420p[c${i}]`);
+                chains.push(`[c${i}]${ovLabel}overlay=0:0:eof_action=pass:format=auto[p${i}]`);
+                ovLabel = `[p${i}]`;
+            }
+        }
+        const ox = box ? box.x : 0;
+        const oy = box ? box.y : 0;
+        chains.push(`${vLast}${ovLabel}overlay=${ox}:${oy}:eof_action=pass:format=auto[vo${i}]`);
+        vLast = `[vo${i}]`;
+        if (s.kind === "video" && s.hasAudio && c.muted !== true) {
+            const vol = c.volume ?? 1;
+            const a = [audioTrim(inT, outT), ...speedPitchSteps(cm.speed, c.pitch), `volume=${dec(vol, 2)}`, ...toStereo(s.channels), `atrim=end_sample=${cm.samples}`, "asetpts=PTS-STARTPTS"];
+            a.push(`adelay=${cm.start * spf}S:all=1`, "apad", `atrim=end_sample=${N * spf}`);
+            chains.push(`[${n}:a:0]${a.join(",")}[oa${i}]`);
+            mixIn.push(`[oa${i}]`);
+        }
+    }
+    if (mixIn.length > 1) chains.push(`${mixIn.join("")}amix=inputs=${mixIn.length}:duration=first:dropout_transition=0:normalize=0[aout]`);
+    const format = opts.format ?? t.output ?? "mp4";
+    let videoLabel = vLast;
+    if (format === "webm" || format === "webp") {
+        chains.push(`${vLast}format=yuva420p[vout]`);
+        videoLabel = "[vout]";
+    } else if (format === "prores") {
+        chains.push(`${vLast}format=yuva444p10le[vout]`);
+        videoLabel = "[vout]";
+    }
+    const audioLabel = mixIn.length > 1 ? "[aout]" : "[abase]";
+    const filter = chains.join(";");
+    const M = maxrateFor(t.canvas);
+    const progressArgs = opts.progress === false ? [] : ["-progress", "pipe:1", "-nostats"];
+    const outputArgs = format === "webm"
+        ? ["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-crf", "32", "-b:v", "0", "-c:a", "libopus", "-b:a", "128k", "-ar", "48000", "-ac", "2", ...progressArgs]
+        : format === "prores"
+          ? ["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", ...progressArgs]
+          : format === "webp"
+            ? ["-c:v", "libwebp_anim", "-pix_fmt", "yuva420p", "-loop", "0", "-an", ...progressArgs]
+            : [
+                "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast", "-crf", "20",
+                "-maxrate", `${M}M`, "-bufsize", `${2 * M}M`, "-g", String(2 * F), "-pix_fmt", "yuv420p",
+                "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
+                "-fps_mode", "cfr", "-r", String(F),
+                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+                "-movflags", "+faststart",
+                ...progressArgs,
+            ];
+    const args = [
+        "-nostdin", "-hide_banner", "-loglevel", opts.loglevel ?? "error", "-y",
+        ...inputArgs,
+        "-filter_complex", filter,
+        "-map", videoLabel,
+        ...(format === "webp" ? [] : ["-map", audioLabel]),
+        ...outputArgs,
+        opts.output,
+    ];
+    return { args, audioLabel, filter, inputArgs, ok: true, outputArgs, timing: tm, videoLabel };
+}
+
+/**
+ * The display size a framed clip is scaled from: the cropped pixels when `crop` is set, else the source.
+ * Null when the crop is under 64 px.
+ * @param {import("./probe.js").Source} s @param {import("./timeline.js").EditCrop | undefined} crop
+ * @returns {{w: number, h: number} | null}
+ */
+function croppedDisplay(s, crop) {
+    if (!crop) return { h: s.height, w: s.width };
+    const px = cropToPixels(crop, s.width, s.height);
+    return px ? { h: px.h, w: px.w } : null;
 }
