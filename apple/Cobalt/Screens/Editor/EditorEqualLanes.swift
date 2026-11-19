@@ -168,7 +168,8 @@ struct EditorEqualLanes: View {
 
     private var scrollArea: some View {
         ScrollView(.horizontal, showsIndicators: true) {
-            board
+            // pinned to the top: a horizontal scroll view centres shorter content, which slid the lanes below their headers
+            board.frame(maxHeight: .infinity, alignment: .topLeading)
         }
         .scrollPosition($scroll)
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in scrollX.x = x }

@@ -23,6 +23,7 @@ struct LaneDrag: Equatable {
     var moved: Bool
 }
 
+@MainActor
 enum LaneClipCommands {
     static func laneCount(_ session: EditSession) -> Int {
         max(1, (session.timeline.clips.map(\.lane).max() ?? 0) + 1)

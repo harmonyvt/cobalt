@@ -95,7 +95,7 @@ struct EditorLaneMenuTests {
     @Test func aFreeVideoOffersEveryAction() {
         let items = EditLaneMenu.items(input())
         #expect(items.map(\.action) == LaneMenuAction.allCases)
-        #expect(items.allSatisfy(\.enabled))
+        #expect(items.allSatisfy { $0.enabled })
         #expect(items.allSatisfy { $0.reason == nil })
     }
 

@@ -41,7 +41,6 @@ struct EditorPhoneEqualLanes: View {
         .background(EditorColor.lane)
         .overlay(alignment: .top) { Rectangle().fill(EditorColor.line).frame(height: 1) }
         .overlay(alignment: .bottom) { Rectangle().fill(EditorColor.line).frame(height: 1) }
-        .clipped()
         .haptic(.impact(weight: .medium), trigger: liftTick)
         .haptic(.selection, trigger: laneTick)
         .haptic(.impact(weight: .light), trigger: edgeTick)
@@ -62,6 +61,8 @@ struct EditorPhoneEqualLanes: View {
                 .accessibilityHidden(true)
             laneContent(width: width)
                 .offset(y: -scroll)
+                .frame(width: width, height: viewport, alignment: .topLeading)
+                .clipped()   // only the lanes: the hold menu may open above the board, it is taller than one or two lanes
             playhead(width: width)
             if let lift, lift.showMenu, !lift.moved, let clip = clip(lift.id) { menu(lift, clip, width: width) }
             if showsGap { gapChip(width: width) }
@@ -187,7 +188,9 @@ struct EditorPhoneEqualLanes: View {
         .frame(width: 188, height: height)
         .background(.black.opacity(0.92), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(CobaltColor.border, lineWidth: 1) }
-        .offset(x: min(max(6, clipX), width - 196), y: max(2, clipY - height - 4))
+        .environment(\.colorScheme, .dark)   // the menu is always black, so its text takes the dark palette (black in light mode before)
+        // above the held clip, over the transport when the board is short, never over the clip itself
+        .offset(x: min(max(6, clipX), width - 196), y: min(viewport - height, clipY - height - 4))
         .zIndex(30)
     }
 
