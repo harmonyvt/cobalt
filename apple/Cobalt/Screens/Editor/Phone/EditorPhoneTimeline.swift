@@ -47,6 +47,15 @@ struct EditorPhoneTimeline: View {
     private var height: CGFloat { mainY + Self.mainHeight + Self.bottomSpace }
 
     var body: some View {
+        if session.timeline.isV2 {
+            EditorPhoneEqualLanes(session: session, scale: $scale, openAdd: openAdd)
+        } else {
+            legacyBody
+        }
+    }
+
+    /// Version 1: the main lane under the overlay lanes, a long press reorders the main clips.
+    private var legacyBody: some View {
         GeometryReader { geo in
             lanes(width: geo.size.width)
         }

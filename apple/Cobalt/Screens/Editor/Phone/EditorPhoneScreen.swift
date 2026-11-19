@@ -65,6 +65,16 @@ struct EditorPhoneScreen: View {
                 .environment(host)
                 .cobaltRoot(model: model)
         }
+        .onChange(of: session.effectsFor) { _, id in
+            if id != nil { sheet = .effects }
+        }
+        .sheet(item: cutoutRequest) { request in
+            if let source = LaneClipCommands.picture(session, request.id) {
+                EditorCutoutSheet(session: session, source: source, replacing: request.id) {
+                    session.cutoutFor = nil
+                }
+            }
+        }
         .onChange(of: session.renderConfirmRequested, initial: true) { _, requested in
             guard requested else { return }
             session.renderConfirmRequested = false
@@ -74,6 +84,12 @@ struct EditorPhoneScreen: View {
         .modifier(PostToolAutoOpen(model: model, open: openPost))
         .motion(Motion.card, value: session.saveState == .saved)
         .accessibilityElement(children: .contain)
+    }
+
+    private var cutoutRequest: Binding<CutoutRequest?> {
+        Binding(
+            get: { session.cutoutFor.map { CutoutRequest(id: $0) } },
+            set: { session.cutoutFor = $0?.id })
     }
 
     /// "open in editor for more" made this project: the post tool comes up on the main clip.

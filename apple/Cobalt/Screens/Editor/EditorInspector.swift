@@ -12,8 +12,8 @@ struct EditorInspector: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if let id = session.effectsFor, let overlay = session.timeline.overlay.first(where: { $0.id == id }) {
-                    effects(overlay)
+                if let id = session.effectsFor, let overlay = session.effectOverlay(for: id) {
+                    effects(overlay, back: effectsBack(id))
                 } else {
                     switch session.selection {
                     case .main:
@@ -50,12 +50,19 @@ struct EditorInspector: View {
         }
     }
 
-    private func effects(_ overlay: EditOverlay) -> some View {
+    private func effectsBack(_ id: String) -> String {
+        if session.timeline.isV2, session.timeline.clips.first(where: { $0.id == id })?.lane == 0 {
+            return Copy.Editor.effectsBackClip
+        }
+        return Copy.Editor.effectsBack
+    }
+
+    private func effects(_ overlay: EditOverlay, back: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Button {
                 session.closeEffects()
             } label: {
-                Text(Copy.Editor.effectsBack)
+                Text(back)
                     .font(Font.cobalt(12.5, .semibold, relativeTo: .subheadline))
                     .foregroundStyle(CobaltColor.text)
             }

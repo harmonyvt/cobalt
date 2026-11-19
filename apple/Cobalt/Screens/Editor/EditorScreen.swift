@@ -39,6 +39,19 @@ struct EditorScreen: View {
         }
         .motion(Motion.card, value: session.saveState == .saved)
         .accessibilityElement(children: .contain)
+        .sheet(item: cutoutRequest) { request in
+            if let source = LaneClipCommands.picture(session, request.id) {
+                EditorCutoutSheet(session: session, source: source, replacing: request.id) {
+                    session.cutoutFor = nil
+                }
+            }
+        }
+    }
+
+    private var cutoutRequest: Binding<CutoutRequest?> {
+        Binding(
+            get: { session.cutoutFor.map { CutoutRequest(id: $0) } },
+            set: { session.cutoutFor = $0?.id })
     }
 
     private var middle: some View {

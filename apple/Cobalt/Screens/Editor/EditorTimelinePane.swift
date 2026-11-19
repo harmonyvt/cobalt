@@ -55,6 +55,15 @@ struct EditorTimelinePane: View {
     }
 
     var body: some View {
+        if session.timeline.isV2 {
+            EditorEqualLanes(session: session, scale: $scale, height: height)
+        } else {
+            legacyBody
+        }
+    }
+
+    /// Version 1 (a project that could not become lanes): the main row, the overlay rows and the audio row.
+    private var legacyBody: some View {
         HStack(spacing: 0) {
             headers
                 .frame(width: Self.headerWidth)
