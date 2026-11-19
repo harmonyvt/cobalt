@@ -17,7 +17,11 @@ import Observation
 @MainActor @Observable
 public final class EditSession {
     public enum Tool: String, CaseIterable, Sendable { case select, blade, crop }
-    public enum SaveState: Equatable, Sendable { case saved, saving, unsaved, failed(EditError), conflict(EditProject) }
+    public enum SaveState: Equatable, Sendable {
+        case saved, saving, unsaved, failed(EditError), conflict(EditProject)
+        /// The project on the server is a version 2 timeline this save cannot write back. Shown as "update needed".
+        case needsUpdate
+    }
     public enum Selection: Equatable, Sendable { case none, main(String), overlay(String) }     // clip ids
 
     // MARK: state
@@ -31,8 +35,10 @@ public final class EditSession {
     public private(set) var problems: [EditProblem]
     /// Layers the owner locked on this device. Never written to the project.
     public private(set) var lockedTracks: Set<Int> = []
-    /// The overlay whose effects menu replaces the Mac inspector. The phone uses its own sheet.
+    /// The clip whose effects menu replaces the Mac inspector. The phone uses its own sheet. Any lane, including lane 0.
     public var effectsFor: String?
+    /// The picture whose cut-out sheet is up. Any lane. The screens present it and clear it on close.
+    public var cutoutFor: String?
     /// Greenscreen the canvas is previewing, before Apply. Not saved.
     public var effectDraft: EditEffectDraft?
     /// "fx" on a clip whose file a cut or Bria replaced. A greenscreen shows from its `key` alone.
@@ -67,6 +73,12 @@ public final class EditSession {
     public private(set) var previewIssues: [String: String] = [:]
     public private(set) var canUndo = false
     public private(set) var canRedo = false
+    /// Why the last lane edit was refused (`all 64 lanes are in use`, a locked lane, an older server). Nil after a success.
+    public private(set) var laneRefusal: String?
+    /// Bumps on every refusal, including the same line twice, so the timeline can toast it.
+    public private(set) var laneRefusalNonce = 0
+    /// Clip ids the preview skipped because their file could not be read. The last good frame stays up; the chip names these.
+    public private(set) var previewSkips: [String] = []
 
     // MARK: wiring
 
@@ -134,7 +146,7 @@ public final class EditSession {
         cache: EditSourceCache, onProject: @escaping @MainActor (EditProject) -> Void,
         onRender: @escaping @MainActor (EditRender) -> Void
     ) {
-        let rounded = EditJSON.rounded(timeline)
+        let rounded = EditLanes.materialize(EditJSON.rounded(timeline))
         self.project = project
         self.timeline = rounded
         self.sources = sources
@@ -358,14 +370,65 @@ public final class EditSession {
         return timing.sourceTime(clip: index, offset: offset, in: timeline)
     }
 
-    /// Splits the main clip under the playhead; both halves keep every setting.
+    /// Splits the clip under the playhead. A selected clip that contains the playhead wins; otherwise the lane 0 clip.
     public func splitAtPlayhead() {
+        let selected: String? = switch selection {
+        case .main(let id), .overlay(let id): id
+        case .none: nil
+        }
+        if let selected, contains(selected, frame: playhead) {
+            split(clip: selected, atFrame: playhead)
+            return
+        }
+        if timeline.version >= 2,
+           let row = timing.laneClips.first(where: { row in
+               timeline.clips.first(where: { $0.id == row.id })?.lane == 0 && playhead >= row.start && playhead < row.start + row.frames
+           }) {
+            split(clip: row.id, atFrame: playhead)
+            return
+        }
         guard let (index, _) = timing.clip(atFrame: playhead) else { return }
         split(clip: timeline.main[index].id, atFrame: playhead)
     }
 
+    /// The clip the playhead is inside. `preferring` is used when that clip contains the playhead.
+    func clipUnderPlayhead(preferring selection: Selection) -> String? {
+        let preferred: String? = switch selection {
+        case .main(let id), .overlay(let id): id
+        case .none: nil
+        }
+        if let preferred, contains(preferred, frame: playhead) { return preferred }
+        if timeline.version >= 2 {
+            return EditLanes.drawOrder(timeline).reversed().compactMap { index -> String? in
+                let clip = timeline.clips[index]
+                guard !clip.hidden, contains(clip.id, frame: playhead) else { return nil }
+                return clip.id
+            }.first
+        }
+        return nil
+    }
+
+    private func contains(_ id: String, frame: Int) -> Bool {
+        if timeline.version >= 2, let row = timing.laneClips.first(where: { $0.id == id }) {
+            return frame >= row.start && frame < row.start + row.frames
+        }
+        if let index = timeline.main.firstIndex(where: { $0.id == id }), index < timing.main.count {
+            let row = timing.main[index]
+            return frame >= row.start && frame < row.start + row.frames
+        }
+        if let index = timeline.overlay.firstIndex(where: { $0.id == id }), index < timing.overlay.count {
+            let row = timing.overlay[index]
+            return frame >= row.start && frame < row.start + row.frames
+        }
+        return false
+    }
+
     /// Splits at output frame `k`. Nothing happens when `k` is on the clip's edge or a half would be under 0.1 s.
     public func split(clip id: String, atFrame k: Int) {
+        if timeline.version >= 2, timeline.clips.contains(where: { $0.id == id }) {
+            applyLane(EditLanes.split(timeline, id: id, atFrame: k, newID: EditID.mint()))
+            return
+        }
         guard let index = timeline.main.firstIndex(where: { $0.id == id }), index < timing.main.count else { return }
         let slot = timing.main[index]
         let offset = k - slot.start
@@ -387,8 +450,18 @@ public final class EditSession {
     public func remove(_ selection: Selection) {
         switch selection {
         case .none: return
-        case .main(let id): commit(key: nil) { $0.main.removeAll { $0.id == id } }
+        case .main(let id):
+            if timeline.version >= 2 {
+                applyLane(EditLanes.delete(timeline, id: id, closeLane0: true, locked: lockedLanes), clampForV1: true)
+            } else {
+                commit(key: nil) { $0.main.removeAll { $0.id == id } }
+            }
         case .overlay(let id):
+            if timeline.version >= 2 {
+                applyLane(EditLanes.delete(timeline, id: id, closeLane0: true, locked: lockedLanes), clampForV1: true)
+                effectMarks[id] = nil
+                return
+            }
             if let track = timeline.overlay.first(where: { $0.id == id })?.track, lockedTracks.contains(track) { return }
             commit(key: nil) { $0.overlay.removeAll { $0.id == id } }
             effectMarks[id] = nil
@@ -446,8 +519,35 @@ public final class EditSession {
         max(1, ctx.capabilities.limits.editMaxClips)
     }
 
-    /// The server stores `hidden: true`. When it does not, hide stays on the device and the save leaves the key out.
+    /// The server stores `hidden: true`. When it does not, hide stays on the device and a version 1 save leaves the key out.
     public var sendsHidden: Bool { ctx.capabilities.limits.editOverlayHidden }
+
+    /// This server stores a version 2 timeline (`limits.edit_timeline_version` >= 2). Otherwise a save is still version 1,
+    /// and a lane move version 1 cannot represent is refused.
+    public var savesTimelineV2: Bool { ctx.capabilities.limits.editTimelineVersion >= 2 }
+
+    /// Overlay-track locks, as lane numbers. Lane 0 is the main row and is not one of those locks.
+    var lockedLanes: Set<Int> { Set(lockedTracks.map { $0 + 1 }) }
+
+    func sourceKinds() -> [String: String?] {
+        var kinds: [String: String?] = [:]
+        for (id, source) in sources {
+            switch source.kind {
+            case .video: kinds[id] = "video"
+            case .gif: kinds[id] = "gif"
+            case .photo: kinds[id] = "photo"
+            case .unsupported: break
+            }
+        }
+        return kinds
+    }
+
+    /// A version 1 server can store `next` only when the conversion drops nothing.
+    func allowsSave(_ next: EditTimeline) -> Bool {
+        if savesTimelineV2 || next.version < 2 { return true }
+        if case .ok = EditLanes.v2ToV1(next, kinds: sourceKinds()) { return true }
+        return false
+    }
 
     /// A video overlay hiding the whole picture at the playhead: full frame, opaque, no greenscreen. Nil when the preview
     /// already marked that clip broken, or while its effects are open.
@@ -469,6 +569,22 @@ public final class EditSession {
 
     public func showsEffect(_ overlay: EditOverlay) -> Bool {
         overlay.hasKey || effectMarks[overlay.id] != nil
+    }
+
+    /// An "fx" mark for a clip on any lane. A greenscreen shows from its key; a cut that replaced the file is marked here.
+    public func showsEffect(id: String) -> Bool {
+        if effectMarks[id] != nil { return true }
+        if timeline.version >= 2, let clip = timeline.clips.first(where: { $0.id == id }) {
+            return clip.key?.normalized() != nil
+        }
+        return timeline.overlay.first { $0.id == id }?.hasKey ?? false
+    }
+
+    /// The effects panel's shape for a clip on any lane. Lane 0 is not in `overlay`, so it is built from the lane clip.
+    public func effectOverlay(for id: String) -> EditOverlay? {
+        if let overlay = timeline.overlay.first(where: { $0.id == id }) { return overlay }
+        guard timeline.version >= 2, let clip = timeline.clips.first(where: { $0.id == id }) else { return nil }
+        return EditLanes.asOverlay(clip)
     }
 
     public func isTrackLocked(_ track: Int) -> Bool { lockedTracks.contains(track) }
@@ -493,7 +609,7 @@ public final class EditSession {
     }
 
     public func openEffects(_ id: String) {
-        guard timeline.overlay.contains(where: { $0.id == id }) else { return }
+        guard clipExists(id) else { return }
         effectsFor = id
     }
 
@@ -515,6 +631,12 @@ public final class EditSession {
     public func applyGreenscreen(id: String, key: EditChromaKey, background: EditOverlayBackground?, output: EditKeyedOutput?) {
         guard let key = key.normalized() else { return }
         commit(key: nil) { t in
+            if t.version >= 2, let i = t.clips.firstIndex(where: { $0.id == id }) {
+                t.clips[i].key = key
+                t.clips[i].background = background
+                t.output = output?.stored
+                return
+            }
             guard let i = t.overlay.firstIndex(where: { $0.id == id }) else { return }
             t.overlay[i].key = key
             t.overlay[i].background = background
@@ -531,31 +653,29 @@ public final class EditSession {
         if kind == .depthCut {
             return "depth cutout needs depth anything v2 small (\(EditDepthModel.approximateMegabytes) mb). it isn't in this build. person and subject work on this device."
         }
-        guard let overlay = timeline.overlay.first(where: { $0.id == id }),
-              let source = sources[overlay.item], source.kind == .video else { return "that isn't a video" }
+        guard let target = effectTarget(id),
+              let source = sources[target.item], source.kind == .video else { return "that isn't a video" }
         effectStatus = "cutting out…"
         do {
             let asset = try await cache.asset(for: source)
             guard case .video(let av, _, _) = asset else { effectStatus = nil; return "that isn't a video" }
             let movie = try await EditMaskExport.movie(
-                source: av.url, kind: kind, start: overlay.`in`, end: overlay.out, soften: soften)
+                source: av.url, kind: kind, start: target.inPoint, end: target.out, soften: soften)
             guard let client = ctx.client as? any CobaltClient else { effectStatus = nil; return "you're offline · try again" }
             let spec = try JSONSerialization.data(withJSONObject: ["kind": kind.rawValue])
             let uploaded = try await client.uploadMade(
-                item: overlay.item, role: .alt, file: movie, contentType: "video/quicktime",
+                item: target.item, role: .alt, file: movie, contentType: "video/quicktime",
                 name: "\(kind.rawValue).mov", spec: spec, progress: { _ in })
             await cache.register(local: movie, for: uploaded.file.id)
             let made = EditSource(
                 id: uploaded.file.id, name: uploaded.file.name, kind: .video,
                 contentType: uploaded.file.contentType ?? "video/quicktime",
                 width: uploaded.file.width, height: uploaded.file.height,
-                duration: uploaded.file.duration ?? (overlay.out - overlay.`in`),
+                duration: uploaded.file.duration ?? (target.out - target.inPoint),
                 bytes: uploaded.file.bytes, posterURL: uploaded.file.posterURL)
             sources[made.id] = made
             commit(key: nil) { t in
-                guard let i = t.overlay.firstIndex(where: { $0.id == id }) else { return }
-                t.overlay[i].item = made.id
-                t.overlay[i].key = nil
+                self.replaceItem(id, with: made.id, in: &t, clearKey: true)
             }
             effectMarks[id] = kind.effect
             effectDraft = nil
@@ -587,16 +707,15 @@ public final class EditSession {
 
     /// The section 67 quote, or nil when this server has no remove-background route.
     public func backgroundQuote(for id: String) async -> RmbgQuote? {
-        guard let item = timeline.overlay.first(where: { $0.id == id })?.item,
-              let client = ctx.client as? any RmbgClient else { return nil }
+        guard let item = effectTarget(id)?.item, let client = ctx.client as? any RmbgClient else { return nil }
         return try? await client.rmbgQuote(of: item)
     }
 
     /// Bria (section 67). Shows the quote's price on the card, then polls the job. The result is a ProRes alternate.
     /// Nil means the overlay now points at it.
     public func removeVideoBackground(id: String, spill: Double) async -> String? {
-        guard let overlay = timeline.overlay.first(where: { $0.id == id }),
-              let source = sources[overlay.item], source.kind == .video else { return "that isn't a video" }
+        guard let target = effectTarget(id),
+              let source = sources[target.item], source.kind == .video else { return "that isn't a video" }
         guard let client = ctx.client as? any RmbgClient else {
             return "this server can't remove a video background yet"
         }
@@ -617,9 +736,7 @@ public final class EditSession {
                         duration: job.seconds ?? quote.seconds)
                     sources[made.id] = made
                     commit(key: nil) { t in
-                        guard let i = t.overlay.firstIndex(where: { $0.id == id }) else { return }
-                        t.overlay[i].item = made.id
-                        t.overlay[i].key = nil
+                        self.replaceItem(id, with: made.id, in: &t, clearKey: true)
                     }
                     effectMarks[id] = .removeBackground
                     effectDraft = nil
@@ -750,8 +867,12 @@ public final class EditSession {
             let latest = gap.to - me.frames
             guard latest >= gap.from else { return }
             let start = min(max(k, gap.from), latest)
-            t.overlay[i].at = Double(start) / Double(timing.fps)
-            t.overlay[i].track = layer
+            // one write: on a version 2 timeline `overlay` is a view sorted by time, so after a write to `at` the index can
+            // name another overlay and a second write to `track` would move that one
+            var placed = t.overlay[i]
+            placed.at = Double(start) / Double(timing.fps)
+            placed.track = layer
+            t.overlay[i] = placed
             moved = true
         }
         return moved
@@ -763,6 +884,12 @@ public final class EditSession {
         guard file.kind == .photo || file.kind == .gif else { return }
         sources[file.id] = file
         commit(key: nil) { t in
+            if t.version >= 2, let i = t.clips.firstIndex(where: { $0.id == id }) {
+                let kind = self.sources[t.clips[i].item]?.kind
+                guard kind == .photo || kind == .gif else { return }
+                t.clips[i].item = file.id
+                return
+            }
             guard let i = t.overlay.firstIndex(where: { $0.id == id }),
                   let kind = self.sources[t.overlay[i].item]?.kind, kind == .photo || kind == .gif else { return }
             t.overlay[i].item = file.id
@@ -909,7 +1036,7 @@ public final class EditSession {
         made.posterURL = nil
         sources[made.id] = made
         if isClosed { return made }
-        if let overlayID, timeline.overlay.contains(where: { $0.id == overlayID }) {
+        if let overlayID, clipExists(overlayID) {
             setOverlayItem(id: overlayID, made)
         } else if place {
             addOverlay(made, atFrame: nil)
@@ -942,12 +1069,143 @@ public final class EditSession {
         made.posterURL = nil
         sources[made.id] = made
         if isClosed { return made }
-        if let overlayID, timeline.overlay.contains(where: { $0.id == overlayID }) {
+        if let overlayID, clipExists(overlayID) {
             setOverlayItem(id: overlayID, made)
         } else if place {
             addOverlay(made, atFrame: nil)
         }
         return made
+    }
+
+    /// A clip id the cutout or crop can replace: an overlay, or any clip once the timeline is version 2.
+    private func clipExists(_ id: String) -> Bool {
+        if timeline.version >= 2 { return timeline.clips.contains { $0.id == id } }
+        return timeline.overlay.contains { $0.id == id }
+    }
+
+    // MARK: - Lanes (section 69)
+
+    /// Moves a clip to `toLane` at `at` seconds. Leaving lane 0 closes the hole unless `keepGap`. Landing on another clip
+    /// opens a new lane directly above the target. One undo step. False, and `laneRefusal`, when it cannot.
+    @discardableResult
+    public func moveClip(id: String, toLane: Int, at: Double, keepGap: Bool = false) -> Bool {
+        applyLane(EditLanes.moveClip(timeline, id: id, toLane: toLane, at: at, keepGap: keepGap, locked: lockedLanes))
+    }
+
+    /// Opens a new lane directly above `lane` and puts the clip there, whether or not `lane` was free.
+    @discardableResult
+    public func moveClipToNewLane(id: String, above lane: Int, at: Double, keepGap: Bool = false) -> Bool {
+        applyLane(EditLanes.moveToNewLane(timeline, id: id, above: lane, at: at, keepGap: keepGap, locked: lockedLanes))
+    }
+
+    /// Shifts every clip above `lane` up by one. The new lane is empty.
+    @discardableResult
+    public func insertLaneAbove(_ lane: Int) -> Bool {
+        applyLane(EditLanes.insertLane(above: lane, in: timeline))
+    }
+
+    /// A copy of the clip just after it, on the same lane, or on a new lane above when that spot is taken.
+    @discardableResult
+    public func duplicateClip(id: String) -> Bool {
+        applyLane(EditLanes.duplicate(timeline, id: id, newID: EditID.mint(), locked: lockedLanes))
+    }
+
+    /// Hides or shows one clip on any lane. A hidden clip still occupies its lane.
+    public func setClipHidden(id: String, _ hidden: Bool) {
+        _ = applyLane(EditLanes.setHidden(timeline, id: id, hidden: hidden))
+    }
+
+    /// One lane up (`by` +1, drawn later) or down. A taken spot is refused.
+    @discardableResult
+    public func moveClipLayer(id: String, by delta: Int) -> Bool {
+        applyLane(EditLanes.moveLayer(timeline, id: id, by: delta, locked: lockedLanes))
+    }
+
+    /// `clampForV1`: a delete. On an older server the overlays are cut at the end of lane 0 first, as `commit` does and
+    /// as version 1 always did, so a delete that leaves an overlay running past the end (or nothing on lane 0) goes through
+    /// instead of being refused. Moves are checked as they are.
+    @discardableResult
+    private func applyLane(_ change: EditLaneChange, key: String? = nil, clampForV1: Bool = false) -> Bool {
+        switch change {
+        case .done(let success):
+            let checked = clampForV1 && !savesTimelineV2 ? normalized(success.timeline, clampOverlays: true) : success.timeline
+            // the last clip deleted: as version 1 that is an empty main track, which `problems` keeps from saving (`.empty`)
+            guard allowsSave(checked) || (clampForV1 && checked.clips.isEmpty) else {
+                laneRefusal = EditLanes.needsServerMessage
+                laneRefusalNonce += 1
+                return false
+            }
+            laneRefusal = nil
+            guard success.timeline != timeline else { return true }
+            if let lane = success.insertedAbove { shiftLocks(above: lane) }
+            commit(key: key) { $0 = success.timeline }
+            return true
+        case .refused(let message):
+            laneRefusal = message
+            laneRefusalNonce += 1
+            return false
+        }
+    }
+
+    /// Hide or show every clip on one lane, in one undo step. Lane 0 included.
+    public func setLaneHidden(_ lane: Int, _ hidden: Bool) {
+        if timeline.version >= 2 {
+            commit(key: nil) { t in
+                for index in t.clips.indices where t.clips[index].lane == lane {
+                    t.clips[index].hidden = hidden
+                }
+            }
+            return
+        }
+        if lane > 0 { setLayerHidden(lane - 1, hidden) }
+    }
+
+    /// A lane is hidden when it has clips and every one of them is hidden.
+    public func laneHidden(_ lane: Int) -> Bool {
+        if timeline.version >= 2 {
+            let rows = timeline.clips.filter { $0.lane == lane }
+            return !rows.isEmpty && rows.allSatisfy(\.hidden)
+        }
+        return lane > 0 && layerHidden(lane - 1)
+    }
+
+    /// Lane 0's lock is kept as track -1, so `lockedLanes` contains 0 and a drop there is refused.
+    public func isLaneLocked(_ lane: Int) -> Bool {
+        lockedTracks.contains(lane == 0 ? -1 : lane - 1)
+    }
+
+    public func setLaneLocked(_ lane: Int, _ locked: Bool) {
+        setTrackLocked(lane == 0 ? -1 : lane - 1, locked)
+    }
+
+    /// The file, in-point and out-point an effect reads. A version 2 clip on any lane, else an overlay.
+    private func effectTarget(_ id: String) -> (item: String, inPoint: Double, out: Double)? {
+        if timeline.version >= 2, let clip = timeline.clips.first(where: { $0.id == id }) {
+            return (clip.item, clip.`in`, clip.out)
+        }
+        if let overlay = timeline.overlay.first(where: { $0.id == id }) {
+            return (overlay.item, overlay.`in`, overlay.out)
+        }
+        return nil
+    }
+
+    /// Points a clip at a new file. A version 2 clip on any lane, else an overlay. Clears a greenscreen key when asked.
+    private func replaceItem(_ id: String, with item: String, in timeline: inout EditTimeline, clearKey: Bool) {
+        if timeline.version >= 2, let index = timeline.clips.firstIndex(where: { $0.id == id }) {
+            timeline.clips[index].item = item
+            if clearKey { timeline.clips[index].key = nil }
+            return
+        }
+        guard let index = timeline.overlay.firstIndex(where: { $0.id == id }) else { return }
+        timeline.overlay[index].item = item
+        if clearKey { timeline.overlay[index].key = nil }
+    }
+
+    /// A new lane was opened above `lane`, so a lock on a higher overlay track moves up with that track.
+    private func shiftLocks(above lane: Int) {
+        lockedTracks = Set(lockedTracks.map { track in
+            track + 1 > lane ? track + 1 : track
+        })
     }
 
     // MARK: - Canvas, title
@@ -993,7 +1251,7 @@ public final class EditSession {
     }
 
     private func applyHistory(_ t: EditTimeline) {
-        timeline = normalized(t)
+        timeline = normalized(t, clampOverlays: !savesTimelineV2)
         lastKey = nil
         afterChange()
     }
@@ -1022,8 +1280,9 @@ public final class EditSession {
     /// Applies `change` to a copy, normalizes it, and (if anything changed) records the undo step and takes it.
     private func commit(key: String?, _ change: (inout EditTimeline) -> Void) {
         var t = timeline
+        let clamp = !savesTimelineV2
         change(&t)
-        t = normalized(t)
+        t = normalized(t, clampOverlays: clamp)
         guard t != timeline else { return }
         let now = ctx.clock.now()
         if let key, key == lastKey, now.timeIntervalSince(lastEditAt) < Self.coalesceWindow {
@@ -1124,10 +1383,14 @@ public final class EditSession {
 
     /// Rounded, and with the overlays made safe: sorted by start (ties keep their order), on a known layer, inside the canvas,
     /// never overlapping another of their layer (in frames), inside the main track. An overlay with under 0.1 s of room is dropped.
-    private func normalized(_ input: EditTimeline) -> EditTimeline {
+    ///
+    /// A server that stores version 2 does not pull clips back inside lane 0: a gap stays black and a higher lane may run past
+    /// lane 0. `clampOverlays` is that older rule, used while the save is still version 1.
+    private func normalized(_ input: EditTimeline, clampOverlays: Bool) -> EditTimeline {
         var t = EditJSON.rounded(input)
+        guard clampOverlays else { return t }
         let fps = Double(max(1, t.canvas.fps))
-        let total = EditTiming(t).frames
+        let total = t.version >= 2 ? EditLanes.lane0EndFrame(t) : EditTiming(t).frames
         let minFrames = Self.minFrames(fps: t.canvas.fps)
         t.overlay = t.overlay.enumerated()
             .sorted { $0.element.at != $1.element.at ? $0.element.at < $1.element.at : $0.offset < $1.offset }
@@ -1222,6 +1485,7 @@ public final class EditSession {
     func flush() async {
         guard dirty, !isClosed else { return }
         if case .conflict = saveState { return }
+        if case .needsUpdate = saveState { return }
         if let running = flushTask {
             // a PUT is out: it sends this change too (flushAgain), and the caller waits for all of it
             flushAgain = true
@@ -1257,10 +1521,23 @@ public final class EditSession {
         repeat {
             flushAgain = false
             let snapshot = timeline
+            // Version 2 is sent only when the server says `edit_timeline_version` >= 2. Otherwise the save is the version 1
+            // document, and a timeline that cannot be one is "update needed" rather than a partial write.
+            var sent = snapshot
+            if savesTimelineV2 {
+                if sent.version < 2, case .ok(let v2) = EditLanes.v1ToV2(sent) { sent = v2 }
+            } else if sent.version >= 2 {
+                guard case .ok(let v1) = EditLanes.v2ToV1(sent, kinds: sourceKinds()) else {
+                    saveState = .needsUpdate
+                    return
+                }
+                sent = v1
+            }
             // a server that does not know pitch refuses the key: it gets the timeline with every pitch at 0 (left out).
-            // one that does not advertise `hidden` must not be sent the key either (it would refuse the save).
-            var sent = ctx.capabilities.limits.editPitch ? snapshot : EditJSON.withoutPitch(snapshot)
-            if !sendsHidden { sent = EditJSON.withoutHidden(sent) }
+            // one that does not advertise `hidden` must not be sent the key either (it would refuse the save). A version 2
+            // document includes both keys (section 69), so they are stripped only from a version 1 save.
+            if !ctx.capabilities.limits.editPitch { sent = EditJSON.withoutPitch(sent) }
+            if sent.version < 2, !sendsHidden { sent = EditJSON.withoutHidden(sent) }
             let title = pendingTitle
             saveState = .saving
             saveCalls += 1
@@ -1283,6 +1560,10 @@ public final class EditSession {
                 if case .conflict(let theirs) = e {
                     conflict = theirs
                     saveState = .conflict(theirs)
+                    return
+                }
+                if case .needsTimelineV2 = e {
+                    saveState = .needsUpdate
                     return
                 }
                 saveState = .failed(e)
@@ -1370,7 +1651,7 @@ public final class EditSession {
             project = p
             pendingTitle = nil
             conflict = nil
-            timeline = normalized(theirTimeline)
+            timeline = normalized(EditLanes.materialize(theirTimeline), clampOverlays: !savesTimelineV2)
             lastKey = nil
             dirty = false
             timing = EditTiming(timeline, sourceDurations: Self.durations(of: sources))
@@ -1396,6 +1677,7 @@ public final class EditSession {
         switch saveState {
         case .conflict(let theirs): throw .conflict(theirs)
         case .failed(let e): throw e
+        case .needsUpdate: throw .needsTimelineV2(path: "", title: project.title, projectID: project.id)
         case .saved: break
         case .saving, .unsaved: throw .other("unsaved")
         }
@@ -1478,17 +1760,26 @@ public final class EditSession {
         for task in running { await task.value }
         guard generation == rebuildGeneration, !isClosed else { return }
 
-        guard !snapshot.main.isEmpty else {
+        // a missing file is a gap or a left-out clip with its reason (`previewIssues`), never a blank preview
+        let empty = snapshot.version < 2 ? snapshot.main.isEmpty : snapshot.clips.isEmpty
+        guard !empty else {
             previewIssues = [:]
+            previewSkips = []
             failPreview(EditPreviewFailure.nothingToPlay, keepPicture: false)
             return
         }
         var playing = snapshot
-        playing.overlay = snapshot.overlay.filter { !$0.hidden }
-        if let draft = effectDraft, draft.kind == .greenscreen,
-           let i = playing.overlay.firstIndex(where: { $0.id == draft.overlayID }) {
-            playing.overlay[i].key = draft.key.normalized()
-            playing.overlay[i].background = draft.background
+        if snapshot.version < 2 {
+            playing.overlay = snapshot.overlay.filter { !$0.hidden }
+        }
+        if let draft = effectDraft, draft.kind == .greenscreen {
+            if playing.version >= 2, let i = playing.clips.firstIndex(where: { $0.id == draft.overlayID }) {
+                playing.clips[i].key = draft.key.normalized()
+                playing.clips[i].background = draft.background
+            } else if let i = playing.overlay.firstIndex(where: { $0.id == draft.overlayID }) {
+                playing.overlay[i].key = draft.key.normalized()
+                playing.overlay[i].background = draft.background
+            }
         }
         // clips with a pitch play their shifted copy once it is made, the source's sound until then
         let wanted = pitchKeys(playing)
@@ -1518,6 +1809,7 @@ public final class EditSession {
             observeStatus(of: item)
             player.replaceCurrentItem(with: item)
             playable = built
+            previewSkips = built.skippedClipIDs
             let k = min(playhead, max(0, built.timing.frames - 1))
             playhead = k
             pendingSeekFrame = nil                                                        // this seek goes to the playhead
@@ -1623,6 +1915,13 @@ public final class EditSession {
     /// The copies a timeline needs: every audible clip and video overlay with a pitch whose file is here and has sound.
     func pitchKeys(_ t: EditTimeline) -> Set<EditPitchKey> {
         var keys = Set<EditPitchKey>()
+        if t.version >= 2 {
+            for clip in t.clips where !clip.muted && !clip.hidden {
+                guard let key = EditPitchKey(lane: clip), case .video(_, _, let hasAudio)? = assets[clip.item], hasAudio else { continue }
+                keys.insert(key)
+            }
+            return keys
+        }
         for clip in t.main where !clip.muted {
             guard let key = EditPitchKey(clip: clip), case .video(_, _, let hasAudio)? = assets[clip.item], hasAudio else { continue }
             keys.insert(key)

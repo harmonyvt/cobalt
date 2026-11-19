@@ -44,18 +44,21 @@ public struct EditPlayable: @unchecked Sendable {
     public let timing: EditTiming
     /// The preview was drawn at half size because more than 8 videos overlap. The render on the server is full size.
     public let proxy: Bool
+    /// Clips the preview left out because their file could not be read. The picture keeps the last good frame under them.
+    public let skippedClipIDs: [String]
     /// Clips left out of the picture, or main clips drawn as a gap. The rest of the composition still plays.
     public let issues: [EditPreviewIssue]
 
     public init(
         composition: AVComposition, videoComposition: AVVideoComposition, audioMix: AVAudioMix, timing: EditTiming,
-        proxy: Bool = false, issues: [EditPreviewIssue] = []
+        proxy: Bool = false, skippedClipIDs: [String] = [], issues: [EditPreviewIssue] = []
     ) {
         self.composition = composition
         self.videoComposition = videoComposition
         self.audioMix = audioMix
         self.timing = timing
         self.proxy = proxy
+        self.skippedClipIDs = skippedClipIDs
         self.issues = issues
     }
 
@@ -84,13 +87,18 @@ public enum EditComposition {
         let t = EditJSON.rounded(t)
         // a clip's `out` is clamped to its file's length, as the renderer does
         var durations: [String: Double] = [:]
-        for clip in t.main {
-            if durations[clip.item] == nil, case .video(let asset, _, _)? = assets[clip.item],
+        let videoItems = t.version >= 2 ? t.clips.map(\.item) : t.main.map(\.item)
+        for item in videoItems where durations[item] == nil {
+            if case .video(let asset, _, _)? = assets[item],
                let d = try? await asset.load(.duration).seconds, d.isFinite, d > 0 {
-                durations[clip.item] = d
+                durations[item] = d
             }
         }
         let timing = EditTiming(t, sourceDurations: durations)
+        if t.version >= 2 {
+            guard !t.clips.isEmpty, timing.frames > 0 else { throw EditError.other("empty") }
+            return try await buildLanes(t, assets: assets, shifted: shifted, preview: preview, timing: timing)
+        }
         guard !t.main.isEmpty, timing.frames > 0 else { throw EditError.other("empty") }
         let fps = Int32(timing.fps)
 
@@ -376,6 +384,180 @@ public enum EditComposition {
         guard available.isValid, !available.isEmpty else { return }
         try track.insertTimeRange(available, of: source, at: at)
     }
+
+    /// One stretch of a version 2 preview. `clipIDs` is the clips to draw, bottom lane first. An empty list is black
+    /// (a gap, the time before the first clip, or a stretch whose only clip is hidden).
+    public struct LaneSpan: Sendable, Equatable {
+        public var start: Int
+        public var end: Int
+        public var clipIDs: [String]
+    }
+
+    /// The instruction breaks for a version 2 timeline: every clip edge, including gaps. Hidden clips are not drawn.
+    public static func laneSpans(_ timeline: EditTimeline, timing: EditTiming) -> [LaneSpan] {
+        guard timeline.version >= 2, timing.laneClips.count == timeline.clips.count, timing.frames > 0 else { return [] }
+        var breaks: Set<Int> = [0, timing.frames]
+        for row in timing.laneClips {
+            breaks.insert(max(0, min(timing.frames, row.start)))
+            breaks.insert(max(0, min(timing.frames, row.start + row.frames)))
+        }
+        let ordered = breaks.filter { $0 >= 0 && $0 <= timing.frames }.sorted()
+        let draw = EditLanes.drawOrder(timeline)
+        var spans: [LaneSpan] = []
+        for (index, start) in ordered.enumerated() where index + 1 < ordered.count {
+            let end = ordered[index + 1]
+            guard end > start else { continue }
+            let ids = draw.compactMap { clipIndex -> String? in
+                let row = timing.laneClips[clipIndex]
+                let clip = timeline.clips[clipIndex]
+                guard !clip.hidden, start >= row.start, start < row.start + row.frames else { return nil }
+                return clip.id
+            }
+            spans.append(LaneSpan(start: start, end: end, clipIDs: ids))
+        }
+        return spans
+    }
+
+    /// Version 2 picture: a black base for the edit length, then every visible clip bottom to top. Video tracks are
+    /// assigned by peak overlap (interval colouring), not one per lane. A clip whose file is missing is skipped.
+    private static func buildLanes(
+        _ t: EditTimeline, assets: [String: EditSourceAsset], shifted: [EditPitchKey: URL], preview: EditPreviewHints,
+        timing: EditTiming
+    ) async throws -> EditPlayable {
+        let fps = Int32(timing.fps)
+        let composition = AVMutableComposition()
+        var skipped: [String] = []
+        var issues: [EditPreviewIssue] = []
+        func skip(_ clip: EditLaneClip, _ reason: String) {
+            skipped.append(clip.id)
+            issues.append(EditPreviewIssue(clipID: clip.id, lane: clip.lane == 0 ? .main : .overlay, reason: reason))
+        }
+        var media: [String: EditRenderPlan.LanePicture] = [:]
+        var videoClips: [(id: String, start: Int, end: Int)] = []
+        for (index, clip) in t.clips.enumerated() where !clip.hidden {
+            guard index < timing.laneClips.count else { continue }
+            let row = timing.laneClips[index]
+            guard let asset = assets[clip.item] else { skip(clip, EditPreviewFailure.fileMissing); continue }
+            switch asset {
+            case .video(let avAsset, _, _):
+                guard (try? await avAsset.loadTracks(withMediaType: .video).first) != nil else {
+                    skip(clip, EditPreviewFailure.couldntRead); continue
+                }
+                videoClips.append((clip.id, row.start, row.start + row.frames))
+            case .gif(let frames, let delays, let display):
+                media[clip.id] = .gif(
+                    frames: frames, delays: delays, display: display, images: frames.map(EditFrameComposer.ciImage))
+            case .photo(let image, let display):
+                media[clip.id] = .photo(image, display: display, imageCI: EditFrameComposer.ciImage(image))
+            }
+        }
+        let colored = EditLanes.colorTracks(videoClips)
+        var trackOf: [String: Int] = [:]
+        for item in colored { trackOf[item.id] = item.track }
+        let trackCount = (colored.map(\.track).max() ?? -1) + 1
+        var videoTracks: [AVMutableCompositionTrack] = []
+        var audioTracks: [AVMutableCompositionTrack] = []
+        for index in 0..<max(trackCount, 1) {
+            if let video = composition.addMutableTrack(withMediaType: .video, preferredTrackID: CMPersistentTrackID(1 + index * 2)) {
+                videoTracks.append(video)
+            }
+            if let audio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: CMPersistentTrackID(2 + index * 2)) {
+                audioTracks.append(audio)
+            }
+        }
+        var volumes: [Int: [(at: CMTime, volume: Float)]] = [:]
+        for (index, clip) in t.clips.enumerated() where !clip.hidden && trackOf[clip.id] != nil {
+            guard index < timing.laneClips.count, case .video(let avAsset, let display, let hasAudio) = assets[clip.item],
+                  let sourceVideo = try? await avAsset.loadTracks(withMediaType: .video).first else { continue }
+            let trackIndex = trackOf[clip.id] ?? 0
+            guard trackIndex < videoTracks.count else { continue }
+            let row = timing.laneClips[index]
+            let at = CMTime(value: Int64(row.start), timescale: fps)
+            let target = CMTime(value: Int64(row.frames), timescale: fps)
+            let videoRange = (try? await sourceVideo.load(.timeRange)) ?? .invalid
+            let transform = (try? await sourceVideo.load(.preferredTransform)) ?? .identity
+            if videoRange.isValid {
+                try insertScaled(
+                    into: videoTracks[trackIndex], from: sourceVideo, sourceRange: videoRange, in: clip.`in`,
+                    out: clip.out, at: at, target: target)
+            }
+            media[clip.id] = .video(
+                trackID: videoTracks[trackIndex].trackID, orientation: EditRenderPlan.orientation(of: transform), display: display)
+            let clipOut = clip.out
+            var pitched: (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange)?
+            if hasAudio, !clip.muted, let key = EditPitchKey(lane: clip), let url = shifted[key] {
+                pitched = await shiftedTrack(url)
+            }
+            if trackIndex < audioTracks.count {
+                if let pitched {
+                    try insertScaled(
+                        into: audioTracks[trackIndex], from: pitched.track, sourceRange: pitched.range, in: 0,
+                        out: clipOut - clip.`in`, at: at, target: target)
+                    volumes[trackIndex, default: []].append((at, Float(clip.volume)))
+                } else if hasAudio, let sourceAudio = try? await avAsset.loadTracks(withMediaType: .audio).first,
+                          let audioRange = try? await sourceAudio.load(.timeRange) {
+                    try insertScaled(
+                        into: audioTracks[trackIndex], from: sourceAudio, sourceRange: audioRange, in: clip.`in`,
+                        out: clipOut, at: at, target: target)
+                    volumes[trackIndex, default: []].append((at, clip.muted ? 0 : Float(clip.volume)))
+                }
+            }
+        }
+        // A photo-only edit still needs a timeline long enough for the compositor. An empty range holds the duration.
+        // A player may not call the compositor until a real video sample exists; the instruction list is still complete.
+        let full = CMTime(value: Int64(timing.frames), timescale: fps)
+        if let base = videoTracks.first {
+            let covered = base.timeRange.isValid && !base.timeRange.isEmpty ? base.timeRange.end : .zero
+            if covered < full {
+                base.insertEmptyTimeRange(CMTimeRange(start: covered, duration: CMTimeSubtract(full, covered)))
+            }
+        }
+        let peak = Set(trackOf.values).count == 0 ? 0 : (videoClips.reduce(0) { partial, clip in
+            let overlapping = videoClips.filter { $0.start < clip.end && clip.start < $0.end }.count
+            return max(partial, overlapping)
+        })
+        let proxy = peak > EditOverlap.comfortableVideos
+        let plan = EditRenderPlan(
+            timeline: t, timing: timing, main: [], overlay: [], proxy: proxy,
+            previewMaskID: preview.maskOverlayID, previewSplitID: preview.splitOverlayID, lanes: media)
+        let spans = laneSpans(t, timing: timing)
+        let end = CMTimeMaximum(full, composition.duration)
+        var instructions: [EditInstruction] = []
+        for span in spans {
+            let from = CMTime(value: Int64(span.start), timescale: fps)
+            let to = span.end == timing.frames ? end : CMTime(value: Int64(span.end), timescale: fps)
+            let ids = span.clipIDs.compactMap { id -> CMPersistentTrackID? in
+                if case .video(let trackID, _, _) = media[id] { return trackID }
+                return nil
+            }
+            instructions.append(EditInstruction(timeRange: CMTimeRange(start: from, end: to), plan: plan, laneIDs: span.clipIDs, trackIDs: ids))
+        }
+        guard !instructions.isEmpty else { throw EditError.other("empty") }
+        let video = AVMutableVideoComposition()
+        video.customVideoCompositorClass = EditCompositor.self
+        video.frameDuration = CMTime(value: 1, timescale: fps)
+        let scale = proxy ? 0.5 : 1.0
+        video.renderSize = CGSize(
+            width: max(2, Int(Double(t.canvas.w) * scale) / 2 * 2),
+            height: max(2, Int(Double(t.canvas.h) * scale) / 2 * 2))
+        video.instructions = instructions
+        video.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
+        video.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
+        video.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
+        let mix = AVMutableAudioMix()
+        var parameters: [AVMutableAudioMixInputParameters] = []
+        for (index, track) in audioTracks.enumerated() {
+            let entries = volumes[index] ?? []
+            guard !entries.isEmpty else { continue }
+            let parameter = AVMutableAudioMixInputParameters(track: track)
+            for entry in entries { parameter.setVolume(entry.volume, at: entry.at) }
+            parameters.append(parameter)
+        }
+        mix.inputParameters = parameters
+        return EditPlayable(
+            composition: composition, videoComposition: video, audioMix: mix, timing: timing, proxy: proxy,
+            skippedClipIDs: skipped, issues: issues)
+    }
 }
 
 // MARK: - What the compositor reads
@@ -396,6 +578,19 @@ final class EditRenderPlan: @unchecked Sendable {
         case photo(CGImage)
         /// Left out of the picture. The slot stays so indices still match the timeline.
         case missing
+    }
+
+    /// One version 2 clip's picture. Videos name the composition track interval colouring assigned them.
+    enum LanePicture {
+        case video(trackID: CMPersistentTrackID, orientation: CGImagePropertyOrientation, display: PixelSize)
+        case gif(frames: [CGImage], delays: [Double], display: PixelSize, images: [CIImage])
+        case photo(CGImage, display: PixelSize, imageCI: CIImage)
+
+        var display: PixelSize {
+            switch self {
+            case .video(_, _, let display), .gif(_, _, let display, _), .photo(_, let display, _): return display
+            }
+        }
     }
 
     struct OverlayClip {
@@ -425,12 +620,14 @@ final class EditRenderPlan: @unchecked Sendable {
     let previewMaskID: String?
     /// The overlay whose preview is split, original on the left and the effect on the right.
     let previewSplitID: String?
+    /// Version 2 pictures by clip id. Empty for a version 1 plan.
+    let lanes: [String: LanePicture]
     /// One plate for every missing main span, made once. Nil when every main clip has a picture.
     let missingPlate: CIImage?
 
     init(
         timeline: EditTimeline, timing: EditTiming, main: [MainClip], overlay: [OverlayClip], proxy: Bool = false,
-        previewMaskID: String? = nil, previewSplitID: String? = nil
+        previewMaskID: String? = nil, previewSplitID: String? = nil, lanes: [String: LanePicture] = [:]
     ) {
         self.timeline = timeline
         self.timing = timing
@@ -439,6 +636,7 @@ final class EditRenderPlan: @unchecked Sendable {
         self.proxy = proxy
         self.previewMaskID = previewMaskID
         self.previewSplitID = previewSplitID
+        self.lanes = lanes
         self.missingPlate = main.contains(where: \.missing) ? EditFrameComposer.missingPlate(canvas: timeline.canvas) : nil
     }
 
@@ -472,12 +670,18 @@ final class EditInstruction: NSObject, AVVideoCompositionInstructionProtocol, @u
     let mainIndex: Int
     /// The overlays up in this stretch (indices into the timeline's `overlay`), at most one per layer.
     let overlayIndices: [Int]
+    /// Version 2 clips to draw, bottom lane first. Empty means this instruction is the version 1 path.
+    let laneIDs: [String]
+    /// True for a version 2 stretch, including a black gap (no clips).
+    let rendersLanes: Bool
 
     init(timeRange: CMTimeRange, plan: EditRenderPlan, mainIndex: Int, overlayIndices: [Int]) {
         self.timeRange = timeRange
         self.plan = plan
         self.mainIndex = mainIndex
         self.overlayIndices = overlayIndices
+        self.laneIDs = []
+        self.rendersLanes = false
         var ids: [NSValue] = []
         if mainIndex < plan.main.count, !plan.main[mainIndex].missing {
             ids.append(NSNumber(value: plan.main[mainIndex].trackID))
@@ -486,6 +690,17 @@ final class EditInstruction: NSObject, AVVideoCompositionInstructionProtocol, @u
             if case .video(let trackID, _) = plan.overlay[j].source { ids.append(NSNumber(value: trackID)) }
         }
         self.requiredSourceTrackIDs = ids
+        super.init()
+    }
+
+    init(timeRange: CMTimeRange, plan: EditRenderPlan, laneIDs: [String], trackIDs: [CMPersistentTrackID]) {
+        self.timeRange = timeRange
+        self.plan = plan
+        self.mainIndex = 0
+        self.overlayIndices = []
+        self.laneIDs = laneIDs
+        self.rendersLanes = true
+        self.requiredSourceTrackIDs = trackIDs.map { NSNumber(value: $0) }
         super.init()
     }
 }

@@ -308,6 +308,9 @@ public enum EditError: Error, Sendable, Equatable {
     case notFound
     /// `409 error.edit.conflict`: the revision moved; the server's current project.
     case conflict(EditProject)
+    /// `409 error.edit.needs_timeline_v2`: the stored edit is version 2 and cannot be shown as version 1.
+    /// The app shows "update needed" and does not write it back.
+    case needsTimelineV2(path: String, title: String, projectID: String)
     /// `409 error.edit.too_many`: 200 projects.
     case tooMany
     /// `429 error.edit.queue_full`: 20 renders queued or running.
@@ -326,13 +329,15 @@ public enum EditError: Error, Sendable, Equatable {
     case other(String)
 
     /// The error for a server answer: its code, the `path` and `items` it carries, and the current project of a conflict.
-    public init(code: String, path: String?, items: [String], project: EditProject?) {
+    public init(code: String, path: String?, items: [String], project: EditProject?, title: String? = nil, projectID: String? = nil) {
         let path = path ?? ""
         switch code {
         case "error.edit.off": self = .off
         case "error.edit.not_found": self = .notFound
         case "error.edit.conflict":
             if let project { self = .conflict(project) } else { self = .other(code) }
+        case "error.edit.needs_timeline_v2":
+            self = .needsTimelineV2(path: path, title: title ?? "", projectID: projectID ?? project?.id ?? "")
         case "error.edit.too_many": self = .tooMany
         case "error.edit.queue_full": self = .queueFull
         case "error.edit.finished": self = .finished

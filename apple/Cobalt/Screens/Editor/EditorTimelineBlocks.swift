@@ -301,3 +301,189 @@ struct OverlayClipBlock: View {
             layerDown: overlay.track > 0 ? { _ = session.setOverlayTrack(id: overlay.id, overlay.track - 1) } : nil)
     }
 }
+
+// MARK: - a clip on any lane
+
+/// One clip on the equal-lane board. Press and drag moves it in time and onto another lane. The clip itself stays put
+/// until the drop: the pane draws the lift and the ghost from `drag`. Right-click opens the menu.
+struct EqualLaneClipBlock: View {
+    let session: EditSession
+    let clip: EditLaneClip
+    let span: TimelineSpan
+    let scale: TimelineScale
+    let laneHeight: CGFloat
+    let laneCount: Int
+    let rowHeight: CGFloat
+    let zoneHeight: CGFloat
+    @Binding var drag: LaneDrag?
+    let keepGap: () -> Bool
+    let run: (LaneMenuAction) -> Void
+
+    @Environment(EditorHost.self) private var host
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var snapTick = 0
+    @State private var laneTick = 0
+
+    private var blockHeight: CGFloat { max(16, laneHeight - min(12, laneHeight * 0.28)) }
+    private var width: CGFloat { max(2, scale.x(span.length) - 2) }
+    private var selected: Bool { LaneClipCommands.selected(session, clip.id) }
+    private var lifted: Bool { drag?.id == clip.id && drag?.moved == true }
+    private var source: EditSource? { session.source(for: clip.item) }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            TimelineLaneClipView(
+                clip: clip, source: source, seconds: span.length, width: width, height: blockHeight,
+                isSelected: selected, loading: session.loadingSources[clip.item],
+                failed: session.sourceFailures[clip.item] != nil, missing: session.isMissing(item: clip.item),
+                showsEffect: session.showsEffect(id: clip.id), actions: actions)
+                .opacity(lifted ? 0.25 : 1)
+            if selected, !lifted, session.tool != .blade { handles }
+        }
+        .frame(width: width, height: blockHeight, alignment: .topLeading)
+        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .gesture(tap)
+        .gesture(dragGesture)
+        .contextMenu { menu }
+        .haptic(.impact(weight: .light), trigger: snapTick)
+        .haptic(.selection, trigger: laneTick)
+    }
+
+    private var tap: some Gesture {
+        SpatialTapGesture().onEnded { value in
+            if session.tool == .blade {
+                let seconds = span.start + scale.seconds(at: value.location.x)
+                session.split(clip: clip.id, atFrame: session.timing.frame(at: seconds))
+                snapTick += 1
+            } else {
+                LaneClipCommands.select(session, clip)
+            }
+        }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named("equalLanes"))
+            .onChanged { value in
+                guard session.tool == .select else { return }
+                if !LaneClipCommands.selected(session, clip.id) { LaneClipCommands.select(session, clip) }
+                let time = scale.seconds(at: value.location.x)
+                var next = drag?.id == clip.id ? drag! : LaneDrag(
+                    id: clip.id, fromLane: clip.lane, start: span.start, length: span.length, grab: time - span.start,
+                    point: value.location, target: .lane(clip.lane), drop: span.start, snapped: false, moved: false)
+                if next.id != clip.id { return }
+                let moved = next.moved || hypot(value.translation.width, value.translation.height) >= 4
+                let raw = time - next.grab
+                let snapped = EditLaneDrop.snap(
+                    start: raw, length: span.length, points: LaneClipCommands.snapPoints(session, except: clip.id),
+                    threshold: 6 / Double(scale.pointsPerSecond))
+                let target = EditLaneDrop.hit(
+                    y: Double(value.location.y), laneCount: laneCount, rowHeight: Double(rowHeight), zoneHeight: Double(zoneHeight))
+                if snapped.snapped && !next.snapped { snapTick += 1 }
+                if moved && target != next.target { laneTick += 1 }
+                next.point = value.location
+                next.target = target
+                next.drop = snapped.value
+                next.snapped = snapped.snapped
+                next.moved = moved
+                drag = next
+            }
+            .onEnded { _ in
+                let finished = drag
+                drag = nil
+                guard let finished, finished.id == clip.id, finished.moved else { return }
+                withAnimation(reduceMotion ? Motion.fade : Motion.rows) {
+                    LaneClipCommands.drop(session, id: clip.id, target: finished.target, at: finished.drop, keepGap: keepGap())
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var handles: some View {
+        if clip.lane == 0, let index = session.timeline.main.firstIndex(where: { $0.id == clip.id }) {
+            MainTrimHandles(
+                session: session, index: index, clip: session.timeline.main[index], scale: scale, width: width, height: blockHeight)
+        } else if let overlay = session.timeline.overlay.first(where: { $0.id == clip.id }) {
+            EqualLaneOverlayHandles(
+                session: session, overlay: overlay, scale: scale, width: width, height: blockHeight, video: source?.kind == .video)
+        }
+    }
+
+    private var menu: some View {
+        ForEach(LaneClipCommands.items(session, clip), id: \.action) { item in
+            Button(role: item.action == .delete ? .destructive : nil) {
+                if let reason = LaneClipCommands.run(item.action, session: session, clip: clip, keepGap: keepGap()) {
+                    host.show(reason, seconds: 2.4)
+                } else {
+                    run(item.action)
+                }
+            } label: {
+                Text(menuTitle(item))
+            }
+            .disabled(!item.enabled)
+        }
+    }
+
+    private func menuTitle(_ item: LaneMenuItem) -> String {
+        let name = LaneClipCommands.title(item.action, hidden: clip.hidden)
+        guard let reason = item.reason else { return name }
+        return "\(name) · \(reason)"
+    }
+
+    private var actions: TimelineClipActions {
+        LaneClipCommands.actions(session, clip) { action in
+            if let reason = LaneClipCommands.run(action, session: session, clip: clip, keepGap: keepGap()) {
+                host.show(reason, seconds: 2.4)
+            } else {
+                run(action)
+            }
+        }
+    }
+}
+
+/// Trim handles for a clip above lane 0: the right edge is how long it stays up, the left (a video) is its source in-point.
+private struct EqualLaneOverlayHandles: View {
+    let session: EditSession
+    let overlay: EditOverlay
+    let scale: TimelineScale
+    let width: CGFloat
+    let height: CGFloat
+    let video: Bool
+
+    @State private var baseLength: Double?
+    @State private var baseIn: Double?
+
+    private var fps: Double { Double(session.timing.fps) }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if video {
+                TimelineTrimHandle(
+                    edge: .leading, height: height, valueText: Copy.Editor.clockTenths(overlay.in), color: EditorColor.selection,
+                    onDrag: { dx in
+                        let base = baseIn ?? overlay.in
+                        baseIn = base
+                        session.trimOverlay(id: overlay.id, in: base + Double(dx / scale.pointsPerSecond), out: nil)
+                    },
+                    onEnd: { baseIn = nil; session.endGesture() },
+                    step: { n in
+                        session.trimOverlay(id: overlay.id, in: overlay.in + Double(n) / fps, out: nil)
+                        session.endGesture()
+                    })
+            }
+            TimelineTrimHandle(
+                edge: .trailing, height: height, valueText: Copy.Editor.clockTenths(overlay.length), color: EditorColor.selection,
+                onDrag: { dx in
+                    let base = baseLength ?? overlay.length
+                    baseLength = base
+                    session.setOverlayLength(id: overlay.id, seconds: base + Double(dx / scale.pointsPerSecond))
+                },
+                onEnd: { baseLength = nil; session.endGesture() },
+                step: { n in
+                    session.setOverlayLength(id: overlay.id, seconds: overlay.length + Double(n) / fps)
+                    session.endGesture()
+                })
+                .offset(x: width - TimelineTrimHandle.hitWidth)
+        }
+        .frame(width: width, height: height, alignment: .topLeading)
+    }
+}

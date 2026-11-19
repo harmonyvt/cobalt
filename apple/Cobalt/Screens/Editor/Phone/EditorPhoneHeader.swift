@@ -92,7 +92,7 @@ struct EditorPhoneHeader: View {
             Button { Task { await session.retrySave() } } label: { line(session.saveLine, error: true) }
                 .buttonStyle(.plain)
                 .accessibilityHint(Copy.Editor.tryAgain)
-        case .conflict:
+        case .conflict, .needsUpdate:
             line(session.saveLine, error: true)
         case .saved, .saving, .unsaved:
             if let problem = session.problemLine {

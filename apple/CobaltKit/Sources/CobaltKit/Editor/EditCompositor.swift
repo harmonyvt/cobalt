@@ -54,6 +54,32 @@ public final class EditCompositor: NSObject, AVVideoCompositing, @unchecked Send
             let plan = instruction.plan
             let k = max(0, Int((request.compositionTime.seconds * Double(plan.timing.fps)).rounded()))
             let opts: [CIImageOption: Any] = [.colorSpace: NSNull()]
+            // Version 2 is its own path so the version 1 picture (PR 195's never-black change, on
+            // `cursor/overlay-preview-black-7971`) can land in the block below without rewriting this one.
+            // A missing frame keeps the last good one; a clip that has never delivered a frame is skipped and the
+            // request still finishes, so one bad clip does not turn the preview black.
+            if instruction.rendersLanes {
+                var frames: [String: CIImage] = [:]
+                for id in instruction.laneIDs {
+                    guard case .video(let trackID, _, _) = plan.lanes[id] else { continue }
+                    if let buffer = request.sourceFrame(byTrackID: trackID) {
+                        let frame = CIImage(cvPixelBuffer: buffer, options: opts)
+                        frames[id] = frame
+                        self.lastFrames[trackID] = frame
+                    } else if let held = self.lastFrames[trackID] {
+                        frames[id] = held
+                    }
+                }
+                var image = EditFrameComposer.composeLanes(plan: plan, frame: k, videos: frames)
+                let bw = CVPixelBufferGetWidth(output), bh = CVPixelBufferGetHeight(output)
+                if bw > 0, bh > 0, abs(image.extent.width - CGFloat(bw)) > 1 || abs(image.extent.height - CGFloat(bh)) > 1 {
+                    image = EditFrameComposer.scale(image, to: PixelSize(w: bw, h: bh))
+                }
+                Self.context.render(
+                    image, to: output, bounds: CGRect(x: 0, y: 0, width: bw, height: bh), colorSpace: nil)
+                request.finish(withComposedVideoFrame: output)
+                return
+            }
             var main: CIImage?
             let mainMeta = plan.main[instruction.mainIndex]
             // a missing span draws the plate; the previous clip's last frame must not fill the gap
@@ -93,6 +119,83 @@ public final class EditCompositor: NSObject, AVVideoCompositing, @unchecked Send
 
 /// The picture of one output frame, from the plan and the source frames. Pure Core Image, so a test draws a frame with no player.
 enum EditFrameComposer {
+    /// Version 2: black for the whole edit, then each visible clip bottom to top. A clip with no picture is skipped,
+    /// which leaves the black base or the last clip that did draw.
+    static func composeLanes(plan: EditRenderPlan, frame k: Int, videos: [String: CIImage]) -> CIImage {
+        let canvas = plan.timeline.canvas
+        let rect = CGRect(x: 0, y: 0, width: canvas.w, height: canvas.h)
+        var out = CIImage(color: CIColor.black).cropped(to: rect)
+        guard plan.timing.laneClips.count == plan.timeline.clips.count else { return out }
+        for index in EditLanes.drawOrder(plan.timeline) {
+            let clip = plan.timeline.clips[index]
+            let row = plan.timing.laneClips[index]
+            guard !clip.hidden, k >= row.start, k < row.start + row.frames, let picture = plan.lanes[clip.id] else { continue }
+            guard var source = laneSource(picture, video: videos[clip.id], at: k, start: row.start, fps: plan.timing.fps) else {
+                continue
+            }
+            if plan.proxy, source.extent.width > 960 || source.extent.height > 960 {
+                let long = max(source.extent.width, source.extent.height)
+                let factor = 960 / long
+                source = scale(source, to: PixelSize(
+                    w: max(2, Int((source.extent.width * factor).rounded())),
+                    h: max(2, Int((source.extent.height * factor).rounded()))))
+            }
+            let oriented = orientLane(source, picture)
+            if let key = clip.key?.normalized() {
+                let keyed = EditChroma.apply(oriented, key: key, mask: plan.previewMaskID == clip.id)
+                source = plan.previewSplitID == clip.id ? EditChroma.split(original: oriented, keyed: keyed) : keyed
+            } else {
+                source = oriented
+            }
+            out = drawLane(source, clip: clip, canvas: canvas, under: out)
+        }
+        return out.cropped(to: rect)
+    }
+
+    private static func laneSource(
+        _ picture: EditRenderPlan.LanePicture, video: CIImage?, at k: Int, start: Int, fps: Int
+    ) -> CIImage? {
+        switch picture {
+        case .video:
+            return video
+        case .gif(_, let delays, _, let images):
+            let seconds = Double(k - start) / Double(max(1, fps))
+            guard let index = gifFrameIndex(count: images.count, delays, at: seconds), index < images.count else { return nil }
+            return images[index]
+        case .photo(_, _, let image):
+            return image
+        }
+    }
+
+    private static func orientLane(_ image: CIImage, _ picture: EditRenderPlan.LanePicture) -> CIImage {
+        switch picture {
+        case .video(_, let orientation, let display):
+            return squarePixels(orient(image, orientation), display: display)
+        case .gif, .photo:
+            return image
+        }
+    }
+
+    /// A lane clip on the canvas. A `frame` uses the overlay placement; without one, crop and fit cover the canvas.
+    private static func drawLane(_ image: CIImage, clip: EditLaneClip, canvas: EditCanvas, under: CIImage) -> CIImage {
+        if let frame = clip.frame {
+            let overlay = EditOverlay(
+                id: clip.id, item: clip.item, at: clip.at, in: clip.`in`, out: clip.out, frame: frame, opacity: clip.opacity,
+                volume: clip.volume, muted: clip.muted, pitch: clip.pitch, hidden: false, key: nil, background: clip.background)
+            return drawOverlay(image, overlay: overlay, canvas: canvas, under: under) ?? under
+        }
+        let main = EditClip(
+            id: clip.id, item: clip.item, in: clip.`in`, out: clip.out, speed: clip.speed, crop: clip.crop, fit: clip.fit,
+            volume: clip.volume, muted: clip.muted, pitch: clip.pitch)
+        guard var drawn = drawMain(image, clip: main, canvas: canvas) else { return under }
+        if clip.opacity < 0.9999 {
+            drawn = drawn.applyingFilter("CIColorMatrix", parameters: [
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(max(0, clip.opacity))),
+            ])
+        }
+        return drawn.composited(over: under)
+    }
+
     /// The canvas for output frame `k`. `main` is the main clip's decoded frame as the track delivers it (not yet oriented);
     /// `overlayVideos` is the same for each video overlay that is up, by its index in `overlay`. A GIF or a photo overlay comes
     /// from the plan. Overlays are drawn in `overlayDrawOrder` (lowest layer first, so a higher one is on top).

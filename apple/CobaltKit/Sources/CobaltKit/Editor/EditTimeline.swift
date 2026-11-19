@@ -1,30 +1,217 @@
 import CoreGraphics
 import Foundation
 
-// The editor's timeline (APP-API-CONTRACT 31.2, apple/CONTRACT-EDITOR.md 3.1): the JSON document a project is. The app writes
-// and reads exactly the server's canonical form: numbers rounded as 31.2 says, keys sorted, no whitespace, `crop` left out when
-// absent. `EditJSON.encode(EditJSON.decode(bytes)) == bytes` for any canonical document.
+// The editor's timeline (APP-API-CONTRACT 31.2 and 69, apple/CONTRACT-EDITOR.md 3.1): the JSON document a project is. The app
+// writes and reads exactly the server's canonical form: numbers rounded as 31.2 says, keys sorted, no whitespace, defaults left
+// out. `EditJSON.encode(EditJSON.decode(bytes)) == bytes` for any canonical v1 or v2 document.
+//
+// In memory a project that can be converted is version 2 (`clips`, one lane each). Version 1 (`main` + `overlay`) still decodes
+// and encodes byte for byte. `main` and `overlay` on a version 2 timeline are a projection the current timeline UI reads: lane 0
+// is the main row, lane N + 1 is overlay track N.
 
-/// One timeline: a main track of video clips, overlays on the layers the server allows (APP-API-CONTRACT 39.1).
+/// One timeline. Version 1 is a main track plus overlays. Version 2 is equal lanes (section 69).
 public struct EditTimeline: Sendable, Equatable, Codable {
-    public var version: Int                     // 1
+    public var version: Int
     public var canvas: EditCanvas
-    public var main: [EditClip]
-    public var overlay: [EditOverlay]
     /// `output` (section 66): webm, prores or webp. Nil is mp4, and the key is left out so an older project keeps its bytes.
-    public var output: EditKeyedOutput? = nil
+    public var output: EditKeyedOutput?
+    /// Version 2 clips. Empty while `version` is 1.
+    public var clips: [EditLaneClip]
+    /// The version 1 main track. Empty while `version` is 2; `main` is then lane 0.
+    var storedMain: [EditClip]
+    /// The version 1 overlays. Empty while `version` is 2; `overlay` is then every lane above 0.
+    var storedOverlay: [EditOverlay]
+
+    /// Lane 0, in time order, while the timeline is version 2. The stored main track while it is version 1.
+    public var main: [EditClip] {
+        get { version >= 2 ? EditLanes.projectMain(self) : storedMain }
+        set {
+            if version >= 2 { EditLanes.applyMain(newValue, to: &self) }
+            else { storedMain = newValue }
+        }
+    }
+
+    /// Lanes above 0, in time order, while the timeline is version 2. The stored overlays while it is version 1.
+    public var overlay: [EditOverlay] {
+        get { version >= 2 ? EditLanes.projectOverlay(self) : storedOverlay }
+        set {
+            if version >= 2 { EditLanes.applyOverlay(newValue, to: &self) }
+            else { storedOverlay = newValue }
+        }
+    }
 
     public init(version: Int = 1, canvas: EditCanvas, main: [EditClip], overlay: [EditOverlay] = [], output: EditKeyedOutput? = nil) {
         self.version = version
         self.canvas = canvas
-        self.main = main
-        self.overlay = overlay
         self.output = output?.stored
+        self.clips = []
+        self.storedMain = main
+        self.storedOverlay = overlay
+    }
+
+    /// A version 2 timeline. Lane numbers are kept as given; `EditLanes` checks them.
+    public init(canvas: EditCanvas, clips: [EditLaneClip], output: EditKeyedOutput? = nil) {
+        self.version = 2
+        self.canvas = canvas
+        self.output = output?.stored
+        self.clips = clips
+        self.storedMain = []
+        self.storedOverlay = []
     }
 
     /// Version 1, no overlay.
     public static func new(canvas: EditCanvas, main: [EditClip]) -> EditTimeline {
         EditTimeline(version: 1, canvas: canvas, main: main, overlay: [])
+    }
+
+    /// True when this is the equal-lanes document.
+    public var isV2: Bool { version >= 2 }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, canvas, main, overlay, clips, output
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(Int.self, forKey: .version)
+        canvas = try c.decode(EditCanvas.self, forKey: .canvas)
+        output = try c.decodeIfPresent(EditKeyedOutput.self, forKey: .output)?.stored
+        if version == 2 {
+            clips = try c.decode([EditLaneClip].self, forKey: .clips)
+            storedMain = []
+            storedOverlay = []
+        } else {
+            clips = []
+            storedMain = try c.decode([EditClip].self, forKey: .main)
+            storedOverlay = try c.decode([EditOverlay].self, forKey: .overlay)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(version, forKey: .version)
+        try c.encode(canvas, forKey: .canvas)
+        if let output { try c.encode(output, forKey: .output) }
+        if version >= 2 {
+            try c.encode(clips, forKey: .clips)
+        } else {
+            try c.encode(storedMain, forKey: .main)
+            try c.encode(storedOverlay, forKey: .overlay)
+        }
+    }
+}
+
+/// One clip on a version 2 timeline (APP-API-CONTRACT 69.1). Defaults are kept in memory and left out of the JSON, the same
+/// way the server omits them: speed 1, fill, opacity 1, volume 1, unmuted, pitch 0, not hidden.
+public struct EditLaneClip: Sendable, Equatable, Codable, Identifiable {
+    public var id: String
+    public var item: String
+    /// 0 is the bottom. 0...63.
+    public var lane: Int
+    /// Seconds on the output, including 0.
+    public var at: Double
+    public var `in`: Double
+    public var out: Double
+    /// 0.25...4, a multiple of 0.05. 1 is left out of the JSON.
+    public var speed: Double
+    public var crop: EditCrop?
+    /// Used only when `frame` is absent. `"fill"` is the default and is left out.
+    public var fit: EditFit
+    /// When set, it places the clip and `fit` does not.
+    public var frame: EditFrame?
+    /// 0.1...1. 1 is left out.
+    public var opacity: Double
+    /// 0...1. 1 is left out.
+    public var volume: Double
+    /// Omitted means the sound plays. A picture has no sound either way.
+    public var muted: Bool
+    /// Semitones, -12...12 in steps of 0.5. 0 is left out.
+    public var pitch: Double
+    /// The renderer skips a hidden clip. It still occupies its lane. False is left out.
+    public var hidden: Bool
+    public var key: EditChromaKey?
+    public var background: EditOverlayBackground?
+
+    public init(
+        id: String, item: String, lane: Int, at: Double, in inPoint: Double, out: Double, speed: Double = 1,
+        crop: EditCrop? = nil, fit: EditFit = .fill, frame: EditFrame? = nil, opacity: Double = 1, volume: Double = 1,
+        muted: Bool = false, pitch: Double = 0, hidden: Bool = false, key: EditChromaKey? = nil,
+        background: EditOverlayBackground? = nil
+    ) {
+        self.id = id
+        self.item = item
+        self.lane = lane
+        self.at = at
+        self.`in` = inPoint
+        self.out = out
+        self.speed = speed
+        self.crop = crop
+        self.fit = fit
+        self.frame = frame
+        self.opacity = opacity
+        self.volume = volume
+        self.muted = muted
+        self.pitch = pitch
+        self.hidden = hidden
+        self.key = key
+        self.background = background
+    }
+
+    /// Output seconds `(out − in) / speed`, before the frame rounding.
+    public var outputSeconds: Double {
+        let span = out - `in`
+        let rate = speed > 0 ? speed : 1
+        return span / rate
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, item, lane, at, `in`, out, speed, crop, fit, frame, opacity, volume, muted, pitch, hidden, key, background
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        item = try c.decode(String.self, forKey: .item)
+        lane = try c.decode(Int.self, forKey: .lane)
+        at = try c.decode(Double.self, forKey: .at)
+        `in` = try c.decode(Double.self, forKey: .in)
+        out = try c.decode(Double.self, forKey: .out)
+        speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 1
+        crop = try c.decodeIfPresent(EditCrop.self, forKey: .crop)
+        fit = try c.decodeIfPresent(EditFit.self, forKey: .fit) ?? .fill
+        frame = try c.decodeIfPresent(EditFrame.self, forKey: .frame)
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
+        volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 1
+        muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
+        pitch = try c.decodeIfPresent(Double.self, forKey: .pitch) ?? 0
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        key = try c.decodeIfPresent(EditChromaKey.self, forKey: .key)?.normalized()
+        if let wire = try c.decodeIfPresent(EditBackgroundWire.self, forKey: .background) {
+            background = EditOverlayBackground(wire: wire)
+        } else {
+            background = nil
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(item, forKey: .item)
+        try c.encode(lane, forKey: .lane)
+        try c.encode(at, forKey: .at)
+        try c.encode(`in`, forKey: .in)
+        try c.encode(out, forKey: .out)
+        if speed != 1 { try c.encode(speed, forKey: .speed) }
+        try c.encodeIfPresent(crop, forKey: .crop)
+        if fit == .fit { try c.encode(fit, forKey: .fit) }
+        try c.encodeIfPresent(frame, forKey: .frame)
+        if opacity != 1 { try c.encode(opacity, forKey: .opacity) }
+        if volume != 1 { try c.encode(volume, forKey: .volume) }
+        if muted { try c.encode(true, forKey: .muted) }
+        if pitch != 0 { try c.encode(pitch, forKey: .pitch) }
+        if hidden { try c.encode(true, forKey: .hidden) }
+        if let key = key?.normalized() { try c.encode(key, forKey: .key) }
+        if let wire = background?.wire { try c.encode(wire, forKey: .background) }
     }
 }
 
@@ -362,6 +549,7 @@ public enum EditJSON {
 
     /// Every number rounded as 31.2 says: times 0.001, speed to 0.05, volume and opacity 0.01, fractions 0.0001.
     public static func rounded(_ t: EditTimeline) -> EditTimeline {
+        if t.version >= 2 { return roundLanes(t) }
         var out = t
         for i in out.main.indices {
             out.main[i].`in` = time(out.main[i].`in`)
@@ -396,6 +584,41 @@ public enum EditJSON {
         return out
     }
 
+    /// Version 2 rounding. Writes the clips directly so a lane's `at` is not rippled by the main-track setter.
+    static func roundLanes(_ t: EditTimeline) -> EditTimeline {
+        var out = t
+        for i in out.clips.indices {
+            var clip = out.clips[i]
+            clip.at = time(clip.at)
+            clip.`in` = time(clip.`in`)
+            clip.out = time(clip.out)
+            clip.speed = speed(clip.speed)
+            clip.volume = level(clip.volume)
+            clip.opacity = level(clip.opacity)
+            clip.pitch = pitch(clip.pitch)
+            if var crop = clip.crop {
+                crop.x = fraction(crop.x); crop.y = fraction(crop.y); crop.w = fraction(crop.w); crop.h = fraction(crop.h)
+                clip.crop = crop
+            }
+            if var frame = clip.frame {
+                frame.x = fraction(frame.x); frame.y = fraction(frame.y); frame.w = fraction(frame.w)
+                clip.frame = frame
+            }
+            if let key = clip.key {
+                clip.key = EditChromaKey(
+                    color: EditChromaKey.hex(key.color) ?? key.color,
+                    similarity: round(key.similarity, to: 1_000),
+                    blend: round(key.blend, to: 1_000),
+                    spill: round(key.spill, to: 1_000))
+            }
+            out.clips[i] = clip
+        }
+        out.storedMain = []
+        out.storedOverlay = []
+        if out.output == .mp4 { out.output = nil }
+        return out
+    }
+
     /// The canonical bytes: rounded, keys sorted, no whitespace, a nil `crop` left out.
     public static func encode(_ t: EditTimeline) throws -> Data {
         let encoder = JSONEncoder()
@@ -407,6 +630,10 @@ public enum EditJSON {
     /// (`limits.edit_overlay_tracks` 1). Only safe when no two overlays overlap; `EditSession` keeps it so on such a server.
     public static func withoutTracks(_ t: EditTimeline) -> EditTimeline {
         var out = t
+        if out.version >= 2 {
+            for i in out.clips.indices where out.clips[i].lane > 1 { out.clips[i].lane = 1 }
+            return out
+        }
         for i in out.overlay.indices { out.overlay[i].track = 0 }
         return out
     }
@@ -414,15 +641,23 @@ public enum EditJSON {
     /// The timeline with every pitch at 0: what goes to a server that does not know pitch (`limits.edit_pitch` false).
     public static func withoutPitch(_ t: EditTimeline) -> EditTimeline {
         var out = t
+        if out.version >= 2 {
+            for i in out.clips.indices { out.clips[i].pitch = 0 }
+            return out
+        }
         for i in out.main.indices { out.main[i].pitch = 0 }
         for i in out.overlay.indices { out.overlay[i].pitch = 0 }
         return out
     }
 
     /// The timeline with every overlay shown: what goes to a server that does not advertise `limits.edit_overlay_hidden`.
-    /// `hidden: true` would be an unknown key and the save would be refused.
+    /// `hidden: true` would be an unknown key and the save would be refused. A version 2 save keeps `hidden` (section 69).
     public static func withoutHidden(_ t: EditTimeline) -> EditTimeline {
         var out = t
+        if out.version >= 2 {
+            for i in out.clips.indices { out.clips[i].hidden = false }
+            return out
+        }
         for i in out.overlay.indices { out.overlay[i].hidden = false }
         return out
     }

@@ -48,7 +48,10 @@ struct EditSessionMainTrackTests {
     @Test func theSessionStartsFromTheServersProject() async throws {
         let rig = try await Rig()
         defer { rig.finish() }
-        #expect(rig.session.timeline == EditJSON.rounded(PreviewData.editorBeachTimeline()))
+        let beach = EditJSON.rounded(PreviewData.editorBeachTimeline())
+        #expect(rig.session.timeline.version == 2)
+        #expect(rig.session.timeline.main == beach.main && rig.session.timeline.overlay == beach.overlay)
+        #expect(rig.session.timeline.canvas == beach.canvas && rig.session.timeline.output == beach.output)
         #expect(rig.session.timing.frames == 780)
         #expect(rig.session.problems.isEmpty)
         #expect(rig.session.saveState == .saved)

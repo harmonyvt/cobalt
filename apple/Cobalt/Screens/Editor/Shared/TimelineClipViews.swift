@@ -15,6 +15,15 @@ struct TimelineClipActions {
     /// An overlay: up or down a layer (39.1); nil when it cannot go that way.
     var layerUp: (() -> Void)?
     var layerDown: (() -> Void)?
+    /// Equal lanes. Nil leaves the action out. `hideTitle` is "hide this clip" or "show this clip".
+    var effect: (() -> Void)?
+    var cutout: (() -> Void)?
+    var duplicateClip: (() -> Void)?
+    var hide: (() -> Void)?
+    var hideTitle = Copy.Editor.hideThisClip
+    var newLane: (() -> Void)?
+    /// VoiceOver "move to lane …", and any dimmed row whose name includes the reason.
+    var extra: [(name: String, run: () -> Void)] = []
 }
 
 private struct TimelineClipAccessibility: ViewModifier {
@@ -36,6 +45,23 @@ private struct TimelineClipAccessibility: ViewModifier {
             .modifier(OptionalAction(name: Copy.Editor.trimAction, run: actions.trim))
             .modifier(OptionalAction(name: Copy.Editor.layerUp, run: actions.layerUp))
             .modifier(OptionalAction(name: Copy.Editor.layerDown, run: actions.layerDown))
+            .modifier(OptionalAction(name: Copy.Editor.applyEffect, run: actions.effect))
+            .modifier(OptionalAction(name: Copy.Editor.cutOutOrKey, run: actions.cutout))
+            .modifier(OptionalAction(name: Copy.Editor.duplicateClip, run: actions.duplicateClip))
+            .modifier(OptionalAction(name: actions.hideTitle, run: actions.hide))
+            .modifier(OptionalAction(name: Copy.Editor.moveToNewLane, run: actions.newLane))
+            .modifier(LaneAccessibilityExtras(actions: actions.extra))
+    }
+}
+
+/// A variable list of VoiceOver actions (one per other lane, plus a dimmed row and its reason).
+private struct LaneAccessibilityExtras: ViewModifier {
+    let actions: [(name: String, run: () -> Void)]
+
+    func body(content: Content) -> some View {
+        actions.reduce(AnyView(content)) { view, action in
+            AnyView(view.accessibilityAction(named: action.name) { action.run() })
+        }
     }
 }
 
@@ -281,6 +307,150 @@ struct TimelineOverlayClipView: View {
         .padding(.horizontal, 5)
         .padding(.vertical, 2)
         .background(CobaltColor.error, in: Capsule())
+    }
+}
+
+// MARK: - one clip, any lane
+
+/// A clip on an equal lane. Lane 0 and the rows above it draw the same block: poster, name, speed, a gif or photo tag,
+/// an fx mark. A hidden clip stays put and fades. The selection ring is the same blue on every lane.
+struct TimelineLaneClipView: View {
+    let clip: EditLaneClip
+    let source: EditSource?
+    let seconds: Double
+    let width: CGFloat
+    let height: CGFloat
+    var isSelected = false
+    var loading: Double?
+    var failed = false
+    var missing = false
+    var showsEffect = false
+    var actions = TimelineClipActions()
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            filmstrip
+            LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
+            label
+            if let loading { download(loading) }
+            if failed || missing { problem }
+        }
+        .frame(width: max(2, width), height: height, alignment: .topLeading)
+        .opacity(clip.hidden ? 0.4 : 1)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(isSelected ? EditorColor.selection : Color.clear, lineWidth: 2)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .modifier(TimelineClipAccessibility(
+            label: Copy.Editor.a11yLaneClip(
+                lane: clip.lane, name: source?.shortName ?? "", seconds: seconds, speed: clip.speed,
+                hidden: clip.hidden, selected: isSelected),
+            selected: isSelected, actions: actions))
+    }
+
+    private var filmstrip: some View {
+        TimelineFilmstrip(url: source?.posterURL, color: EditorColor.clip(for: clip.item), width: width, height: height)
+    }
+
+    private var label: some View {
+        HStack(spacing: 5) {
+            Text(source?.shortName ?? "")
+                .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
+                .lineLimit(1)
+            if let tag { Text(tag).font(Font.cobalt(9.5, .regular, relativeTo: .caption2)).opacity(0.85).fixedSize() }
+            if abs(clip.speed - 1) > 0.001 { badge(Copy.Editor.speedValue(clip.speed)) }
+            if abs(clip.pitch) > 0.001 { badge(Copy.Editor.pitchChip(clip.pitch)) }
+            if clip.crop.map({ !$0.isFull }) ?? false { badge(Copy.Editor.crop) }
+            if showsEffect { badge(Copy.Editor.effectMark) }
+            if clip.muted {
+                Image(systemName: Symbol.Editor.muted)
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            if clip.hidden {
+                Image(systemName: Symbol.Editor.layerHide)
+                    .font(.system(size: 9, weight: .semibold))
+            }
+        }
+        .foregroundStyle(EditorColor.clipInk)
+        .padding(.horizontal, 9)
+        .padding(.top, 5)
+        .dynamicTypeSize(...DynamicTypeSize.large)
+        .frame(width: width, alignment: .leading)
+        .clipped()
+    }
+
+    private var tag: String? {
+        switch source?.kind {
+        case .gif?: return Copy.Editor.badgeGif
+        case .photo?: return Copy.Editor.badgePhoto
+        default: return nil
+        }
+    }
+
+    private func badge(_ text: String) -> some View {
+        Text(text)
+            .font(Font.cobalt(9.5, .regular, relativeTo: .caption2))
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 5)
+            .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+
+    private func download(_ fraction: Double) -> some View {
+        VStack {
+            Spacer(minLength: 0)
+            ZStack(alignment: .leading) {
+                Rectangle().fill(.black.opacity(0.4))
+                Rectangle().fill(EditorColor.clipInk.opacity(0.9)).frame(width: width * min(1, max(0, fraction)))
+            }
+            .frame(height: 3)
+        }
+        .frame(width: width, height: height)
+    }
+
+    private var problem: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+            Image(systemName: Symbol.Editor.missing)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(EditorColor.clipInk)
+        }
+        .frame(width: width, height: height)
+    }
+}
+
+/// The small bar over a selected clip: effect, split, duplicate, hide, delete.
+struct LaneClipToolbar: View {
+    let hidden: Bool
+    let run: (LaneMenuAction) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            tool(Symbol.Editor.effects, Copy.Editor.applyEffect, .effect, false)
+            tool(Symbol.Editor.split, Copy.Editor.splitAtPlayhead, .split, false)
+            tool(Symbol.Editor.overlay, Copy.Editor.duplicateClip, .duplicate, false)
+            tool(hidden ? Symbol.Editor.layerShow : Symbol.Editor.layerHide, hidden ? Copy.Editor.showThisClip : Copy.Editor.hideThisClip, .hide, false)
+            tool(Symbol.Editor.delete, Copy.Editor.deleteClipShort, .delete, true)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(.black.opacity(0.82), in: Capsule())
+        .overlay { Capsule().strokeBorder(EditorColor.line, lineWidth: 1) }
+    }
+
+    private func tool(_ symbol: String, _ title: String, _ action: LaneMenuAction, _ destructive: Bool) -> some View {
+        Button { run(action) } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(destructive ? CobaltColor.errorText : EditorColor.clipInk)
+                .frame(width: 22, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
     }
 }
 

@@ -152,7 +152,10 @@ struct EditorOpenTests {
         try await rig.store.open(PreviewEditorIDs.beach)
         let session = try #require(rig.store.session)
         #expect(session.project.id == PreviewEditorIDs.beach && session.project.title == "beach day edit")
-        #expect(session.timeline == EditJSON.rounded(PreviewData.editorBeachTimeline()))
+        let beach = EditJSON.rounded(PreviewData.editorBeachTimeline())
+        #expect(session.timeline.version == 2)
+        #expect(session.timeline.main == beach.main && session.timeline.overlay == beach.overlay)
+        #expect(session.timeline.canvas == beach.canvas)
         #expect(Set(session.sources.keys) == [
             PreviewEditorIDs.pier, PreviewEditorIDs.surf, PreviewEditorIDs.sunset, PreviewEditorIDs.friends, PreviewEditorIDs.dance,
         ])

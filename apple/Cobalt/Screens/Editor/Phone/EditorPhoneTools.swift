@@ -25,8 +25,12 @@ struct EditorPhoneToolTray: View {
     private var hasClip: Bool { session.selectedMain != nil || currentSpot.clipID != nil }
 
     private var splitReady: Bool {
-        if case .overlay = session.selection { return false }
-        return currentSpot.canSplit
+        session.timeline.isV2 ? playheadHasClip : currentSpot.canSplit
+    }
+
+    /// Any version 2 clip contains the playhead, so split is not limited to the bottom lane.
+    private var playheadHasClip: Bool {
+        session.timing.laneClips.contains { session.playhead > $0.start && session.playhead < $0.start + $0.frames }
     }
 
     var body: some View {
@@ -49,7 +53,7 @@ struct EditorPhoneToolTray: View {
             ToolButton(title: Copy.Editor.toolVolume, symbol: Symbol.Editor.volume, enabled: hasClip || session.selectedOverlay != nil) {
                 openVolume()
             }
-            ToolButton(title: Copy.Editor.effects, symbol: Symbol.Editor.effects, enabled: videoOverlay != nil) {
+            ToolButton(title: Copy.Editor.effects, symbol: Symbol.Editor.effects, enabled: LaneClipCommands.videoClipID(session) != nil) {
                 openEffects()
             }
             if showsPost {
@@ -76,8 +80,7 @@ struct EditorPhoneToolTray: View {
     }
 
     private func split() {
-        let ready: Bool
-        if case .overlay = session.selection { ready = false } else { ready = session.canSplitAtPlayhead }   // live, not `spot`
+        let ready = session.timeline.isV2 ? playheadHasClip : session.canSplitAtPlayhead
         guard ready else {
             host.show(Copy.Editor.nothingToSplit)
             return
@@ -102,17 +105,17 @@ struct EditorPhoneToolTray: View {
         open(.post(target))
     }
 
-    private var videoOverlay: EditOverlay? {
-        if let selected = session.selectedOverlay, session.source(for: selected.item)?.kind == .video { return selected }
-        return session.timeline.overlay.first { session.source(for: $0.item)?.kind == .video }
-    }
-
     private func openEffects() {
-        guard let overlay = videoOverlay else {
+        guard let id = LaneClipCommands.videoClipID(session) else {
             host.show(Copy.Editor.effectsNeedVideo)
             return
         }
-        session.selection = .overlay(overlay.id)
+        if let clip = session.timeline.clips.first(where: { $0.id == id }) {
+            LaneClipCommands.select(session, clip)
+        } else {
+            session.selection = .overlay(id)
+        }
+        session.openEffects(id)
         open(.effects)
     }
 
@@ -159,7 +162,9 @@ struct EditorPhoneEffectsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private var overlay: EditOverlay? {
+        if let id = session.effectsFor, let overlay = session.effectOverlay(for: id) { return overlay }
         if let selected = session.selectedOverlay, session.source(for: selected.item)?.kind == .video { return selected }
+        if let id = LaneClipCommands.videoClipID(session), let overlay = session.effectOverlay(for: id) { return overlay }
         return session.timeline.overlay.first { session.source(for: $0.item)?.kind == .video }
     }
 

@@ -249,6 +249,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var statusIds: Int?
                 var editOverlayTracks: Int?
                 var editOverlayHidden: Bool?
+                var editTimelineVersion: Int?
             }
             var server: String?
             var cobalt: Cobalt?
@@ -288,6 +289,9 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 limits.editOverlayTracks = min(EditValidation.safetyOverlayTracks, max(1, tracks))
             }
             limits.editOverlayHidden = l.editOverlayHidden ?? limits.editOverlayHidden
+            if let version = l.editTimelineVersion {
+                limits.editTimelineVersion = max(1, version)
+            }
         }
         let f = w.features
         var caps = Capabilities(

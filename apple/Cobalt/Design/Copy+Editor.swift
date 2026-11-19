@@ -44,6 +44,7 @@ extension Copy {
             "saved · \(clips) clip\(clips == 1 ? "" : "s") · \(duration)"
         }
         static let saveSaving = "saving…", saveRetrying = "not saved · retrying", saveConflict = "changed on another device"
+        static let saveUpdate = "update needed"
 
         // MARK: bin
 
@@ -90,6 +91,20 @@ extension Copy {
         // MARK: timeline
 
         static let trackOverlay = "overlay", trackMain = "main", trackAudio = "audio", zoomIn = "zoom in", zoomOut = "zoom out"
+        /// Lane 0 is "lane 1" (the bottom row). Lane 2 is the first row above it.
+        static func laneTitle(_ lane: Int) -> String { "lane \(lane + 1)" }
+        static let laneSetsLength = "sets the length"
+        static let newLaneZone = "+ new lane"
+        static let keepGap = "keep gap"
+        static let keepGapHint = "hold ⌥ to keep the gap"
+        static let applyEffect = "apply effect"
+        static let cutOutOrKey = "cut out / key"
+        static let duplicateClip = "duplicate"
+        static let hideThisClip = "hide this clip"
+        static let showThisClip = "show this clip"
+        static let moveToNewLane = "move to new lane"
+        static func moveToLane(_ lane: Int) -> String { "move to lane \(lane + 1)" }
+        static let deleteClipShort = "delete"
 
         // MARK: iPhone tools and sheets
 
@@ -146,6 +161,14 @@ extension Copy {
             if abs(speed - 1) > 0.001 { parts.append("\(trimmedNumber(speed)) times speed") }
             if cropped { parts.append("cropped") }
             if muted { parts.append("muted") }
+            if selected { parts.append("selected") }
+            return parts.joined(separator: ", ")
+        }
+        /// "lane 2, dance, 3 seconds, hidden, selected"
+        static func a11yLaneClip(lane: Int, name: String, seconds: Double, speed: Double, hidden: Bool, selected: Bool) -> String {
+            var parts = [laneTitle(lane), name, "\(trimmedNumber(seconds, places: 1)) seconds"]
+            if abs(speed - 1) > 0.001 { parts.append("\(trimmedNumber(speed)) times speed") }
+            if hidden { parts.append("hidden") }
             if selected { parts.append("selected") }
             return parts.joined(separator: ", ")
         }
@@ -206,6 +229,7 @@ extension Copy {
             case .invalid(let problem): return Self.problem(problem)
             case .offline: return renderOffline
             case .unavailable: return "the server can't do that right now"
+            case .needsTimelineV2: return saveUpdate
             case .other(let word):
                 switch word {
                 case "timed out": return openingTooLong
@@ -427,7 +451,8 @@ extension Copy {
         // MARK: effects and layers (section 66, 67; overlay stacking)
 
         static let effects = "effects"
-        static let effectsNeedVideo = "pick a video overlay"
+        static let effectsNeedVideo = "pick a video"
+        static let effectsBackClip = "‹ clip"
         static let effectsBack = "‹ overlay"
         static let effectsPick = "pick a method"
         static let effectGreenscreen = "greenscreen"
@@ -470,6 +495,7 @@ extension Copy {
         static let layerLockNote = "lock stays on this device"
         static let layerHiddenNote = "this server doesn't hide layers yet · hidden here, still in the render"
         static let previewCrowded = "lots of videos at once — preview may stutter, render is fine"
+        static func previewSkipped(_ n: Int) -> String { n == 1 ? "skipped a clip" : "skipped \(n) clips" }
 
         // MARK: icon names (added for the icon-first controls: what a long press shows and VoiceOver reads)
 
