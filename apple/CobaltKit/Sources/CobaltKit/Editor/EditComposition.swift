@@ -175,8 +175,16 @@ public enum EditComposition {
         if let track = mainVideo {
             let end = CMTime(value: Int64(timing.frames), timescale: fps)
             let have = track.timeRange.end
-            if have.isNumeric, have < end {
-                track.insertEmptyTimeRange(CMTimeRange(start: have, duration: CMTimeSubtract(end, have)))
+            // empty edits at the end of a track do not count (a track of only empty edits has no length), so the tail is
+            // filled with a real clip, or a missing last clip is cut off and an all-missing timeline plays 0 s
+            let from = have.isNumeric ? have : .zero
+            if from < end {
+                let tail = CMTimeRange(start: from, duration: CMTimeSubtract(end, from))
+                do {
+                    try await EditGapFiller.fill(track, tail)
+                } catch {
+                    track.insertEmptyTimeRange(tail)
+                }
             }
         }
 

@@ -1535,6 +1535,12 @@ public final class EditSession {
         }
     }
 
+    /// Off the main thread (apple/ARCHITECTURE.md rule 1): a stat can stall on a busy disk.
+    @concurrent
+    nonisolated static func fileIsReadable(_ url: URL) async -> Bool {
+        FileManager.default.isReadableFile(atPath: url.path)
+    }
+
     /// A file the session already holds must still be on disk. One that is gone is dropped so `startLoad` fetches it again,
     /// and every file that is still here is pinned before the next download's trim.
     private func preflight(_ ids: Set<String>) async {
@@ -1543,7 +1549,7 @@ public final class EditSession {
             let readable: Bool
             switch asset {
             case .video(let av, _, _):
-                readable = FileManager.default.isReadableFile(atPath: av.url.path)
+                readable = await Self.fileIsReadable(av.url)
             case .gif, .photo:
                 readable = await cache.isReadable(id)
             }

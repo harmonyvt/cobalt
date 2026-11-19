@@ -217,7 +217,8 @@ struct EditFrameComposerTests {
         let t = EditTimeline(canvas: EditCanvas(w: 1080, h: 1920, fps: 30), main: [clip])
         let plan = EditRenderPlan(
             timeline: t, timing: EditTiming(t),
-            main: [EditRenderPlan.MainClip(display: PixelSize(w: 1280, h: 720), orientation: .up, trackID: 1, missing: true)])
+            main: [EditRenderPlan.MainClip(display: PixelSize(w: 1280, h: 720), orientation: .up, trackID: 1, missing: true)],
+            overlay: [])
         let px = pixels(EditFrameComposer.compose(plan: plan, frame: 10, main: red(), overlayVideos: [:]))
         let corner = at(px, 2, 2)
         // the checker, not the red source frame and not an empty black canvas
