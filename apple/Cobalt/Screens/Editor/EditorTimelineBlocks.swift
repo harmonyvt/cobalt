@@ -37,7 +37,7 @@ struct MainClipBlock: View {
                 width: width, height: blockHeight, isSelected: selected,
                 loading: session.loadingSources[clip.item],
                 failed: session.sourceFailures[clip.item] != nil, missing: session.isMissing(item: clip.item),
-                actions: actions)
+                problem: session.previewIssues[clip.id], actions: actions)
             if selected, !dragging, session.tool != .blade {
                 MainTrimHandles(session: session, index: index, clip: clip, scale: scale, width: width, height: blockHeight)
             }
@@ -200,7 +200,7 @@ struct OverlayClipBlock: View {
             TimelineOverlayClipView(
                 overlay: overlay, source: source, seconds: span.length, width: width, height: blockHeight,
                 isSelected: selected, missing: session.isMissing(item: overlay.item),
-                showsEffect: session.showsEffect(overlay), actions: actions)
+                showsEffect: session.showsEffect(overlay), problem: session.previewIssues[overlay.id], actions: actions)
             if selected {
                 if source?.kind == .video { leadingHandle }
                 trailingHandle

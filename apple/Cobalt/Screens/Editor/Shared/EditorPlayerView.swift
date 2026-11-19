@@ -92,16 +92,14 @@ struct EditorCanvasView<Overlay: View>: View {
                 EditorPlayerView(player: session.player)
                     .opacity(session.isPlayerReady ? 1 : 0)
                 stateLine
-                if session.previewFailed {
-                    Text(Copy.Editor.previewFailed)
-                        .font(CobaltType.captionSmall)
-                        .foregroundStyle(CobaltColor.caption)
-                        .multilineTextAlignment(.center)
-                        .padding(16)
-                }
                 overlay(fit)
             }
             .frame(width: fit.width, height: fit.height)
+            .overlay(alignment: .bottom) {
+                if session.previewFailed || (session.effectsFor == nil && session.coveringOverlayID != nil) {
+                    previewBanners
+                }
+            }
             .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay {
@@ -112,6 +110,49 @@ struct EditorCanvasView<Overlay: View>: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel(Copy.Editor.canvasA11y)
         }
+    }
+
+    /// The failure line, and the hint when one opaque video hides the whole picture. Only as tall as the words, so the
+    /// canvas under them still takes the tap, the drag and the pinch.
+    @ViewBuilder
+    private var previewBanners: some View {
+        VStack(spacing: 6) {
+            if session.previewFailed {
+                Text(session.previewFailure ?? Copy.Editor.previewFailed)
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityLabel(session.previewFailure ?? Copy.Editor.previewFailed)
+            }
+            if !session.previewFailed, session.effectsFor == nil, let id = session.coveringOverlayID {
+                HStack(spacing: 8) {
+                    Text(Copy.Editor.overlayCoversPicture)
+                        .font(CobaltType.captionSmall)
+                        .foregroundStyle(.white.opacity(0.92))
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        session.selection = .overlay(id)
+                        session.openEffects(id)
+                    } label: {
+                        Text(Copy.Editor.effects)
+                            .font(CobaltType.captionSmall)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(CobaltColor.linkBlue)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
+        .padding(10)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder

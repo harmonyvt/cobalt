@@ -54,12 +54,17 @@ public final class EditSession {
     public private(set) var isPlaying = false
     /// The newest render of this project.
     public private(set) var activeRender: EditRender?
-    /// The composition the player plays; nil until every main clip's file is on the device.
+    /// The composition the player plays; nil until one has been built.
     public private(set) var playable: EditPlayable?
-    /// True once an item reports `.readyToPlay` (kept while a rebuilt item loads); false before the first one and after a failure.
+    /// True once an item reports `.readyToPlay` (kept while a rebuilt item loads); false before the first one and when the
+    /// current item has failed. A rebuild that throws keeps the last ready item, so play still works.
     public private(set) var isPlayerReady = false
-    /// True when the current item's status is `.failed` (the preview cannot play; render still works). Reset on every rebuild.
+    /// True when the newest build threw, or the current item's status is `.failed`. The last good picture stays up when there is one.
     public private(set) var previewFailed = false
+    /// The line on the canvas while `previewFailed` (a short reason, never a path).
+    public private(set) var previewFailure: String?
+    /// Clip id -> why that clip was left out of the picture or drawn as a gap. The rest of the preview still plays.
+    public private(set) var previewIssues: [String: String] = [:]
     public private(set) var canUndo = false
     public private(set) var canRedo = false
 
@@ -101,6 +106,10 @@ public final class EditSession {
     @ObservationIgnored private var pendingSeekFrame: Int?
     @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
+    /// The newest build threw and the previous item is still in the player. Its `.readyToPlay` must not clear `previewFailed`.
+    @ObservationIgnored private var previewHold = false
+    /// Pins on the source cache for the files this session is playing. Released in `tearDown`.
+    @ObservationIgnored private let cacheOwner = UUID()
     @ObservationIgnored private var renderPoll: Task<Void, Never>?
     @ObservationIgnored private(set) var builds = 0
 
@@ -231,20 +240,37 @@ public final class EditSession {
     }
 
     /// Follows the item's status: ready only at `.readyToPlay`, `previewFailed` at `.failed`. `token` drops stale callbacks.
+    /// A rebuild that kept the previous item sets `previewHold`, so this item becoming ready does not clear that failure.
     private func observeStatus(of item: AVPlayerItem) {
         statusObservation?.invalidate()
         let token = builds
         statusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             let status = item.status
-            Task { @MainActor [weak self] in self?.itemStatus(status, token: token) }
+            // the reason is a short string: `Error` is not sent across the hop, and its description can carry a path
+            let failed = status == .failed ? EditPreviewFailure.reason(item.error ?? EditError.other("player")) : nil
+            let logged = status == .failed ? Telemetry.errorData(item.error ?? EditError.other("player")) : nil
+            Task { @MainActor [weak self] in self?.itemStatus(status, reason: failed, log: logged, token: token) }
         }
     }
 
-    private func itemStatus(_ status: AVPlayerItem.Status, token: Int) {
+    private func itemStatus(_ status: AVPlayerItem.Status, reason: String?, log: [String: TelemetryValue]?, token: Int) {
         guard token == builds, !isClosed else { return }
         switch status {
-        case .readyToPlay: isPlayerReady = true; previewFailed = false
-        case .failed: isPlayerReady = false; previewFailed = true
+        case .readyToPlay:
+            isPlayerReady = true
+            if !previewHold {
+                previewFailed = false
+                previewFailure = nil
+            }
+        case .failed:
+            previewHold = false
+            isPlayerReady = false
+            previewFailed = true
+            previewFailure = reason ?? EditPreviewFailure.couldntUpdate
+            var data = log ?? [:]
+            data["reason"] = .string(previewFailure ?? EditPreviewFailure.couldntUpdate)
+            data["where"] = "player"
+            Telemetry.log(.error, .ui, "edit preview failed", data: data)
         default: break   // still loading: keep the last item's state
         }
     }
@@ -422,6 +448,19 @@ public final class EditSession {
 
     /// The server stores `hidden: true`. When it does not, hide stays on the device and the save leaves the key out.
     public var sendsHidden: Bool { ctx.capabilities.limits.editOverlayHidden }
+
+    /// A video overlay hiding the whole picture at the playhead: full frame, opaque, no greenscreen. Nil when the preview
+    /// already marked that clip broken, or while its effects are open.
+    public var coveringOverlayID: String? {
+        EditPreviewCover.id(
+            in: timeline, timing: timing, at: playhead,
+            display: { id in
+                if let asset = self.assets[id], asset.display.w > 0, asset.display.h > 0 { return asset.display }
+                return self.sources[id]?.display
+            },
+            isVideo: { self.sources[$0]?.kind == .video },
+            blocked: { self.previewIssues[$0] != nil || self.effectsFor == $0 })
+    }
 
     /// More than about 8 videos share one moment. The preview is drawn smaller and a note says the render is fine.
     public var previewCrowded: Bool {
@@ -1434,21 +1473,18 @@ public final class EditSession {
     private func rebuild(generation: Int) async {
         let snapshot = timeline
         let items = Set(snapshot.main.map(\.item) + snapshot.overlay.map(\.item))
+        await preflight(items)
         let running = items.compactMap { startLoad($0) }
         for task in running { await task.value }
         guard generation == rebuildGeneration, !isClosed else { return }
 
-        guard snapshot.main.allSatisfy({ assets[$0.item] != nil }), !snapshot.main.isEmpty else {
-            statusObservation?.invalidate()
-            statusObservation = nil
-            isPlayerReady = false
-            previewFailed = false
-            playable = nil
-            player.replaceCurrentItem(with: nil)
+        guard !snapshot.main.isEmpty else {
+            previewIssues = [:]
+            failPreview(EditPreviewFailure.nothingToPlay, keepPicture: false)
             return
         }
         var playing = snapshot
-        playing.overlay = snapshot.overlay.filter { assets[$0.item] != nil && !$0.hidden }
+        playing.overlay = snapshot.overlay.filter { !$0.hidden }
         if let draft = effectDraft, draft.kind == .greenscreen,
            let i = playing.overlay.firstIndex(where: { $0.id == draft.overlayID }) {
             playing.overlay[i].key = draft.key.normalized()
@@ -1469,7 +1505,16 @@ public final class EditSession {
             let item = built.playerItem()
             observeEnd(of: item)
             // keep the last item's readiness while the new one loads (no flicker on every edit); its status decides
+            previewHold = false
             previewFailed = false
+            previewFailure = nil
+            let nextIssues = Dictionary(built.issues.map { ($0.clipID, $0.reason) }, uniquingKeysWith: { first, _ in first })
+            for issue in built.issues where previewIssues[issue.clipID] != issue.reason {
+                Telemetry.log(.warn, .ui, "edit preview left a clip out", data: [
+                    "lane": .string(issue.lane.rawValue), "reason": .string(issue.reason),
+                ])
+            }
+            previewIssues = nextIssues
             observeStatus(of: item)
             player.replaceCurrentItem(with: item)
             playable = built
@@ -1480,13 +1525,62 @@ public final class EditSession {
             if wasPlaying { player.play() }
         } catch {
             guard generation == rebuildGeneration else { return }
-            statusObservation?.invalidate()
-            statusObservation = nil
-            isPlayerReady = false
-            previewFailed = false
-            playable = nil
-            player.replaceCurrentItem(with: nil)
+            let reason = EditPreviewFailure.reason(error)
+            // the last picture stays, and play stays usable while that item is still ready
+            failPreview(reason, keepPicture: player.currentItem != nil && playable != nil)
+            var data = Telemetry.errorData(error)
+            data["reason"] = .string(reason)
+            data["where"] = "build"
+            Telemetry.log(.error, .ui, "edit preview failed", data: data)
         }
+    }
+
+    /// Off the main thread (apple/ARCHITECTURE.md rule 1): a stat can stall on a busy disk.
+    @concurrent
+    nonisolated static func fileIsReadable(_ url: URL) async -> Bool {
+        FileManager.default.isReadableFile(atPath: url.path)
+    }
+
+    /// A file the session already holds must still be on disk. One that is gone is dropped so `startLoad` fetches it again,
+    /// and every file that is still here is pinned before the next download's trim.
+    private func preflight(_ ids: Set<String>) async {
+        for id in ids {
+            guard let asset = assets[id] else { continue }
+            let readable: Bool
+            switch asset {
+            case .video(let av, _, _):
+                readable = await Self.fileIsReadable(av.url)
+            case .gif, .photo:
+                readable = await cache.isReadable(id)
+            }
+            if readable {
+                if case .video(let av, _, _) = asset {
+                    await cache.pin(owner: cacheOwner, file: av.url)
+                }
+                await cache.pin(owner: cacheOwner, id: id)
+                await cache.touch(id)
+            } else {
+                assets[id] = nil
+                sourceFailures[id] = nil
+                await cache.invalidate(id)
+            }
+        }
+    }
+
+    /// `keepPicture`: the player already has an item, so this failure leaves it (and its frame) where it is.
+    private func failPreview(_ reason: String, keepPicture: Bool) {
+        previewFailure = reason
+        previewFailed = true
+        if keepPicture {
+            previewHold = true
+            return
+        }
+        previewHold = false
+        statusObservation?.invalidate()
+        statusObservation = nil
+        isPlayerReady = false
+        playable = nil
+        player.replaceCurrentItem(with: nil)
     }
 
     /// Starts fetching a file unless it is here or on its way; the task finishes when it is decoded or has failed.
@@ -1508,6 +1602,10 @@ public final class EditSession {
                 var length: Double?
                 if source.kind == .video, source.duration == nil { length = await self.cache.length(of: id) }
                 self.assets[id] = asset
+                if case .video(let av, _, _) = asset {
+                    await self.cache.pin(owner: self.cacheOwner, file: av.url)
+                }
+                await self.cache.pin(owner: self.cacheOwner, id: id)
                 self.learn(id, display: asset.display, duration: length)
             } catch {
                 self.sourceFailures[id] = EditError.from(error)
@@ -1608,7 +1706,11 @@ public final class EditSession {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = nil
         player.replaceCurrentItem(with: nil)
-        Task { [cache] in await cache.cancelAll() }
+        let owner = cacheOwner
+        Task { [cache] in
+            await cache.unpinOwner(owner)
+            await cache.cancelAll()
+        }
     }
 }
 
