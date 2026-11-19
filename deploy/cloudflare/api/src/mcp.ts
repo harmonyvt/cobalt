@@ -8,6 +8,7 @@
 // caps (saves, renders) and the workbench box behave as they do for one chat thread.
 // Free of Cloudflare imports: the tests run it under node.
 import * as z from "zod";
+import { EDIT_MAX_CLIPS, EDIT_OVERLAY_TRACKS } from "../../editor/helper/timeline.js";
 import { chatTools, type ChatCollect } from "./chat-tools";
 import { lookImages, lookMediaImages, type LookOpts } from "./look-pictures";
 import { mediaHostsOf } from "./media-refs";
@@ -157,6 +158,7 @@ export const INSTRUCTIONS = [
     "Save a link (TikTok, X, YouTube, Instagram, a direct file...) with save_link. Upload a local file with upload_files, then PUT the file's bytes to the upload_url it returns (its `curl` field is ready to run).",
     "Make ops (make_*, edits_render, chat_video, convert_to_webp) answer a job: check on it with job_status. Share links: create_share_link; collections and sets group them.",
     "Cropping (make_cropImage for pictures, make_crop for videos): never guess the position or assume the centre. Look at the source with grid: true (a video: frames: true, or make_frames for frames at chosen seconds), read the box off the labelled grid, check it with look's box option before making it, and look at the result after. A moving subject needs a box that covers it in every frame, or several clips with their own crops. Plain crop by default: cutout only for a subject on a plain background, never for banners, bars or text. Then edits_addOverlay to use it in a video.",
+    `Editor timelines (edits_create, edits_update) allow ${EDIT_MAX_CLIPS} clips and ${EDIT_OVERLAY_TRACKS} overlay layers (track 0..${EDIT_OVERLAY_TRACKS - 1}, higher on top). edits_addOverlay picks the lowest free layer. An overlay may set hidden: true (the renderer skips it; omit the key when it is shown). A greenscreen is the key object. A library_removeBackground result (a private ProRes alternate) can be overlaid the same way as a cutout.`,
     "When offered, agents_spawn starts a helper (another capystore agent with these tools) on one task in the background; follow it with agents_get or job_status on its job, message it with agents_send, read what helpers sent you with agents_inbox.",
     "To see any media (a 7TV emote id or link, a capystore link, an allowed https image URL), call look with media. Swarms (swarm_plan): when the items are a 7TV set's emotes, use source { call: \"seventv.set\" } (one read gives every name, id and picture) instead of searching for each; emotes_findMany looks up to 20 names in one request; swarm_board shows any swarm's results with their media and scores.",
     "Tools marked destructive delete or change things for good: confirm with the user first.",

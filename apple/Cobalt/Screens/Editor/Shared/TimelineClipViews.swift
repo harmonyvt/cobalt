@@ -98,6 +98,8 @@ struct TimelineMainClipView: View {
     var loading: Double?
     var failed = false
     var missing = false
+    /// Why this clip was left out of the preview, when the rest of it still plays.
+    var problem: String? = nil
     var actions = TimelineClipActions()
 
     var body: some View {
@@ -106,7 +108,8 @@ struct TimelineMainClipView: View {
             LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
             label
             if let loading { downloadBar(loading) }
-            if failed || missing { problem }
+            if failed || missing { problemOverlay }
+            if let problem, !failed, !missing { problemChip(problem) }
         }
         .frame(width: max(2, width), height: height, alignment: .topLeading)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -116,9 +119,9 @@ struct TimelineMainClipView: View {
         }
         .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .modifier(TimelineClipAccessibility(
-            label: Copy.Editor.a11yClip(
+            label: a11yLabel(Copy.Editor.a11yClip(
                 n: number, name: source?.shortName ?? "", seconds: seconds, speed: clip.speed,
-                cropped: clip.crop.map { !$0.isFull } ?? false, muted: clip.muted, selected: isSelected),
+                cropped: clip.crop.map { !$0.isFull } ?? false, muted: clip.muted, selected: isSelected)),
             selected: isSelected, actions: actions))
     }
 
@@ -171,7 +174,38 @@ struct TimelineMainClipView: View {
         .frame(width: width, height: height)
     }
 
-    private var problem: some View {
+    private func a11yLabel(_ base: String) -> String {
+        guard let problem else { return base }
+        return base + ". " + problem
+    }
+
+    /// A small red chip. The words show when the block is wide enough; VoiceOver always gets them.
+    private func problemChip(_ text: String) -> some View {
+        VStack {
+            Spacer(minLength: 0)
+            HStack(spacing: 0) {
+                HStack(spacing: 3) {
+                    Image(systemName: Symbol.error)
+                        .font(.system(size: 8, weight: .bold))
+                        .accessibilityHidden(true)
+                    if width > 88 {
+                        Text(text)
+                            .font(Font.cobalt(9, .semibold, relativeTo: .caption2))
+                            .lineLimit(1)
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(CobaltColor.error, in: Capsule())
+                Spacer(minLength: 0)
+            }
+            .padding(3)
+        }
+        .frame(width: width, height: height)
+    }
+
+    private var problemOverlay: some View {
         ZStack {
             Color.black.opacity(0.55)
             HStack(spacing: 4) {
@@ -202,6 +236,8 @@ struct TimelineOverlayClipView: View {
     var isSelected = false
     var missing = false
     var showsEffect = false
+    /// Why this overlay was left out of the preview.
+    var problem: String? = nil
     var actions = TimelineClipActions()
 
     var body: some View {
@@ -222,6 +258,7 @@ struct TimelineOverlayClipView: View {
                         .accessibilityLabel(Copy.Editor.effects)
                 }
                 if missing { Image(systemName: Symbol.Editor.missing).font(.system(size: 10, weight: .semibold)) }
+                if let problem, !missing { overlayProblem(problem) }
             }
             .foregroundStyle(EditorColor.clipInk)
             .padding(.horizontal, 9)
@@ -239,8 +276,11 @@ struct TimelineOverlayClipView: View {
         }
         .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .modifier(TimelineClipAccessibility(
-            label: Copy.Editor.a11yOverlay(
-                name: source?.shortName ?? "", start: overlay.at, seconds: seconds, selected: isSelected),
+            label: {
+                let base = Copy.Editor.a11yOverlay(
+                    name: source?.shortName ?? "", start: overlay.at, seconds: seconds, selected: isSelected)
+                return problem.map { base + ". " + $0 } ?? base
+            }(),
             selected: isSelected, actions: actions))
     }
 
@@ -250,6 +290,23 @@ struct TimelineOverlayClipView: View {
         case .photo?: return Copy.Editor.badgePhoto
         default: return nil
         }
+    }
+
+    private func overlayProblem(_ text: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: Symbol.error)
+                .font(.system(size: 8, weight: .bold))
+                .accessibilityHidden(true)
+            if width > 88 {
+                Text(text)
+                    .font(Font.cobalt(9, .semibold, relativeTo: .caption2))
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(CobaltColor.error, in: Capsule())
     }
 }
 

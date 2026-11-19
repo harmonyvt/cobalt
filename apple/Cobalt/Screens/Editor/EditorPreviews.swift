@@ -17,7 +17,7 @@ private struct EditorPreviewHost: View {
             if let session = model.editor.session {
                 EditorRoot(model: model, session: session)
             } else {
-                EditorOpeningView(model: model)
+                EditorOpeningView(model: model, previewWaiting: true)
             }
         }
         .cobaltRoot(model: model)

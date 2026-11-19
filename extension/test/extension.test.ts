@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import { describe, expect, it } from "vitest";
 import { wire } from "../src/background";
+import { start } from "../src/content";
 import { badgeColor } from "../src/lib/brand";
 import type { Ext, StorageArea } from "../src/lib/browser";
 import { markRail, mountedHost, pruneRail, relocateHost, scanInstagram, scanTwitch, scanX, scanYouTube } from "../src/lib/find";
@@ -299,6 +300,177 @@ describe("finding posts in a page", () => {
         expect(posts.map((f) => f.url)).toEqual(["https://www.instagram.com/p/AAAAAAAAAAA/", "https://www.instagram.com/reel/FEEDREEL111/"]);
         expect(posts.every((f) => f.fit !== "rail")).toBe(true);
         expect(feed.querySelectorAll("article")).toHaveLength(2);
+    });
+
+    it("puts one button in each home-feed action row, including a video and a carousel", () => {
+        const url = "https://www.instagram.com/";
+        const doc = page(url, readFileSync(new URL("./fixtures/ig-home-feed.html", import.meta.url), "utf8"));
+        const posts = scanInstagram(doc, url);
+        expect(posts.map((f) => f.url)).toEqual([
+            "https://www.instagram.com/p/PHOTOCODE11/",
+            "https://www.instagram.com/reel/FEEDVID1111/",
+            "https://www.instagram.com/p/CAROUSEL111/",
+        ]);
+        expect(posts.every((f) => f.fit !== "rail")).toBe(true);
+        // Image and carousel: appended to the icon group, which sits beside Save. Not on the burst heart.
+        expect(posts[0]!.mount.id).toBe("photo-icons");
+        expect(posts[0]!.before).toBeUndefined();
+        expect(posts[0]!.mount.closest("article")?.id).toBe("photo");
+        expect(doc.querySelector(".burst")!.contains(posts[0]!.mount)).toBe(false);
+        expect(posts[2]!.mount.id).toBe("carousel-icons");
+        // Video: the row is flat, so the button is the slot before Save. The audio disc is not the URL.
+        expect(posts[1]!.mount.id).toBe("video-actions");
+        expect(posts[1]!.before?.id).toBe("video-save");
+        expect(posts[1]!.url).not.toContain("/audio/");
+        // Stories and the feed column itself are not a mount. Comment hearts are not posts.
+        expect(posts.some((f) => f.mount.id === "feed" || f.mount.id === "stories" || f.mount.closest("#stories"))).toBe(false);
+        expect(doc.querySelectorAll("#feed > .capystore-save, #stories .capystore-save")).toHaveLength(0);
+        // A second scan is the same three slots.
+        const again = scanInstagram(doc, url);
+        expect(again.map((f) => [f.url, (f.mount as HTMLElement).id, f.before?.id ?? ""])).toEqual(
+            posts.map((f) => [f.url, (f.mount as HTMLElement).id, f.before?.id ?? ""]),
+        );
+    });
+
+    it("uses a comment permalink when a video post has no clean link of its own", () => {
+        const doc = page(
+            "https://www.instagram.com/",
+            `<div id="feed">
+              <article id="clip">
+                <a href="/reels/audio/17890/">audio</a>
+                <section id="row">
+                  <div role="button" aria-label="Like"><svg aria-label="Like"></svg></div>
+                  <div role="button" aria-label="Comment"></div>
+                  <div role="button" aria-label="Share Post"></div>
+                  <div id="save" role="button" aria-label="Save"></div>
+                </section>
+                <a href="/p/COMMENTONLY1/c/18130549336575775/">a comment</a>
+              </article>
+            </div>`,
+        );
+        const found = scanInstagram(doc, "https://www.instagram.com/");
+        expect(found.map((f) => f.url)).toEqual(["https://www.instagram.com/p/COMMENTONLY1/"]);
+        expect(found[0]!.mount.id).toBe("row");
+        expect(found[0]!.before?.id).toBe("save");
+        expect(found[0]!.fit).toBeUndefined();
+    });
+
+    it("puts one button on a single post page, in the icon row, not on each comment", () => {
+        const url = "https://www.instagram.com/p/POSTPAGE01/";
+        const doc = page(url, readFileSync(new URL("./fixtures/ig-post.html", import.meta.url), "utf8"));
+        const found = scanInstagram(doc, url);
+        expect(found).toHaveLength(1);
+        expect(found[0]!.url).toBe(url);
+        expect(found[0]!.fit).toBeUndefined();
+        expect(found[0]!.mount.id).toBe("post-icons");
+        expect(doc.getElementById("post-comments")!.contains(found[0]!.mount)).toBe(false);
+        expect(doc.querySelector("article")).toBeNull();
+        const again = scanInstagram(doc, url);
+        expect(again).toHaveLength(1);
+        expect(again[0]!.mount.id).toBe("post-icons");
+    });
+
+    it("keeps one button per feed post when posts are appended and when a row is redrawn", async () => {
+        const win = new Window({ url: "https://www.instagram.com/" });
+        win.document.write(readFileSync(new URL("./fixtures/ig-home-feed.html", import.meta.url), "utf8"));
+        const previous = {
+            window: globalThis.window,
+            document: globalThis.document,
+            location: globalThis.location,
+            MutationObserver: globalThis.MutationObserver,
+            getComputedStyle: globalThis.getComputedStyle,
+            ShadowRoot: globalThis.ShadowRoot,
+            Element: globalThis.Element,
+            Node: globalThis.Node,
+            HTMLElement: globalThis.HTMLElement,
+            chrome: (globalThis as { chrome?: unknown }).chrome,
+        };
+        const g = globalThis as unknown as Record<string, unknown>;
+        g.window = win;
+        g.document = win.document;
+        g.location = win.location;
+        g.MutationObserver = win.MutationObserver;
+        g.getComputedStyle = win.getComputedStyle.bind(win);
+        g.ShadowRoot = win.ShadowRoot;
+        g.Element = win.Element;
+        g.Node = win.Node;
+        g.HTMLElement = win.HTMLElement;
+        g.chrome = {
+            runtime: {
+                id: "capystore-test",
+                getURL: (path: string) => `chrome-extension://capystore/${path}`,
+                sendMessage: async (message: { type?: string }) => {
+                    if (message?.type === "get-sites") return { instagram: true };
+                    if (message?.type === "auth-state") return { signedIn: true };
+                    if (message?.type === "status") return { state: "idle", signedIn: true };
+                    return {};
+                },
+                onMessage: { addListener() {} },
+            },
+            storage: {
+                local: { async get() { return {}; }, async set() {}, async remove() {} },
+                onChanged: { addListener() {} },
+            },
+            tabs: { async create() { return {}; }, async sendMessage() { return {}; } },
+        };
+        (g.__capystoreStarted as Set<string> | undefined)?.delete("instagram");
+        const hosts = () => [...win.document.querySelectorAll(".capystore-save")];
+        const hostUrl = (el: { getAttribute(name: string): string | null }) => el.getAttribute("data-url");
+        const waitFor = async (pred: () => boolean) => {
+            const deadline = Date.now() + 2000;
+            while (Date.now() < deadline) {
+                if (pred()) return;
+                await new Promise((resolve) => setTimeout(resolve, 40));
+            }
+            throw new Error(`timed out with ${hosts().length} buttons: ${hosts().map((h) => hostUrl(h)).join(",")}`);
+        };
+        try {
+            start("instagram", scanInstagram);
+            await waitFor(() => hosts().length === 3);
+            expect(hosts().map((h) => hostUrl(h))).toEqual([
+                "https://www.instagram.com/p/PHOTOCODE11/",
+                "https://www.instagram.com/reel/FEEDVID1111/",
+                "https://www.instagram.com/p/CAROUSEL111/",
+            ]);
+            expect(win.document.querySelector("#feed > .capystore-save")).toBeNull();
+            expect(win.document.querySelector("#photo-icons > .capystore-save")).not.toBeNull();
+            expect(win.document.querySelector("#video-save")?.previousElementSibling?.classList.contains("capystore-save")).toBe(true);
+            expect(win.document.querySelector("#carousel-icons > .capystore-save")).not.toBeNull();
+            expect(win.document.querySelector("#stories .capystore-save")).toBeNull();
+
+            const more = win.document.createElement("article");
+            more.id = "more";
+            more.innerHTML = `<a href="/p/SCROLLED111/"><time>now</time></a>
+              <section class="actions"><div class="icons" id="more-icons">
+                <div role="button" aria-label="Like"><svg aria-label="Like"></svg></div>
+                <div role="button" aria-label="Comment"></div>
+                <div role="button" aria-label="Share"></div>
+              </div><div class="save" role="button" aria-label="Save"><svg aria-label="Save"></svg></div></section>`;
+            win.document.getElementById("feed")!.append(more);
+            await waitFor(() => hosts().length === 4);
+            expect(hosts().filter((h) => hostUrl(h) === "https://www.instagram.com/p/SCROLLED111/")).toHaveLength(1);
+            expect(win.document.querySelector("#more-icons > .capystore-save, #more .icons > .capystore-save")).not.toBeNull();
+
+            // The site redraws the row and drops the button. The observer puts exactly one back.
+            win.document.querySelector("#photo .capystore-save")!.remove();
+            win.document.getElementById("photo-icons")!.append(win.document.createElement("span"));
+            await waitFor(() => win.document.querySelectorAll("#photo .capystore-save").length === 1);
+            expect(hosts().filter((h) => hostUrl(h) === "https://www.instagram.com/p/PHOTOCODE11/")).toHaveLength(1);
+            expect(hosts()).toHaveLength(4);
+        } finally {
+            win.happyDOM.abort();
+            (g.__capystoreStarted as Set<string> | undefined)?.delete("instagram");
+            g.window = previous.window;
+            g.document = previous.document;
+            g.location = previous.location;
+            g.MutationObserver = previous.MutationObserver;
+            g.getComputedStyle = previous.getComputedStyle;
+            g.ShadowRoot = previous.ShadowRoot;
+            g.Element = previous.Element;
+            g.Node = previous.Node;
+            g.HTMLElement = previous.HTMLElement;
+            g.chrome = previous.chrome;
+        }
     });
 
     it("does not inject on an Instagram page that only says the post is unavailable", () => {

@@ -3,9 +3,10 @@ import CobaltKit
 import SwiftUI
 
 /// The clip sheet, the approved "iPhone A crop + speed + trim" board (apple/CONTRACT-EDITOR.md 4.5): `surf · clip 2` ·
-/// `done` · the close (cancel) top right; the clip's frame at the top with the crop frame on it; and below, `crop`, `speed` and `trim`. Opened from `trim`,
-/// `crop` or `speed` it scrolls to that section. Changes reach the preview as they are made; `cancel` puts the clip back as it
-/// was when the sheet opened.
+/// `done` · the close (cancel) top right; the clip's own picture at the top (playing, with a timecode) and the crop frame
+/// on it; and below, `crop`, `speed` and `trim`. Opened from `trim`, `crop` or `speed` it scrolls to that section. Changes
+/// reach the preview as they are made; `cancel` puts the clip back as it was when the sheet opened. The sheet opens at the
+/// medium detent so the editor's picture and play stay visible behind it.
 struct EditorPhoneClipSheet: View {
     let session: EditSession
     let section: EditorPhoneClipSection
@@ -14,6 +15,7 @@ struct EditorPhoneClipSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var original: EditClip?
     @State private var clipID: String
+    @State private var preview = ClipTrimPreview()
 
     init(session: EditSession, section: EditorPhoneClipSection, pitchEnabled: Bool = true) {
         self.session = session
@@ -29,14 +31,18 @@ struct EditorPhoneClipSheet: View {
 
     var body: some View {
         GeometryReader { geo in
+            // The picture keeps at least ~150 pt. The settings take the rest, and never the whole sheet.
+            let panelHeight = min(400, max(180, geo.size.height - 64 - 150))
             VStack(spacing: 0) {
                 header
                 stage
-                    .frame(maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
                 panel
-                    .frame(height: min(440, geo.size.height * 0.58))
+                    .frame(height: panelHeight)
             }
         }
+        .modifier(ClipTrimSync(session: session, clip: clip, preview: preview))
         .background(CobaltColor.bg.ignoresSafeArea())
     }
 
@@ -84,7 +90,7 @@ struct EditorPhoneClipSheet: View {
     @ViewBuilder
     private var stage: some View {
         if let clip {
-            EditorPhoneCropStage(session: session, clip: clip)
+            EditorPhoneCropStage(session: session, clip: clip, preview: preview)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 10)
         } else {
@@ -161,135 +167,21 @@ struct EditorPhoneClipSheet: View {
 
     private func trimSection(_ clip: EditClip) -> some View {
         EditorSection(Copy.Editor.trim) {
-            VStack(alignment: .leading, spacing: 8) {
-                EditorPhoneTrimStrip(session: session, clip: clip, source: session.source(for: clip.item))
-                HStack {
-                    Text(Copy.Editor.inAt(Copy.Editor.clockCentis(clip.in)))
-                    Spacer(minLength: 8)
-                    Text(Copy.Editor.outAt(Copy.Editor.clockCentis(clip.out)))
-                }
-                .font(Font.cobalt(11, .regular, relativeTo: .caption2))
-                .foregroundStyle(CobaltColor.caption)
-                .monospacedDigit()
-            }
+            ClipTrimStrip(session: session, clip: clip, preview: preview)
         }
-    }
-}
-
-// MARK: - the trim filmstrip
-
-/// The whole source as a filmstrip with what the clip uses framed in blue and the rest dimmed; a handle at each end moves the
-/// clip's `in` and `out` (the session keeps them at least 0.1 s apart and inside the file).
-struct EditorPhoneTrimStrip: View {
-    let session: EditSession
-    let clip: EditClip
-    let source: EditSource?
-
-    @State private var base: (inPoint: Double, outPoint: Double)?
-
-    private static let height: CGFloat = 48
-
-    private var duration: Double { max(0.2, source?.duration ?? clip.out) }
-
-    var body: some View {
-        GeometryReader { geo in
-            strip(width: geo.size.width)
-        }
-        .frame(height: Self.height)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func strip(width: CGFloat) -> some View {
-        let left = width * CGFloat(min(1, max(0, clip.in / duration)))
-        let right = width * CGFloat(min(1, max(0, clip.out / duration)))
-        return ZStack(alignment: .topLeading) {
-            filmstrip(width: width)
-            Rectangle().fill(.black.opacity(0.65)).frame(width: left, height: Self.height)
-            Rectangle().fill(.black.opacity(0.65)).frame(width: max(0, width - right), height: Self.height).offset(x: right)
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(EditorColor.selection, lineWidth: 2)
-                .frame(width: max(2, right - left), height: Self.height)
-                .offset(x: left)
-                .allowsHitTesting(false)
-            handles(width: width, left: left, right: right)
-        }
-        .frame(width: width, height: Self.height, alignment: .topLeading)
-    }
-
-    private func filmstrip(width: CGFloat) -> some View {
-        let count = max(1, Int((width / Metrics.stripCell).rounded(.up)))
-        return HStack(spacing: 0) {
-            ForEach(0..<count, id: \.self) { _ in
-                EditorPoster(url: source?.posterURL, fallback: EditorColor.clip(for: clip.item), maxPixel: 120)
-                    .frame(width: Metrics.stripCell, height: Self.height)
-            }
-        }
-        .frame(width: width, height: Self.height, alignment: .leading)
-        .background(EditorColor.clip(for: clip.item))
-        .clipped()
-        .accessibilityHidden(true)
-    }
-
-    private func handles(width: CGFloat, left: CGFloat, right: CGFloat) -> some View {
-        ZStack(alignment: .topLeading) {
-            EditorPhoneHitZone(height: Self.height, onDrag: { dragIn($0, width: width) }, onEnd: finish)
-                .offset(x: left - 10)
-            EditorPhoneHitZone(height: Self.height, onDrag: { dragOut($0, width: width) }, onEnd: finish)
-                .offset(x: right - Metrics.hit + 10)
-            TimelineTrimHandle(
-                edge: .leading, height: Self.height, valueText: Copy.Editor.clockCentis(clip.in),
-                onDrag: { dragIn($0, width: width) }, onEnd: finish,
-                step: { n in nudge(inPoint: n) })
-                .offset(x: left)
-            TimelineTrimHandle(
-                edge: .trailing, height: Self.height, valueText: Copy.Editor.clockCentis(clip.out),
-                onDrag: { dragOut($0, width: width) }, onEnd: finish,
-                step: { n in nudge(outPoint: n) })
-                .offset(x: right - TimelineTrimHandle.hitWidth)
-        }
-    }
-
-    private func capture() -> (inPoint: Double, outPoint: Double) {
-        if let base { return base }
-        let first = (inPoint: clip.in, outPoint: clip.out)
-        base = first
-        return first
-    }
-
-    private func dragIn(_ dx: CGFloat, width: CGFloat) {
-        let first = capture()
-        session.trim(clip: clip.id, in: first.inPoint + Double(dx / max(1, width)) * duration, out: nil)
-    }
-
-    private func dragOut(_ dx: CGFloat, width: CGFloat) {
-        let first = capture()
-        session.trim(clip: clip.id, in: nil, out: first.outPoint + Double(dx / max(1, width)) * duration)
-    }
-
-    private func nudge(inPoint n: Int) {
-        session.trim(clip: clip.id, in: clip.in + Double(n) / Double(max(1, session.timing.fps)), out: nil)
-        session.endGesture()
-    }
-
-    private func nudge(outPoint n: Int) {
-        session.trim(clip: clip.id, in: nil, out: clip.out + Double(n) / Double(max(1, session.timing.fps)))
-        session.endGesture()
-    }
-
-    private func finish() {
-        base = nil
-        session.endGesture()
     }
 }
 
 // MARK: - the crop frame
 
-/// The clip's frame (its poster; the kit has no frame still) with the crop frame on it: corner marks, drag inside to move,
-/// drag a corner or an edge to resize, pinch to scale about the middle. The outside is dimmed. The aspect is locked unless it is
-/// `free`. Edits go to the session as they happen, so the preview behind the sheet follows.
+/// The clip's own picture (its source player, the poster until that is ready) with the crop frame on it: corner marks,
+/// drag inside to move, drag a corner or an edge to resize, pinch to scale about the middle. The outside is dimmed. The
+/// aspect is locked unless it is `free`. Play and the source timecode sit on the picture. Edits go to the session as they
+/// happen, so the preview behind the sheet follows.
 struct EditorPhoneCropStage: View {
     let session: EditSession
     let clip: EditClip
+    let preview: ClipTrimPreview
 
     @State private var startRect: CGRect?
     @State private var pinchRect: CGRect?
@@ -320,7 +212,7 @@ struct EditorPhoneCropStage: View {
         let c = current
         let frame = CGRect(x: c.x * size.width, y: c.y * size.height, width: c.w * size.width, height: c.h * size.height)
         return ZStack(alignment: .topLeading) {
-            EditorPoster(url: source?.posterURL, fallback: EditorColor.clip(for: clip.item), maxPixel: 900)
+            ClipTrimPicture(session: session, clip: clip, preview: preview, showsTransport: false)
                 .frame(width: size.width, height: size.height)
             PhoneDim(hole: frame)
                 .fill(Color.black.opacity(0.6), style: FillStyle(eoFill: true))
@@ -339,6 +231,9 @@ struct EditorPhoneCropStage: View {
             ForEach(EditorCropMath.Handle.grips, id: \.self) { handle in
                 grip(handle, frame: frame, size: size)
             }
+        }
+        .overlay(alignment: .bottom) {
+            ClipTrimTransport(session: session, preview: preview, fallback: clip.in)
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .coordinateSpace(.named(Self.space))

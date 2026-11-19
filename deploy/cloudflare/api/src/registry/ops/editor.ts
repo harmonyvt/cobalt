@@ -3,7 +3,7 @@
 import * as z from "zod";
 import { CUTOUT_SOURCE_TYPES, makeCutout, type ImagesPort } from "../../cutout";
 import { makeImageCrop } from "../../image-crop";
-import { EDIT_OVERLAY_TRACKS, EDIT_SOURCE_TYPES, sourceKind } from "../../../../editor/helper/timeline.js";
+import { EDIT_MAX_CLIPS, EDIT_OVERLAY_TRACKS, EDIT_SOURCE_TYPES, sourceKind } from "../../../../editor/helper/timeline.js";
 import { EDIT_PROJECT_ID_REGEX, ITEM_ID_REGEX } from "../../gate";
 import { budgetPort } from "../budget";
 import { defineOp, ok, OpError, type OpContext, capThreadOf } from "../op";
@@ -153,11 +153,11 @@ export const editsAddOverlayOp = defineOp({
     cors: false,
     input: z.object({
         project: z.string().regex(EDIT_PROJECT_ID_REGEX, "an edit project id"),
-        file: z.string().min(1).max(40).describe("a video, gif, photo, webp/7TV emote or cutout: file id or post id"),
+        file: z.string().min(1).max(40).describe("a video, gif, photo, webp/7TV emote, cutout, or a library.removeBackground ProRes alternate: file id or post id"),
         at: z.number().min(0).optional().describe("output seconds where it starts, default 0"),
         seconds: z.number().gt(0).optional().describe("how long it stays, default: a picture to the end, a video its length"),
         in: z.number().min(0).optional().describe("a video: source seconds to start from, default 0"),
-        track: z.number().int().min(0).max(EDIT_OVERLAY_TRACKS - 1).optional().describe("layer 0..63 (higher on top); default the lowest free one"),
+        track: z.number().int().min(0).max(EDIT_OVERLAY_TRACKS - 1).optional().describe(`layer 0..${EDIT_OVERLAY_TRACKS - 1} (higher on top); default the lowest free one`),
         position: z.enum(POSITIONS).optional().describe("default center (ignored when x and y are given)"),
         x: z.number().min(0).max(1).optional().describe("left edge, canvas fraction"),
         y: z.number().min(0).max(1).optional().describe("top edge, canvas fraction"),
@@ -171,8 +171,7 @@ export const editsAddOverlayOp = defineOp({
         refs: { file: "file" },
         tier: "free",
         only: true,
-        summary:
-            "Put one video, gif, picture, 7TV emote or cutout over an edit project (on the lowest free layer, so several can be up at once). Sized from its shape and kept on the canvas. Returns the project.",
+        summary: `Put one video, gif, picture, 7TV emote, cutout or a library.removeBackground result (private ProRes alternate) over an edit project, on the lowest free layer of ${EDIT_OVERLAY_TRACKS} (0..${EDIT_OVERLAY_TRACKS - 1}, higher on top). The project still holds at most ${EDIT_MAX_CLIPS} clips. Sized from its shape and kept on the canvas. Returns the project. An overlay with hidden: true still occupies its layer; the renderer skips it.`,
         params: ["project", "file"],
         options: true,
     },

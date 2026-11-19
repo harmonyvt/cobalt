@@ -7,6 +7,7 @@
 import * as z from "zod";
 import { libraryStudio, POST_KEY_SQL } from "../../app-routes";
 import { editsKeyed, kickRenderers, parseEditTimeline, type EditsOp, type RendererNamespace } from "../../edits";
+import { EDIT_MAX_CLIPS, EDIT_MAX_SECONDS, EDIT_OVERLAY_TRACKS } from "../../../../editor/helper/timeline.js";
 import { EDIT_PROJECT_ID_REGEX, EDIT_RENDER_ID_REGEX, ITEM_ID_REGEX, STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "../../gate";
 import { AGENT_LIVE_HEADER, KEY_ID_HEADER } from "../../headers";
 import { getSession, itemTypeOf, STILL_ADOPT_TYPES, type SessionRow } from "../../studio";
@@ -788,16 +789,18 @@ const TimelineInput = z
     })
     .meta({ ts: "Timeline" });
 
+const LAST_TRACK = EDIT_OVERLAY_TRACKS - 1;
 const TIMELINE_TYPE = `type Timeline = { version: 1; canvas: { w, h, fps: 30 | 60 } (w x h: 1080x1920, 720x1280, 1080x1080, 720x720, 1920x1080, 1280x720);
   main: { id: string /* unique, letters */; item: string /* a video file id */; in: number; out: number /* source seconds */; speed: number /* 0.25..4 */;
           crop?: { aspect: "free"; x; y; w; h } /* fractions */; fit: "fill" | "fit"; volume: number /* 0..1 */; muted: boolean; pitch?: number /* semitones -12..12 */ }[];
-  overlay: { id; item /* a video, gif, photo, webp (7TV emotes too) or cutout file id */; at: number /* output seconds */; in; out /* video: source seconds; picture: in 0, out = seconds shown */;
-             frame: { x; y; w } /* top-left + width, canvas fractions; height follows the picture */; opacity: number; volume; muted; track?: number /* layer 0..63, higher on top */; hidden?: true /* omitted when shown */;
-             key?: { color: "#RRGGBB"; similarity: number /* 0.01..0.6 */; blend: number /* 0..0.5 */; spill: number /* 0..1 */ } /* omitted when absent */;
+  overlay: { id; item /* a video, gif, photo, webp (7TV emotes too), cutout, or a library.removeBackground ProRes alternate */; at: number /* output seconds */; in; out /* video: source seconds; picture: in 0, out = seconds shown */;
+             frame: { x; y; w } /* top-left + width, canvas fractions; height follows the picture */; opacity: number; volume; muted; track?: number /* layer 0..${LAST_TRACK}, higher on top */; hidden?: true /* renderer skips it (no input, no filter, no audio); omitted when false */;
+             key?: { color: "#RRGGBB"; similarity: number /* 0.01..0.6 */; blend: number /* 0..0.5 */; spill: number /* 0..1 */ } /* greenscreen; omitted when absent */;
              background?: { type: "clip" } | { type: "color"; color: "#RRGGBB" } /* transparent is omitted */ }[];
   output?: "webm" | "prores" | "webp" /* mp4 is omitted; it flattens. webm and prores keep alpha */ }
   // overlay[] sorted by at; overlays on one track never overlap, on different tracks they may (stack stickers, several videos at once).
-  // Adding one overlay to an existing project: edits.addOverlay is simpler.`;
+  // At most ${EDIT_MAX_CLIPS} clips and ${EDIT_MAX_SECONDS} s. Adding one overlay: edits.addOverlay picks the lowest free layer of ${EDIT_OVERLAY_TRACKS}.
+  // A library.removeBackground result (private ProRes alternate) can be overlaid the same way as a cutout.`;
 
 export const ProjectSchema = z.object({ id: z.string(), title: z.string(), revision: z.number(), duration: z.number(), render: z.unknown().nullable() }).meta({ id: "EditProject" });
 export const projectOf = (p: Record<string, any>) => ({ id: p.id, title: p.title, revision: p.revision, duration: p.duration, render: p.render ?? null });
@@ -968,7 +971,7 @@ export const editsCreateOp = defineOp({
     ai: {
         tier: "free",
         only: true,
-        summary: `A new editor project (nothing renders until edits.render). Output at most 600 s, 50 clips; main clips are videos.\n${TIMELINE_TYPE}`,
+        summary: `A new editor project (nothing renders until edits.render). Output at most ${EDIT_MAX_SECONDS} s, ${EDIT_MAX_CLIPS} clips; main clips are videos.\n${TIMELINE_TYPE}`,
         params: ["timeline"],
         options: true,
     },
@@ -982,7 +985,13 @@ export const editsUpdateOp = defineOp({
     cors: false,
     input: z.object({ id: z.string().regex(EDIT_PROJECT_ID_REGEX, "an edit project id"), timeline: TimelineInput, title: z.string().min(1).max(80).optional() }),
     output: ProjectSchema,
-    ai: { tier: "free", only: true, summary: "Replace a project's timeline (and title).", params: ["id", "timeline"], options: true },
+    ai: {
+        tier: "free",
+        only: true,
+        summary: `Replace a project's timeline (and title). Same limits as edits.create: at most ${EDIT_MAX_SECONDS} s and ${EDIT_MAX_CLIPS} clips, overlay layers 0..${LAST_TRACK}. hidden: true is skipped by the renderer and omitted when false. A greenscreen is key. A library.removeBackground result can be overlaid.`,
+        params: ["id", "timeline"],
+        options: true,
+    },
     handler: async (ctx, input) => {
         const call = "edits.update";
         const cur = (await editCall(ctx, call, "get", { id: input.id })).project;

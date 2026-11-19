@@ -5130,8 +5130,8 @@ the account). A cutout is made only on request, never in the cron.
   0.4), the height follows the source's aspect. Answers the project like `edits.update` plus `clip` (the new
   overlay's id) and `track`. When every layer is taken over that span it answers `error.make.refused` ("all 64 layers are busy then"); an explicit busy `track` is refused the same way.
 - `edits.get` also returns `sources` (each source's id, kind, size, seconds, `source`), so the AI can place things.
-- The timeline type text the AI reads (`TIMELINE_TYPE`) documents `track`, webp/emote/cutout sources and points at
-  `edits.addOverlay`.
+- The timeline type text the AI reads (`TIMELINE_TYPE`) documents `track` 0..63, `hidden` (the renderer skips it; omitted when false), the greenscreen `key`, the 200-clip / 600 s limits (from `EDIT_MAX_CLIPS` and `EDIT_MAX_SECONDS`), webp/emote/cutout sources, and that a `library.removeBackground` result can be overlaid. It points at
+  `edits.addOverlay`, which picks the lowest free layer of all 64.
 - Flow for "put this emote over the clip": `emotes.find` → `emotes.save` → `edits.addOverlay`; for "cut out the
   background of this sticker and stack it": `make.cutout` → `edits.addOverlay`.
 

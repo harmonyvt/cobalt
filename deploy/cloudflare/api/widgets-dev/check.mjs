@@ -428,6 +428,26 @@ await step("edit.private: lock badge, signed sources and a private render", asyn
         eq(await F().locator(".cprev video").getAttribute("src"), "https://api.capybaraharmony.com/mcp/media/tok.render", "private render plays signed");
     }
 });
+await step("edit: twenty overlay lanes scroll, a hidden one is dimmed, an effect wears fx", async () => {
+    await open("edit.layers", { width: 720 });
+    eq(await count(".clane.h-o"), 20, "one lane per layer");
+    eq(await F().locator(".labs .h-o").first().innerText(), "L20", "the highest layer is on top");
+    eq(await F().locator(".labs .h-o").last().innerText(), "L1", "layer 1 is the bottom overlay lane");
+    eq(await count(".cclip.hid"), 1, "the hidden overlay is marked");
+    eq(await count(".cclip .fx"), 2, "cutout and greenscreen wear fx");
+    ok((await F().locator(".cclip.hid").getAttribute("title")).includes("hidden"), "the hidden clip says so");
+    const scrolled = await F().locator(".ctracks.many").evaluate((e) => e.scrollHeight > e.clientHeight + 8);
+    ok(scrolled, "more than 8 lanes scroll");
+    eq(await count(".ovb"), 19, "the hidden overlay is not drawn on the preview");
+    await shot("edit-layers");
+    await F().locator(".ctracks.many").evaluate((e) => { e.scrollTop = e.scrollHeight; });
+    await page.waitForTimeout(80);
+    await shot("edit-layers-scrolled");
+    await open("edit.layers", { width: 390, theme: "dark" });
+    const over = await fr().evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    ok(over <= 1, `twenty lanes fit a phone (overflow ${over})`);
+    await shot("edit-layers-phone");
+});
 await step("edit: long and short timelines, list with show more, no render", async () => {
     await open("edit.long");
     const t = await F().locator(".cruler span").allInnerTexts();

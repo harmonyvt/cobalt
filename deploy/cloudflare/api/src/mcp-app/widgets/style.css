@@ -180,6 +180,15 @@ a.ext:hover{text-decoration:underline}
 .cclip{position:absolute;top:0;bottom:0;border-radius:3px;font:9.5px/12px var(--sans);color:#fff;padding:0 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .h-s .cclip{opacity:.8;line-height:14px}
 .cclip.dim{opacity:.4;background-image:repeating-linear-gradient(135deg,transparent 0 4px,rgba(255,255,255,.25) 4px 6px)}
+.cclip.hid{opacity:.4;background-image:repeating-linear-gradient(135deg,transparent 0 3px,rgba(255,255,255,.35) 3px 5px)}
+.cclip.hasfx{padding-right:18px}
+.fx{position:absolute;right:2px;top:0;font:600 8px/12px var(--mono);letter-spacing:.02em;color:#fff;background:rgba(0,0,0,.55);padding:0 3px;border-radius:2px;pointer-events:none}
+.film .fx{top:2px}
+.ctracks.many{max-height:220px;overflow-y:auto}
+.ctracks.many .h-o{height:10px;margin-bottom:1px}
+.ctracks.many .cclip{font-size:8px;line-height:10px;padding:0 3px}
+.ctracks.many .cclip.hasfx{padding-right:16px}
+.ctracks.many .fx{font-size:7px;line-height:10px}
 .cclip.on{box-shadow:inset 0 0 0 1.5px #fff}
 .film{position:absolute;top:0;bottom:0;border-radius:4px;overflow:hidden;background-color:var(--soft);background-repeat:repeat-x;background-size:auto 100%;box-shadow:inset 0 0 0 1.5px var(--c,#2f7d4a)}
 .film.on{box-shadow:inset 0 0 0 2px #fff,0 0 0 1px var(--pink)}

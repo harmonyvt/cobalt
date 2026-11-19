@@ -359,8 +359,13 @@ extension QueueDestination { case edit(projectID: String) }     // a new case; `
 
 ### 4.2 Presentation and layout choice
 
-- `EditorPresenter` (AppShell modifier): while `editor.session != nil`, iOS shows `EditorRoot` in a `fullScreenCover`; macOS opens the
-  `editor` window (`openWindow(id: "editor")`) and the window's content is `EditorRoot`; closing the window calls `editor.close()`.
+- `EditorPresenter` (AppShell modifier): while `editor.session != nil` or a project is opening, iOS shows `EditorWindowContent` in a
+  `fullScreenCover`; macOS opens the `editor` window (`openWindow(id: "editor")`, `restorationBehavior(.disabled)` so a relaunch
+  does not bring the window back with no session). The content is `EditorRoot` once the session exists.
+- Closing the edit (the session is nil and nothing is opening) closes the Mac window with `NSWindow.close()` as well as
+  `dismissWindow`. `dismissWindow` goes through the close button, and that button's action is the unsaved-changes check, so it
+  does not close the window by itself. A window that is still up with nothing to show says `editClosed`, with `close`, and does
+  not show the opening skeleton. The iPhone cover uses the same decision and dismisses with the session.
 - `EditorRoot` picks **`EditorScreen`** (lane 5, Mac A) on macOS and on iPad when the width is ≥ 900 pt and the size class is
   regular, else **`EditorPhoneScreen`** (lane 6). Rotating or resizing across 900 pt switches layouts and keeps the session.
 - Close: `close` (iOS) / the window's close (Mac) → `editor.close()`; if it returns false: `closeUnsavedTitle` / `closeUnsavedBody`,
@@ -451,8 +456,10 @@ Colours from `Cobalt/Design` tokens; selection blue `#2f8af9` (`CobaltColor.link
 
 ### 4.7 States
 
-- Opening: `openingProject` (skeleton timeline, disabled tools) until `GET /edits/<id>` answers; failure → `couldntOpen` with
-  `try again` and `close`; `404` → `projectGone` and the session closes.
+- Opening: `openingProject` (skeleton timeline, disabled tools) until `GET /edits/<id>` answers. A blank id fails at once
+  (`nothingToOpen`). A load that is still going after 20 s becomes `couldntOpen` / `openingTooLong`, with `try again` and
+  `close`, on the Mac window and the iPhone cover. Any other failure → `couldntOpen` with `try again` and `close`; `404` →
+  `projectGone` and the window or cover closes.
 - Sources: per clip download progress on its timeline block (a thin bar) and the canvas line `loadingSources(pct)`; a source that
   cannot be fetched → `sourceFailed` on that clip with `try again`; a deleted source → `missingClip` (the clip stays, rendering is
   disabled until it is removed: `removeMissing`).
@@ -561,6 +568,9 @@ extension Copy {
         static let closeRendering = "it keeps rendering on the server. it shows up in your library when it's done."
         // open, save, close
         static let openingProject = "opening the edit…"
+        static let openingTooLong = "this is taking too long. try again."
+        static let nothingToOpen = "there's no edit to open"
+        static let editClosed = "this edit is closed"
         static let couldntOpen = "couldn't open this edit", projectGone = "this edit was deleted"
         static let closeUnsavedTitle = "close without saving?"
         static let closeUnsavedBody = "your last changes aren't on the server yet."

@@ -4,9 +4,13 @@ import SwiftUI
 /// The keyboard of the Mac and iPad editor (apple/CONTRACT-EDITOR.md 4.8). Plain keys (space, J K L, arrows, I O, V B C, delete,
 /// esc) are key presses on the screen's own focus, so a text field that has the focus keeps its letters; the command keys
 /// (⌘B, ⌘=, ⌘−, ⌘↩, ⌘W) are shortcuts on buttons, hidden behind the screen. ⌘Z and ⇧⌘Z are on the undo and redo buttons.
+/// While a main clip's source file is on the device, space plays that selection, ← → step a source frame, I and O set in and
+/// out at the trim playhead, and L toggles the loop. Otherwise space plays the whole edit and L shuttles, as before.
 struct EditorKeyboard: ViewModifier {
     let model: AppModel
     let session: EditSession
+    /// The selected clip's source player. While it is up, space, the arrows, I, O and L trim that clip.
+    let clipTrim: ClipTrimPreview
     let zoomIn: () -> Void
     let zoomOut: () -> Void
     let openRender: () -> Void
@@ -36,13 +40,26 @@ struct EditorKeyboard: ViewModifier {
         let big = press.modifiers.contains(.shift)
         switch press.key {
         case .space:
-            session.togglePlay()
+            if trimming {
+                session.pause()
+                clipTrim.togglePlay()
+            } else {
+                session.togglePlay()
+            }
             return .handled
         case .leftArrow:
-            session.step(frames: big ? -session.timing.fps : -1)
+            if trimming {
+                clipTrim.step(frames: big ? -session.timing.fps : -1)
+            } else {
+                session.step(frames: big ? -session.timing.fps : -1)
+            }
             return .handled
         case .rightArrow:
-            session.step(frames: big ? session.timing.fps : 1)
+            if trimming {
+                clipTrim.step(frames: big ? session.timing.fps : 1)
+            } else {
+                session.step(frames: big ? session.timing.fps : 1)
+            }
             return .handled
         case .delete, .deleteForward:
             guard session.selection != .none else { return .ignored }
@@ -59,13 +76,15 @@ struct EditorKeyboard: ViewModifier {
         case "k":
             rate = 0
             session.pause()
-        case "l": shuttle(backwards: false)
+            clipTrim.pause()
+        case "l":
+            if trimming { clipTrim.toggleLoop() } else { shuttle(backwards: false) }
         case "i":
             guard case .main(let id) = session.selection else { return .ignored }
-            session.setIn(atPlayheadFor: id)
+            ClipTrimEditing.setIn(session: session, clip: id, preview: clipTrim)
         case "o":
             guard case .main(let id) = session.selection else { return .ignored }
-            session.setOut(atPlayheadFor: id)
+            ClipTrimEditing.setOut(session: session, clip: id, preview: clipTrim)
         case "v": session.tool = .select
         case "b": session.tool = .blade
         case "c": session.tool = .crop
@@ -74,8 +93,13 @@ struct EditorKeyboard: ViewModifier {
         return .handled
     }
 
+    /// A main clip whose source file is on the device: space plays its selection, the arrows step a frame, L loops.
+    private var trimming: Bool { ClipTrimEditing.isTrimming(session: session, preview: clipTrim) }
+
     /// J and L: play backwards or forwards; the same key again doubles the rate up to 4×, the other one slows it down.
+    /// L loops the selection instead while a clip is being trimmed.
     private func shuttle(backwards: Bool) {
+        clipTrim.pause()
         let direction: Double = backwards ? -1 : 1
         if rate * direction > 0 {
             rate = direction * min(4, abs(rate) * 2)
