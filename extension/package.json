@@ -6,7 +6,8 @@
     "scripts": {
         "build": "node scripts/build.mjs",
         "typecheck": "tsc --noEmit",
-        "test": "vitest run"
+        "test": "vitest run",
+        "e2e": "node e2e/run.cjs"
     },
     "devDependencies": {
         "@types/node": "^22.20.5",
