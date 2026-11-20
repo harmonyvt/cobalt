@@ -491,6 +491,7 @@ describe("planning and approval", () => {
             "swarm.messages",
             "swarm.agent",
             "swarm.board",
+            "swarm.export",
         ]);
         expect(["swarm.plan", "swarm.get"].map(mcpToolName)).toEqual(["swarm_plan", "swarm_get"]);
         const chatCtx = forCall(base(), { keyId: "chat:AbCdEfGh12345678", caller: "chat", chat: { threadId: "AbCdEfGh12345678", collect, tools: {}, mcp: { origin: API, clientKeyId: "sess-1" } } });

@@ -226,6 +226,8 @@ describe("a poster can not be deleted by hand, and nothing on a lifetime path or
                 // the preview job made, never a poster or a mirror)
                 "hidden.ts:media.delete(",
                 "library.ts:media.delete(", // releasePoster
+                // section 63.6: exports/<id>/<file> in originals older than a day (a download link's file, never a poster)
+                "mcp-export.ts:bucket.delete(",
                 "poster.ts:media.delete(", // an orphan guard / a failed put of a poster
                 "studio.ts:originals.delete(", // a save marked lost meanwhile
                 // section 29: the deleter handed to the moving previews (loops.ts), only ever with a media_loops

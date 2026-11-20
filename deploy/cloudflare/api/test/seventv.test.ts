@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeD1, type FakeD1 } from "../../test-support/d1-sqlite";
 import { hashKey } from "../src/keys";
-import { openToken, sealToken, tokenExpiry, cleanToken, channelsOf, setEmoteShape } from "../src/seventv";
+import { openToken, sealToken, tokenExpiry, cleanToken, channelsOf, setEmoteShape, sevenTvAddMany, sevenTvClonePlan, sevenTvPermissions } from "../src/seventv";
 import { handleRequest, type WorkerEnv } from "../src/worker";
 import { withBatch } from "./d1-batch";
 import { fixedLengthPair, MemoryMedia, MemoryOriginals } from "./studio-fakes";
@@ -535,5 +535,159 @@ describe("uploading a library picture as a new emote (57.9)", () => {
             file_url: null,
             page_url: `https://7tv.app/emotes/${EMOTE}`,
         });
+    });
+});
+
+// section 63.4-63.5: many adds with one approval, a set copied with swaps, and what the account may do per channel.
+// The fake set behaves like live 7TV (checked 2026-11-16): one failed add in a batch answers data null with an error for
+// that alias alone, so the rest of the batch is unknown until the set is read again.
+describe("many adds, set copies and permissions (63.4, 63.5)", () => {
+    const id = (n: number) => `01HE${String(n).padStart(22, "0")}`;
+    const deps = () => ({ db: db as unknown as D1Database, now: () => clock, secret: INTERNAL });
+    let sets: Map<string, { name: string; capacity: number; items: { id: string; alias: string }[] }>;
+    let refuse: (setId: string, emoteId: string) => { message: string; code: string; status: number } | null;
+    let limitOnce: boolean;
+    const setAnswer = (vars: any) => {
+        const s = sets.get(vars.id);
+        if (!s) return { body: { data: { emoteSets: { emoteSet: null } } } };
+        const per = vars.perPage;
+        const page = s.items.slice((vars.page - 1) * per, vars.page * per);
+        return {
+            body: {
+                data: {
+                    emoteSets: {
+                        emoteSet: {
+                            id: vars.id, name: s.name, kind: "NORMAL", capacity: s.capacity, ownerId: ME_ID, owner: { id: ME_ID, style: {} },
+                            emotes: { totalCount: s.items.length, pageCount: Math.max(1, Math.ceil(s.items.length / per)), items: page.map((e) => ({ id: e.id, alias: e.alias, addedAt: null, emote: { id: e.id, defaultName: e.alias, flags: { animated: false }, images: [] } })) },
+                        },
+                    },
+                },
+            },
+        };
+    };
+    const addAnswer = (q: string, vars: any) => {
+        if (limitOnce) {
+            limitOnce = false;
+            return { status: 429, body: {} };
+        }
+        const s = sets.get(vars.set)!;
+        const data: Record<string, unknown> = {};
+        for (const m of q.matchAll(/(a\d+): emoteSets/g)) {
+            const k = m[1]!.slice(1);
+            const e = vars[`e${k}`];
+            const no = refuse(vars.set, e.emoteId);
+            if (no) return { body: { data: null, errors: [{ message: no.message, path: [m[1], "emoteSet"], extensions: { code: no.code, status: no.status } }] } };
+            const alias = e.alias ?? e.emoteId;
+            const at = s.items.findIndex((x) => x.alias.toLowerCase() === alias.toLowerCase());
+            if (at >= 0 && !vars.over) return { body: { data: null, errors: [{ message: "emote name conflict", path: [m[1], "emoteSet"], extensions: { code: "CONFLICT", status: 409 } }] } };
+            if (at >= 0) s.items.splice(at, 1);
+            s.items.push({ id: e.emoteId, alias });
+            data[m[1]!] = { emoteSet: { addEmote: { id: vars.set } } };
+        }
+        return { body: { data } };
+    };
+
+    beforeEach(async () => {
+        await link();
+        sets = new Map([
+            [SET_MAIN, { name: "main", capacity: 1000, items: Array.from({ length: 70 }, (_, i) => ({ id: id(i), alias: `e${i}` })) }],
+            [SET_XMAS, { name: "xmas", capacity: 1000, items: [{ id: id(1), alias: "e1" }] }],
+        ]);
+        refuse = () => null;
+        limitOnce = false;
+        answer = (q, v) => (q.startsWith("mutation(") ? addAnswer(q, v) : q.includes("emoteSet(id: $id)") ? setAnswer(v) : q.includes("me {") ? { body: { data: ME } } : { body: { data: null } });
+    });
+
+    it("adds in batches of 10, skips what is already there, and can be repeated", async () => {
+        const items = Array.from({ length: 25 }, (_, i) => ({ emote_id: id(i), alias: `e${i}` }));
+        const r = (await sevenTvAddMany(deps(), SET_XMAS, items, { sleep: async () => {} })).body as any;
+        expect(r).toMatchObject({ set_name: "xmas", count_before: 1, count_after: 25, failed: [], remaining: [] });
+        expect(r.added).toHaveLength(24);
+        expect(r.skipped).toEqual([{ emote_id: id(1), alias: "e1", why: "already in the set under that name" }]);
+        expect(calls.filter((c) => c.query.startsWith("mutation(")).map((c) => (c.query.match(/addEmote/g) ?? []).length)).toEqual([10, 10, 4]);
+        const again = (await sevenTvAddMany(deps(), SET_XMAS, items, { sleep: async () => {} })).body as any;
+        expect(again.added).toEqual([]);
+        expect(again.skipped).toHaveLength(25);
+    });
+
+    it("an add that fails nulls its batch: the set is read again and the unknown ones are sent once more", async () => {
+        const bad = id(503);
+        refuse = (_s, e) => (e === bad ? { message: "emote not found", code: "LOAD_ERROR", status: 404 } : null);
+        const items = [{ emote_id: id(500), alias: "x0" }, { emote_id: bad, alias: "x3" }, { emote_id: id(501), alias: "x1" }, { emote_id: id(502), alias: "x2" }];
+        const r = (await sevenTvAddMany(deps(), SET_XMAS, items, { sleep: async () => {} })).body as any;
+        // the fake stops at the failed add: x0 landed before it, x1 and x2 never ran
+        expect(r.added.map((a: any) => a.alias).sort()).toEqual(["x0", "x1", "x2"]);
+        expect(r.failed).toEqual([{ emote_id: bad, alias: "x3", code: "error.seventv.not_found", message: "emote not found" }]);
+        expect(sets.get(SET_XMAS)!.items.map((e) => e.alias)).toEqual(["e1", "x0", "x1", "x2"]);
+    });
+
+    it("stops at the first LACKING_PRIVILEGES, with 7TV's own words and what was not sent", async () => {
+        refuse = () => ({ message: "you do not have permission to manage this user's emote sets", code: "LACKING_PRIVILEGES", status: 403 });
+        const items = Array.from({ length: 30 }, (_, i) => ({ emote_id: id(600 + i), alias: `n${i}` }));
+        const r = (await sevenTvAddMany(deps(), SET_XMAS, items, { sleep: async () => {} })).body as any;
+        expect(r.added).toEqual([]);
+        expect(r.failed).toHaveLength(1);
+        expect(r.failed[0].code).toBe("error.seventv.forbidden");
+        expect(r.stopped).toContain("you do not have permission to manage this user's emote sets");
+        expect(r.remaining.length).toBe(29);
+        expect(calls.filter((c) => c.query.startsWith("mutation("))).toHaveLength(1);
+    });
+
+    it("waits out a rate limit and retries the batch", async () => {
+        limitOnce = true;
+        const waited: number[] = [];
+        const r = (await sevenTvAddMany(deps(), SET_XMAS, [{ emote_id: id(700), alias: "r" }], { sleep: async (ms) => void waited.push(ms) })).body as any;
+        expect(r.added).toEqual([{ emote_id: id(700), alias: "r" }]);
+        expect(waited).toHaveLength(1);
+    });
+
+    it("refuses a call that does not fit, counting replaced names as no new room; dry_run sends nothing", async () => {
+        sets.get(SET_XMAS)!.capacity = 3;
+        const items = [{ emote_id: id(800), alias: "e1" }, { emote_id: id(801), alias: "a" }, { emote_id: id(802), alias: "b" }];
+        const full = await sevenTvAddMany(deps(), SET_XMAS, items);
+        expect(full.status).toBe(409);
+        expect((full.body as any).error.code).toBe("error.seventv.set_full");
+        const dry = (await sevenTvAddMany(deps(), SET_XMAS, items, { override_conflicts: true, dry_run: true })).body as any;
+        expect(dry).toMatchObject({ dry_run: true, added: [] });
+        expect(dry.would_add).toHaveLength(3);
+        expect(calls.filter((c) => c.query.startsWith("mutation("))).toHaveLength(0);
+        expect((await sevenTvAddMany(deps(), SET_XMAS, [{ emote_id: "nope", alias: "x" }])).status).toBe(400);
+    });
+
+    it("a copy keeps every alias, puts the swaps in, honours skip and only, and names swaps that matched nothing", async () => {
+        const p = (await sevenTvClonePlan(deps(), { from_set_id: SET_MAIN, to_set_id: SET_XMAS, swap: [{ alias: "E2", emote_id: id(900) }, { alias: "ghost", emote_id: id(901) }], skip: ["e3"] })) as any;
+        expect(p.from).toEqual({ id: SET_MAIN, name: "main", count: 70 }); // read across two pages of 60
+        expect(p.items).toHaveLength(69);
+        expect(p.items.find((i: any) => i.alias === "e2")).toEqual({ emote_id: id(900), alias: "e2" });
+        expect(p.items.some((i: any) => i.alias === "e3")).toBe(false);
+        expect(p.swapped).toBe(1);
+        expect(p.unknown_swaps).toEqual(["ghost"]);
+        const only = (await sevenTvClonePlan(deps(), { from_set_id: SET_MAIN, to_set_id: SET_XMAS, only: ["e5", "e6"] })) as any;
+        expect(only.items.map((i: any) => i.alias)).toEqual(["e5", "e6"]);
+        expect(((await sevenTvClonePlan(deps(), { from_set_id: SET_MAIN, to_set_id: SET_MAIN })) as any).status).toBe(400);
+    });
+
+    it("permissions: each channel's rights and the blockers in plain words", async () => {
+        const me = structuredClone(ME.users.me) as any;
+        me.permissions = { emoteSetLimit: 10, emoteSetCapacity: 1000, emote: { upload: true } };
+        me.ownedEmoteSets = Array.from({ length: 10 }, (_, i) => ({ id: id(i), kind: i === 0 ? "PERSONAL" : "NORMAL" }));
+        for (const e of me.editorFor) e.user.ownedEmoteSets = [{ id: id(50), kind: "NORMAL" }];
+        answer = (q) => (q.includes("permissions { emoteSetLimit") ? { body: { data: { users: { me } } } } : { body: { data: ME } });
+        const r = (await sevenTvPermissions(deps(), null)).body as any;
+        expect(r.account).toEqual({ id: ME_ID, name: "capybaraharmony", set_limit: 10, set_capacity: 1000 });
+        expect(r.channels.map((c: any) => c.name)).toEqual(["capybaraharmony", "liacat", "mochi_vt", "someone"]);
+        expect(r.channels[0]).toMatchObject({ you: true, sets: 9, can: { add_remove_rename: true, create_sets: true, make_live: true, upload_emotes: true } });
+        const mochi = r.channels.find((c: any) => c.name === "mochi_vt");
+        expect(mochi.can).toEqual({ add_remove_rename: true, create_sets: false, make_live: false, upload_emotes: false });
+        expect(mochi.blockers.join(" ")).toContain("LACKING_PRIVILEGES");
+        const pending = r.channels.find((c: any) => c.name === "someone");
+        expect(pending.can.add_remove_rename).toBe(false);
+        expect(pending.blockers[0]).toContain("pending");
+        me.ownedEmoteSets.push({ id: id(99), kind: "NORMAL" });
+        const one = (await sevenTvPermissions(deps(), ME_ID)).body as any;
+        expect(one.channels).toHaveLength(1);
+        expect(one.channels[0].can.create_sets).toBe(false);
+        expect(one.channels[0].blockers[0]).toContain("your limit is 10");
+        expect((await sevenTvPermissions(deps(), id(12345))).status).toBe(404);
     });
 });
