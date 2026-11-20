@@ -36,6 +36,11 @@ const stageRoute = (op: StageOp, method: "GET" | "POST" | "PATCH" | "DELETE", pa
         handler: async (ctx): Promise<OpReply> => {
             const d = stageDeps(ctx);
             if (!d) return { status: 404, body: offBody };
+            // the token goes to a signed-in device only, never to a key for tools
+            if (op === "twitch_session") {
+                const row = await ctx.db.prepare("SELECT kind FROM api_keys WHERE id = ?1").bind(ctx.keyId).first<{ kind: string }>();
+                if (row?.kind !== "session") return { status: 403, body: { status: "error", error: { code: "error.stage.twitch_session_device_only" } } };
+            }
             const r = await stageKeyed(d, op, ctx.request!, ctx.params, ctx.query);
             return { status: r.status, body: r.body };
         },
@@ -50,6 +55,7 @@ const STAGE_ROUTES = [
     stageRoute("redemptions", "GET", "/stage/redemptions"),
     stageRoute("twitch_delete", "DELETE", "/stage/twitch"),
     stageRoute("twitch_connect", "POST", "/stage/twitch/connect"),
+    stageRoute("twitch_session", "GET", "/stage/twitch/session"),
     stageRoute("reward", "PATCH", "/stage/rewards/:action", { action: STAGE_ACTION_REGEX }),
 ];
 

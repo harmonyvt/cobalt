@@ -67,6 +67,7 @@ export const PATHS: string[] = [
     "/stage/redemptions",
     "/stage/twitch",
     "/stage/twitch/connect",
+    "/stage/twitch/session",
     "/stage/rewards/summon",
     "/stage/rewards/bad",
     "/stage/other",

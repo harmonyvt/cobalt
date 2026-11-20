@@ -8908,6 +8908,33 @@
         }
       }
     },
+    "/stage/twitch/session": {
+      "get": {
+        "operationId": "stage_owner.twitch_session",
+        "summary": "GET /stage/twitch/session",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/studio": {
       "post": {
         "operationId": "studio.create",

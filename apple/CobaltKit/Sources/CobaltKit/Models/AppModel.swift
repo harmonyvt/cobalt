@@ -10,7 +10,7 @@ import UserNotifications
 /// (APP-API-CONTRACT 27), after the studio, and shows only with `features.chat`. iPhone shows the first four of these
 /// (the queue is a sheet there) and a "more" tab for the rest.
 public enum AppTab: String, Sendable, CaseIterable {
-    case save, library, links, sevenTv, stage, chat, swarms, names, queue, settings
+    case save, library, links, sevenTv, stage, twitch, chat, swarms, names, queue, settings
 
     /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
     /// chat needs `features.chat`, the studio needs `features.stage`, search names need `features.names` (48.6).
@@ -19,7 +19,8 @@ public enum AppTab: String, Sendable, CaseIterable {
         case .library, .swarms: return caps.library
         case .links: return caps.shareSets
         case .chat: return caps.chat
-        case .stage, .sevenTv: return caps.stage
+        // twitch: the session comes from the studio's Twitch connection (APP-API-CONTRACT 70)
+        case .stage, .sevenTv, .twitch: return caps.stage
         case .names: return caps.names
         case .save, .queue, .settings: return true
         }
@@ -121,6 +122,8 @@ public final class AppModel {
     public let account: AccountStore
     /// 7TV accounts (APP-API-CONTRACT 57; the 7tv tab): the linked account, its channels, their sets and the uploads.
     public let sevenTv: SevenTvStore
+    /// The twitch tab (APP-API-CONTRACT 70): live streams and their chat. Idle until `load()`.
+    public let twitch: TwitchStore
     /// The video editor (APP-API-CONTRACT 31): the projects, this key's renders and the open project. Idle until `refresh()`.
     public let editor: EditorStore
     /// Post frames (APP-API-CONTRACT 52): the details of the posts asked about and the framed copies being watched.
@@ -241,6 +244,7 @@ public final class AppModel {
         self.searchNames = SearchNamesModel(context: context, library: library)
         self.account = AccountStore(context: context)
         self.sevenTv = SevenTvStore(context: context)
+        self.twitch = TwitchStore(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
         let jobQueue = JobQueue(
@@ -498,6 +502,7 @@ public final class AppModel {
         searchNames.reset()
         account.reset()
         sevenTv.reset()
+        twitch.reset()
     }
 
     // MARK: - Links, handoffs

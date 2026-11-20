@@ -386,6 +386,7 @@ struct AppShell: View {
                 case .swarms: NavigationStack { SwarmsScreen(model: model, tier: tier) }
                 case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
                 case .sevenTv: NavigationStack { SevenTvScreen(model: model, tier: tier) }
+                case .twitch: NavigationStack { TwitchScreen(model: model, tier: tier) }
                 case .names: NavigationStack { NamesScreen(model: model) }
                 case .queue: NavigationStack { QueueScreen(model: model) }
                 case .settings: SettingsScreen(model: model)
@@ -411,6 +412,7 @@ struct AppShell: View {
         case .swarms: SwarmsScreen(model: model, tier: tier)
         case .stage: StageScreen(model: model, tier: tier)
         case .sevenTv: SevenTvScreen(model: model, tier: tier)
+        case .twitch: TwitchScreen(model: model, tier: tier)
         case .names: NamesScreen(model: model)
         case .queue: QueueScreen(model: model)
         case .settings: SettingsScreen(model: model)
@@ -720,6 +722,7 @@ func icon(for tab: AppTab) -> String {
     case .swarms: return Symbol.Swarms.tab
     case .stage: return Symbol.stage
     case .sevenTv: return Symbol.SevenTv.tab
+    case .twitch: return Symbol.Twitch.tab
     case .names: return Symbol.Names.menu
     case .queue: return Symbol.queue
     case .settings: return Symbol.settings

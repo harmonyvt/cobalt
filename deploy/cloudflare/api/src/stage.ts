@@ -1022,11 +1022,11 @@ async function poolItems(d: StageDeps, s: SettingsRow): Promise<Item[]> {
 
 // ---- owner routes (30.10) ---------------------------------------------------------------------------------------------------
 
-export type StageOp = "get" | "patch" | "rotate" | "action" | "pool" | "redemptions" | "reward" | "twitch_connect" | "twitch_delete";
+export type StageOp = "get" | "patch" | "rotate" | "action" | "pool" | "redemptions" | "reward" | "twitch_connect" | "twitch_delete" | "twitch_session";
 
 export async function stageKeyed(d: StageDeps, op: StageOp, request: Request, params: Record<string, string>, q: URLSearchParams): Promise<StudioReply> {
     try {
-        if ((op === "twitch_connect" || op === "twitch_delete") && !d.twitch) return err(404, "error.stage.twitch_off");
+        if ((op === "twitch_connect" || op === "twitch_delete" || op === "twitch_session") && !d.twitch) return err(404, "error.stage.twitch_off");
         switch (op) {
             case "get":
                 return await ownerGet(d);
@@ -1046,6 +1046,8 @@ export async function stageKeyed(d: StageDeps, op: StageOp, request: Request, pa
                 return await ownerTwitchConnect(d);
             case "twitch_delete":
                 return await ownerTwitchDelete(d);
+            case "twitch_session":
+                return await ownerTwitchSession(d);
         }
     } catch (e) {
         log(`${op} failed`, e);
@@ -1298,6 +1300,42 @@ async function ownerTwitchConnect(d: StageDeps): Promise<StudioReply> {
     const state = randomBase62(32, rbytes(d));
     await writeSettings(d, { oauth_state: state, oauth_state_at: d.now() });
     return ok({ authorize_url: tc.authorizeUrl(`${d.stageBaseUrl}twitch/callback`, state) });
+}
+
+// The app's twitch tab (section 70): the connected account's token, refreshed when it is near its end, for the
+// app's own IRC chat connection and Twitch calls. A token that cannot be refreshed answers reconnect: true.
+async function ownerTwitchSession(d: StageDeps): Promise<StudioReply> {
+    const tw = await readTwitch(d);
+    if (!tw) return ok({ connected: false });
+    const who = (row: TwitchRow) => ({
+        client_id: d.twitch!.clientId,
+        user_id: row.broadcaster_id,
+        login: row.login,
+        display_name: row.display_name,
+    });
+    const scopesOf = (row: TwitchRow) => row.scopes.split(/\s+/).filter((x) => x !== "");
+    const client = clientOf(d)!;
+    let token: string;
+    try {
+        token = await accessToken(d, client, false);
+    } catch (e) {
+        if (e instanceof TwitchError && e.status === 401 && e.detail === "reconnect") {
+            const row = (await readTwitch(d)) ?? tw;
+            return ok({ connected: true, ...who(row), access_token: null, expires_at: null, scopes: scopesOf(row), can_chat: false, reconnect: true });
+        }
+        throw e;
+    }
+    const row = (await readTwitch(d)) ?? tw;
+    const scopes = scopesOf(row);
+    return ok({
+        connected: true,
+        ...who(row),
+        access_token: token,
+        expires_at: row.expires_at,
+        scopes,
+        can_chat: scopes.includes("chat:read") && scopes.includes("chat:edit"),
+        reconnect: false,
+    });
 }
 
 async function ownerTwitchDelete(d: StageDeps): Promise<StudioReply> {
