@@ -78,6 +78,7 @@ describe("the owner routes (30.10, ops since APP-API-CONTRACT 33.10)", () => {
         expect(op("GET", "/stage/pool")).toBe("stage_owner.pool");
         expect(op("GET", "/stage/redemptions")).toBe("stage_owner.redemptions");
         expect(op("POST", "/stage/twitch/connect")).toBe("stage_owner.twitch_connect");
+        expect(op("GET", "/stage/twitch/session")).toBe("stage_owner.twitch_session");
         expect(op("DELETE", "/stage/twitch")).toBe("stage_owner.twitch_delete");
         expect(REGISTRY.match("PATCH", "/stage/rewards/pin")).toMatchObject({ op: { name: "stage_owner.reward" }, params: { action: "pin" } });
         // no op: the gate's 404

@@ -955,3 +955,11 @@ public struct JobNotice: Equatable, Identifiable, Sendable {
     public var kind: Kind
     public var title: String
 }
+
+extension JobQueue {
+    /// How far the first live job is, 0...1, for the seam light between two panes; nil when nothing runs.
+    public func seamFraction(now: Date) -> Double? {
+        guard let job = live.first else { return nil }
+        return ContinuedProgress.fraction(of: job.pipeline, now: now)
+    }
+}

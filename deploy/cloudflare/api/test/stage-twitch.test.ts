@@ -32,7 +32,7 @@ describe("the client", () => {
             response_type: "code",
             client_id: TWITCH_ID,
             redirect_uri: "https://studio.capybaraharmony.com/twitch/callback",
-            scope: "channel:manage:redemptions",
+            scope: "channel:manage:redemptions chat:read chat:edit user:read:follows user:read:emotes user:read:chat user:write:chat clips:edit",
             state: "STATE",
             force_verify: "true",
         });

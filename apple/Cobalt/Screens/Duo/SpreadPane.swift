@@ -1,0 +1,215 @@
+import CobaltKit
+import SwiftUI
+
+// The other screen (Duo building blocks, /mnt/project-files/iphone-duo/building-blocks.html). On a spread the shell keeps
+// one pane over the right half of the window: a sheet, a picker, a confirm or a second tab opens there instead of
+// covering the screen it came from, which stays live and touchable. Folded, on an iPhone and on the Mac the same calls
+// are ordinary sheets.
+
+/// The pane the shell draws over the right half of a spread.
+@MainActor @Observable
+final class SpreadPaneHost {
+    struct Pane {
+        let id: String
+        let content: AnyView
+        /// Draws a close button in the pane's top corner (content that has none of its own).
+        let closable: Bool
+        let onClose: @MainActor () -> Void
+    }
+
+    private(set) var pane: Pane?
+    /// A tab asked for on the other screen ("two tabs at once"); the shell, which can draw any tab, takes it.
+    var tabRequest: AppTab?
+    /// Bumped on every show, so the pane's view (and its state) is new for new content.
+    private(set) var generation = 0
+
+    /// Shows `content` in the pane, closing whatever was there.
+    func show(id: String, content: AnyView, closable: Bool = false, onClose: @escaping @MainActor () -> Void) {
+        if let old = pane, old.id != id {
+            pane = nil
+            old.onClose()
+        }
+        generation &+= 1
+        pane = Pane(id: id, content: content, closable: closable, onClose: onClose)
+    }
+
+    /// Closes the pane (only when it shows `id`, when one is given) and tells its presenter.
+    func close(id: String? = nil) {
+        guard let p = pane, id == nil || p.id == id else { return }
+        pane = nil
+        p.onClose()
+    }
+
+    func isShowing(_ id: String) -> Bool { pane?.id == id }
+}
+
+private struct SpreadPaneKey: EnvironmentKey {
+    static let defaultValue: SpreadPaneHost? = nil
+}
+
+private struct IsSpreadKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+private struct PaneCloseKey: EnvironmentKey {
+    static let defaultValue: SheetCloseAction? = nil
+}
+
+extension EnvironmentValues {
+    /// The shell's pane host (nil in previews and the extensions).
+    var spreadPane: SpreadPaneHost? {
+        get { self[SpreadPaneKey.self] }
+        set { self[SpreadPaneKey.self] = newValue }
+    }
+
+    /// The window is a spread: two screens' width (`Spread.minWidth` and up) on iPhone and iPad.
+    var isSpread: Bool {
+        get { self[IsSpreadKey.self] }
+        set { self[IsSpreadKey.self] = newValue }
+    }
+
+    /// How the pane this view is in closes; nil outside the pane.
+    var paneClose: SheetCloseAction? {
+        get { self[PaneCloseKey.self] }
+        set { self[PaneCloseKey.self] = newValue }
+    }
+}
+
+/// `dismiss()` for content that is a sheet when folded and the pane on a spread: closes whichever it is in.
+@MainActor
+struct SheetOrPaneDismiss: DynamicProperty {
+    @Environment(\.dismiss) private var system
+    @Environment(\.paneClose) private var pane
+
+    func callAsFunction() {
+        if let pane { pane.run() } else { system() }
+    }
+}
+
+extension View {
+    /// `.sheet(item:)`, except on a spread, where `content` opens in the pane on the other screen.
+    func spreadSheet<Item: Identifiable, Content: View>(
+        item: Binding<Item?>, @ViewBuilder content: @escaping (Item) -> Content
+    ) -> some View {
+        modifier(SpreadSheetItem(item: item, content: content))
+    }
+
+    /// `.sheet(isPresented:)`, except on a spread, where `content` opens in the pane on the other screen. `id` names the
+    /// pane, so a second presenter replaces it rather than stacking.
+    func spreadSheet<Content: View>(
+        isPresented: Binding<Bool>, id: String, @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        modifier(SpreadSheetFlag(shown: isPresented, id: id, content: content))
+    }
+}
+
+private struct SpreadSheetItem<Item: Identifiable, Pane: View>: ViewModifier {
+    @Binding var item: Item?
+    let content: (Item) -> Pane
+
+    @Environment(\.spreadPane) private var host
+    @Environment(\.isSpread) private var spread
+    @State private var paneID = "sheet-\(UUID().uuidString)"
+
+    private var usesPane: Bool { spread && host != nil }
+
+    private var sheetItem: Binding<Item?> {
+        Binding(get: { usesPane ? nil : item }, set: { item = $0 })
+    }
+
+    func body(content view: Content) -> some View {
+        view
+            .sheet(item: sheetItem) { content($0) }
+            .onChange(of: item.map { AnyHashable($0.id) }, initial: true) { _, id in
+                guard usesPane, let host else { return }
+                if let shown = item, id != nil {
+                    host.show(id: paneID, content: AnyView(content(shown))) { item = nil }
+                } else {
+                    host.close(id: paneID)
+                }
+            }
+            .onDisappear { host?.close(id: paneID) }
+    }
+}
+
+private struct SpreadSheetFlag<Pane: View>: ViewModifier {
+    @Binding var shown: Bool
+    let id: String
+    let content: () -> Pane
+
+    @Environment(\.spreadPane) private var host
+    @Environment(\.isSpread) private var spread
+
+    private var usesPane: Bool { spread && host != nil }
+
+    private var sheetShown: Binding<Bool> {
+        Binding(get: { usesPane ? false : shown }, set: { shown = $0 })
+    }
+
+    func body(content view: Content) -> some View {
+        view
+            .sheet(isPresented: sheetShown) { content() }
+            .onChange(of: shown, initial: true) { _, on in
+                guard usesPane, let host else { return }
+                if on {
+                    host.show(id: id, content: AnyView(content())) { shown = false }
+                } else {
+                    host.close(id: id)
+                }
+            }
+            .onDisappear { host?.close(id: id) }
+    }
+}
+
+/// The pane itself: the right half of the window, over whatever is there, with the hinge on its left edge.
+struct SpreadPaneView: View {
+    let host: SpreadPaneHost
+    let queue: JobQueue
+
+    var body: some View {
+        if let pane = host.pane {
+            HStack(spacing: 0) {
+                HingeSeam(queue: queue)
+                pane.content
+                    .environment(\.paneClose, SheetCloseAction { host.close(id: pane.id) })
+                    .sheetClose { host.close(id: pane.id) }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(CobaltColor.bg)
+                    .id(host.generation)
+                    .overlay(alignment: .topLeading) {
+                        if pane.closable {
+                            CloseButton(cancels: true) { host.close(id: pane.id) }
+                                .padding(12)
+                        }
+                    }
+            }
+            .background(CobaltColor.bg.ignoresSafeArea())
+            .transition(.move(edge: .trailing).combined(with: .opacity))
+        }
+    }
+}
+
+#if os(iOS)
+/// "open on the other screen": a menu of the other tabs, in the toolbar of a spread (Duo building blocks, two tabs).
+struct SecondScreenToolbarItem: ToolbarContent {
+    let model: AppModel
+
+    @Environment(\.spreadPane) private var host
+    @Environment(\.isSpread) private var spread
+
+    var body: some ToolbarContent {
+        if spread, let host {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    ForEach(model.visibleTabs.filter { $0 != model.selectedTab && $0 != .settings }, id: \.self) { tab in
+                        Button(Copy.tab(tab), systemImage: icon(for: tab)) { host.tabRequest = tab }
+                    }
+                } label: {
+                    Label(Copy.Duo.otherScreen, systemImage: Symbol.Duo.otherScreen)
+                }
+                .labelStyle(.iconOnly)
+            }
+        }
+    }
+}
+#endif

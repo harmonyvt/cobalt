@@ -19,6 +19,10 @@ struct LinksScreen: View {
     @State private var openedCollection: CollectionRoute?
     /// The link a card opened (APP-API-CONTRACT 41.4), the same way.
     @State private var openedLink: LinkRoute?
+    /// The tab's own width: from `Spread.minWidth` a link opens beside the list instead of on top of it.
+    @State private var width: CGFloat = 0
+
+    private var spread: Bool { width >= Spread.minWidth }
 
     init(model: AppModel) {
         self.model = model
@@ -39,8 +43,11 @@ struct LinksScreen: View {
     }
 
     var body: some View {
-        content
+        Group {
+            if spread { split } else { pushed }
+        }
             .background(CobaltColor.bg)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .navigationTitle(Copy.Links.title)
             .toolbar {
                 #if os(iOS)
@@ -63,10 +70,35 @@ struct LinksScreen: View {
             .navigationDestination(item: $openedCollection) { route in
                 CollectionScreen(model: model, collectionID: route.id)
             }
+            .linkPresentations(controller)
+    }
+
+    /// iPhone and a narrow window: the list, and a link pushed on it.
+    private var pushed: some View {
+        content
             .navigationDestination(item: $openedLink) { route in
                 LinkScreen(model: model, setID: route.id)
             }
-            .linkPresentations(controller)
+    }
+
+    /// A spread (two screens, a landscape iPad, the Mac): the links on the left, the one being edited on the right, so
+    /// its preview changes beside the list. Collections still open on top.
+    private var split: some View {
+        HStack(spacing: 0) {
+            content.frame(width: Spread.listWidth + 40)
+            HingeSeam(queue: model.queue)
+            Group {
+                if let route = openedLink, store.sets.contains(where: { $0.id == route.id }) {
+                    NavigationStack { LinkScreen(model: model, setID: route.id) }
+                        .id(route)
+                } else {
+                    Text(Copy.Duo.pickLink)
+                        .font(CobaltType.body).foregroundStyle(CobaltColor.caption)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
     }
 
     @ViewBuilder

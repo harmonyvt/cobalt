@@ -14,7 +14,7 @@ import SwiftUI
 struct SevenTvAddToSetSheet: View {
     let picker: SevenTvAddToSetModel
 
-    @Environment(\.dismiss) private var dismiss
+    var dismiss = SheetOrPaneDismiss()
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.shell) private var shell
     @State private var clash: SevenTvNameClash?

@@ -130,6 +130,10 @@ the files and a real run before anything is called done.
   7TV's v4 GraphQL (`api/src/seventv.ts`, routes `/7tv*`, chat/MCP `seventv.*`, writes tier `ask`). 7TV has no OAuth: the
   token is 7tv.app's `localStorage["7tv-token"]` session (30 days), brought in by a bookmarklet that opens
   `cobalt-apple://7tv-link?token=` or pasted in the studio tab's link sheet; never through chat.
+- Twitch watch + chat (`APP-API-CONTRACT.md` section 70): the app's twitch tab plays streams through Twitch's embed player and
+  talks IRC chat itself as the studio's connected Twitch account; `GET /stage/twitch/session` (signed-in devices only) hands it a
+  fresh token. Chat scopes were added to the studio connect: an older connection answers `can_chat: false` until the owner
+  reconnects twitch once in studio.
 - PostHog (`APP-API-CONTRACT.md` section 58): US cloud project "capystore" (735568). The API Worker sends an `op` event for
   every route, chat and MCP call, plus app warn/error logs, crashes and cron runs (`api/src/posthog.ts`, `background()`,
   never changes an answer); the token is a public-safe text binding. The apps use `posthog-ios` (the only third-party
