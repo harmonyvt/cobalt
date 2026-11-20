@@ -57,6 +57,8 @@ struct AppShell: View {
     /// Two or more links pasted or dropped: the review sheet (CONTRACT-PARALLEL 4.5).
     @State private var review: PasteReviewRequest?
     @State private var width: CGFloat = 0
+    /// The other screen of a spread (Duo building blocks): sheets, pickers, confirms and a second tab open there.
+    @State private var spreadPane = SpreadPaneHost()
     /// What a screen that has just popped left to say ("deleted."), drawn over the shell for a moment.
     @State private var status: String?
     @State private var statusToken = 0
@@ -85,6 +87,37 @@ struct AppShell: View {
         #endif
     }
 
+    /// Two screens' width on iPhone and iPad (`Spread.minWidth`): the pane and the hinge notices are on. The Mac keeps
+    /// its sheets.
+    private var isSpread: Bool {
+        #if os(iOS)
+        return width >= Spread.minWidth
+        #else
+        return false
+        #endif
+    }
+
+    private static let photosPaneID = "shell-photos"
+
+    /// The photo picker: on a spread it opens inline on the other screen, beside the screen that asked for it
+    /// (Duo building blocks); otherwise the system sheet.
+    private func choosePhotos() {
+        #if os(iOS)
+        if isSpread {
+            let picker = PhotosPicker(
+                selection: $pickedPhoto, matching: .any(of: [.videos, .images]), preferredItemEncoding: .current,
+                photoLibrary: .shared()
+            ) { EmptyView() }
+                .photosPickerStyle(.inline)
+                .photosPickerDisabledCapabilities([.selectionActions])
+                .ignoresSafeArea(edges: .bottom)
+            spreadPane.show(id: Self.photosPaneID, content: AnyView(picker), closable: true) {}
+            return
+        }
+        #endif
+        showPhotos = true
+    }
+
     var body: some View {
         gatedNavigation
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
@@ -92,12 +125,37 @@ struct AppShell: View {
             .cobaltRoot(model: model)
             .environment(\.shell, actions)
             .environment(\.photoImport, photoImport)
+            .environment(\.spreadPane, spreadPane)
+            .environment(\.isSpread, isSpread)
+            .overlay(alignment: .trailing) {
+                if isSpread {
+                    SpreadPaneView(host: spreadPane, queue: model.queue)
+                        .frame(width: width / 2)
+                        .environment(\.shell, actions)
+                        .environment(\.photoImport, photoImport)
+                        .environment(\.spreadPane, spreadPane)
+                        .environment(\.isSpread, isSpread)
+                        .cobaltRoot(model: model)
+                }
+            }
+            .animation(Motion.card, value: spreadPane.pane?.id)
+            .onChange(of: isSpread) { _, spread in if !spread { spreadPane.close() } }
+            #if os(iOS)
+            // a second tab on the other screen; picking the same tab on the main screen closes it there
+            .onChange(of: spreadPane.tabRequest) { _, tab in
+                guard let tab else { return }
+                spreadPane.tabRequest = nil
+                spreadPane.show(id: "tab-\(tab)", content: AnyView(tabRoot(tab)), closable: true) {}
+            }
+            .onChange(of: model.selectedTab) { _, tab in spreadPane.close(id: "tab-\(tab)") }
+            #endif
             .overlay { if dropTargeted { dropHighlight } }
             #if os(iOS)
             .background { KeyboardShelfPublisher(store: model.store) }
             .modifier(AlertsPromptPresenter(model: model, blocked: titleSheet != nil || review != nil))
             #endif
-            .overlay(alignment: .bottom) {
+            // on a spread the notice sits on the hinge, between the two screens, instead of over either
+            .overlay(alignment: isSpread ? .center : .bottom) {
                 if let note {
                     StatusToast(text: note.text, detail: note.detail, actionTitle: note.actionTitle) {
                         let action = note.action
@@ -136,6 +194,7 @@ struct AppShell: View {
             .onChange(of: pickedPhoto) { _, item in
                 guard let item else { return }
                 pickedPhoto = nil
+                spreadPane.close(id: Self.photosPaneID)
                 // the picker's asset id rides with the file, so the upload joins the cobalt album as that asset
                 photoImport.load(item, into: model) { [id = item.itemIdentifier] in intake($0, photosAssetID: id) }
             }
@@ -476,7 +535,7 @@ struct AppShell: View {
         ShellActions(
             paste: { Task { handle(await Pasteboard.contentsOffMain(), via: .circle, dropped: false) } },
             chooseFile: { showImporter = true },
-            choosePhotos: { showPhotos = true },
+            choosePhotos: { choosePhotos() },
             trimNewWebp: { post in
                 TrimIntent.request()
                 Task { await model.trimNewWebp(from: post) }

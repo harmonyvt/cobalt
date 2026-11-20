@@ -38,7 +38,7 @@ struct TwitchScreen: View {
             await store.load()
             if model.sevenTv.status == nil { await model.sevenTv.load() }
         }
-        .sheet(item: $addingToSet) { picker in
+        .spreadSheet(item: $addingToSet) { picker in
             SevenTvAddToSetSheet(picker: picker)
         }
     }

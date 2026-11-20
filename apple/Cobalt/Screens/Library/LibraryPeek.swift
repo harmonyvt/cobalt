@@ -89,6 +89,8 @@ extension View {
 /// else is its picture. It takes no touches, so lifting the finger (which the hold is still tracking) closes it.
 struct LibraryPeek: View {
     let row: LibraryRow
+    /// Dims what is under it (over the grid); off on the other screen of a spread, where nothing is under it.
+    var dims = true
 
     private var face: Rendition { row.item.face }
 
@@ -113,7 +115,7 @@ struct LibraryPeek: View {
             let room = CGSize(width: max(proxy.size.width - 32, 1), height: max(proxy.size.height - 64, 1))
             let size = Self.fit(aspect: aspect, in: room)
             ZStack {
-                Color.black.opacity(0.55).ignoresSafeArea()
+                Color.black.opacity(dims ? 0.55 : 0).ignoresSafeArea()
                 ZStack {
                     FacePicture(item: row.item, maxPixel: 1024, showsGlyph: false)
                     if let url = videoURL {

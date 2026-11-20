@@ -7,14 +7,19 @@ import SwiftUI
 /// (`AppModel.delete(_:)`, the calls the detail's deletes use).
 struct LibraryDeleteSheet: View {
     let picks: [MediaItem]
+    /// What the picks are in (share links, collections): drawn over the list, so the cost is seen first.
+    var impact: DeleteImpact = .none
     let delete: ([DeletePick]) -> Void
 
     @State private var plans: [DeletePick]
     @State private var open: Set<String> = []
-    @Environment(\.dismiss) private var dismiss
+    var dismiss = SheetOrPaneDismiss()
 
-    init(picks: [MediaItem], delete: @escaping ([DeletePick]) -> Void) {
+    @Environment(\.paneClose) private var inPane
+
+    init(picks: [MediaItem], impact: DeleteImpact = .none, delete: @escaping ([DeletePick]) -> Void) {
         self.picks = picks
+        self.impact = impact
         self.delete = delete
         _plans = State(initialValue: picks.map { DeletePick(item: $0) })
         // one pick with files to choose opens on them
@@ -32,6 +37,7 @@ struct LibraryDeleteSheet: View {
                         .font(CobaltType.captionSmall)
                         .foregroundStyle(CobaltColor.caption)
                         .padding(.horizontal, 4)
+                    if impact != .none { DeleteImpactCard(impact: impact) }
                     ForEach($plans, id: \.item.id) { $plan in
                         PickRow(plan: $plan, open: openBinding(plan.item.id))
                     }
@@ -62,11 +68,28 @@ struct LibraryDeleteSheet: View {
         })
     }
 
-    private var deleteButton: some View {
+    private func deleteChosen() {
+        let chosen = plans.filter { $0.plan != .nothing }
+        dismiss()
+        delete(chosen)
+    }
+
+    /// On the other screen of a spread the button is a hold (a big button beside the grid is easy to brush); in a
+    /// sheet it stays a tap.
+    @ViewBuilder private var deleteButton: some View {
+        if inPane != nil {
+            HoldToDelete(title: Copy.DeletePicks.holdButton(files), enabled: files > 0 && !blocked, action: deleteChosen)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.bar)
+        } else {
+            tapButton
+        }
+    }
+
+    private var tapButton: some View {
         Button(role: .destructive) {
-            let chosen = plans.filter { $0.plan != .nothing }
-            dismiss()
-            delete(chosen)
+            deleteChosen()
         } label: {
             Label(Copy.DeletePicks.button(files), systemImage: Symbol.Library.deleteEverything)
                 .labelStyle(.titleAndIcon)
@@ -217,5 +240,89 @@ private struct FileTile: View {
         } else if let url = r.publicURL ?? r.file?.url {
             RemoteStill(poster: RemotePoster(url: HeroSource.resolve(url), isVideo: r.isMotionItem), maxPixel: 200)
         }
+    }
+}
+
+/// What deleting the picks breaks: the share links holding one of their files and the collections holding those links.
+struct DeleteImpact: Equatable {
+    var links = 0
+    var collections = 0
+
+    static let none = DeleteImpact()
+
+    @MainActor
+    init(picks: [MediaItem], model: AppModel) {
+        guard model.capabilities.shareSets else { return }
+        let index = ShareSetIndex(sets: model.shareSets.sets, collections: model.shareSets.collections)
+        var sets = Set<String>()
+        var folders = Set<String>()
+        for item in picks {
+            sets.formUnion(index.setIDs(for: item))
+            folders.formUnion(index.collectionIDs(for: item))
+        }
+        links = sets.count
+        collections = folders.count
+    }
+
+    init() {}
+}
+
+private struct DeleteImpactCard: View {
+    let impact: DeleteImpact
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if impact.links > 0 {
+                Label(Copy.DeletePicks.linksLose(impact.links), systemImage: Symbol.Library.deleteEverything)
+            }
+            if impact.collections > 0 {
+                Label(Copy.DeletePicks.collectionsShrink(impact.collections), systemImage: "folder")
+            }
+        }
+        .labelStyle(.titleAndIcon)
+        .font(CobaltType.caption)
+        .foregroundStyle(CobaltColor.errorText)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CobaltColor.errorText.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+/// A destructive button that runs only after a 1 s hold, filling as it goes.
+struct HoldToDelete: View {
+    let title: String
+    let enabled: Bool
+    let action: () -> Void
+
+    @State private var holding = false
+
+    var body: some View {
+        Label(title, systemImage: Symbol.Library.deleteEverything)
+            .labelStyle(.titleAndIcon)
+            .font(CobaltType.bodySemibold)
+            .foregroundStyle(CobaltColor.errorText)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(alignment: .leading) {
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(CobaltColor.errorText.opacity(0.35))
+                        .frame(width: holding ? geo.size.width : 0)
+                        .animation(holding ? .linear(duration: 1) : .easeOut(duration: 0.2), value: holding)
+                }
+            }
+            .background(CobaltColor.errorText.opacity(0.15))
+            .clipShape(Capsule())
+            .contentShape(Capsule())
+            .opacity(enabled ? 1 : 0.4)
+            .onLongPressGesture(minimumDuration: 1, maximumDistance: 30) {
+                guard enabled else { return }
+                holding = false
+                action()
+            } onPressingChanged: { pressing in
+                holding = pressing && enabled
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { if enabled { action() } }
     }
 }
