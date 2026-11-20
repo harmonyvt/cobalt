@@ -246,7 +246,7 @@ private struct TwitchWatchView: View {
     var body: some View {
         GeometryReader { geo in
             // side by side when there is room for a real chat column beside a 16:9 player
-            if geo.size.width >= 700, geo.size.width > geo.size.height * 1.05 {
+            if geo.size.width >= Spread.minWidth, geo.size.width > geo.size.height * 1.05 {
                 let chatWidth = min(420, max(300, geo.size.width * 0.34))
                 HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 0) {
@@ -257,7 +257,7 @@ private struct TwitchWatchView: View {
                         Spacer(minLength: 0)
                     }
                     .frame(maxWidth: .infinity)
-                    Divider()
+                    HingeSeam(queue: model.queue)
                     chat.frame(width: chatWidth)
                 }
             } else {

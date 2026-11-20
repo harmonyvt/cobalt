@@ -137,7 +137,7 @@ struct SevenTvScreen: View {
             case "upload": controller.segment = .upload
             default: break
             }
-            if raw == "upload", tier == .wide { controller.pane = .upload }
+            if raw == "upload", tier != .compact { controller.pane = .upload }
         }
         #endif
         _tab = State(initialValue: controller)
@@ -145,12 +145,12 @@ struct SevenTvScreen: View {
 
     private var store: SevenTvStore { model.sevenTv }
 
-    /// Three columns on the Mac and in a wide iPad window.
+    /// Three columns on the Mac and from a two-screen spread up (a landscape phone, an iPad).
     private var twoPane: Bool {
         #if os(macOS)
         return true
         #else
-        return tier == .wide
+        return tier != .compact
         #endif
     }
 
@@ -639,7 +639,7 @@ private struct SevenTvWideLayout: View {
             SevenTvMiddleColumn(tab: tab)
                 .frame(width: 280)
                 .background(CobaltColor.surface.opacity(0.5))
-            Divider()
+            HingeSeam(queue: tab.model.queue)
             SevenTvRightColumn(tab: tab)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
