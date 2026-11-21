@@ -165,14 +165,42 @@ gate_mac() {
     bin="$app/Contents/MacOS/$exe"
     [ -x "$bin" ] || die "no executable at $bin"
 
-    # Unsandboxed (CODE_SIGNING_ALLOWED=NO) the caches folder is the plain one; sandboxed it is in the container.
-    local markers=("$HOME/Library/Caches/$BUNDLE_ID/$MARKER"
+    # Signed like the local install (mac-install.sh): the login keychain trusts the Developer ID signature of the key's
+    # item, so the launch reads it without a prompt. Unsigned, the first launch of a build blocks in Settings.shared()
+    # on the keychain access prompt (no cached key answer yet) and no window ever appears.
+    local id ent
+    id="$(security find-identity -v -p codesigning 2>/dev/null | grep 'Developer ID Application' | head -n 1 | awk '{print $2}' || true)"
+    if [ -n "$id" ]; then
+        step "sign with Developer ID (as mac-install.sh)"
+        ent="$(mktemp -t cobalt-gate-entitlements).plist"
+        cat >"$ent" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+	<key>com.apple.security.personal-information.photos-library</key><true/>
+</dict></plist>
+XML
+        find "$app/Contents" \( -name '*.framework' -o -name '*.dylib' -o -name '*.appex' -o -name '*.xpc' \) -prune -print 2>/dev/null |
+        while read -r nested; do
+            codesign --force --options runtime --timestamp=none --sign "$id" "$nested" >/dev/null
+        done
+        codesign --force --options runtime --timestamp=none --entitlements "$ent" --sign "$id" "$app"
+        rm -f "$ent"
+    else
+        echo "launch-gate.sh: no Developer ID identity; unsigned, the launch may wait on the keychain prompt" >&2
+    fi
+
+    # Unsandboxed the caches folder is ~/Library/Caches itself (no bundle id folder); sandboxed it is in the container.
+    local markers=("$HOME/Library/Caches/$MARKER"
+                   "$HOME/Library/Caches/$BUNDLE_ID/$MARKER"
                    "$HOME/Library/Containers/$BUNDLE_ID/Data/Library/Caches/$MARKER")
     rm -f "${markers[@]}"
     pkill -f "$bin" 2>/dev/null || true
 
     step "launch, then wait ${TIMEOUT}s"
-    open -n -g "$app"
+    # Without saved window state: the build shares the owner's bundle id, and when their last session ended with the main
+    # window closed (running from the menu bar icon) the restored launch opens no window, so the marker never comes.
+    open -n -g "$app" --args -ApplePersistenceIgnoreState YES
     sleep "$TIMEOUT"
 
     local pid found=""
@@ -189,7 +217,8 @@ gate_mac() {
         [ -n "$crash" ] && echo "--- newest crash report: $crash" >&2
     fi
 
-    osascript -e "quit app id \"$BUNDLE_ID\"" >/dev/null 2>&1 || true
+    # Only the gate's own process: quitting by bundle id would also quit an installed cobalt the owner has open.
+    if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
     sleep 2
     pkill -f "$bin" 2>/dev/null || true
     [ -z "$FAILED" ] || exit 1

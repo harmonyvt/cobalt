@@ -6,10 +6,8 @@ import SwiftUI
 // `@Environment(\.lifecycle)` instead of `@Environment(\.scenePhase)`. App and Scene bodies and `.commands` read
 // neither: they are part of SwiftUI's dependency graph, and a live read there made the #113 loop.
 
-extension EnvironmentValues {
-    /// The whole app's phase, memory pressure and thermal state (not one window's scenePhase).
-    @Entry var lifecycle = LifecycleSnapshot()
-}
+// The `\.lifecycle` entry itself is in Cobalt/Shared/LifecycleValue.swift, so the share extension (which compiles
+// Cobalt/Shared but not Cobalt/App) can read it too.
 
 extension View {
     /// The root of each window: feeds `\.lifecycle` from `AppLifecycle.shared`, and writes the launch marker the
