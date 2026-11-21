@@ -3,6 +3,7 @@
 import { AGENT_OPS } from "./ops/agents";
 import { AUTH_OPS } from "./ops/auth";
 import { BOX_OPS } from "./ops/box";
+import { BOORU_OPS } from "./ops/booru";
 import { YTDLP_OPS } from "./ops/ytdlp";
 import { CHAT_OPS } from "./ops/chat";
 import { CHAT_VIDEO_OPS } from "./ops/chat-video";
@@ -53,6 +54,7 @@ export const REGISTRY = new Registry([
     ...NAMES_OPS,
     ...STAGE_OPS,
     ...SEVENTV_OPS,
+    ...BOORU_OPS,
     ...BOX_OPS,
     ...YTDLP_OPS,
     ...FRAME_OPS,

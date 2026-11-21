@@ -987,6 +987,7 @@ describe("GET /capabilities", () => {
                 chat_video: false,
                 post_frame: false,
                 seventv: true,
+                booru: true,
                 accounts: true,
                 still_webp: false,
                 // no embedding Space in this world's env (section 21)

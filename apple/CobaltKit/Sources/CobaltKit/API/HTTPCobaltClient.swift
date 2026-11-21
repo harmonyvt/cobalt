@@ -236,6 +236,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var chatVideo: Bool?
                 var names: Bool?
                 var ytdlp: Bool?
+                var booru: Bool?
                 var postFrame: Bool?
             }
             struct Limits: Decodable {
@@ -348,6 +349,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.chatVideo = (f?.chatVideo ?? false) && caps.chat
         caps.names = (f?.names ?? false) && caps.search
         caps.ytdlp = f?.ytdlp ?? false
+        caps.booru = f?.booru ?? false
         caps.postFrame = f?.postFrame ?? false
         if let ph = w.posthog, let token = ph.token?.trimmingCharacters(in: .whitespaces), !token.isEmpty,
            let host = ph.host.flatMap(URL.init(string:)), host.scheme == "https" {

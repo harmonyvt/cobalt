@@ -243,8 +243,8 @@ const swiftFuncName = (opName: string) => {
 // The app's hand-written swarm models (apple/CobaltKit/.../Swarms) own the plain names `Swarm`, `SwarmChange`, `SwarmResult`,
 // ...; the generated wire structs of the same names would be a second declaration in the module, so they carry a `Wire` prefix.
 // CobaltKit declares its own swarm and board types (Swarms/, apple/CONTRACT-SWARMS.md); the generated wire structs of the
-// same names get a `Wire` prefix so the module keeps one type per name.
-const WIRE_PREFIXED = /^(Swarm|Board|MediaRef$)/;
+// same names get a `Wire` prefix so the module keeps one type per name. Booru/ (BooruModels.swift) owns `BooruPost` the same way.
+const WIRE_PREFIXED = /^(Swarm|Board|Booru|MediaRef$)/;
 const swiftName = (n: string) => (WIRE_PREFIXED.test(n) ? `Wire${n}` : n);
 
 type SwiftCtx = { components: Json; structs: string[]; named: Set<string> };
