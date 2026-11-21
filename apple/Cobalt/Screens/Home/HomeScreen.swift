@@ -96,8 +96,7 @@ struct HomeScreen: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
     @Environment(\.shell) private var shell
-    @Environment(\.spreadPane) private var spreadHost
-    @Environment(\.isSpread) private var isSpread
+    @Environment(\.hingeEdge) private var hingeEdge
     @Environment(\.photoImport) private var photoImport
     @Environment(\.hapticsEnabled) private var haptics
 
@@ -601,7 +600,7 @@ struct HomeScreen: View {
             .ignoresSafeArea()
             // one of two screens: the planets stay in this one (they crossed the hinge) and fade out at its sides
             // instead of stopping on a hard line; the extension under the sidebar would smear across the hinge
-            .modifier(OrbitColumnEdges(inColumn: inSpreadColumn, extendUnderSidebar: tier != .compact))
+            .modifier(OrbitColumnEdges(hinge: hingeEdge, extendUnderSidebar: tier != .compact))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Copy.orbitA11y)
             .accessibilityValue(orbitSummary)
@@ -609,9 +608,6 @@ struct HomeScreen: View {
             // assistive tech that offers custom actions (each one looks up a planet's title)
             .accessibilityActions { if !focusActive, voiceOver || switchControl { orbitActions(media) } }
     }
-
-    /// The save screen is one column of a spread (the other screen holds a pane).
-    private var inSpreadColumn: Bool { isSpread && spreadHost?.pane != nil }
 
     /// The orbit's timeline runs while the orbit turns, the star lives, or something is still easing
     /// (and never while another tab or a planet's detail is on screen).
@@ -1284,19 +1280,20 @@ struct CircleLabel: View {
 
 /// On iPad and the Mac the orbit continues under the sidebar (the system's background extension);
 /// on a phone there is no sidebar, so it is left alone.
-/// The orbit's sides: full-bleed (and under the sidebar) alone; inside its own column, with soft edges, in a spread.
+/// The orbit's sides: full-bleed (and under the sidebar) alone; in a spread it stays in its own column and fades out
+/// on the hinge side only (the outer side is a real screen edge and cuts it as before).
 private struct OrbitColumnEdges: ViewModifier {
-    let inColumn: Bool
+    let hinge: HorizontalEdge?
     let extendUnderSidebar: Bool
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if inColumn {
+        if let hinge {
             content.mask {
                 LinearGradient(
-                    stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.06),
-                            .init(color: .black, location: 0.94), .init(color: .clear, location: 1)],
-                    startPoint: .leading, endPoint: .trailing)
+                    stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.05), .init(color: .black, location: 1)],
+                    startPoint: hinge == .leading ? .leading : .trailing,
+                    endPoint: hinge == .leading ? .trailing : .leading)
             }
         } else {
             content.modifier(ExtendUnderSidebar(enabled: extendUnderSidebar))

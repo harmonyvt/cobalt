@@ -47,6 +47,8 @@ private struct SpreadPaneKey: EnvironmentKey {
     static let defaultValue: SpreadPaneHost? = nil
 }
 
+private struct HingeEdgeKey: EnvironmentKey { static let defaultValue: HorizontalEdge? = nil }
+
 private struct IsSpreadKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -60,6 +62,13 @@ extension EnvironmentValues {
     var spreadPane: SpreadPaneHost? {
         get { self[SpreadPaneKey.self] }
         set { self[SpreadPaneKey.self] = newValue }
+    }
+
+    /// The side of this screen the hinge is on, while it is one column of a spread with a pane open; nil when it has the
+    /// whole window.
+    var hingeEdge: HorizontalEdge? {
+        get { self[HingeEdgeKey.self] }
+        set { self[HingeEdgeKey.self] = newValue }
     }
 
     /// The window is a spread: two screens' width (`Spread.minWidth` and up) on iPhone and iPad.
@@ -201,6 +210,7 @@ struct SpreadPaneColumn<Content: View>: View {
             // search, toolbar) draws in its column instead of under the bar
             content
                 .padding(.top, shows ? SpreadTopRow.height : 0)
+                .environment(\.hingeEdge, shows ? .trailing : nil)
             if shows, let host {
                 SpreadPaneView(host: host, queue: queue)
             }
@@ -242,6 +252,7 @@ struct SpreadPaneView: View {
                 HingeSeam(queue: queue)
                     .ignoresSafeArea()
                 pane.content
+                    .environment(\.hingeEdge, .leading)
                     .environment(\.paneClose, SheetCloseAction { host.close(id: pane.id) })
                     .sheetClose { host.close(id: pane.id) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
