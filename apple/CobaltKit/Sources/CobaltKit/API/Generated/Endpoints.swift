@@ -787,22 +787,22 @@ enum Endpoints {
     }
 
     /// `GET /booru/posts` (op `booru.posts`, auth key): Danbooru posts under this key's level and filters (GET /booru/posts).
-    static func booruPosts() -> APIEndpoint<BooruPostsResponse> {
+    static func booruPosts() -> APIEndpoint<WireBooruPostsResponse> {
         APIEndpoint(op: "booru.posts", method: "GET", path: "/booru/posts", auth: .key)
     }
 
     /// `GET /booru/autocomplete` (op `booru.autocomplete`, auth key): Danbooru tag suggestions (GET /booru/autocomplete).
-    static func booruAutocomplete() -> APIEndpoint<BooruAutocompleteResponse> {
+    static func booruAutocomplete() -> APIEndpoint<WireBooruAutocompleteResponse> {
         APIEndpoint(op: "booru.autocomplete", method: "GET", path: "/booru/autocomplete", auth: .key)
     }
 
     /// `GET /booru/settings` (op `booru.settings`, auth key): This key's booru level, themes and blacklist (GET /booru/settings).
-    static func booruSettings() -> APIEndpoint<BooruSettingsResponse> {
+    static func booruSettings() -> APIEndpoint<WireBooruSettingsResponse> {
         APIEndpoint(op: "booru.settings", method: "GET", path: "/booru/settings", auth: .key)
     }
 
     /// `PUT /booru/settings` (op `booru.settings_update`, auth key): Change this key's booru level, themes or blacklist (PUT /booru/settings).
-    static func booruSettingsUpdate() -> APIEndpoint<BooruSettingsUpdateResponse> {
+    static func booruSettingsUpdate() -> APIEndpoint<WireBooruSettingsUpdateResponse> {
         APIEndpoint(op: "booru.settings_update", method: "PUT", path: "/booru/settings", auth: .key)
     }
 
@@ -2062,7 +2062,7 @@ struct SeventvHttpOwnedResponse: Decodable, Sendable {
     var status: String
 }
 
-struct BooruPostTags: Decodable, Sendable {
+struct WireBooruPostTags: Decodable, Sendable {
     var artist: [String]
     var character: [String]
     var copyright: [String]
@@ -2070,7 +2070,7 @@ struct BooruPostTags: Decodable, Sendable {
     var meta: [String]
 }
 
-struct BooruPost: Decodable, Sendable {
+struct WireBooruPost: Decodable, Sendable {
     var id: Int
     /// g general, s sensitive, q questionable; there is no explicit
     var rating: String
@@ -2089,10 +2089,10 @@ struct BooruPost: Decodable, Sendable {
     var thumbUrl: String
     var sampleUrl: String
     var fileUrl: String
-    var tags: BooruPostTags
+    var tags: WireBooruPostTags
 }
 
-struct BooruPostsResponseHidden: Decodable, Sendable {
+struct WireBooruPostsResponseHidden: Decodable, Sendable {
     var level: Int
     var theme: Int
     var blacklist: Int
@@ -2100,29 +2100,29 @@ struct BooruPostsResponseHidden: Decodable, Sendable {
     var blocked: Int
 }
 
-struct BooruPostsResponse: Decodable, Sendable {
+struct WireBooruPostsResponse: Decodable, Sendable {
     var status: String
     /// g general, s sensitive, q questionable; there is no explicit
     var level: String
-    var posts: [BooruPost]
-    var hidden: BooruPostsResponseHidden
+    var posts: [WireBooruPost]
+    var hidden: WireBooruPostsResponseHidden
     var nextPage: Int?
     /// extras Danbooru's 2-tag limit did not take (order, rating); filtered here anyway
     var dropped: [String]
 }
 
-struct BooruAutocompleteResponseTagsItem: Decodable, Sendable {
+struct WireBooruAutocompleteResponseTagsItem: Decodable, Sendable {
     var name: String
     var kind: String
     var count: Int
 }
 
-struct BooruAutocompleteResponse: Decodable, Sendable {
+struct WireBooruAutocompleteResponse: Decodable, Sendable {
     var status: String
-    var tags: [BooruAutocompleteResponseTagsItem]
+    var tags: [WireBooruAutocompleteResponseTagsItem]
 }
 
-struct BooruSettingsResponseThemeListItem: Decodable, Sendable {
+struct WireBooruSettingsResponseThemeListItem: Decodable, Sendable {
     var id: String
     var label: String
     var detail: String
@@ -2132,17 +2132,17 @@ struct BooruSettingsResponseThemeListItem: Decodable, Sendable {
     var tags: [String]
 }
 
-struct BooruSettingsResponse: Decodable, Sendable {
+struct WireBooruSettingsResponse: Decodable, Sendable {
     var status: String
     /// g general, s sensitive, q questionable; there is no explicit
     var level: String
     var levels: [String]
-    var themeList: [BooruSettingsResponseThemeListItem]
+    var themeList: [WireBooruSettingsResponseThemeListItem]
     var blacklist: String
     var updatedAt: Int?
 }
 
-struct BooruSettingsUpdateResponseThemeListItem: Decodable, Sendable {
+struct WireBooruSettingsUpdateResponseThemeListItem: Decodable, Sendable {
     var id: String
     var label: String
     var detail: String
@@ -2152,12 +2152,12 @@ struct BooruSettingsUpdateResponseThemeListItem: Decodable, Sendable {
     var tags: [String]
 }
 
-struct BooruSettingsUpdateResponse: Decodable, Sendable {
+struct WireBooruSettingsUpdateResponse: Decodable, Sendable {
     var status: String
     /// g general, s sensitive, q questionable; there is no explicit
     var level: String
     var levels: [String]
-    var themeList: [BooruSettingsUpdateResponseThemeListItem]
+    var themeList: [WireBooruSettingsUpdateResponseThemeListItem]
     var blacklist: String
     var updatedAt: Int?
 }

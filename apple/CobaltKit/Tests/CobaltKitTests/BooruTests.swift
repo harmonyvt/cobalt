@@ -55,8 +55,11 @@ import Testing
         #expect(store.phase == .loaded)
         #expect(!store.posts.isEmpty)
         #expect(store.posts.allSatisfy { $0.rating <= .sensitive })
+        // safeMode's didSet starts the reload itself; a second reload here would be dropped by the generation check
         store.safeMode = true
-        await store.reload()
+        for _ in 0..<200 where store.pageLevel != .general || store.phase != .loaded {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         #expect(store.pageLevel == .general)
         #expect(store.posts.allSatisfy { $0.rating == .general })
     }
