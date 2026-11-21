@@ -193,7 +193,10 @@ extension CobaltAppDelegate: UIApplicationDelegate {
         if connectingSceneSession.role == .windowExternalDisplayNonInteractive {
             return TwitchTVSceneDelegate.configuration(role: connectingSceneSession.role)
         }
-        return connectingSceneSession.configuration
+        // A fresh configuration with no delegate class, so SwiftUI fills in its own scene delegate. Returning
+        // `connectingSceneSession.configuration` (which already names SwiftUI's AppSceneDelegate) made SwiftUI treat it as
+        // ours and forward to itself until the stack ran out: the 8.27 (138) launch crash.
+        return UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
     }
 }
 #else
