@@ -10,6 +10,7 @@ struct TwitchScreen: View {
     let tier: Tier
 
     @State private var addingToSet: SevenTvAddToSetModel?
+    @Environment(\.scenePhase) private var scenePhase
 
     private var store: TwitchStore { model.twitch }
 
@@ -37,6 +38,10 @@ struct TwitchScreen: View {
         .task {
             await store.load()
             if model.sevenTv.status == nil { await model.sevenTv.load() }
+        }
+        // back from studio (a reconnect) or from the background: a session that could not chat is asked again
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await store.load() } }
         }
         .spreadSheet(item: $addingToSet) { picker in
             SevenTvAddToSetSheet(picker: picker)
@@ -79,7 +84,7 @@ private struct TwitchChannelList: View {
             .frame(maxWidth: 1100, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .refreshable { await store.loadFollowing() }
+        .refreshable { await store.load(force: true) }
     }
 
     private var search: some View {

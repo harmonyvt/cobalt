@@ -8,6 +8,9 @@ import WebKit
 // One player for the whole app (`TwitchPlayerHost.shared`): a `TwitchPlayer` view adopts its web view, so moving the stream
 // between layouts or to the TV window reparents it without a reload. The page reports Twitch's own "latency to broadcaster"
 // every second; the host keeps the best it has seen and jumps back to live when the stream drifts behind it.
+// The embed's "Log in" opens twitch.tv's sign-in in a popup (window.open): the popup opens in a sheet over the player, in a
+// web view made from the configuration WebKit hands over, so it shares the player's cookies. When the sign-in closes it
+// (or the owner does), the player reloads signed in, and subscriptions apply.
 
 enum TwitchEmbed {
     static let parent = "cobalt.capybaraharmony.com"
@@ -104,6 +107,8 @@ final class TwitchPlayerHost {
     private(set) var holder: UUID?
     /// Jump to live by itself when the stream drifts behind (on by default).
     var autoCatchUp = true
+    /// The popup the embed opened (Twitch's sign-in), shown in a sheet by the holding view.
+    private(set) var popup: TwitchPopup?
 
     /// Seconds behind live more than this stream's best, nil until known.
     var behind: Double? {
@@ -113,6 +118,7 @@ final class TwitchPlayerHost {
     var isBehind: Bool { (behind ?? 0) >= Self.behindBy }
 
     @ObservationIgnored let webView: WKWebView
+    @ObservationIgnored private let proxy: TwitchMessageProxy
     @ObservationIgnored private var claims: [UUID] = []
     @ObservationIgnored private var behindRun = 0
     @ObservationIgnored private var lastJump: Date = .distantPast
@@ -123,6 +129,7 @@ final class TwitchPlayerHost {
     private init() {
         let proxy = TwitchMessageProxy()
         let view = WKWebView(frame: .zero, configuration: TwitchEmbed.configuration(handler: proxy))
+        view.uiDelegate = proxy
         #if os(iOS)
         view.isOpaque = false
         view.backgroundColor = .black
@@ -132,6 +139,7 @@ final class TwitchPlayerHost {
         view.setValue(false, forKey: "drawsBackground")
         #endif
         webView = view
+        self.proxy = proxy
         proxy.host = self
     }
 
@@ -205,6 +213,30 @@ final class TwitchPlayerHost {
         }
     }
 
+    /// Loads the channel's page again (after a sign-in, so the embed picks it up).
+    func reload() {
+        guard let channel else { return }
+        reset()
+        webView.loadHTMLString(TwitchEmbed.html(channel: channel), baseURL: TwitchEmbed.base)
+    }
+
+    // MARK: popups
+
+    fileprivate func showPopup(_ view: WKWebView) {
+        popup = TwitchPopup(view: view)
+    }
+
+    /// The popup closed (sign-in done, or the owner closed it): reload the player.
+    func dismissPopup() {
+        guard popup != nil else { return }
+        popup = nil
+        reload()
+    }
+
+    fileprivate func popupClosed(_ view: WKWebView) {
+        if popup?.view === view { dismissPopup() }
+    }
+
     private func reset() {
         delay = nil
         bestDelay = nil
@@ -241,15 +273,76 @@ final class TwitchPlayerHost {
     }
 }
 
-/// Holds the host weakly, so the web view's message handler doesn't keep it alive in a cycle.
+/// The web view's message handler and UI delegate. Holds the host weakly, so the web view doesn't keep it alive in a cycle.
 @MainActor
-private final class TwitchMessageProxy: NSObject, WKScriptMessageHandler {
+private final class TwitchMessageProxy: NSObject, WKScriptMessageHandler, WKUIDelegate {
     weak var host: TwitchPlayerHost?
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         host?.receive(message.body)
     }
+
+    // window.open from the embed (its "Log in"): a web view from WebKit's configuration, so cookies are shared and
+    // the popup keeps its opener.
+    func webView(
+        _ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+        for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+        let popup = WKWebView(frame: .zero, configuration: configuration)
+        popup.uiDelegate = self
+        host?.showPopup(popup)
+        return popup
+    }
+
+    // window.close from the sign-in page once it is done.
+    func webViewDidClose(_ webView: WKWebView) {
+        host?.popupClosed(webView)
+    }
 }
+
+/// The popup the embed opened (Twitch's sign-in), shown in a sheet.
+struct TwitchPopup: Identifiable {
+    let id = UUID()
+    let view: WKWebView
+}
+
+private struct TwitchPopupSheet: View {
+    let popup: TwitchPopup
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            TwitchPopupWeb(view: popup.view)
+                .ignoresSafeArea(edges: .bottom)
+                .navigationTitle(Copy.Twitch.playerSignIn)
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        CloseButton(cancels: true, action: onClose)
+                    }
+                }
+        }
+        #if os(macOS)
+        .frame(minWidth: 460, minHeight: 640)
+        #endif
+    }
+}
+
+#if os(iOS)
+private struct TwitchPopupWeb: UIViewRepresentable {
+    let view: WKWebView
+    func makeUIView(context: Context) -> WKWebView { view }
+    func updateUIView(_ view: WKWebView, context: Context) {}
+}
+#else
+private struct TwitchPopupWeb: NSViewRepresentable {
+    let view: WKWebView
+    func makeNSView(context: Context) -> WKWebView { view }
+    func updateNSView(_ view: WKWebView, context: Context) {}
+}
+#endif
 
 /// The player for one channel. It adopts the app's one player, so the same channel keeps playing through layout changes and
 /// a new channel switches in place. `showsDelay` adds the delay badge (tap: jump to live).
@@ -279,6 +372,11 @@ struct TwitchPlayer: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(channel)'s stream")
+        // only the view holding the player shows its sign-in sheet
+        .sheet(item: Binding(get: { host.holder == id ? host.popup : nil },
+                             set: { if $0 == nil, host.holder == id { host.dismissPopup() } })) { popup in
+            TwitchPopupSheet(popup: popup) { host.dismissPopup() }
+        }
         .onAppear { host.claim(id, channel: channel) }
         .onDisappear { host.release(id) }
         .onChange(of: channel) { _, new in
