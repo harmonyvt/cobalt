@@ -23,6 +23,7 @@ extension Copy {
         static let reconnectTitle = "twitch signed you out"
         static let reconnectBody = "connect twitch again in studio."
         static let openStudio = "open studio"
+        static let playerSignIn = "sign in to twitch"
         static func viewers(_ n: Int) -> String {
             n >= 1000 ? String(format: "%.1fk", Double(n) / 1000).replacingOccurrences(of: ".0k", with: "k") : "\(n)"
         }

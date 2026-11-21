@@ -45,6 +45,12 @@ public final class TwitchStore {
     @ObservationIgnored private var listen: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var emotesVersion = -1
+    /// When `GET /stage/twitch/session` was last asked, so a session that cannot chat yet is asked again (after a
+    /// reconnect in studio) without asking on every appearance.
+    @ObservationIgnored private var sessionFetchedAt: Date?
+    /// The open channel's chat signed in with chat scopes (false: read-only or anonymous).
+    @ObservationIgnored private var engineCanChat = false
+    static let recheckAfter: TimeInterval = 15
 
     static let recentsKey = "twitchRecentChannels"
     static let recentsMax = 8
@@ -54,10 +60,13 @@ public final class TwitchStore {
         self.recents = context.settings.defaults.stringArray(forKey: Self.recentsKey) ?? []
     }
 
-    /// Reads the session (when it is missing or near its end) and the followed live channels.
-    public func load() async {
-        await refreshSessionIfNeeded()
+    /// Reads the session (when it is missing, near its end, or cannot chat yet) and the followed live channels. A
+    /// session that gained chat (Twitch reconnected in studio) rejoins the open channel's chat signed in. `force`
+    /// asks the server even when the last answer is recent (pull to refresh).
+    public func load(force: Bool = false) async {
+        await refreshSessionIfNeeded(force: force)
         await loadFollowing()
+        rejoinIfChatGained()
     }
 
     public func loadFollowing() async {
@@ -72,9 +81,15 @@ public final class TwitchStore {
         followingLoaded = true
     }
 
-    private func refreshSessionIfNeeded() async {
-        if let s = session, s.connected, let end = s.expiresAt, end.timeIntervalSinceNow > 10 * 60 { return }
-        if sessionLoaded, session?.connected == false { return }
+    private func refreshSessionIfNeeded(force: Bool = false) async {
+        if !force {
+            // a session that can chat is kept until near its end; anything else (read-only, not connected, needs a
+            // reconnect) is asked again once the last answer is a few seconds old, so a reconnect shows up
+            if let s = session, s.connected, s.canChat == true, s.reconnect != true, let end = s.expiresAt,
+               end.timeIntervalSinceNow > 10 * 60 { return }
+            if let at = sessionFetchedAt, Date().timeIntervalSince(at) < Self.recheckAfter { return }
+        }
+        sessionFetchedAt = Date()
         let gen = generation
         let fresh: TwitchSession?
         if let client = ctx.client as? any TwitchSessionClient {
@@ -87,10 +102,17 @@ public final class TwitchStore {
         sessionLoaded = true
     }
 
+    /// The open channel's chat was joined without chat scopes and the session has them now: join again, signed in.
+    private func rejoinIfChatGained() {
+        guard let login = channel, engine != nil, !engineCanChat, session?.credentials?.canChat == true else { return }
+        close()
+        open(login)
+    }
+
     /// Opens `name` (a login, or a twitch.tv link): its stream and its chat.
     public func open(_ name: String) {
         guard let login = Self.login(from: name) else { return }
-        if channel == login, engine != nil { return }
+        if channel == login, engine != nil, engineCanChat || session?.credentials?.canChat != true { return }
         close()
         channel = login
         remember(login)
@@ -101,6 +123,7 @@ public final class TwitchStore {
             let creds = session?.credentials
             let engine = TwitchChatEngine(channel: login, credentials: creds)
             self.engine = engine
+            engineCanChat = creds?.canChat == true
             listen = Task { [weak self] in
                 for await snap in engine.snapshots {
                     guard let self, gen == self.generation else { return }
@@ -132,6 +155,7 @@ public final class TwitchStore {
         listen = nil
         if let engine { Task { await engine.stop() } }
         engine = nil
+        engineCanChat = false
         channel = nil
         channelInfo = nil
         stream = nil

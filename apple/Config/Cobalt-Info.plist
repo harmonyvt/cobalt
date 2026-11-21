@@ -48,6 +48,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCrossWebsiteTrackingUsageDescription</key>
+	<string>lets you stay signed in to twitch in the stream player, so your subscriptions work there.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>capystore asks for face id before showing hidden posts.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
