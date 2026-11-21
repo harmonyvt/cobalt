@@ -106,6 +106,7 @@ export const PATHS: string[] = [
     "/booru/posts?tags=a%20b%20c",
     "/booru/autocomplete?q=miku",
     "/booru/settings",
+    "/booru/filter",
     "/library",
     "/sync",
     "/library?limit=5",

@@ -811,6 +811,11 @@ enum Endpoints {
         APIEndpoint(op: "booru.posts", method: "GET", path: "/booru/posts", auth: .key)
     }
 
+    /// `POST /booru/filter` (op `booru.filter`, auth key): Filter a page of Danbooru posts the app fetched under this key's level and filters (POST /booru/filter).
+    static func booruFilter() -> APIEndpoint<WireBooruFilterResponse> {
+        APIEndpoint(op: "booru.filter", method: "POST", path: "/booru/filter", auth: .key)
+    }
+
     /// `GET /booru/autocomplete` (op `booru.autocomplete`, auth key): Danbooru tag suggestions (GET /booru/autocomplete).
     static func booruAutocomplete() -> APIEndpoint<WireBooruAutocompleteResponse> {
         APIEndpoint(op: "booru.autocomplete", method: "GET", path: "/booru/autocomplete", auth: .key)
@@ -2162,6 +2167,22 @@ struct WireBooruPostsResponse: Decodable, Sendable {
     var nextPage: Int?
     /// extras Danbooru's 2-tag limit did not take (order, rating); filtered here anyway
     var dropped: [String]
+}
+
+struct WireBooruFilterResponseHidden: Decodable, Sendable {
+    var level: Int
+    var theme: Int
+    var blacklist: Int
+    var refine: Int
+    var blocked: Int
+}
+
+struct WireBooruFilterResponse: Decodable, Sendable {
+    var status: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var level: String
+    var posts: [WireBooruPost]
+    var hidden: WireBooruFilterResponseHidden
 }
 
 struct WireBooruAutocompleteResponseTagsItem: Decodable, Sendable {

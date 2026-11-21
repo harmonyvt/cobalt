@@ -2589,6 +2589,147 @@
         }
       }
     },
+    "/booru/filter": {
+      "post": {
+        "operationId": "booru.filter",
+        "summary": "Filter a page of Danbooru posts the app fetched under this key's level and filters (POST /booru/filter).",
+        "tags": [
+          "booru"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "posts": {
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {},
+                    "description": "one page of Danbooru's posts.json, as the app fetched it"
+                  },
+                  "level": {
+                    "description": "lower than the key's own level for this request only (safe mode); never higher",
+                    "type": "string",
+                    "enum": [
+                      "g",
+                      "s",
+                      "q"
+                    ]
+                  },
+                  "min_score": {
+                    "type": "integer",
+                    "minimum": -100,
+                    "maximum": 100000
+                  },
+                  "media": {
+                    "type": "string",
+                    "enum": [
+                      "image",
+                      "animated",
+                      "video"
+                    ]
+                  },
+                  "shape": {
+                    "type": "string",
+                    "enum": [
+                      "tall",
+                      "square",
+                      "wide"
+                    ]
+                  }
+                },
+                "required": [
+                  "posts"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "level": {
+                      "type": "string",
+                      "enum": [
+                        "g",
+                        "s",
+                        "q"
+                      ],
+                      "description": "g general, s sensitive, q questionable; there is no explicit"
+                    },
+                    "posts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BooruPost"
+                      }
+                    },
+                    "hidden": {
+                      "type": "object",
+                      "properties": {
+                        "level": {
+                          "type": "integer"
+                        },
+                        "theme": {
+                          "type": "integer"
+                        },
+                        "blacklist": {
+                          "type": "integer"
+                        },
+                        "refine": {
+                          "type": "integer"
+                        },
+                        "blocked": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "level",
+                        "theme",
+                        "blacklist",
+                        "refine",
+                        "blocked"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "level",
+                    "posts",
+                    "hidden"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/booru/posts": {
       "get": {
         "operationId": "booru.posts",

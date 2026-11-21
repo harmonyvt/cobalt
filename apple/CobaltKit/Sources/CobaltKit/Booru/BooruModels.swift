@@ -21,6 +21,17 @@ public enum BooruThemeMode: String, Sendable, Codable, CaseIterable {
 
 public enum BooruOrder: String, Sendable, Codable, CaseIterable {
     case new, popular, score, favs, random
+
+    /// Danbooru's `order:` metatag; newest is its default.
+    var danbooruTag: String? {
+        switch self {
+        case .new: return nil
+        case .popular: return "order:rank"
+        case .score: return "order:score"
+        case .favs: return "order:favcount"
+        case .random: return "order:random"
+        }
+    }
 }
 
 public enum BooruMedia: String, Sendable, Codable, CaseIterable {
@@ -208,6 +219,11 @@ public struct BooruSuggestion: Sendable, Equatable, Decodable, Identifiable {
         self.kind = kind
         self.count = count
     }
+
+    /// Tags never suggested (the server's hard block, APP-API-CONTRACT 72.1); posts carrying them never come back from the
+    /// server's filter either.
+    static let blocked = ["loli", "shota", "toddlercon", "lolicon", "shotacon", "child_on_child"]
+    static func isBlocked(_ name: String) -> Bool { blocked.contains { name == $0 || name.hasPrefix($0 + "_") } }
 }
 
 /// One search: the owner's tags (at most 2), the order and the refinements.
@@ -261,15 +277,95 @@ public protocol BooruClient: Sendable {
 }
 
 extension HTTPCobaltClient: BooruClient {
+    // Danbooru answers the apps but refuses requests from the Worker (live, 2026-11-21: every GET /booru/posts was 502). So
+    // the app fetches posts.json itself and the server filters the page under this device's settings (POST /booru/filter,
+    // APP-API-CONTRACT 72.7): the level, the hard block, the themes and the blacklist are still the server's to apply.
+    static let danbooru = URL(string: "https://danbooru.donmai.us")!
+    static let danbooruPageLimit = 100
+    /// The post fields the server's filter reads; the rest of Danbooru's answer stays on the device.
+    static let danbooruKeys: Set<String> = [
+        "id", "rating", "tag_string", "tag_string_artist", "tag_string_character", "tag_string_copyright", "tag_string_general",
+        "tag_string_meta", "score", "fav_count", "file_ext", "file_size", "image_width", "image_height", "created_at", "source",
+        "file_url", "large_file_url", "preview_file_url", "is_deleted", "is_banned", "is_pending", "media_asset",
+    ]
+    private static let danbooruSession: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.timeoutIntervalForRequest = 15
+        c.httpAdditionalHeaders = ["User-Agent": "capystore/1.0 (private booru tab)", "Accept": "application/json"]
+        return URLSession(configuration: c)
+    }()
+
+    private static func danbooruGet(_ path: String, _ items: [URLQueryItem]) async throws -> (Any?, Int) {
+        var c = URLComponents(url: danbooru.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        c.queryItems = items
+        do {
+            let (data, response) = try await danbooruSession.data(from: c.url!)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            return (try? JSONSerialization.jsonObject(with: data), status)
+        } catch let e as URLError {
+            throw CobaltError.network(e.code)
+        }
+    }
+
     public func booruPosts(_ query: BooruQuery, page: Int, level: BooruLevel?) async throws -> BooruPage {
-        let req = try makeRequest("GET", "/booru/posts", query: query.items(page: page, level: level), keyed: true, timeout: 25)
-        return try await decodeBooru(BooruPage.self, req)
+        // the owner's tags first; the order and the rating clause are extras, given up in that order when Danbooru refuses
+        // the tag count (anonymous searches take 2 tags). The server filters the page again either way.
+        let clause = level ?? .questionable
+        let ratings = BooruLevel.allCases.filter { $0 <= clause }.map(\.rawValue).joined(separator: ",")
+        var extras: [(String, String)] = []
+        if let order = query.order.danbooruTag { extras.append(("order", order)) }
+        extras.append(("rating", "rating:\(ratings)"))
+        var dropped: [String] = []
+        var raw: [Any] = []
+        while true {
+            let tags = (query.tagList + extras.map(\.1)).joined(separator: " ")
+            let (body, status) = try await Self.danbooruGet("posts.json", [
+                URLQueryItem(name: "limit", value: String(Self.danbooruPageLimit)),
+                URLQueryItem(name: "page", value: String(page)),
+                URLQueryItem(name: "tags", value: tags),
+            ])
+            if status == 422, !extras.isEmpty {
+                dropped.append(extras.removeFirst().0)
+                continue
+            }
+            if status == 429 { throw CobaltError.api(code: "error.booru.busy", httpStatus: 429) }
+            guard (200..<300).contains(status), let list = body as? [Any] else {
+                throw CobaltError.api(code: "error.booru.upstream", httpStatus: status == 0 ? 502 : status)
+            }
+            raw = list
+            break
+        }
+        let trimmed: [Any] = raw.compactMap { item in
+            (item as? [String: Any]).map { $0.filter { Self.danbooruKeys.contains($0.key) } }
+        }
+        var json: [String: Any] = ["posts": trimmed]
+        if let level { json["level"] = level.rawValue }
+        if let s = query.minScore { json["min_score"] = s }
+        if let m = query.media { json["media"] = m.rawValue }
+        if let s = query.shape { json["shape"] = s.rawValue }
+        struct Wire: Decodable { var level: BooruLevel; var posts: [BooruPost]; var hidden: BooruHidden }
+        let req = try makeRequest("POST", "/booru/filter", keyed: true, timeout: 25)
+        let w = try await decodeBooru(Wire.self, req, body: try JSONSerialization.data(withJSONObject: json))
+        let next = raw.count >= Self.danbooruPageLimit && page < 1000 ? page + 1 : nil
+        return BooruPage(level: w.level, posts: w.posts, hidden: w.hidden, nextPage: next, dropped: dropped)
     }
 
     public func booruAutocomplete(_ q: String) async throws -> [BooruSuggestion] {
-        struct Wire: Decodable { var tags: [BooruSuggestion] }
-        let req = try makeRequest("GET", "/booru/autocomplete", query: [("q", q)], keyed: true, timeout: 10)
-        return try await decodeBooru(Wire.self, req).tags
+        let term = q.trimmingCharacters(in: .whitespaces).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "-~"))
+        guard !term.isEmpty, !term.contains(":") else { return [] }
+        let (body, status) = try await Self.danbooruGet("autocomplete.json", [
+            URLQueryItem(name: "search[query]", value: term),
+            URLQueryItem(name: "search[type]", value: "tag_query"),
+            URLQueryItem(name: "limit", value: "10"),
+        ])
+        guard (200..<300).contains(status), let list = body as? [[String: Any]] else {
+            throw CobaltError.api(code: "error.booru.upstream", httpStatus: status == 0 ? 502 : status)
+        }
+        let kinds: [Int: BooruSuggestion.Kind] = [0: .general, 1: .artist, 3: .copyright, 4: .character, 5: .meta]
+        return list.compactMap { s in
+            guard let name = s["value"] as? String, !name.isEmpty, !name.contains(":"), !BooruSuggestion.isBlocked(name) else { return nil }
+            return BooruSuggestion(name: name, kind: kinds[s["category"] as? Int ?? 0] ?? .general, count: s["post_count"] as? Int ?? 0)
+        }
     }
 
     public func booruSettings() async throws -> BooruSettings {
