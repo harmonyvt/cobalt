@@ -161,10 +161,18 @@ final class LibraryController {
 
     /// The library's width class changed (a pane opened or closed beside it, a fold, a rotation): UIKit keeps the bar it
     /// built for the old one, so the stack is built again.
+    /// Waits for the change to settle first: a pane opening or closing animates the column's width and the bar's row,
+    /// and a stack built mid-animation came up with a half-width bar and no "…" at full width.
     func tierChanged() {
-        Breadcrumbs.add("library.tierChanged")
-        stackID += 1
+        tierRebuild?.cancel()
+        tierRebuild = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled, let self else { return }
+            Breadcrumbs.add("library.tierChanged")
+            self.stackID += 1
+        }
     }
+    @ObservationIgnored private var tierRebuild: Task<Void, Never>?
 
     private func unstick(_ how: String) {
         Breadcrumbs.add("library.unstuck", ["how": .string(how)])
