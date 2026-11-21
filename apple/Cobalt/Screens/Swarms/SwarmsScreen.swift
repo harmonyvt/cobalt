@@ -98,22 +98,17 @@ struct SwarmsScreen: View {
             }
     }
 
-    /// The Mac and a wide iPad: the list on the left, the same screen on the right.
+    /// The Mac and a wide iPad: the list on the left, the same screen on the right. With no swarm open the list has the
+    /// whole width: an empty right side is not drawn at all.
     private var split: some View {
         HStack(spacing: 0) {
-            list.frame(width: Spread.listWidth)
-            HingeSeam(queue: model.queue)
-            Group {
-                if let dest = open {
-                    NavigationStack { SwarmScreen(model: model, dest: dest) }
-                        .id(dest)
-                } else {
-                    Text(Copy.Swarms.pickOne)
-                        .font(CobaltType.body).foregroundStyle(CobaltColor.caption)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+            list.frame(maxWidth: open == nil ? .infinity : Spread.listWidth)
+            if let dest = open {
+                HingeSeam(queue: model.queue)
+                NavigationStack { SwarmScreen(model: model, dest: dest) }
+                    .id(dest)
+                    .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
         }
     }
 

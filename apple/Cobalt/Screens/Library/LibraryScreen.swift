@@ -596,6 +596,8 @@ private struct LibraryContent: View {
                     controller.inspectorOpen.toggle()
                 }
                 .labelStyle(.iconOnly)
+                // the column only draws with a post in it (`LibraryInspector`), so with none picked the button has nothing to show
+                .disabled(controller.selectedItem == nil)
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help(Copy.Library2.toggleDetail)
             }
@@ -810,8 +812,16 @@ private struct LibraryInspector: ViewModifier {
     @Bindable var controller: LibraryController
     let enabled: Bool
 
+    /// Open only with a post to show: an empty column ("pick something") is not drawn at all. The owner's open/closed
+    /// choice (`inspectorOpen`) is kept, so the column comes back with the next post they pick.
+    private var shown: Binding<Bool> {
+        Binding(
+            get: { enabled && controller.inspectorOpen && controller.selectedItem != nil },
+            set: { if enabled { controller.inspectorOpen = $0 } })
+    }
+
     func body(content: Content) -> some View {
-        content.inspector(isPresented: enabled ? $controller.inspectorOpen : .constant(false)) {
+        content.inspector(isPresented: shown) {
             Group {
                 if let item = controller.selectedItem {
                     NavigationStack {
