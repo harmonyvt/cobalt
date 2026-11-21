@@ -82,7 +82,6 @@ struct BooruFilterSheet: View {
                     .disabled(busy)
                 }
             }
-            Text(Copy.Booru.noExplicit).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.caption)
         }
         .padding(12)
         .card()

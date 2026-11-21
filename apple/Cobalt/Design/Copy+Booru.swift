@@ -49,7 +49,6 @@ extension Copy {
         }
         static func upTo(_ l: BooruLevel) -> String { l == .general ? "general" : "up to \(level(l))" }
         static let safeMode = "safe mode: your screen is shared or recorded, so only general shows"
-        static let noExplicit = "explicit isn't part of capystore, on any device."
         static let raiseReason = "raise the booru level on this device"
 
         // MARK: filters
