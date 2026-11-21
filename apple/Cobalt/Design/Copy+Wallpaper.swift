@@ -25,6 +25,10 @@ extension Copy {
         static let subjectOut = "subject out"
         static let findSubject = "find subject"
         static let undo = "undo"
+        /// Over the preview with no brush on.
+        static let brushHint = "pick subject in or out, then paint on the picture"
+        /// Over the preview while a brush is on.
+        static let paintHint = "paint on the picture · blue is the subject"
         static let brushSize = "brush size"
         static let blur = "background blur"
         static let parallax = "drift"

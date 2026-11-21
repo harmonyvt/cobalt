@@ -29,7 +29,9 @@ struct WallpaperSheet: View {
     @State private var maker: WallpaperMaker?
     @State private var failed = false
     @State private var start: Double = 0
-    @State private var look = WallpaperLook()
+    /// Starts with some blur and drift, so the depth edits show at once: with both at 0 the picture never changes and
+    /// the subject brushes look like they do nothing (8.32 on the iPhone).
+    @State private var look = WallpaperLook(blur: 0.4, parallax: 0.5)
     @State private var target: WallpaperTarget = .lockScreen
     @State private var frame: WallpaperMaker.Frame?
     @State private var preview: WallpaperMaker.Preview?
@@ -106,7 +108,22 @@ struct WallpaperSheet: View {
                         .frame(width: geo.size.width, height: geo.size.height)
                         .clipped()
                         .mediaMask()
-                        .overlay { if !showsDepth { lockScreenChrome(width: geo.size.width) } }
+                        .overlay {
+                            // While a brush is on, the subject glows blue and the clock steps aside, so each stroke shows.
+                            if brush != .none && !showsDepth {
+                                Image(decorative: preview.depth, scale: 1)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: geo.size.width, height: geo.size.height)
+                                    .clipped()
+                                    .colorMultiply(CobaltColor.focus)
+                                    .opacity(0.55)
+                                    .blendMode(.screen)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .overlay { if !showsDepth && brush == .none { lockScreenChrome(width: geo.size.width) } }
+                        .overlay(alignment: .bottom) { stageHint }
                         .overlay { if target == .duoPair { hinge(width: geo.size.width) } }
                         .contentShape(Rectangle())
                         .gesture(brushGesture(size: geo.size, picture: preview.size), including: brush == .none ? .none : .all)
@@ -125,6 +142,25 @@ struct WallpaperSheet: View {
         .background(CobaltColor.surface)
         .clipShape(RoundedRectangle(cornerRadius: target == .duoPair ? 22 : 34, style: .continuous))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// A line over the bottom of the preview that says what the brushes do, or that a brush is on.
+    @ViewBuilder
+    private var stageHint: some View {
+        if brush != .none || look.strokes.isEmpty {
+            hintText
+        }
+    }
+
+    private var hintText: some View {
+        Text(brush == .none ? Copy.Wallpaper.brushHint : Copy.Wallpaper.paintHint)
+            .font(CobaltType.captionSmall)
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Color.black.opacity(0.6)))
+            .padding(.bottom, 14)
+            .allowsHitTesting(false)
     }
 
     /// Where iOS puts the date and clock, so the owner sees what the clock covers.
