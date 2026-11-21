@@ -305,10 +305,16 @@ struct WallpaperSheet: View {
 
     // MARK: work
 
+    /// Off the main thread (apple/ARCHITECTURE.md rule 1).
+    @concurrent
+    nonisolated private static func exists(_ url: URL) async -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+    }
+
     private func open() async {
         do {
             let url: URL
-            if let local = rendition.local?.fileURL, FileManager.default.fileExists(atPath: local.path) {
+            if let local = rendition.local?.fileURL, await Self.exists(local) {
                 url = local
             } else if let file = rendition.file {
                 url = try await model.library.localCopy(file)
