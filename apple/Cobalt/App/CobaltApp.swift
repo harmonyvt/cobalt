@@ -84,6 +84,14 @@ struct CobaltApp: App {
     @NSApplicationDelegateAdaptor(CobaltAppDelegate.self) private var delegate
     #endif
     @State private var model: AppModel
+    #if os(macOS)
+    /// The menu bar icon's switch, read here for `MenuBarExtra(isInserted:)`. Not `model.settings.menuBarExtra`: that is an
+    /// `@Observable` read in the scene body, and the scene body must read none (the #113 loops). `@AppStorage` is
+    /// SwiftUI's own dependency on UserDefaults, which is where `Settings.menuBarExtra` stores it (same key, same default,
+    /// on the Mac `AppGroup.defaults()` is `.standard`), and the settings row is the only writer. Only a debug sandbox run
+    /// stores it in another suite; there the icon follows its default.
+    @AppStorage("menuBarExtra") private var showMenuBarExtra = true
+    #endif
 
     init() {
         #if os(macOS)
@@ -125,6 +133,7 @@ struct CobaltApp: App {
         // Settings are the system's: ⌘, opens this window, and the app menu names it.
         SwiftUI.Settings {
             SettingsScreen(model: model)
+                .publishesLifecycle()
                 .cobaltRoot(model: model)
                 .frame(width: 560, height: 740)
         }
@@ -174,10 +183,18 @@ struct CobaltApp: App {
                 handleAppLink(url, model: model)
             }
             .task { await sceneStarted() }
+            // every window's views read `\.lifecycle` (AppLifecycle), and the launch marker is written
+            .publishesLifecycle()
             // PostHog (APP-API-CONTRACT 58): starts once the server names its project, follows the two switches
             .onChange(of: AnalyticsKey(model), initial: true) { Analytics.sync(model: model) }
             #if os(macOS)
             .frame(minWidth: 900, minHeight: 600)
+            // the window is found by identifier and opened again by the Dock (`MacWindows`)
+            .registersMainWindow()
+            // closing the last window must not quit while the icon is up: set from the view, where reading is allowed
+            .onChange(of: model.settings.menuBarExtra, initial: true) { _, on in
+                MenuBarPresence.shared.staysRunning = on
+            }
             #endif
     }
 
@@ -198,15 +215,14 @@ struct CobaltApp: App {
     /// One window, not a `WindowGroup`: a group opens another window for every `cobalt-apple://` link
     /// (each with its own copy of the shell over the same model), and the Mac app has one model.
     private var mainWindow: some Scene {
-        // Taken here, not inside `.commands`. `Scene.commands` runs the builder from the app body's
+        // Nothing observable is read here or in `.commands`. `Scene.commands` runs the builder from the app body's
         // update. An `@Observable` read in that builder (this used to read the wallpaper object and
         // `model.capabilities` from the menu item) marks the graph dirty before the update finishes.
         // Launch collides with a window being miniaturized or closed — the menu bar extra's window,
         // or a restored minimized window — and `updateRootHost` flushes that graph, which builds the
-        // commands again, until the stack overflows.
+        // commands again, until the stack overflows. `StageWallpaperCommand` is a view: it reads the
+        // wallpaper and the capabilities in its own body, which is an ordinary view graph.
         let model = model
-        let wallpaper = StudioWallpaperMenu(
-            isOn: StageWallpaper.shared.isOn, stageAvailable: model.capabilities.stage)
         return Window("capystore", id: "main") { windowContent }
             .defaultSize(width: 1280, height: 780)
             .defaultLaunchBehavior(.presented)
@@ -219,7 +235,7 @@ struct CobaltApp: App {
                 }
                 // the studio canvas behind the desktop icons; off works without opening the tab
                 CommandGroup(after: .toolbar) {
-                    StageWallpaperCommand(menu: wallpaper, model: model)
+                    StageWallpaperCommand(model: model)
                 }
                 #if DEBUG
                 SyncGlowDebugCommands(model: model)
@@ -230,19 +246,19 @@ struct CobaltApp: App {
     /// The menu bar icon. `isInserted` is the settings switch (on unless the owner turns it off).
     /// `.window` is the popover, not a pull-down menu.
     private var menuBar: some Scene {
-        // Read here, in the scene body, so this scene updates when the settings row changes. A
-        // statement before the scene means this property has to return explicitly (it is not a
-        // result builder).
+        // `showMenuBarExtra` is `@AppStorage` (see its comment), so this scene still updates when the settings row
+        // changes, and no `@Observable` is read here.
         //
         // The binding is constant. `MenuBarExtra` writes `isInserted` while it creates its window
         // and again when that window is closed or miniaturized (launch does both). Writing that
         // through `settings.menuBarExtra` used to publish an observation the body had just read,
         // so the scene list and `.commands` rebuilt from inside `updateRootHost` and never settled.
         // The settings row is the only control; the extra does not get to change the switch.
-        let show = model.settings.menuBarExtra
-        MenuBarPresence.shared.staysRunning = show
-        return MenuBarExtra(isInserted: .constant(show)) {
+        // `MenuBarPresence.staysRunning` is not set here (a scene body writes nothing): `init` and the window's
+        // `onChange` of the setting do.
+        return MenuBarExtra(isInserted: .constant(showMenuBarExtra)) {
             MenuBarPopover(model: model)
+                .publishesLifecycle()
         } label: {
             MenuBarLabel(model: model)
         }
@@ -255,13 +271,16 @@ struct CobaltApp: App {
 /// View ▸ "studio wallpaper": a checkmark item. On reads the stage first when the tab has not; it can be turned on only
 /// while the server has the studio, and off always.
 ///
-/// The checkmark is the snapshot the scene passed in. The menu writes that same value back while the
-/// menus are built; applying it would turn the wallpaper on or off from inside `Scene.commands`.
+/// This is a view, so it reads the wallpaper object and `model.capabilities` in its own body (a menu's content is an
+/// ordinary view graph, unlike the `.commands` builder that only names this view). The checkmark is the snapshot the
+/// body took; the menu writes that same value back while the menus are built, and applying it would turn the wallpaper
+/// on or off by itself, so `changes(to:)` lets only a different value through.
 private struct StageWallpaperCommand: View {
-    let menu: StudioWallpaperMenu
     let model: AppModel
 
     var body: some View {
+        let menu = StudioWallpaperMenu(
+            isOn: StageWallpaper.shared.isOn, stageAvailable: model.capabilities.stage)
         Toggle(Copy.Stage.wallpaperMenu, isOn: Binding(
             get: { menu.isOn },
             set: { on in

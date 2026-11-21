@@ -2,11 +2,11 @@ import Foundation
 
 /// View ▸ "studio wallpaper", as plain values.
 ///
-/// The Mac app scene reads this once, then hands it to `.commands`. The commands builder runs
-/// inside `Scene.commands` during the app body's update. Reading the live wallpaper object or the
-/// server capabilities from in there dirties the graph before that update finishes. A window being
-/// miniaturized or closed (the menu bar extra's window at launch, or a restored minimized window)
-/// flushes the graph, the flush builds the commands again, and the stack overflows.
+/// The menu item's own view builds this inside its body (it observes the wallpaper and the capabilities there, a normal
+/// view graph). The App body and the `.commands` builder read neither: they run inside the app body's update, and a live
+/// read there dirties the graph before that update finishes. A window being miniaturized or closed (the menu bar extra's
+/// window at launch, or a restored minimized window) flushes the graph, the flush builds the commands again, and the
+/// stack overflows.
 public struct StudioWallpaperMenu: Equatable, Sendable {
     public var isOn: Bool
     /// The server has the studio, so the menu is allowed to turn the wallpaper on.

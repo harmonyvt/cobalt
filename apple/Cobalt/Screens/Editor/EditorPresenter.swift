@@ -107,6 +107,7 @@ private struct EditorCover: ViewModifier {
             }
         )) {
             EditorWindowContent(model: model)
+                .publishesLifecycle()
                 .cobaltRoot(model: model)
         }
         #else
@@ -190,6 +191,7 @@ struct EditorWindow: Scene {
     var body: some Scene {
         Window(Copy.Editor.title, id: EditorWindowID.editor) {
             EditorWindowContent(model: model)
+                .publishesLifecycle()
                 .cobaltRoot(model: model)
                 .frame(minWidth: 960, minHeight: 640)
         }

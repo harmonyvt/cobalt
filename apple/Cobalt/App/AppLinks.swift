@@ -227,10 +227,17 @@ extension CobaltAppDelegate: NSApplicationDelegate {
         return true
     }
 
-    /// The window was closed and the menu bar (or the Dock) is what's left. Open the one window again.
+    /// The window was closed (or minimized) and the menu bar or the Dock is what's left. Open the one window again.
+    ///
+    /// `flag` is not asked: the studio wallpaper's desktop-level windows count as visible, so with the wallpaper on a
+    /// closed main window never reopened. The main window's own visibility decides (`MacWindows`). The menu bar's
+    /// reveal is used when it exists; otherwise (the icon never appeared) `MacWindows.reveal` orders the window front or
+    /// opens the scene from the action the window's root view stored.
     @MainActor
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { MenuBarHandoff.shared.reveal?() }
+        // The app is hidden (⌘H): the system unhides it, and that brings the window back.
+        guard !sender.isHidden, !MacWindows.isMainVisible else { return true }
+        if let reveal = MenuBarHandoff.shared.reveal { reveal() } else { MacWindows.reveal() }
         return true
     }
 

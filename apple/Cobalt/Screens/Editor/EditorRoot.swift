@@ -369,8 +369,8 @@ enum EditorWindowCloser {
 
     private static func isEditor(_ window: NSWindow) -> Bool {
         if let held = Self.window, held === window { return true }
-        if window.identifier?.rawValue == EditorWindowID.editor { return true }
-        return window.title == Copy.Editor.title
+        // by identifier only: the title is the open project's while a session is up (see `MacWindows`)
+        return MacWindows.matches(window.identifier, id: EditorWindowID.editor)
     }
 }
 

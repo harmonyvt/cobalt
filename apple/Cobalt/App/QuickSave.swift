@@ -80,12 +80,8 @@ enum QuickSave {
             reveal()
             return
         }
-        // the menu bar icon is off, so the window is still there (closing it would have quit)
-        NSApp.activate()
-        if let window = NSApp.windows.first(where: { $0.title == "capystore" }) {
-            if window.isMiniaturized { window.deminiaturize(nil) }
-            window.makeKeyAndOrderFront(nil)
-        }
+        // the menu bar icon is off or has not appeared: the window is found by identifier, or opened again
+        MacWindows.reveal()
     }
 }
 
