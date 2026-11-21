@@ -47,7 +47,7 @@ public final class TwitchStore {
     @ObservationIgnored private var emotesVersion = -1
     /// When `GET /stage/twitch/session` was last asked, so a session that cannot chat yet is asked again (after a
     /// reconnect in studio) without asking on every appearance.
-    @ObservationIgnored private var sessionFetchedAt: Date?
+    @ObservationIgnored var sessionFetchedAt: Date?  // internal: tests age it past `recheckAfter`
     /// The open channel's chat signed in with chat scopes (false: read-only or anonymous).
     @ObservationIgnored private var engineCanChat = false
     static let recheckAfter: TimeInterval = 15
