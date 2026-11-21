@@ -28,7 +28,7 @@ struct PlanetType: Equatable {
     /// name; and only when none of them has a real type, from what the entry is (an original video is
     /// an mp4 the server saved, a webp is a webp).
     init(_ video: StoredVideo) {
-        let candidates: [URL?] = [video.fileURL, video.remoteURL, URL(fileURLWithPath: video.name)]
+        let candidates: [URL?] = [video.fileURL, video.remoteURL, URL(fileURLWithPath: video.name, isDirectory: false)]
         for url in candidates {
             if let ext = Self.knownExtension(of: url) {
                 self.init(label: ext)
@@ -47,13 +47,13 @@ struct PlanetType: Equatable {
         guard var ext = url?.pathExtension.lowercased(), !ext.isEmpty, ext.count <= 5 else { return nil }
         if ext == "jpeg" { ext = "jpg" }
         if ext == "qt" { ext = "mov" }
-        guard let type = UTType(filenameExtension: ext), type.conforms(to: .audiovisualContent) || type.conforms(to: .image) else { return nil }
+        guard MediaExtension.isMedia(ext) else { return nil }
         return ext
     }
 
     static func symbol(for ext: String) -> String {
         if ext == "webp" { return "sparkles" }
-        if let type = UTType(filenameExtension: ext), type.conforms(to: .movie) { return "film" }
+        if MediaExtension.isMovie(ext) { return "film" }
         return "photo"
     }
 }

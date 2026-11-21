@@ -225,9 +225,17 @@ extension AppModel {
             }
             guard let file = source else { throw PipelineFailure.unsupported }
             defer { if temporary { try? fm.removeItem(at: file) } }
-            let type = UTType(filenameExtension: file.pathExtension.lowercased())
-            let isImage = rendition.isWebp || (type?.conforms(to: .image) ?? false)
-            try await ctx.savePhoto(fileURL: file, isImage: isImage, key: key)
+            // the bytes decide, not the name: a picture stored without an extension sits on disk as `<id>.mp4`, and
+            // Photos refuses a picture handed over as a video
+            let isImage = FileSniff.kind(of: file)?.isImage ?? (rendition.isWebp || MediaExtension.isImage(file.pathExtension))
+            do {
+                try await ctx.savePhoto(fileURL: file, isImage: isImage, key: key)
+            } catch {
+                Telemetry.log(.error, .photos, "save to photos failed", data: Telemetry.errorData(error).merging([
+                    "ext": .string(file.pathExtension.lowercased()), "image": .bool(isImage),
+                ]) { a, _ in a })
+                throw error
+            }
         } catch {
             if let mapped = pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits) { throw mapped }
             throw error

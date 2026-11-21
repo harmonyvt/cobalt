@@ -550,7 +550,7 @@ struct GalleryStoreTests {
 
     private func file(_ dir: URL, _ name: String) throws -> URL {
         let url = dir.appendingPathComponent(UUID().uuidString.prefix(6) + name)
-        try PreviewMedia.placeholderBytes.write(to: url)
+        try PreviewMedia.placeholder(for: url).write(to: url)
         return url
     }
 

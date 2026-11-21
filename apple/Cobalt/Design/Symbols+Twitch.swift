@@ -20,5 +20,13 @@ extension Symbol {
         static let open = "arrow.up.forward.square"
         static let pin = "pin"
         static let recent = "clock"
+        static let jumpToLive = "forward.end.fill"
+        // the stream on a TV (70.5)
+        static let tv = "tv"
+        static let airPlay = "airplayvideo"
+        static let dim = "moon"
+        static let undim = "sun.max"
+        static let chatOnTV = "text.bubble"
+        static let mirror = "rectangle.on.rectangle"
     }
 }

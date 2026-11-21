@@ -6,6 +6,8 @@ import SwiftUI
 
 struct TwitchChatPane: View {
     let model: AppModel
+    /// Seconds lines wait before they show (video-only AirPlay runs the TV behind, 70.5); 0 shows them at once.
+    var delay: TimeInterval = 0
     let onAddEmote: (ChatEmote) -> Void
 
     private var store: TwitchStore { model.twitch }
@@ -13,15 +15,26 @@ struct TwitchChatPane: View {
     var body: some View {
         VStack(spacing: 0) {
             TwitchChatHeader(status: store.chat?.status ?? .connecting, room: store.chat?.room ?? TwitchRoomState())
-            TwitchChatLines(
-                snapshot: store.chat,
-                canAddEmotes: model.sevenTv.isLinked,
-                canReply: store.canSend,
-                onReply: { store.replyTo = $0 },
-                onAddEmote: onAddEmote)
+            if delay > 0 {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    lines(cutoff: context.date.addingTimeInterval(-delay))
+                }
+            } else {
+                lines(cutoff: nil)
+            }
             TwitchComposer(store: store)
         }
         .background(CobaltColor.bg)
+    }
+
+    private func lines(cutoff: Date?) -> some View {
+        TwitchChatLines(
+            snapshot: store.chat,
+            cutoff: cutoff,
+            canAddEmotes: model.sevenTv.isLinked,
+            canReply: store.canSend,
+            onReply: { store.replyTo = $0 },
+            onAddEmote: onAddEmote)
     }
 }
 
@@ -82,6 +95,8 @@ private struct TwitchChatHeader: View {
 
 private struct TwitchChatLines: View {
     let snapshot: TwitchChatSnapshot?
+    /// Lines newer than this wait (the owner's own show at once); nil shows every line.
+    let cutoff: Date?
     let canAddEmotes: Bool
     let canReply: Bool
     let onReply: (TwitchChatLine) -> Void
@@ -95,7 +110,11 @@ private struct TwitchChatLines: View {
 
     private static let bottom = "twitch-chat-bottom"
 
-    private var lines: [TwitchChatLine] { snapshot?.lines ?? [] }
+    private var lines: [TwitchChatLine] {
+        let all = snapshot?.lines ?? []
+        guard let cutoff else { return all }
+        return all.filter { $0.mine || $0.timestamp <= cutoff }
+    }
 
     private var newSincePause: Int {
         guard !following, let pausedAt, let i = lines.lastIndex(where: { $0.id == pausedAt }) else { return 0 }

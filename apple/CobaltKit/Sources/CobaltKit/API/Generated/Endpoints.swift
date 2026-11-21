@@ -771,6 +771,21 @@ enum Endpoints {
         APIEndpoint(op: "seventv_http.upload", method: "POST", path: "/7tv/emotes", auth: .key)
     }
 
+    /// `POST /7tv/emotes/make` (op `seventv_http.make`, auth key): Make a draft emote from a library picture or video: crop, squash, format (webp, gif, png), quality, frame rate, video moment, bounce. The draft lives 24 h (POST /7tv/emotes/make).
+    static func seventvHttpMake() -> APIEndpoint<SevenTvEmoteDraft> {
+        APIEndpoint(op: "seventv_http.make", method: "POST", path: "/7tv/emotes/make", auth: .key)
+    }
+
+    /// `DELETE /7tv/drafts/:id` (op `seventv_http.draft_delete`, auth key): Delete an emote draft (DELETE /7tv/drafts/<id>).
+    static func seventvHttpDraftDelete(id: String) -> APIEndpoint<SeventvHttpDraftDeleteResponse> {
+        APIEndpoint(op: "seventv_http.draft_delete", method: "DELETE", path: "/7tv/drafts/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
+    /// `POST /7tv/drafts/:id/save` (op `seventv_http.draft_save`, auth key): Save an emote draft as a private library item; the draft is kept (POST /7tv/drafts/<id>/save).
+    static func seventvHttpDraftSave(id: String) -> APIEndpoint<SevenTvDraftSaved> {
+        APIEndpoint(op: "seventv_http.draft_save", method: "POST", path: "/7tv/drafts/\(HTTPCobaltClient.encode(id))/save", auth: .key)
+    }
+
     /// `GET /7tv/emotes/:id` (op `seventv_http.emote`, auth key): One 7TV emote: its name, owner, and whether 7TV is still processing it (GET /7tv/emotes/<id>).
     static func seventvHttpEmote(id: String) -> APIEndpoint<SeventvHttpEmoteResponse> {
         APIEndpoint(op: "seventv_http.emote", method: "GET", path: "/7tv/emotes/\(HTTPCobaltClient.encode(id))", auth: .key)
@@ -784,6 +799,31 @@ enum Endpoints {
     /// `GET /7tv/owned` (op `seventv_http.owned`, auth key): Every emote the linked 7TV account owns (uploaded anywhere), newest first, at most 500 (GET /7tv/owned).
     static func seventvHttpOwned() -> APIEndpoint<SeventvHttpOwnedResponse> {
         APIEndpoint(op: "seventv_http.owned", method: "GET", path: "/7tv/owned", auth: .key)
+    }
+
+    /// `GET /7tv/drafts/:id` (op `seventv_http.draft`, auth key): An emote draft's file (GET /7tv/drafts/<id>), private to the key that made it.
+    static func seventvHttpDraft(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "seventv_http.draft", method: "GET", path: "/7tv/drafts/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
+    /// `GET /booru/posts` (op `booru.posts`, auth key): Danbooru posts under this key's level and filters (GET /booru/posts).
+    static func booruPosts() -> APIEndpoint<WireBooruPostsResponse> {
+        APIEndpoint(op: "booru.posts", method: "GET", path: "/booru/posts", auth: .key)
+    }
+
+    /// `GET /booru/autocomplete` (op `booru.autocomplete`, auth key): Danbooru tag suggestions (GET /booru/autocomplete).
+    static func booruAutocomplete() -> APIEndpoint<WireBooruAutocompleteResponse> {
+        APIEndpoint(op: "booru.autocomplete", method: "GET", path: "/booru/autocomplete", auth: .key)
+    }
+
+    /// `GET /booru/settings` (op `booru.settings`, auth key): This key's booru level, themes and blacklist (GET /booru/settings).
+    static func booruSettings() -> APIEndpoint<WireBooruSettingsResponse> {
+        APIEndpoint(op: "booru.settings", method: "GET", path: "/booru/settings", auth: .key)
+    }
+
+    /// `PUT /booru/settings` (op `booru.settings_update`, auth key): Change this key's booru level, themes or blacklist (PUT /booru/settings).
+    static func booruSettingsUpdate() -> APIEndpoint<WireBooruSettingsUpdateResponse> {
+        APIEndpoint(op: "booru.settings_update", method: "PUT", path: "/booru/settings", auth: .key)
     }
 
     /// `PUT /live/start-token` (op `live.start_token.put`, auth key): A device's push-to-start token.
@@ -1990,6 +2030,39 @@ struct SevenTvUpload: Decodable, Sendable {
     var addError: SevenTvUploadAddError?
 }
 
+struct SevenTvEmoteDraft: Decodable, Sendable {
+    var status: String
+    /// 22 url-safe characters; the draft lives 24 h
+    var draftId: String
+    var format: String
+    var contentType: String
+    var width: Int
+    var height: Int
+    var frames: Int
+    /// one loop, bounce included
+    var durationMs: Int
+    var bytes: Int
+    /// the quality used (a gif: its palette as a share of 256 colours; a png: 100)
+    var quality: Int
+    /// a fixed quality came out over 7 MiB less 64 KiB: the file is made, the app shows it amber
+    var overCap: Bool
+    /// /7tv/drafts/<draft_id> on this host
+    var url: String
+    /// ms
+    var expiresAt: Int
+}
+
+struct SeventvHttpDraftDeleteResponse: Decodable, Sendable {
+    var status: String
+    var deleted: Bool
+}
+
+struct SevenTvDraftSaved: Decodable, Sendable {
+    var status: String
+    var itemId: String
+    var fileId: String
+}
+
 struct SeventvHttpEmoteResponse: Decodable, Sendable {
     var emoteId: String
     var name: String
@@ -2040,6 +2113,106 @@ struct SeventvHttpOwnedResponse: Decodable, Sendable {
     var total: Double
     var emotes: [SeventvHttpOwnedResponseEmotesItem]
     var status: String
+}
+
+struct WireBooruPostTags: Decodable, Sendable {
+    var artist: [String]
+    var character: [String]
+    var copyright: [String]
+    var general: [String]
+    var meta: [String]
+}
+
+struct WireBooruPost: Decodable, Sendable {
+    var id: Int
+    /// g general, s sensitive, q questionable; there is no explicit
+    var rating: String
+    /// a theme set to blur matched: show a cover until tapped
+    var blur: Bool
+    var media: String
+    var ext: String
+    var width: Int
+    var height: Int
+    var size: Int
+    var score: Int
+    var favs: Int
+    var createdAt: String?
+    var source: String?
+    var pageUrl: String
+    var thumbUrl: String
+    var sampleUrl: String
+    var fileUrl: String
+    var tags: WireBooruPostTags
+}
+
+struct WireBooruPostsResponseHidden: Decodable, Sendable {
+    var level: Int
+    var theme: Int
+    var blacklist: Int
+    var refine: Int
+    var blocked: Int
+}
+
+struct WireBooruPostsResponse: Decodable, Sendable {
+    var status: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var level: String
+    var posts: [WireBooruPost]
+    var hidden: WireBooruPostsResponseHidden
+    var nextPage: Int?
+    /// extras Danbooru's 2-tag limit did not take (order, rating); filtered here anyway
+    var dropped: [String]
+}
+
+struct WireBooruAutocompleteResponseTagsItem: Decodable, Sendable {
+    var name: String
+    var kind: String
+    var count: Int
+}
+
+struct WireBooruAutocompleteResponse: Decodable, Sendable {
+    var status: String
+    var tags: [WireBooruAutocompleteResponseTagsItem]
+}
+
+struct WireBooruSettingsResponseThemeListItem: Decodable, Sendable {
+    var id: String
+    var label: String
+    var detail: String
+    var `default`: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var minLevel: String
+    var tags: [String]
+}
+
+struct WireBooruSettingsResponse: Decodable, Sendable {
+    var status: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var level: String
+    var levels: [String]
+    var themeList: [WireBooruSettingsResponseThemeListItem]
+    var blacklist: String
+    var updatedAt: Int?
+}
+
+struct WireBooruSettingsUpdateResponseThemeListItem: Decodable, Sendable {
+    var id: String
+    var label: String
+    var detail: String
+    var `default`: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var minLevel: String
+    var tags: [String]
+}
+
+struct WireBooruSettingsUpdateResponse: Decodable, Sendable {
+    var status: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var level: String
+    var levels: [String]
+    var themeList: [WireBooruSettingsUpdateResponseThemeListItem]
+    var blacklist: String
+    var updatedAt: Int?
 }
 
 struct McpSettingsResponseLink: Decodable, Sendable {

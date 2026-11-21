@@ -768,6 +768,7 @@ export interface OriginalsBucket {
         httpMetadata?: { contentType?: string };
         httpEtag?: string;
         uploaded?: Date;
+        customMetadata?: Record<string, string>;
     } | null>;
     // Metadata only (no body): the object's real size, null when it is missing.
     head(key: string): Promise<{

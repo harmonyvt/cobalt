@@ -26,6 +26,8 @@ public final class SevenTvUploadModel: Identifiable {
     public let bytes: Int64?
     public let contentType: String?
     public let fileName: String?
+    /// An emote editor draft (APP-API-CONTRACT 71.2) this uploads as it is; `fileID` is then `draft:<id>`. Nil for a library file.
+    public let draftID: String?
     /// The picture's size in px: the library's, or the picture's once the crop sheet opened it (nil when unknown).
     public private(set) var width: Int?
     public private(set) var height: Int?
@@ -60,8 +62,9 @@ public final class SevenTvUploadModel: Identifiable {
 
     init(
         fileID: String, bytes: Int64?, title: String?, contentType: String? = nil, fileName: String? = nil, width: Int? = nil,
-        height: Int? = nil, store: SevenTvStore
+        height: Int? = nil, draftID: String? = nil, store: SevenTvStore
     ) {
+        self.draftID = draftID
         self.fileID = fileID
         self.bytes = bytes
         self.contentType = contentType
@@ -79,7 +82,7 @@ public final class SevenTvUploadModel: Identifiable {
     public var nameIsValid: Bool { SevenTvEmoteRule.isValidName(cleanName) }
 
     /// The server can crop and shrink this file (webp, gif, png, jpeg; an unknown type passes): the sheet offers crop and size.
-    public var fittable: Bool { SevenTvEmoteRule.isFittable(contentType: contentType, name: fileName) }
+    public var fittable: Bool { draftID == nil && SevenTvEmoteRule.isFittable(contentType: contentType, name: fileName) }
     /// Over 7TV's byte cap.
     public var isOverBytes: Bool { SevenTvEmoteRule.isTooBig(bytes) }
     /// Over 1000 px a side.
@@ -190,7 +193,7 @@ public final class SevenTvUploadModel: Identifiable {
         let mine = token
         let draft = SevenTvUploadDraft(
             fileID: fileID, name: cleanName, zeroWidth: zeroWidth, isPrivate: isPrivate, setID: addToSet ? setID : nil,
-            crop: fittable ? crop : nil, size: fittable ? size : nil)
+            crop: fittable ? crop : nil, size: fittable ? size : nil, draftID: draftID)
         phase = .uploading
         timedOut = false
         emote = nil

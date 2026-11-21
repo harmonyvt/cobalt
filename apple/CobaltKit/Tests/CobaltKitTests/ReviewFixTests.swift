@@ -58,6 +58,8 @@ struct ScriptedClient: CobaltClient {
     var deletePostHook: (@Sendable (String) async throws -> PostDeleteResult)?
     var setNotifyHook: (@Sendable (String, NotifyOptIn) async throws -> Void)?
     var cancelNotifyHook: (@Sendable (String) async throws -> Void)?
+    /// `GET /stage/twitch/session` (TwitchSessionClient); nil throws, which reads as no session like any other client.
+    var twitchSessionHook: (@Sendable () async throws -> TwitchSession)?
 
     var baseURL: URL { base.baseURL }
     func capabilities() async -> Capabilities { await base.capabilities() }
@@ -859,5 +861,12 @@ struct NotificationPermissionTests {
         let text = try String(contentsOf: source, encoding: .utf8)
         #expect(!text.contains("requestAuthorization"), "AppModel must not ask for notification permission at launch")
         #expect(text.contains("ctx.notifier = SystemNotifier()"))
+    }
+}
+
+extension ScriptedClient: TwitchSessionClient {
+    func twitchSession() async throws -> TwitchSession {
+        guard let twitchSessionHook else { throw URLError(.unsupportedURL) }
+        return try await twitchSessionHook()
     }
 }

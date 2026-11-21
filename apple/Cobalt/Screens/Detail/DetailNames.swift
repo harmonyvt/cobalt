@@ -51,7 +51,7 @@ extension Rendition {
             guard var ext = url?.pathExtension.lowercased(), !ext.isEmpty, ext.count <= 5 else { continue }
             if ext == "jpeg" { ext = "jpg" }
             if ext == "qt" { ext = "mov" }
-            if let type = UTType(filenameExtension: ext), type.conforms(to: .audiovisualContent) || type.conforms(to: .image) {
+            if MediaExtension.isMedia(ext) {
                 return ext
             }
         }

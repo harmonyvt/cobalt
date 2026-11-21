@@ -101,6 +101,11 @@ export const PATHS: string[] = [
     `/chat/budget/${ID16}/renders`,
     "/library/adopt",
     "/emotes",
+    // added with the booru tab (section 72)
+    "/booru/posts",
+    "/booru/posts?tags=a%20b%20c",
+    "/booru/autocomplete?q=miku",
+    "/booru/settings",
     "/library",
     "/sync",
     "/library?limit=5",

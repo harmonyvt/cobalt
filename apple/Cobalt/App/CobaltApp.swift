@@ -126,7 +126,6 @@ struct CobaltApp: App {
         SwiftUI.Settings {
             SettingsScreen(model: model)
                 .cobaltRoot(model: model)
-                .syncGlow(model.library.syncStatus)
                 .frame(width: 560, height: 740)
         }
         EditorWindow(model: model)

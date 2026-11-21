@@ -151,3 +151,53 @@ struct TwitchSessionTests {
         #expect(TwitchStore.login(from: "ab") == nil)
     }
 }
+
+/// Counts `GET /stage/twitch/session` and answers whatever the test set last.
+private actor TwitchSessionScript {
+    var calls = 0
+    var next: TwitchSession
+    init(_ first: TwitchSession) { next = first }
+    func answer() -> TwitchSession { calls += 1; return next }
+    func set(_ s: TwitchSession) { next = s }
+}
+
+@MainActor
+struct TwitchStoreSessionRecheckTests {
+    /// A cached session that cannot chat (read-only, or connected before the chat scopes) is asked for again once the last
+    /// answer is older than `recheckAfter`, so a reconnect in studio shows up without a relaunch; one that can chat is kept.
+    @Test func aReadOnlySessionIsAskedForAgain() async throws {
+        let far = Date().addingTimeInterval(3600)
+        let readOnly = TwitchSession(connected: true, login: "capy", accessToken: "t", expiresAt: far, canChat: false)
+        let canChat = TwitchSession(connected: true, login: "capy", accessToken: "t", expiresAt: far, canChat: true)
+        let script = TwitchSessionScript(readOnly)
+        let h = Harness(.shortClip)
+        h.ctx.client = ScriptedClient(base: h.ctx.client, twitchSessionHook: { await script.answer() })
+        let store = h.app.twitch
+
+        await store.load()
+        #expect(await script.calls == 1)
+        #expect(store.session?.canChat == false)
+        #expect(store.needsChatScopes)
+
+        // a second appearance right away does not ask again
+        await store.load()
+        #expect(await script.calls == 1)
+
+        // the owner reconnects in studio; once the last answer is old, the read-only session is asked for again
+        await script.set(canChat)
+        store.sessionFetchedAt = Date().addingTimeInterval(-(TwitchStore.recheckAfter + 1))
+        await store.load()
+        #expect(await script.calls == 2)
+        #expect(store.session?.canChat == true)
+        #expect(!store.needsChatScopes)
+
+        // a session that can chat and is far from its end is kept, however old the last answer
+        store.sessionFetchedAt = Date().addingTimeInterval(-(TwitchStore.recheckAfter + 1))
+        await store.load()
+        #expect(await script.calls == 2)
+
+        // pull to refresh asks anyway
+        await store.load(force: true)
+        #expect(await script.calls == 3)
+    }
+}

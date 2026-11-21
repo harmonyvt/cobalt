@@ -23,7 +23,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: "8.26"
+    MARKETING_VERSION: "8.27"
     CURRENT_PROJECT_VERSION: "26"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
@@ -78,6 +78,10 @@ targets:
             CFBundleURLSchemes: [cobalt-apple]
         LSApplicationCategoryType: public.app-category.utilities
         # Hidden posts (APP-API-CONTRACT 37.7): opening the hidden album asks for Face ID, Touch ID or the passcode.
+        # The twitch tab's player (APP-API-CONTRACT 70): Twitch's embed keeps its sign-in in a twitch.tv cookie inside the
+        # web app's page. This key adds "Allow Cross-Website Tracking" to the app's page in Settings, which lets that
+        # cookie through if WebKit blocks it (the app's web views only ever show Twitch's player).
+        NSCrossWebsiteTrackingUsageDescription: lets you stay signed in to twitch in the stream player, so your subscriptions work there.
         NSFaceIDUsageDescription: capystore asks for face id before showing hidden posts.
         NSPhotoLibraryAddUsageDescription: capystore saves videos you choose to your photos.
         # The photos album (CONTRACT-SYNC.md decision 7): putting an asset in an album needs full

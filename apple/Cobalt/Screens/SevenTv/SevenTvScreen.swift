@@ -117,6 +117,8 @@ struct SevenTvScreen: View {
     let tier: Tier
 
     @State private var tab: SevenTvTabController
+    /// The tab's own width: in the other screen of a spread it is half the window, whatever the window's tier.
+    @State private var width: CGFloat = 0
     @Environment(\.shell) private var shell
 
     #if DEBUG
@@ -150,6 +152,7 @@ struct SevenTvScreen: View {
         #if os(macOS)
         return true
         #else
+        if width > 0 { return width >= Spread.minWidth }
         return tier != .compact
         #endif
     }
@@ -165,6 +168,7 @@ struct SevenTvScreen: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .background(CobaltColor.bg)
             .navigationTitle(Copy.SevenTv.title)
             #if os(iOS)
