@@ -4,6 +4,8 @@ import Foundation
 extension Copy {
     enum Duo {
         static let otherScreen = "open on the other screen"
+        /// The close every right-hand panel has (`SidePanel.swift`).
+        static let hidePanel = "hide this side"
     }
 }
 
@@ -11,5 +13,6 @@ extension Copy {
 extension Symbol {
     enum Duo {
         static let otherScreen = "rectangle.split.2x1"
+        static let hidePanel = "xmark"
     }
 }

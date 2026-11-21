@@ -12,8 +12,6 @@ final class SpreadPaneHost {
     struct Pane {
         let id: String
         let content: AnyView
-        /// Draws a close button in the pane's top corner (content that has none of its own).
-        let closable: Bool
         let onClose: @MainActor () -> Void
     }
 
@@ -23,14 +21,15 @@ final class SpreadPaneHost {
     /// Bumped on every show, so the pane's view (and its state) is new for new content.
     private(set) var generation = 0
 
-    /// Shows `content` in the pane, closing whatever was there.
-    func show(id: String, content: AnyView, closable: Bool = false, onClose: @escaping @MainActor () -> Void) {
+    /// Shows `content` in the pane, closing whatever was there. The pane always closes: content with no close of its own
+    /// (no `panelDrawsOwnClose()`) gets the round close on the hinge (`SidePanel.swift`).
+    func show(id: String, content: AnyView, onClose: @escaping @MainActor () -> Void) {
         if let old = pane, old.id != id {
             pane = nil
             old.onClose()
         }
         generation &+= 1
-        pane = Pane(id: id, content: content, closable: closable, onClose: onClose)
+        pane = Pane(id: id, content: content, onClose: onClose)
     }
 
     /// Closes the pane (only when it shows `id`, when one is given) and tells its presenter.
@@ -84,14 +83,17 @@ extension EnvironmentValues {
     }
 }
 
-/// `dismiss()` for content that is a sheet when folded and the pane on a spread: closes whichever it is in.
+/// `dismiss()` for content that is a sheet when folded and a right-hand panel on a wide layout (`SidePanel.swift`): closes
+/// whichever it is in. A sheet or pushed screen opened from inside a panel inherits the panel's close, so a view that is
+/// itself presented dismisses its own presentation first and never takes the whole panel with it.
 @MainActor
 struct SheetOrPaneDismiss: DynamicProperty {
     @Environment(\.dismiss) private var system
+    @Environment(\.isPresented) private var presented
     @Environment(\.paneClose) private var pane
 
     func callAsFunction() {
-        if let pane { pane.run() } else { system() }
+        if let pane, !presented { pane.run() } else { system() }
     }
 }
 
@@ -128,7 +130,7 @@ private struct SpreadSheetItem<Item: Identifiable, Pane: View>: ViewModifier {
 
     func body(content view: Content) -> some View {
         view
-            .sheet(item: sheetItem) { content($0) }
+            .sheet(item: sheetItem) { content($0).environment(\.paneClose, nil) }
             .onChange(of: item.map { AnyHashable($0.id) }, initial: true) { _, id in
                 guard usesPane, let host else { return }
                 if let shown = item, id != nil {
@@ -157,7 +159,7 @@ private struct SpreadSheetFlag<Pane: View>: ViewModifier {
 
     func body(content view: Content) -> some View {
         view
-            .sheet(isPresented: sheetShown) { content() }
+            .sheet(isPresented: sheetShown) { content().environment(\.paneClose, nil) }
             .onChange(of: shown, initial: true) { _, on in
                 guard usesPane, let host else { return }
                 if on {
@@ -216,14 +218,6 @@ struct SpreadPaneColumn<Content: View>: View {
             }
         }
         .background(CobaltColor.bg.ignoresSafeArea())
-        // the pane's close sits on the hinge at the bottom, so neither column gives up a row for it and their tops line up
-        .overlay(alignment: .bottom) {
-            if shows, let host, let pane = host.pane, pane.closable {
-                CloseButton(cancels: true) { host.close(id: pane.id) }
-                    .padding(.bottom, 14)
-                    .transition(.opacity)
-            }
-        }
         .animation(Motion.card, value: shows ? host?.pane?.id : nil)
     }
 }
@@ -251,12 +245,7 @@ struct SpreadPaneView: View {
             HStack(spacing: 0) {
                 HingeSeam(queue: queue)
                     .ignoresSafeArea()
-                pane.content
-                    .environment(\.hingeEdge, .leading)
-                    .environment(\.paneClose, SheetCloseAction { host.close(id: pane.id) })
-                    .sheetClose { host.close(id: pane.id) }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(CobaltColor.bg)
+                SpreadPaneContent(host: host, pane: pane)
                     .id(host.generation)
                 // a little room from the hinge, so a large title or a row never touches the line
                 .padding(.leading, 8)
@@ -265,6 +254,36 @@ struct SpreadPaneView: View {
             .background(CobaltColor.bg.ignoresSafeArea())
             .transition(.move(edge: .trailing).combined(with: .opacity))
         }
+    }
+}
+
+/// One pane's content, new with each `show` (so what it said about its close is not carried to the next one). Every pane
+/// closes (owner, 8.34): content that draws no close of its own (`panelDrawsOwnClose`) gets a round one on the hinge at
+/// the bottom, so neither column gives up a row for it and their tops line up.
+private struct SpreadPaneContent: View {
+    let host: SpreadPaneHost
+    let pane: SpreadPaneHost.Pane
+
+    @State private var ownClose = false
+
+    var body: some View {
+        pane.content
+            .environment(\.hingeEdge, .leading)
+            .environment(\.paneClose, SheetCloseAction { host.close(id: pane.id) })
+            .sheetClose { host.close(id: pane.id) }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(CobaltColor.bg)
+            .onPreferenceChange(PanelOwnCloseKey.self) { ownClose = $0 }
+            .overlay(alignment: .bottomLeading) {
+                if !ownClose {
+                    CloseButton(cancels: true) { host.close(id: pane.id) }
+                        // centred on the hinge: the pane's leading edge, 8 pt left of the content
+                        .alignmentGuide(.leading) { $0[HorizontalAlignment.center] + 8 }
+                        .padding(.bottom, 14)
+                        .transition(.opacity)
+                        .accessibilityIdentifier("panel.close.hinge")
+                }
+            }
     }
 }
 

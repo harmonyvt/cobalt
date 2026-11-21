@@ -314,7 +314,7 @@ private struct LibraryContent: View {
             .onChange(of: controller.peek?.id) { _, _ in
                 guard peeksInPane, let spreadPane else { return }
                 if let row = controller.peek {
-                    spreadPane.show(id: "library-peek", content: AnyView(LibraryPeek(row: row, dims: false))) {}
+                    spreadPane.show(id: "library-peek", content: AnyView(LibraryPeek(row: row, dims: false).panelDrawsOwnClose())) {}
                 } else {
                     spreadPane.close(id: "library-peek")
                 }
@@ -825,7 +825,9 @@ private struct LibraryInspector: ViewModifier {
             Group {
                 if let item = controller.selectedItem {
                     NavigationStack {
+                        // the column always hides from inside too, not only from the library's toolbar (owner, 8.34)
                         MediaDetail(model: model, item: item, initial: item.face.id)
+                            .panelClose { controller.inspectorOpen = false }
                     }
                     .hiddenCover(controller)
                     .id(controller.selection)

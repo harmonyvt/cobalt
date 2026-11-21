@@ -188,7 +188,7 @@ struct SevenTvScreen: View {
                     upload: item.upload, picture: SevenTvUploadIcon.picture(model: model, file: item.file), setModels: tab.setModels)
             }
             .spreadSheet(item: addToSetShown) { picker in
-                SevenTvAddToSetSheet(picker: picker)
+                SevenTvAddToSetSheet(picker: picker).panelDrawsOwnClose()
             }
             #if DEBUG
             .sheet(item: $debugUpload) { upload in
