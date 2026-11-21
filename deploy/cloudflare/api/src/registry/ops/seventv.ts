@@ -30,6 +30,8 @@ import {
     ADD_MANY_MAX,
 } from "../../seventv";
 import { gateOf } from "../../seventv-gate";
+import { DRAFT_ID } from "../../emote-draft";
+import { getDraftFile, makeEmote, removeDraft, saveDraft, type MakeDeps } from "../../emote-make";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
 
@@ -38,6 +40,8 @@ const uploadDeps = (ctx: OpContext): SevenTvUploadDeps => ({
     ...deps(ctx),
     media: ctx.env.MEDIA,
     originals: ctx.env.ORIGINALS,
+    keyId: ctx.keyId,
+    draftBucket: ctx.env.ORIGINALS,
     // the container's emote fit (57.10), through the Durable Object with the internal key
     fit: (body, bytes, query) =>
         ctx.container.fetch(
@@ -49,6 +53,10 @@ const uploadDeps = (ctx: OpContext): SevenTvUploadDeps => ({
             } as RequestInit),
         ),
 });
+const makeDeps = (ctx: OpContext): MakeDeps => {
+    const u = uploadDeps(ctx);
+    return { db: ctx.db, now: ctx.now, keyId: ctx.keyId, originals: ctx.env.ORIGINALS, media: ctx.env.MEDIA, ...(u.fit ? { fit: u.fit } : {}) };
+};
 const reply = (r: StudioReply): OpReply => ({ status: r.status, body: r.body });
 
 const Id = SEVENTV_ID;
@@ -123,6 +131,42 @@ const UploadShape = z
         add_error: z.object({ code: z.string(), message: z.string().optional() }).optional(),
     })
     .meta({ id: "SevenTvUpload" });
+const MakeShape = z
+    .object({
+        status: Status,
+        draft_id: z.string().describe("22 url-safe characters; the draft lives 24 h"),
+        format: z.enum(["webp", "gif", "png"]),
+        content_type: z.string(),
+        width: z.number().int(),
+        height: z.number().int(),
+        frames: z.number().int(),
+        duration_ms: z.number().int().describe("one loop, bounce included"),
+        bytes: z.number().int(),
+        quality: z.number().int().describe("the quality used (a gif: its palette as a share of 256 colours; a png: 100)"),
+        over_cap: z.boolean().describe("a fixed quality came out over 7 MiB less 64 KiB: the file is made, the app shows it amber"),
+        url: z.string().describe("/7tv/drafts/<draft_id> on this host"),
+        expires_at: z.number().int().describe("ms"),
+    })
+    .meta({ id: "SevenTvEmoteDraft" });
+const MakeInput = z.looseObject({
+    file: z.string().max(64).describe("library file id, public id or post id: a picture or a video"),
+    crop: FitCrop.nullable().optional(),
+    stretch: z
+        .object({ w: z.number().min(0.25).max(4), h: z.number().min(0.25).max(4) })
+        .nullable()
+        .optional()
+        .describe("squash or stretch after the crop, each way on its own (1 = unchanged)"),
+    size: FitSize.nullable().optional(),
+    format: z.enum(["webp", "gif", "png"]).nullable().optional(),
+    quality: z.number().int().min(1).max(100).nullable().optional().describe("one encode at this quality; absent = the automatic ladder"),
+    fps: z.number().int().min(5).max(50).nullable().optional(),
+    start: z.number().min(0).nullable().optional().describe("video only, seconds"),
+    end: z.number().min(0).nullable().optional().describe("video only, seconds; end - start is 0.2 to 10"),
+    bounce: z.boolean().nullable().optional(),
+    frame: z.number().min(0).nullable().optional().describe("seconds into the source: the still for png"),
+    replace: z.string().max(64).nullable().optional().describe("a draft id of this key to delete first"),
+});
+const SavedDraftShape = z.object({ status: Status, item_id: z.string(), file_id: z.string() }).meta({ id: "SevenTvDraftSaved" });
 const UploadsShape = z
     .object({
         uploads: z.array(
@@ -298,7 +342,8 @@ const ROUTE_OPS = [
         method: "POST",
         path: "/7tv/emotes",
         input: z.looseObject({
-            file: z.string().max(64),
+            file: z.string().max(64).optional(),
+            draft: z.string().max(64).nullable().optional().describe("a draft id of this key (POST /7tv/emotes/make) instead of file: its bytes go as they are"),
             name: z.string().max(400),
             tags: z.array(z.string().max(64)).max(6).optional(),
             zero_width: z.boolean().optional(),
@@ -311,6 +356,35 @@ const ROUTE_OPS = [
         output: UploadShape,
         summary: "Upload a library picture (webp, gif, png, avif, jpeg) as a new 7TV emote, optionally cropped and resized first and added to a set (POST /7tv/emotes).",
         run: (ctx, input) => sevenTvUpload(uploadDeps(ctx), input),
+    }),
+    route({
+        name: "seventv_http.make",
+        method: "POST",
+        path: "/7tv/emotes/make",
+        input: MakeInput,
+        output: MakeShape,
+        summary:
+            "Make a draft emote from a library picture or video: crop, squash, format (webp, gif, png), quality, frame rate, video moment, bounce. The draft lives 24 h (POST /7tv/emotes/make).",
+        run: (ctx, input) => makeEmote(makeDeps(ctx), input as Record<string, unknown>),
+    }),
+    route({
+        name: "seventv_http.draft_delete",
+        method: "DELETE",
+        path: "/7tv/drafts/:id",
+        params: { id: DRAFT_ID },
+        output: z.object({ status: Status, deleted: z.literal(true) }),
+        summary: "Delete an emote draft (DELETE /7tv/drafts/<id>).",
+        run: (ctx) => removeDraft(makeDeps(ctx), ctx.params.id!),
+    }),
+    route({
+        name: "seventv_http.draft_save",
+        method: "POST",
+        path: "/7tv/drafts/:id/save",
+        params: { id: DRAFT_ID },
+        input: z.looseObject({ title: z.string().max(400).nullable().optional() }),
+        output: SavedDraftShape,
+        summary: "Save an emote draft as a private library item; the draft is kept (POST /7tv/drafts/<id>/save).",
+        run: (ctx, input) => saveDraft(makeDeps(ctx), ctx.params.id!, input as Record<string, unknown>),
     }),
     route({
         name: "seventv_http.emote",
@@ -336,6 +410,19 @@ const ROUTE_OPS = [
         output: OwnedShape.extend({ status: Status }),
         summary: "Every emote the linked 7TV account owns (uploaded anywhere), newest first, at most 500 (GET /7tv/owned).",
         run: (ctx) => sevenTvOwned(deps(ctx)),
+    }),
+    // the draft's file itself (71.2): bytes, not JSON
+    defineOp({
+        name: "seventv_http.draft",
+        route: { method: "GET", path: "/7tv/drafts/:id", params: { id: DRAFT_ID } },
+        auth: "key",
+        runs: "worker",
+        cors: true,
+        raw: true,
+        input: z.looseObject({}),
+        badRequest: "error.seventv.bad",
+        ai: { tier: "hidden", summary: "An emote draft's file (GET /7tv/drafts/<id>), private to the key that made it." },
+        handler: (ctx) => getDraftFile(makeDeps(ctx), ctx.params.id!),
     }),
 ];
 

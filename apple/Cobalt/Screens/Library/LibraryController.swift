@@ -218,6 +218,8 @@ final class LibraryController {
     var combining: MediaItem?
     /// The picture the owner chose `crop a copy…` for: the crop sheet is open on it (`LibraryImageCropHook.swift`).
     var croppingPicture: LibraryImageCropTarget?
+    /// The post the owner chose `make an emote…` for: the emote editor is open on it (`EmoteEditor/EmoteEditorEntry.swift`).
+    var makingEmote: EmoteEditorTarget?
     /// The sky map (`SkyMap/LibrarySkyMapHook.swift`) is open.
     var showingSkyMap = false
     /// The posts `add to link` is picking a link for (`LibraryAddToLinkHook.swift`): the link picker is up.

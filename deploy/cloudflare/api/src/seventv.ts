@@ -8,6 +8,7 @@
 import { pickWebp, previewWebp, type EmoteImage } from "./emotes";
 import type { StudioReply } from "./studio";
 import { retryAfterSeconds, type SevenTvGate } from "./seventv-gate";
+import { DRAFT_ID, readDraft, type DraftBucket } from "./emote-draft";
 
 export const SEVENTV_GQL = "https://7tv.io/v4/gql";
 const CDN_HOST = "cdn.7tv.app";
@@ -602,15 +603,22 @@ const UPLOAD_TYPES = ["image/webp", "image/gif", "image/png", "image/avif", "ima
 type ReadBucket = { get(key: string): Promise<{ body: ReadableStream; size: number; httpMetadata?: { contentType?: string } } | null> };
 /** The container's emote fit (57.10), reached through the Durable Object; absent: nothing is fitted. */
 export type EmoteFit = (body: ReadableStream, bytes: number, query: string) => Promise<Response>;
-export type SevenTvUploadDeps = SevenTvDeps & { media: ReadBucket; originals: ReadBucket; fit?: EmoteFit };
+export type SevenTvUploadDeps = SevenTvDeps & {
+    media: ReadBucket;
+    originals: ReadBucket;
+    fit?: EmoteFit;
+    // section 71: the drafts are the calling key's (R2 originals, emote-drafts/<key id>/...)
+    keyId?: string | null;
+    draftBucket?: DraftBucket;
+};
 /** The Durable Object's internal path for the fit (src/index.ts). */
 export const EMOTE_FIT_PATH = "/internal/7tv-fit";
 /** Pictures the fit can read (ffmpeg plus the animated WebP composer). */
-const FIT_TYPES = ["image/webp", "image/gif", "image/png", "image/jpeg"];
-const FIT_INPUT_MAX = 64 * 1024 * 1024;
-type Crop = { x: number; y: number; w: number; h: number };
+export const FIT_TYPES = ["image/webp", "image/gif", "image/png", "image/jpeg"];
+export const FIT_INPUT_MAX = 64 * 1024 * 1024;
+export type Crop = { x: number; y: number; w: number; h: number };
 
-function cleanCrop(v: unknown): Crop | null | false {
+export function cleanCrop(v: unknown): Crop | null | false {
     if (v === undefined || v === null) return null;
     if (typeof v !== "object") return false;
     const c = v as Record<string, unknown>;
@@ -621,7 +629,7 @@ function cleanCrop(v: unknown): Crop | null | false {
     return { x: x!, y: y!, w: w!, h: h! };
 }
 
-type FileRow = { id: string; bucket: string; r2_key: string; content_type: string | null; bytes: number | null; name: string | null; width: number | null; height: number | null };
+export type FileRow = { id: string; bucket: string; r2_key: string; content_type: string | null; bytes: number | null; name: string | null; width: number | null; height: number | null };
 
 // 7TV's processing drops (soft-deletes) an emote over 1000 px a side or outside 1:32..3:1; caught here when the size is known.
 // A side over 1000 px is shrunk by the fit (57.10); the shape only changes with a crop box the caller picks.
@@ -644,7 +652,7 @@ export function cleanEmoteName(v: unknown): string | null {
 }
 
 // A file id (or its public id) of the library; a post id answers its first picture.
-async function fileRow(db: D1Database, ref: string): Promise<FileRow | null> {
+export async function fileRow(db: D1Database, ref: string): Promise<FileRow | null> {
     const cols = "id, bucket, r2_key, content_type, bytes, name, width, height";
     const direct = await db
         .prepare(`SELECT ${cols} FROM media_items WHERE (id = ?1 OR public_id = ?1) AND deleted_at IS NULL ORDER BY (id = ?1) DESC LIMIT 1`)
@@ -663,6 +671,17 @@ async function fileRow(db: D1Database, ref: string): Promise<FileRow | null> {
     } catch {
         return null;
     }
+}
+
+/** The container's refusal of a fit (57.10, 71.1) as the Worker answers it. */
+export async function fitRefusal(res: Response): Promise<StudioReply> {
+    const b = (await res.json().catch(() => null)) as { error?: { code?: string; detail?: string } } | null;
+    const code = b?.error?.code ?? "";
+    const detail = b?.error?.detail || undefined;
+    if (res.status === 429) return fail(429, "error.seventv.busy", "the media helper is busy with another job; try again in a minute");
+    if (code === "error.seventv.fit_shape") return fail(400, "error.seventv.too_large", detail);
+    if (code === "error.seventv.fit_too_big" || res.status === 413) return fail(413, "error.seventv.too_big", detail);
+    return fail(422, "error.seventv.fit_failed", detail);
 }
 
 async function uploadError(res: Response): Promise<SevenTvError> {
@@ -685,10 +704,15 @@ export async function sevenTvUpload(
     d: SevenTvUploadDeps,
     body: {
         file?: unknown; name?: unknown; tags?: unknown; zero_width?: unknown; private?: unknown; set_id?: unknown; alias?: unknown;
-        crop?: unknown; size?: unknown;
+        crop?: unknown; size?: unknown; draft?: unknown;
     },
 ): Promise<StudioReply> {
     const ref = typeof body.file === "string" ? body.file.trim() : "";
+    // 71.2: a draft of this key instead of a library file; its bytes go as they are
+    const draftId = body.draft === undefined || body.draft === null || body.draft === "" ? null : body.draft;
+    if (draftId !== null && (typeof draftId !== "string" || !DRAFT_ID.test(draftId) || ref !== "" || body.crop != null || body.size != null)) {
+        return fail(400, "error.seventv.bad", "draft takes the place of file and cannot be cropped or resized");
+    }
     const name = cleanEmoteName(body.name);
     const tags = body.tags === undefined || body.tags === null ? [] : body.tags;
     const setId = body.set_id === undefined || body.set_id === null || body.set_id === "" ? null : body.set_id;
@@ -702,7 +726,7 @@ export async function sevenTvUpload(
         return fail(400, "error.seventv.bad", "crop is {x, y, w, h} as fractions of the picture; size is 32 to 1000 px");
     }
     if (
-        !ref ||
+        (draftId === null && !ref) ||
         ref.length > 64 ||
         !name ||
         !Array.isArray(tags) ||
@@ -713,6 +737,7 @@ export async function sevenTvUpload(
     ) {
         return fail(400, "error.seventv.bad");
     }
+    if (typeof draftId === "string") return uploadDraft(d, draftId, { name: name!, tags, setId, alias, body });
     const row = await fileRow(d.db, ref);
     if (!row) return fail(404, "error.seventv.file_not_found");
     const type = (row.content_type ?? "").toLowerCase().split(";")[0]!.trim();
@@ -753,15 +778,7 @@ export async function sevenTvUpload(
             } catch {
                 return fail(502, "error.seventv.fit_failed", "the resize step did not answer; try again");
             }
-            if (!res.ok) {
-                const b = (await res.json().catch(() => null)) as { error?: { code?: string; detail?: string } } | null;
-                const code = b?.error?.code ?? "";
-                const detail = b?.error?.detail || undefined;
-                if (res.status === 429) return fail(429, "error.seventv.busy", "the media helper is busy with another job; try again in a minute");
-                if (code === "error.seventv.fit_shape") return fail(400, "error.seventv.too_large", detail);
-                if (code === "error.seventv.fit_too_big" || res.status === 413) return fail(413, "error.seventv.too_big", detail);
-                return fail(422, "error.seventv.fit_failed", detail);
-            }
+            if (!res.ok) return fitRefusal(res);
             bytes = await res.arrayBuffer();
             const num = (h: string) => Number(res.headers.get(h)) || 0;
             fitted = { width: num("x-emote-width"), height: num("x-emote-height"), frames: num("x-emote-frames"), bytes: bytes.byteLength, quality: num("x-emote-quality") };
@@ -769,67 +786,123 @@ export async function sevenTvUpload(
         } else {
             bytes = await new Response(obj.body).arrayBuffer();
         }
-        const form = new FormData();
-        form.append(
-            "metadata",
-            JSON.stringify({ name, tags, default_zero_width: body.zero_width === true, private: body.private === true }),
-        );
-        form.append("file", new Blob([bytes], { type: sendType }), `${row.id}.${sendType.split("/")[1]}`);
-        const f = d.fetch ?? fetch;
-        await d.gate?.slot("write");
-        let res: Response;
-        try {
-            res = await f(SEVENTV_UPLOAD, {
-                method: "POST",
-                headers: { accept: "application/json", authorization: `Bearer ${token}` },
-                body: form,
-                signal: AbortSignal.timeout(60_000),
-            });
-        } catch {
-            throw new SevenTvError(fail(502, "error.seventv.unavailable"));
-        }
-        if (!res.ok) throw await uploadError(res);
-        let emoteId: unknown;
-        try {
-            emoteId = ((await res.json()) as { emote_id?: unknown }).emote_id;
-        } catch {
-            emoteId = undefined;
-        }
-        if (typeof emoteId !== "string" || !SEVENTV_ID.test(emoteId)) throw new SevenTvError(fail(502, "error.seventv.unavailable"));
-
-        // Remembered for the 7tv tab (57.11). Before migration 0042 the table is missing: the upload still stands.
-        await d.db
-            .prepare("INSERT OR REPLACE INTO seventv_uploads (emote_id, file_id, name, set_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
-            .bind(emoteId, row.id, name, typeof setId === "string" ? setId : null, d.now())
-            .run()
-            .catch(() => {});
-        // Put it in a set too when asked. The emote exists now even if this part fails, so that is reported, not thrown.
-        let added: { set_id: string; alias: string | null } | null = null;
-        let addError: { code: string; message?: string } | null = null;
-        if (typeof setId === "string") {
-            try {
-                await gql(d, token, ADD, { set: setId, e: { emoteId, ...(alias ? { alias } : {}) }, over: null });
-                added = { set_id: setId, alias };
-            } catch (e) {
-                if (!(e instanceof SevenTvError)) throw e;
-                const b = e.reply.body as { error: { code: string }; message?: string };
-                addError = { code: b.error.code, ...(b.message ? { message: b.message } : {}) };
-            }
-        }
-        return success(
-            {
-                emote_id: emoteId,
-                name,
-                file_id: row.id,
-                page_url: `https://7tv.app/emotes/${emoteId}`,
-                pending: true,
-                fitted,
-                added,
-                ...(addError ? { add_error: addError } : {}),
-            },
-            201,
-        );
+        return finishUpload(d, token, {
+            bytes, sendType, fileName: `${row.id}.${sendType.split("/")[1]}`, fileId: row.id, recordId: row.id, name: name!, tags,
+            setId: typeof setId === "string" ? setId : null, alias, zeroWidth: body.zero_width === true, isPrivate: body.private === true, fitted,
+        });
     });
+}
+
+// POST /7tv/emotes with `draft` (71.2): the draft's bytes go to 7TV as they are, no fit.
+async function uploadDraft(
+    d: SevenTvUploadDeps,
+    id: string,
+    o: { name: string; tags: string[]; setId: unknown; alias: string | null; body: { zero_width?: unknown; private?: unknown } },
+): Promise<StudioReply> {
+    return withToken(d, async (token) => {
+        const dr = d.draftBucket && d.keyId ? await readDraft(d.draftBucket, d.keyId, id, d.now()) : null;
+        if (!dr) return fail(404, "error.seventv.draft_not_found");
+        if (dr.size > UPLOAD_MAX) {
+            await dr.body.cancel().catch(() => {});
+            return fail(413, "error.seventv.too_big");
+        }
+        const bytes = await new Response(dr.body).arrayBuffer();
+        return finishUpload(d, token, {
+            bytes,
+            sendType: dr.contentType,
+            fileName: `${id}.${dr.format}`,
+            fileId: null,
+            recordId: `draft:${id}`,
+            name: o.name,
+            tags: o.tags,
+            setId: typeof o.setId === "string" ? o.setId : null,
+            alias: o.alias,
+            zeroWidth: o.body.zero_width === true,
+            isPrivate: o.body.private === true,
+            fitted: null,
+        });
+    });
+}
+
+type UploadJob = {
+    bytes: ArrayBuffer;
+    sendType: string;
+    fileName: string;
+    // the answer's file_id (null for a draft) and what the 7tv tab remembers (a draft is `draft:<id>`)
+    fileId: string | null;
+    recordId: string;
+    name: string;
+    tags: string[];
+    setId: string | null;
+    alias: string | null;
+    zeroWidth: boolean;
+    isPrivate: boolean;
+    fitted: { width: number; height: number; frames: number; bytes: number; quality: number } | null;
+};
+
+// The 7TV upload itself, the 7tv tab's record, and the optional add to a set (57.9).
+async function finishUpload(d: SevenTvUploadDeps, token: string, u: UploadJob): Promise<StudioReply> {
+    const { bytes, sendType, name, tags, setId, alias, fitted } = u;
+    const form = new FormData();
+    form.append(
+        "metadata",
+        JSON.stringify({ name, tags, default_zero_width: u.zeroWidth, private: u.isPrivate }),
+    );
+    form.append("file", new Blob([bytes], { type: sendType }), u.fileName);
+    const f = d.fetch ?? fetch;
+    await d.gate?.slot("write");
+    let res: Response;
+    try {
+        res = await f(SEVENTV_UPLOAD, {
+            method: "POST",
+            headers: { accept: "application/json", authorization: `Bearer ${token}` },
+            body: form,
+            signal: AbortSignal.timeout(60_000),
+        });
+    } catch {
+        throw new SevenTvError(fail(502, "error.seventv.unavailable"));
+    }
+    if (!res.ok) throw await uploadError(res);
+    let emoteId: unknown;
+    try {
+        emoteId = ((await res.json()) as { emote_id?: unknown }).emote_id;
+    } catch {
+        emoteId = undefined;
+    }
+    if (typeof emoteId !== "string" || !SEVENTV_ID.test(emoteId)) throw new SevenTvError(fail(502, "error.seventv.unavailable"));
+
+    // Remembered for the 7tv tab (57.11). Before migration 0042 the table is missing: the upload still stands.
+    await d.db
+        .prepare("INSERT OR REPLACE INTO seventv_uploads (emote_id, file_id, name, set_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
+        .bind(emoteId, u.recordId, name, setId, d.now())
+        .run()
+        .catch(() => {});
+    // Put it in a set too when asked. The emote exists now even if this part fails, so that is reported, not thrown.
+    let added: { set_id: string; alias: string | null } | null = null;
+    let addError: { code: string; message?: string } | null = null;
+    if (typeof setId === "string") {
+        try {
+            await gql(d, token, ADD, { set: setId, e: { emoteId, ...(alias ? { alias } : {}) }, over: null });
+            added = { set_id: setId, alias };
+        } catch (e) {
+            if (!(e instanceof SevenTvError)) throw e;
+            const b = e.reply.body as { error: { code: string }; message?: string };
+            addError = { code: b.error.code, ...(b.message ? { message: b.message } : {}) };
+        }
+    }
+    return success(
+        {
+            emote_id: emoteId,
+            name,
+            file_id: u.fileId,
+            page_url: `https://7tv.app/emotes/${emoteId}`,
+            pending: true,
+            fitted,
+            added,
+            ...(addError ? { add_error: addError } : {}),
+        },
+        201,
+    );
 }
 
 const EMOTE = `query($id: Id!) { emotes { emote(id: $id) { id defaultName deleted imagesPending ownerId

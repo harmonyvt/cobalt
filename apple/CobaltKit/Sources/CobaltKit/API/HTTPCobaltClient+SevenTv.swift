@@ -92,6 +92,34 @@ extension HTTPCobaltClient: SevenTvClient {
         return try sevenTvAnswer(SevenTvUploadResult.self, data, http)
     }
 
+    public func makeEmoteDraft(_ request: EmoteMakeRequest) async throws -> EmoteDraft {
+        // the helper may take up to 150 s on a video (71.3)
+        let req = try makeRequest("POST", SevenTvRoute.emoteMake, keyed: true, timeout: 200)
+        let (data, http) = try await send(req, body: Self.jsonBody(SevenTvRoute.emoteMakeBody(request)))
+        return try sevenTvAnswer(EmoteDraft.self, data, http)
+    }
+
+    public func emoteDraftData(id: String) async throws -> Data {
+        let req = try makeRequest("GET", SevenTvRoute.draft(id), keyed: true, timeout: 60)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw sevenTvError(data, status: http.statusCode) }
+        return data
+    }
+
+    public func deleteEmoteDraft(id: String) async throws {
+        let req = try makeRequest("DELETE", SevenTvRoute.draft(id), keyed: true, timeout: 20)
+        let (data, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode) else { throw sevenTvError(data, status: http.statusCode) }
+    }
+
+    public func saveEmoteDraft(id: String, title: String?) async throws -> EmoteDraftSaved {
+        let req = try makeRequest("POST", SevenTvRoute.draftSave(id), keyed: true, timeout: 30)
+        var body: [String: Any] = [:]
+        if let title, !title.trimmingCharacters(in: .whitespaces).isEmpty { body["title"] = title }
+        let (data, http) = try await send(req, body: Self.jsonBody(body))
+        return try sevenTvAnswer(EmoteDraftSaved.self, data, http)
+    }
+
     public func sevenTvUploads() async throws -> [SevenTvUploadedEmote] {
         let req = try makeRequest("GET", SevenTvRoute.myUploads, keyed: true, timeout: 20)
         let (data, http) = try await send(req)
@@ -135,7 +163,7 @@ extension HTTPCobaltClient: SevenTvClient {
     }
 
     /// A 2xx whose body decodes as `T`; a refusal as `SevenTvError`; an unreadable answer as `.invalidResponse`.
-    private func sevenTvAnswer<T: Decodable>(_ type: T.Type, _ data: Data, _ http: HTTPURLResponse) throws -> T {
+    func sevenTvAnswer<T: Decodable>(_ type: T.Type, _ data: Data, _ http: HTTPURLResponse) throws -> T {
         guard (200..<300).contains(http.statusCode) else { throw sevenTvError(data, status: http.statusCode) }
         guard let wire = try? CobaltJSON.decoder().decode(T.self, from: data) else {
             if let known = SevenTvRefusal.parse(data) { throw known }
@@ -146,7 +174,7 @@ extension HTTPCobaltClient: SevenTvClient {
 
     /// The routes' refusals as `SevenTvError`; any other code stays the generic `CobaltError.api` (an ended key still
     /// reaches `AuthSignal` through `apiError`).
-    private func sevenTvError(_ data: Data, status: Int) -> Error {
+    func sevenTvError(_ data: Data, status: Int) -> Error {
         if let known = SevenTvRefusal.parse(data) { return known }
         if status == 502 { return SevenTvError.unavailable }
         return apiError(data, status: status)

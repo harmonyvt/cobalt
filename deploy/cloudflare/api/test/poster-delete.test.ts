@@ -221,6 +221,10 @@ describe("a poster can not be deleted by hand, and nothing on a lifetime path or
                 // row names yet (media); the poster object is named only by the render until the record step files the row
                 "edit-render-core.ts:media.delete(",
                 "edit-render-core.ts:originals.delete(",
+                // section 71: an emote draft (`emote-drafts/<key id>/<id>.<ext>`, originals; replaced, deleted, expired), and the
+                // `emotes/<id>.<ext>` copy of a draft whose library row was not written; never a poster
+                "emote-draft.ts:bucket.delete(",
+                "emote-make.ts:originals.delete(",
                 "emotes.ts:media.delete(", // a saved emote whose library row was not written
                 // section 37.2: hiding a post deletes its videos' moving previews, only ever a media_loops r2_key (a .webp
                 // the preview job made, never a poster or a mirror)

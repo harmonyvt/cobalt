@@ -199,7 +199,7 @@ import {
     videoExt,
 } from "./lib.js";
 import { safetyStillsFromAnimatedWebp } from "./webp-anim.js";
-import { EMOTE_FIT_MAX_INPUT, fitEmote } from "./emote-fit.js";
+import { EMOTE_FIT_MAX_INPUT, VIDEO_MAX_SECONDS, VIDEO_MIN_SECONDS, fitEmote } from "./emote-fit.js";
 
 /** Sent on every answer (see `createServer`): the Durable Object's `features.gallery` follows it. */
 export const HELPER_CAPS_HEADER = "x-cobalt-helper";
@@ -1541,6 +1541,39 @@ export function createHelper(opts = {}) {
         if ((size !== null && !(Number.isInteger(size) && size >= 32 && size <= 1000)) || !(Number.isInteger(maxBytes) && maxBytes >= 1024)) {
             return failAndClose(req, res, 400, "error.webp.invalid_params");
         }
+        // section 71.3: stretch, format, quality, fps, video moment, bounce, frame
+        const q = url.searchParams;
+        const num = (/** @type {string} */ k) => (q.has(k) ? Number(q.get(k)) : null);
+        /** @type {{w: number, h: number} | null} */
+        let stretch = null;
+        if (q.has("stretch")) {
+            const v = String(q.get("stretch")).split(",").map(Number);
+            if (v.length !== 2 || v.some((n) => !(n >= 0.25 && n <= 4))) return failAndClose(req, res, 400, "error.webp.invalid_params");
+            stretch = { w: v[0], h: v[1] };
+        }
+        const format = q.get("format") ?? "webp";
+        const quality = num("quality");
+        const fps = num("fps");
+        const startRaw = num("start");
+        const endRaw = num("end");
+        const frame = num("frame");
+        const type = (q.get("type") ?? "").split(";")[0].trim().toLowerCase();
+        const video = type.startsWith("video/");
+        const bounce = q.get("bounce") === "1";
+        const start = startRaw ?? 0;
+        const end = endRaw ?? start + 3;
+        if (
+            !["webp", "gif", "png"].includes(format) ||
+            (quality !== null && !(Number.isInteger(quality) && quality >= 1 && quality <= 100)) ||
+            (fps !== null && !(Number.isInteger(fps) && fps >= 5 && fps <= 50)) ||
+            (startRaw !== null && !(startRaw >= 0 && startRaw <= 86400)) ||
+            (endRaw !== null && !(endRaw > 0 && endRaw <= 86400)) ||
+            (frame !== null && !(frame >= 0 && frame <= 86400)) ||
+            (type !== "" && !/^(image|video)\/[a-z0-9.+-]+$/.test(type)) ||
+            (video && !(end - start >= VIDEO_MIN_SECONDS - 1e-9 && end - start <= VIDEO_MAX_SECONDS + 1e-9))
+        ) {
+            return failAndClose(req, res, 400, "error.webp.invalid_params");
+        }
         if (busy()) return failAndClose(req, res, 429, "error.webp.busy");
         const declared = Number(req.headers["content-length"]);
         if (Number.isFinite(declared) && declared > EMOTE_FIT_MAX_INPUT) return failAndClose(req, res, 413, "error.studio.too_large");
@@ -1574,6 +1607,15 @@ export function createHelper(opts = {}) {
                 crop,
                 size,
                 maxBytes,
+                stretch,
+                format: /** @type {"webp" | "gif" | "png"} */ (format),
+                quality,
+                fps,
+                video,
+                start: startRaw,
+                end: endRaw,
+                bounce,
+                frame,
                 onChild: (/** @type {any} */ c) => {
                     ffmpegChild = c;
                 },
@@ -1595,12 +1637,15 @@ export function createHelper(opts = {}) {
         if (res.headersSent || res.destroyed) return;
         if (answer) {
             res.writeHead(200, {
-                "content-type": "image/webp",
+                "content-type": `image/${answer.format}`,
                 "content-length": answer.bytes.length,
                 "x-emote-width": String(answer.width),
                 "x-emote-height": String(answer.height),
                 "x-emote-frames": String(answer.frames),
                 "x-emote-quality": String(answer.quality),
+                "x-emote-format": answer.format,
+                "x-emote-duration": String(answer.durationMs),
+                "x-emote-over-cap": answer.overCap ? "1" : "0",
             });
             return res.end(answer.bytes);
         }

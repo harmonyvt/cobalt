@@ -18,11 +18,14 @@ public struct SevenTvUploadDraft: Sendable, Equatable {
     public var crop: ImageCropRect?
     /// The longest side in px (32...1000); nil lets the server pick (512 when it has to fit, else the file as it is).
     public var size: Int?
+    /// An emote editor draft (APP-API-CONTRACT 71.2) sent as it is, instead of `fileID`; crop and size are not sent with it.
+    public var draftID: String?
 
     public init(
         fileID: String, name: String, tags: [String] = [], zeroWidth: Bool = false, isPrivate: Bool = false,
-        setID: String? = nil, alias: String? = nil, crop: ImageCropRect? = nil, size: Int? = nil
+        setID: String? = nil, alias: String? = nil, crop: ImageCropRect? = nil, size: Int? = nil, draftID: String? = nil
     ) {
+        self.draftID = draftID
         self.fileID = fileID
         self.name = name
         self.tags = tags

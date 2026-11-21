@@ -49,6 +49,9 @@ struct SevenTvUploadPage: View {
     let tab: SevenTvTabController
 
     @Environment(\.openURL) private var openURL
+    /// "make an emote" (APP-API-CONTRACT 71): the next tap on a picture opens the emote editor on it instead of the upload sheet.
+    @State private var picking = false
+    @State private var emoting: EmoteEditorTarget?
 
     private var store: SevenTvStore { tab.store }
     private var library: LibraryModel { tab.model.library }
@@ -64,6 +67,7 @@ struct SevenTvUploadPage: View {
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(CobaltColor.caption)
                     .fixedSize(horizontal: false, vertical: true)
+                makeAnEmoteRow
                 grid(uploaded: uploaded)
                 ownedSection
             }
@@ -72,6 +76,7 @@ struct SevenTvUploadPage: View {
             .frame(maxWidth: Metrics.columnMax, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        .modifier(EmoteEditorPresenter(model: tab.model, target: $emoting))
         .refreshable {
             await library.refresh()
             await store.loadUploads()
@@ -87,6 +92,39 @@ struct SevenTvUploadPage: View {
         .task {
             await store.loadOwned()
             await store.watchOwned()
+        }
+    }
+
+    // MARK: make an emote
+
+    /// "make an emote": crop, squash, format and compress a library picture or clip before it goes to 7tv. It lights the grid
+    /// for one tap; the editor itself uploads (the made file goes as it is).
+    @ViewBuilder
+    private var makeAnEmoteRow: some View {
+        if tab.model.canMakeEmotes {
+            HStack(spacing: 10) {
+                Button(
+                    picking ? Copy.EmoteEditor.cancelPick : Copy.EmoteEditor.makeAnEmote,
+                    systemImage: picking ? Symbol.close : Symbol.EmoteEditor.make
+                ) { picking.toggle() }
+                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                if picking {
+                    Text(Copy.EmoteEditor.pickToMakeHint)
+                        .font(CobaltType.captionSmall)
+                        .foregroundStyle(CobaltColor.caption)
+                }
+                Spacer(minLength: 0)
+            }
+            .animation(Motion.rows, value: picking)
+        }
+    }
+
+    private func tap(_ picture: SevenTvLibraryPicture) {
+        if picking {
+            picking = false
+            emoting = EmoteEditorTarget(file: picture.file, title: picture.title)
+        } else {
+            tab.startUpload(picture.file, title: picture.title)
         }
     }
 
@@ -172,10 +210,8 @@ struct SevenTvUploadPage: View {
         } else {
             LazyVGrid(columns: columns, spacing: 10) {
                 ForEach(pictures) { picture in
-                    SevenTvLibraryTile(picture: picture, onSevenTv: uploaded.contains(picture.file.id)) {
-                        tab.startUpload(picture.file, title: picture.title)
-                    }
-                    .disabled(!store.canUpload)
+                    SevenTvLibraryTile(picture: picture, onSevenTv: uploaded.contains(picture.file.id)) { tap(picture) }
+                        .disabled(!store.canUpload && !picking)
                 }
             }
         }

@@ -34,6 +34,14 @@ public protocol SevenTvClient: Sendable {
     func uploadSevenTvEmote(_ draft: SevenTvUploadDraft) async throws -> SevenTvUploadResult
     /// `GET /7tv/emotes/<id>` (57.9): one emote; `pending` while 7TV is still processing a new upload.
     func sevenTvEmote(id: String) async throws -> SevenTvEmoteInfo
+    /// `POST /7tv/emotes/make` (71.1): the emote editor's made file, a draft that lives 24 hours; `replace` deletes the last one.
+    func makeEmoteDraft(_ request: EmoteMakeRequest) async throws -> EmoteDraft
+    /// `GET /7tv/drafts/<id>` (71.2): the draft's bytes (the route needs the key, so a picture view cannot load its URL).
+    func emoteDraftData(id: String) async throws -> Data
+    /// `DELETE /7tv/drafts/<id>` (71.2).
+    func deleteEmoteDraft(id: String) async throws
+    /// `POST /7tv/drafts/<id>/save {title?}` (71.2): a private library item made from the draft (the draft is kept).
+    func saveEmoteDraft(id: String, title: String?) async throws -> EmoteDraftSaved
     /// `GET /7tv/uploads`: the emotes uploaded through capystore (57.9), newest first, at most 100.
     func sevenTvUploads() async throws -> [SevenTvUploadedEmote]
     /// `GET /7tv/owned` (57.14): every emote the account owns (made here or on 7tv.app), newest first, at most 500, with the
@@ -66,12 +74,36 @@ enum SevenTvRoute {
     static func emotes(_ setID: String) -> String { "/7tv/sets/\(segment(setID))/emotes" }
     static func emote(_ setID: String, _ emoteID: String) -> String { "/7tv/sets/\(segment(setID))/emotes/\(segment(emoteID))" }
 
+    /// `POST /7tv/emotes/make` (71.1).
+    static let emoteMake = "/7tv/emotes/make"
+    static func draft(_ id: String) -> String { "/7tv/drafts/\(segment(id))" }
+    static func draftSave(_ id: String) -> String { "/7tv/drafts/\(segment(id))/save" }
+
+    /// The make body (71.1): a whole-picture crop, no stretch, a missing size, quality or fps, a false bounce are left out.
+    /// `crop` is `{x, y, w, h}` clamped, `stretch` `{w, h}` clamped to 0.25...4, `size` 32...1000, `quality` 1...100, `fps` 5...50.
+    static func emoteMakeBody(_ r: EmoteMakeRequest) -> [String: Any] {
+        var body: [String: Any] = ["file": r.fileID, "format": r.format.rawValue]
+        if let crop = r.crop?.clamped, !crop.isWhole { body["crop"] = ["x": crop.x, "y": crop.y, "w": crop.w, "h": crop.h] }
+        if let stretch = r.stretch?.clamped, !stretch.isNone { body["stretch"] = ["w": stretch.w, "h": stretch.h] }
+        if let size = SevenTvEmoteRule.clampSize(r.size) { body["size"] = size }
+        if let q = r.quality { body["quality"] = min(max(q, EmoteLimits.qualityRange.lowerBound), EmoteLimits.qualityRange.upperBound) }
+        if let fps = r.fps { body["fps"] = min(max(fps, EmoteLimits.fpsRange.lowerBound), EmoteLimits.fpsRange.upperBound) }
+        if let start = r.start { body["start"] = start }
+        if let end = r.end { body["end"] = end }
+        if r.bounce { body["bounce"] = true }
+        if let frame = r.frame { body["frame"] = frame }
+        if let replace = r.replace, !replace.isEmpty { body["replace"] = replace }
+        return body
+    }
+
     static func emoteInfo(_ emoteID: String) -> String { "/7tv/emotes/\(segment(emoteID))" }
 
     /// `POST /7tv/emotes`: empty tags, false toggles, a missing set or alias, and no crop or size are left out. `crop` is
     /// `{x, y, w, h}` (fractions, clamped into the picture; the whole picture is left out), `size` 32...1000.
     static func uploadBody(_ draft: SevenTvUploadDraft) -> [String: Any] {
-        var body: [String: Any] = ["file": draft.fileID, "name": draft.name]
+        // a draft of the emote editor (71.2) goes as it is: `draft` stands in for `file`, and no fit is asked for
+        var body: [String: Any] = ["name": draft.name]
+        if let draftID = draft.draftID, !draftID.isEmpty { body["draft"] = draftID } else { body["file"] = draft.fileID }
         let tags = SevenTvEmoteRule.cleanTags(draft.tags)
         if !tags.isEmpty { body["tags"] = tags }
         if draft.zeroWidth { body["zero_width"] = true }
@@ -80,10 +112,10 @@ enum SevenTvRoute {
             body["set_id"] = setID
             if let alias = draft.alias, !alias.isEmpty { body["alias"] = alias }
         }
-        if let crop = draft.crop?.clamped, !crop.isWhole {
+        if draft.draftID == nil, let crop = draft.crop?.clamped, !crop.isWhole {
             body["crop"] = ["x": crop.x, "y": crop.y, "w": crop.w, "h": crop.h]
         }
-        if let size = SevenTvEmoteRule.clampSize(draft.size) { body["size"] = size }
+        if draft.draftID == nil, let size = SevenTvEmoteRule.clampSize(draft.size) { body["size"] = size }
         return body
     }
 

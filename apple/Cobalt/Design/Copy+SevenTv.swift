@@ -422,6 +422,8 @@ extension Copy {
             case .tooLarge: return "7tv only keeps shapes from 1:32 to 3:1 · pick a crop box"
             case .fitFailed(let words): return words.map { "couldn't fit it for 7tv · \($0)" } ?? "couldn't fit it for 7tv · try again"
             case .busy: return "the server is fitting another picture · try again in a minute"
+            case .draftNotFound: return "that emote draft is gone · it is made again on the next change"
+            case .bad(let words): return words.map { "that setting didn't work · \($0)" } ?? "that setting didn't work"
             case .off: return "7tv isn't on this server"
             case .offline: return "can't reach the server"
             case .other: return Copy.actionFailed

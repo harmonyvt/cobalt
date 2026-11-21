@@ -303,6 +303,169 @@
         }
       }
     },
+    "/7tv/drafts/{id}": {
+      "delete": {
+        "operationId": "seventv_http.draft_delete",
+        "summary": "Delete an emote draft (DELETE /7tv/drafts/<id>).",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "deleted": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "deleted"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      },
+      "get": {
+        "operationId": "seventv_http.draft",
+        "summary": "An emote draft's file (GET /7tv/drafts/<id>), private to the key that made it.",
+        "tags": [
+          "seventv_http"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/drafts/{id}/save": {
+      "post": {
+        "operationId": "seventv_http.draft_save",
+        "summary": "Save an emote draft as a private library item; the draft is kept (POST /7tv/drafts/<id>/save).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 400
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Za-z]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SevenTvDraftSaved"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/7tv/emotes": {
       "post": {
         "operationId": "seventv_http.upload",
@@ -320,6 +483,18 @@
                   "file": {
                     "type": "string",
                     "maxLength": 64
+                  },
+                  "draft": {
+                    "description": "a draft id of this key (POST /7tv/emotes/make) instead of file: its bytes go as they are",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "name": {
                     "type": "string",
@@ -416,7 +591,6 @@
                   }
                 },
                 "required": [
-                  "file",
                   "name"
                 ],
                 "additionalProperties": {}
@@ -431,6 +605,235 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SevenTvUpload"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
+    "/7tv/emotes/make": {
+      "post": {
+        "operationId": "seventv_http.make",
+        "summary": "Make a draft emote from a library picture or video: crop, squash, format (webp, gif, png), quality, frame rate, video moment, bounce. The draft lives 24 h (POST /7tv/emotes/make).",
+        "tags": [
+          "seventv_http"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "library file id, public id or post id: a picture or a video"
+                  },
+                  "crop": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "y": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "w": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1
+                          },
+                          "h": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y",
+                          "w",
+                          "h"
+                        ],
+                        "additionalProperties": false,
+                        "description": "crop box before uploading, fractions of the picture: left, top, width, height (look at it with a grid first; never guess)"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "stretch": {
+                    "description": "squash or stretch after the crop, each way on its own (1 = unchanged)",
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "w": {
+                            "type": "number",
+                            "minimum": 0.25,
+                            "maximum": 4
+                          },
+                          "h": {
+                            "type": "number",
+                            "minimum": 0.25,
+                            "maximum": 4
+                          }
+                        },
+                        "required": [
+                          "w",
+                          "h"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "size": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 32,
+                        "maximum": 1000,
+                        "description": "longest side in px after fitting (default 512 when it has to shrink; never enlarged)"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "format": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "webp",
+                          "gif",
+                          "png"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "quality": {
+                    "description": "one encode at this quality; absent = the automatic ladder",
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "fps": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 5,
+                        "maximum": 50
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "start": {
+                    "description": "video only, seconds",
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "end": {
+                    "description": "video only, seconds; end - start is 0.2 to 10",
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "bounce": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "frame": {
+                    "description": "seconds into the source: the still for png",
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "replace": {
+                    "description": "a draft id of this key to delete first",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SevenTvEmoteDraft"
                 }
               }
             }
@@ -11998,6 +12401,99 @@
           "you",
           "active_set_id",
           "can"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvDraftSaved": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "success"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "item_id",
+          "file_id"
+        ],
+        "additionalProperties": false
+      },
+      "SevenTvEmoteDraft": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "success"
+          },
+          "draft_id": {
+            "type": "string",
+            "description": "22 url-safe characters; the draft lives 24 h"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "webp",
+              "gif",
+              "png"
+            ]
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "frames": {
+            "type": "integer"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "description": "one loop, bounce included"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "quality": {
+            "type": "integer",
+            "description": "the quality used (a gif: its palette as a share of 256 colours; a png: 100)"
+          },
+          "over_cap": {
+            "type": "boolean",
+            "description": "a fixed quality came out over 7 MiB less 64 KiB: the file is made, the app shows it amber"
+          },
+          "url": {
+            "type": "string",
+            "description": "/7tv/drafts/<draft_id> on this host"
+          },
+          "expires_at": {
+            "type": "integer",
+            "description": "ms"
+          }
+        },
+        "required": [
+          "status",
+          "draft_id",
+          "format",
+          "content_type",
+          "width",
+          "height",
+          "frames",
+          "duration_ms",
+          "bytes",
+          "quality",
+          "over_cap",
+          "url",
+          "expires_at"
         ],
         "additionalProperties": false
       },

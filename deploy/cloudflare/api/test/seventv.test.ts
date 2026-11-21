@@ -13,6 +13,7 @@ const API = "https://api.capybaraharmony.com";
 const WEB = "https://cobalt.capybaraharmony.com";
 const INTERNAL = "9d3a1c6e-2f4b-4c8d-8e7a-5b1f0a2c3d4e";
 const CLIENT = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
+const OTHER = "7c1d9e4a-0a3b-4f6e-8b21-5e9d2f3a4b60";
 
 const ME_ID = "01GZ0000000000000000000001";
 const LIA = "01GZ0000000000000000000002";
@@ -689,5 +690,203 @@ describe("many adds, set copies and permissions (63.4, 63.5)", () => {
         expect(one.channels[0].can.create_sets).toBe(false);
         expect(one.channels[0].blockers[0]).toContain("your limit is 10");
         expect((await sevenTvPermissions(deps(), id(12345))).status).toBe(404);
+    });
+});
+
+describe("the emote editor: drafts (71)", () => {
+    const DAY = 24 * 3600_000;
+    const put = (id: string, type: string, bytes = 100, bucket = "media") => {
+        db.raw
+            .prepare("INSERT INTO media_items (id, kind, source, bucket, r2_key, name, content_type, bytes, created_at, post_key) VALUES (?, 'public', 'webp', ?, ?, ?, ?, ?, ?, ?)")
+            .run(id, bucket, `${id}.bin`, id, type, bytes, 1, `post-${id}`);
+        (bucket === "media" ? (env.MEDIA as any) : (env.ORIGINALS as any)).objects.set(`${id}.bin`, { bytes, meta: {}, contentType: type, data: new Uint8Array(bytes), viaStream: false });
+    };
+    const headers = (o: Record<string, string>) => ({ "content-type": o["x-emote-format"] ? `image/${o["x-emote-format"]}` : "image/webp", ...o });
+    const make = (body: object, key = CLIENT) => send("/7tv/emotes/make", { method: "POST", body: JSON.stringify(body) }, key).then(json);
+    const originals = () => (env.ORIGINALS as any).objects as Map<string, { bytes: Uint8Array; contentType: string; meta: Record<string, string> }>;
+    const drafts = () => [...originals().keys()].filter((k) => k.startsWith("emote-drafts/"));
+    const code = (r: { body: any }) => r.body.error?.code;
+
+    beforeEach(() => {
+        fitAnswer = () =>
+            new Response(new Uint8Array(3000), {
+                headers: headers({ "x-emote-format": "gif", "x-emote-width": "200", "x-emote-height": "150", "x-emote-frames": "18", "x-emote-quality": "50", "x-emote-duration": "3600", "x-emote-over-cap": "0" }),
+            });
+    });
+
+    it("makes a draft: the fit gets every field, R2 holds it under the key, the answer is the contract's", async () => {
+        put("file-gif", "image/gif", 5000);
+        const r = await make({ file: "file-gif", crop: { x: 0.1, y: 0, w: 0.5, h: 1 }, stretch: { w: 0.5, h: 1 }, size: 200, format: "gif", quality: 50, fps: 10, bounce: true, frame: 1.5 });
+        expect(r.status).toBe(201);
+        const id = r.body.draft_id as string;
+        expect(id).toMatch(/^[0-9A-Za-z]{22}$/);
+        expect(r.body).toEqual({
+            status: "success", draft_id: id, format: "gif", content_type: "image/gif", width: 200, height: 150, frames: 18, duration_ms: 3600,
+            bytes: 3000, quality: 50, over_cap: false, url: `/7tv/drafts/${id}`, expires_at: clock + DAY,
+        });
+        const q = new URL(fits[0]!.url).searchParams;
+        expect(Object.fromEntries(q)).toEqual({
+            max_bytes: String(7 * 1024 * 1024 - 64 * 1024), type: "image/gif", crop: "0.1,0,0.5,1", stretch: "0.5,1", size: "200", format: "gif", quality: "50", fps: "10", bounce: "1", frame: "1.5",
+        });
+        expect(fits[0]!.key).toBe(INTERNAL);
+        expect(drafts()).toEqual([`emote-drafts/key-1/${id}.gif`]);
+        expect(originals().get(drafts()[0]!)).toMatchObject({ contentType: "image/gif", meta: { created: String(clock), width: "200", frames: "18", over_cap: "0" } });
+        expect(originals().get(drafts()[0]!)!.bytes).toHaveLength(3000);
+        // without a 7TV account linked: nothing was needed
+        expect(uploads).toHaveLength(0);
+    });
+
+    it("sends only what was asked, and a video's moment with its type", async () => {
+        put("file-png", "image/png");
+        await make({ file: "file-png" });
+        expect(Object.fromEntries(new URL(fits[0]!.url).searchParams)).toEqual({ max_bytes: String(7 * 1024 * 1024 - 64 * 1024), type: "image/png" });
+        put("clip", "video/mp4", 2000);
+        expect((await make({ file: "clip" })).status).toBe(201);
+        expect(Object.fromEntries(new URL(fits[1]!.url).searchParams)).toMatchObject({ type: "video/mp4", start: "0", end: "3" });
+        expect((await make({ file: "clip", start: 4, end: 6.5, fps: 25, format: "png", frame: 5 })).status).toBe(201);
+        expect(Object.fromEntries(new URL(fits[2]!.url).searchParams)).toMatchObject({ start: "4", end: "6.5", fps: "25", format: "png", frame: "5" });
+        expect((await make({ file: "clip", start: 2 })).status).toBe(201);
+        expect(new URL(fits[3]!.url).searchParams.get("end")).toBe("5");
+        // a picture ignores start and end
+        expect((await make({ file: "file-png", start: 1, end: 1.1 })).status).toBe(201);
+        expect(new URL(fits[4]!.url).searchParams.has("start")).toBe(false);
+    });
+
+    it("says over_cap when a fixed quality came out too big", async () => {
+        put("file-png", "image/png");
+        fitAnswer = () => new Response(new Uint8Array(10), { headers: headers({ "x-emote-format": "webp", "x-emote-width": "512", "x-emote-height": "512", "x-emote-frames": "3", "x-emote-quality": "90", "x-emote-duration": "300", "x-emote-over-cap": "1" }) });
+        const r = await make({ file: "file-png", quality: 90 });
+        expect(r.body).toMatchObject({ status: "success", format: "webp", content_type: "image/webp", over_cap: true, quality: 90 });
+    });
+
+    it("refuses bad fields, unknown and wrong files, and passes the fit's refusals on", async () => {
+        put("file-png", "image/png");
+        put("clip", "video/webm");
+        put("pic", "image/avif");
+        put("doc", "application/pdf");
+        put("huge", "image/gif", 70 * 1024 * 1024);
+        for (const bad of [
+            { stretch: { w: 5, h: 1 } }, { stretch: { w: 1 } }, { size: 31 }, { size: 1001 }, { format: "avif" }, { quality: 0 }, { quality: 101 }, { fps: 4 }, { fps: 51 },
+            { start: -1 }, { frame: -2 }, { bounce: "yes" }, { replace: "short" }, { crop: { x: 0.5, y: 0, w: 0.6, h: 1 } }, { file: "" },
+        ]) {
+            const r = await make({ file: "file-png", ...bad });
+            expect([JSON.stringify(bad), r.status, code(r)]).toEqual([JSON.stringify(bad), 400, "error.seventv.bad"]);
+        }
+        expect(code(await make({ file: "clip", start: 1, end: 1.1 }))).toBe("error.seventv.bad");
+        expect(code(await make({ file: "clip", start: 0, end: 10.5 }))).toBe("error.seventv.bad");
+        expect(code(await make({ file: "nope" }))).toBe("error.seventv.file_not_found");
+        expect((await make({ file: "pic" })).status).toBe(415);
+        expect(code(await make({ file: "doc" }))).toBe("error.seventv.file_type");
+        expect((await make({ file: "huge" })).status).toBe(413);
+        expect(fits).toHaveLength(0);
+        const err = (status: number, c: string, detail?: string) => () => Response.json({ status: "error", error: { code: c, ...(detail ? { detail } : {}) } }, { status });
+        fitAnswer = err(400, "error.seventv.fit_shape", "too wide");
+        expect(await make({ file: "file-png" })).toMatchObject({ status: 400, body: { error: { code: "error.seventv.too_large" }, message: "too wide" } });
+        fitAnswer = err(429, "error.webp.busy");
+        expect((await make({ file: "file-png" })).status).toBe(429);
+        fitAnswer = err(422, "error.seventv.fit_failed", "no picture at that moment of the video");
+        expect(await make({ file: "clip" })).toMatchObject({ status: 422, body: { error: { code: "error.seventv.fit_failed" }, message: "no picture at that moment of the video" } });
+        fitAnswer = err(422, "error.seventv.fit_too_big");
+        expect((await make({ file: "file-png" })).status).toBe(413);
+        expect(drafts()).toEqual([]);
+    });
+
+    it("serves the file to its own key only, deletes it, and lets it expire after 24 h", async () => {
+        put("file-png", "image/png");
+        const a = (await make({ file: "file-png" })).body.draft_id as string;
+        const got = await send(`/7tv/drafts/${a}`, { headers: { origin: WEB } });
+        expect(got.status).toBe(200);
+        expect(got.headers.get("content-type")).toBe("image/gif");
+        expect(got.headers.get("cache-control")).toBe("private, max-age=3600");
+        expect(got.headers.get("access-control-allow-origin")).toBe(WEB);
+        expect((await got.arrayBuffer()).byteLength).toBe(3000);
+        // another key sees nothing
+        db.raw.prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)").run("key-2", "other", await hashKey(OTHER), "other-ke", 1);
+        const other = await send(`/7tv/drafts/${a}`, {}, OTHER);
+        expect(other.status).toBe(404);
+        expect(((await other.json()) as any).error.code).toBe("error.seventv.draft_not_found");
+        expect(code(await json(await send(`/7tv/drafts/${a}`, { method: "DELETE" }, OTHER)))).toBe("error.seventv.draft_not_found");
+        expect(drafts()).toHaveLength(1);
+        // expiry is checked when it is read
+        clock += DAY - 1;
+        expect((await send(`/7tv/drafts/${a}`)).status).toBe(200);
+        clock += 1;
+        expect((await send(`/7tv/drafts/${a}`)).status).toBe(404);
+        expect(drafts()).toEqual([]);
+        // delete
+        const b = (await make({ file: "file-png" })).body.draft_id as string;
+        expect(await json(await send(`/7tv/drafts/${b}`, { method: "DELETE" }))).toEqual({ status: 200, body: { status: "success", deleted: true } });
+        expect((await send(`/7tv/drafts/${b}`)).status).toBe(404);
+        expect(code(await json(await send(`/7tv/drafts/${b}`, { method: "DELETE" })))).toBe("error.seventv.draft_not_found");
+        expect((await send("/7tv/drafts/not-an-id")).status).toBe(404);
+    });
+
+    it("replace deletes the last draft first, and only the key's own", async () => {
+        put("file-png", "image/png");
+        const a = (await make({ file: "file-png" })).body.draft_id as string;
+        const b = (await make({ file: "file-png", replace: a })).body.draft_id as string;
+        expect(drafts()).toEqual([`emote-drafts/key-1/${b}.gif`]);
+        // a replace naming a missing or foreign draft is not an error
+        expect((await make({ file: "file-png", replace: "A".repeat(22) })).status).toBe(201);
+        expect(drafts()).toHaveLength(2);
+    });
+
+    it("saves a draft as a private library item (source emote) and keeps the draft", async () => {
+        put("file-png", "image/png");
+        const id = (await make({ file: "file-png" })).body.draft_id as string;
+        const r = await json(await send(`/7tv/drafts/${id}/save`, { method: "POST", body: JSON.stringify({}) }));
+        expect(r.status).toBe(201);
+        expect(r.body).toMatchObject({ status: "success" });
+        expect(r.body.item_id).toBe(r.body.file_id);
+        const row = db.raw.prepare("SELECT * FROM media_items WHERE id = ?").get(r.body.file_id) as any;
+        expect(row).toMatchObject({ source: "emote", kind: "private", bucket: "originals", content_type: "image/gif", bytes: 3000, width: 200, height: 150, key_id: "key-1", name: "emote.gif", visibility: "private" });
+        expect(originals().get(row.r2_key)!.bytes).toHaveLength(3000);
+        expect(drafts()).toHaveLength(1);
+        const titled = await json(await send(`/7tv/drafts/${id}/save`, { method: "POST", body: JSON.stringify({ title: "lia dance" }) }));
+        expect((db.raw.prepare("SELECT name FROM media_items WHERE id = ?").get(titled.body.file_id) as any).name).toBe("lia dance.gif");
+        expect((db.raw.prepare("SELECT title FROM media_titles WHERE post_key = ?").get(titled.body.item_id) as any)?.title).toBe("lia dance");
+        expect((await send(`/7tv/drafts/${"B".repeat(22)}/save`, { method: "POST", body: "{}" })).status).toBe(404);
+    });
+
+    describe("uploading a draft (71.2)", () => {
+        beforeEach(async () => {
+            await link();
+            calls = [];
+            put("file-png", "image/png");
+        });
+
+        it("sends the draft's bytes as they are, no fit, and remembers draft:<id>", async () => {
+            const id = (await make({ file: "file-png" })).body.draft_id as string;
+            fits.length = 0;
+            answer = () => ({ body: { data: { emoteSets: { emoteSet: { addEmote: { id: SET_MAIN } } } } } });
+            const r = await json(await send("/7tv/emotes", { method: "POST", body: JSON.stringify({ draft: id, name: "liaDance", set_id: SET_MAIN }) }));
+            expect(r).toEqual({
+                status: 201,
+                body: { status: "success", emote_id: "01JUP0000000000000000000AB", name: "liaDance", file_id: null, page_url: "https://7tv.app/emotes/01JUP0000000000000000000AB", pending: true, fitted: null, added: { set_id: SET_MAIN, alias: null } },
+            });
+            expect(uploads).toEqual([{ auth: `Bearer ${TOKEN}`, metadata: { name: "liaDance", tags: [], default_zero_width: false, private: false }, type: "image/gif", size: 3000 }]);
+            expect(fits).toHaveLength(0);
+            expect((await json(await send("/7tv/uploads"))).body.uploads).toEqual([
+                { file_id: `draft:${id}`, emote_id: "01JUP0000000000000000000AB", name: "liaDance", set_id: SET_MAIN, created_at: clock },
+            ]);
+        });
+
+        it("refuses a missing, foreign or expired draft, a draft too big for 7TV, and draft with file, crop or size", async () => {
+            const id = (await make({ file: "file-png" })).body.draft_id as string;
+            const up = async (b: object) => json(await send("/7tv/emotes", { method: "POST", body: JSON.stringify({ name: "a", ...b }) }));
+            expect(code(await up({ draft: "C".repeat(22) }))).toBe("error.seventv.draft_not_found");
+            expect(code(await up({ draft: id, file: "file-png" }))).toBe("error.seventv.bad");
+            expect(code(await up({ draft: id, size: 128 }))).toBe("error.seventv.bad");
+            expect(code(await up({ draft: id, crop: { x: 0, y: 0, w: 1, h: 1 } }))).toBe("error.seventv.bad");
+            expect(code(await up({ draft: "short" }))).toBe("error.seventv.bad");
+            expect(code(await up({}))).toBe("error.seventv.bad");
+            // over 7 MiB less 64 KiB (fixed quality came out over the cap)
+            originals().get(drafts()[0]!)!.bytes = new Uint8Array(7 * 1024 * 1024);
+            expect((await up({ draft: id })).status).toBe(413);
+            expect(code(await up({ draft: id }))).toBe("error.seventv.too_big");
+            clock += DAY;
+            expect(code(await up({ draft: id }))).toBe("error.seventv.draft_not_found");
+            expect(uploads).toHaveLength(0);
+        });
     });
 });

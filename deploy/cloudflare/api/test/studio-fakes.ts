@@ -70,6 +70,7 @@ export class MemoryOriginals implements OriginalsBucket {
             httpMetadata: { contentType: o.contentType },
             httpEtag: etagOf(key, o.bytes.length),
             uploaded: UPLOADED,
+            customMetadata: o.meta,
         };
     }
     heads: string[] = [];
