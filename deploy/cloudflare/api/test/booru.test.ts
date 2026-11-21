@@ -189,3 +189,14 @@ describe("filterRaw (POST /booru/filter)", () => {
         expect(filterRaw(settings({ level: "q" }), { posts: raw, level: "g" }).posts.map((p) => p.id)).toEqual([1]);
     });
 });
+
+describe("PUT /booru/settings input", () => {
+    it("takes one theme at a time, and refuses unknown themes and modes", async () => {
+        const { SettingsPatch } = await import("../src/registry/ops/booru");
+        expect(SettingsPatch.safeParse({ themes: { violence: "blur" } }).success).toBe(true);
+        expect(SettingsPatch.safeParse({ level: "s", themes: { violence: "hide", horror: "hide" } }).success).toBe(true);
+        expect(SettingsPatch.safeParse({ themes: { nope: "blur" } }).success).toBe(false);
+        expect(SettingsPatch.safeParse({ themes: { violence: "maybe" } }).success).toBe(false);
+        expect(SettingsPatch.safeParse({ level: "e" }).success).toBe(false);
+    });
+});

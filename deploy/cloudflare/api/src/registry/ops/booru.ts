@@ -87,9 +87,10 @@ const SearchQuery = z.object({
     shape: z.enum(["tall", "square", "wide"]).optional(),
 });
 
-const SettingsPatch = z.object({
+export const SettingsPatch = z.object({
     level: Level.optional(),
-    themes: z.record(z.enum(ThemeIds), Mode).optional(),
+    // partialRecord: zod 4's record with enum keys requires every key, which refused every one-theme change (live 400s)
+    themes: z.partialRecord(z.enum(ThemeIds), Mode).optional(),
     blacklist: z.string().max(BLACKLIST_MAX_CHARS).optional(),
 });
 

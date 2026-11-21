@@ -119,13 +119,13 @@ export async function readSettings(db: D1Database, keyId: string): Promise<Booru
     };
 }
 
-export type SettingsPatch = { level?: BooruLevel; themes?: Record<string, ThemeMode>; blacklist?: string };
+export type SettingsPatch = { level?: BooruLevel; themes?: Partial<Record<string, ThemeMode>>; blacklist?: string };
 
 export async function writeSettings(db: D1Database, keyId: string, patch: SettingsPatch, now: number): Promise<BooruSettings> {
     const cur = await readSettings(db, keyId);
     const themes = { ...cur.themes };
     for (const [id, mode] of Object.entries(patch.themes ?? {})) {
-        if (THEMES.some((t) => t.id === id)) themes[id] = mode;
+        if (mode && THEMES.some((t) => t.id === id)) themes[id] = mode;
     }
     const next: BooruSettings = {
         level: patch.level ?? cur.level,

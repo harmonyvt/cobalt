@@ -3027,15 +3027,7 @@
                         "blur",
                         "hide"
                       ]
-                    },
-                    "required": [
-                      "revealing",
-                      "suggestive",
-                      "partial",
-                      "nudity",
-                      "violence",
-                      "horror"
-                    ]
+                    }
                   },
                   "blacklist": {
                     "type": "string",
