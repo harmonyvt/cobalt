@@ -19,6 +19,9 @@ struct LibraryScreen: View {
     @State private var controller: LibraryController
     #if os(iOS)
     @Environment(\.hingeEdge) private var hingeEdge
+    /// The library's own width: in a spread it is one column, and the shell's tier for it did not always come back
+    /// to the window's when the pane closed (a half-width bar, no "…", at full width).
+    @State private var ownWidth: CGFloat = 0
     #endif
 
     init(model: AppModel, tier: Tier) {
@@ -27,13 +30,18 @@ struct LibraryScreen: View {
         _controller = State(initialValue: LibraryController(model: model))
     }
 
+    #if os(iOS)
+    private var shownTier: Tier { ownWidth > 0 ? Tier(width: ownWidth) : tier }
+    #endif
+
     var body: some View {
         Group {
             #if os(iOS)
             // Always its own stack (the shell adds none), so the tier never changes this screen's identity.
-            NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
+            NavigationStack { LibraryContent(model: model, tier: shownTier, controller: controller) }
                 // rebuilt when the zoom back from a video leaves the grid out of the stack (LibraryController.checkStackSoon)
                 .id(controller.stackID)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { ownWidth = $0 }
                 .onChange(of: hingeEdge) { was, now in if was == .trailing, now == nil { controller.paneClosed() } }
             #else
             if tier == .compact {
