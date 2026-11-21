@@ -195,7 +195,7 @@ final class TwitchPlayerHost {
             try? await Task.sleep(for: .seconds(6))
             guard let self, !Task.isCancelled else { return }
             if self.isBehind {
-                self.webView.evaluateJavaScript("window.cobaltRebuild && window.cobaltRebuild()")
+                self.webView.evaluateJavaScript("window.cobaltRebuild && window.cobaltRebuild()", completionHandler: nil)
                 try? await Task.sleep(for: .seconds(6))
                 guard !Task.isCancelled else { return }
                 // still behind after a reload: this is as close as the stream gets now, so it becomes the new best
