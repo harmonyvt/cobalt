@@ -1,4 +1,6 @@
+import CoreGraphics
 import Foundation
+import ImageIO
 import Synchronization
 import Testing
 import UniformTypeIdentifiers
@@ -230,11 +232,14 @@ private func client(key: String? = key) -> HTTPCobaltClient { HTTPCobaltClient(b
         #expect(await ShareInbox.loadLinkOnly([item([], text: "https://example.com/a")]) == .link(URL(string: "https://example.com/a")!))
     }
 
-    @Test func aLinkWinsOverAMovieAndAMovieAloneNeedsTheSheet() async {
+    @Test func aLinkWinsOverAMovieAndAMovieAloneUploads() async {
         let movie = NSItemProvider(item: URL(fileURLWithPath: "/tmp/clip.mov") as NSURL, typeIdentifier: UTType.movie.identifier)
         let url = NSItemProvider(item: URL(string: "https://x.com/i/status/1")! as NSURL, typeIdentifier: UTType.url.identifier)
         #expect(await ShareInbox.loadLinkOnly([item([movie, url])]) == .link(URL(string: "https://x.com/i/status/1")!))
-        #expect(await ShareInbox.loadLinkOnly([item([movie])]) == .file)
+        #expect(await ShareInbox.loadLinkOnly([item([movie])]) == .media)
+        let photo = NSItemProvider(item: URL(fileURLWithPath: "/tmp/IMG_0412.heic") as NSURL, typeIdentifier: UTType.heic.identifier)
+        #expect(await ShareInbox.loadLinkOnly([item([photo])]) == .media)
+        #expect(await ShareInbox.loadLinkOnly([item([photo, url])]) == .link(URL(string: "https://x.com/i/status/1")!))
     }
 
     @Test func nothingUsableIsNone() async {
@@ -455,5 +460,172 @@ struct InstantShareAppTests {
         #expect(Notifications.instantFailedReason(status: 429) == "the server was busy")
         // the test runner has no notification center: nothing here may reach it
         #expect(!Notifications.runsInApp)
+    }
+}
+
+// MARK: - Photos and videos from the share sheet (CONTRACT-SHARE-QUICK.md section 10)
+
+@Suite struct InstantUploadTests {
+    private func item(_ providers: [NSItemProvider]) -> NSExtensionItem {
+        let item = NSExtensionItem()
+        item.attachments = providers
+        return item
+    }
+
+    /// A tiny picture written by ImageIO in `type` (PNG, TIFF...).
+    private func picture(_ type: UTType, in dir: URL, name: String) throws -> URL {
+        let url = dir.appendingPathComponent(name)
+        let ctx = try #require(CGContext(data: nil, width: 8, height: 6, bitsPerComponent: 8, bytesPerRow: 0,
+                                         space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.setFillColor(red: 1, green: 0.4, blue: 0.7, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: 8, height: 6))
+        let image = try #require(ctx.makeImage())
+        let out = try #require(CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(out, image, nil)
+        #expect(CGImageDestinationFinalize(out))
+        return url
+    }
+
+    @Test func theLabelNamesTheCopyAndTheFileAndRefusesAnythingElse() {
+        let label = UploadLabel.make(stored: "upload-abc-0.heic", name: "IMG_0412.heic")
+        #expect(label == "upload:upload-abc-0.heic/IMG_0412.heic")
+        #expect(UploadLabel.parse(label)?.stored == "upload-abc-0.heic" && UploadLabel.parse(label)?.name == "IMG_0412.heic")
+        #expect(UploadLabel.parse("upload:upload-abc-0.mov/a/b.mov")?.name == "a/b.mov", "only the first slash splits")
+        #expect(UploadLabel.parse("https://www.instagram.com/p/Dc2QA4ng-US/") == nil)
+        #expect(UploadLabel.parse("upload:../secrets.json/x") == nil)
+        #expect(UploadLabel.parse("upload:someone-else.json/x") == nil)
+        #expect(UploadLabel.parse("upload:upload-..x/x") == nil)
+    }
+
+    @Test func theUploadSessionIsASaveSessionWithTheJobInItsName() {
+        let job = UUID()
+        let id = BackgroundSessionID.uploadSave(job: job)
+        #expect(BackgroundSessionID.isSave(id) && BackgroundSessionID.isUploadSave(id))
+        #expect(BackgroundSessionID.saveJob(id) == job && BackgroundSessionID.saveJob(BackgroundSessionID.save(job: job)) == job)
+        #expect(!BackgroundSessionID.isUploadSave(BackgroundSessionID.save(job: job)))
+        #expect(BackgroundSessionID.saveJob(BackgroundSessionID.upload) == nil)
+    }
+
+    @Test func theRequestIsAQueuedUploadWithTheFilesType() throws {
+        let request = try client().shareUploadRequest(name: "IMG 0412.heic", contentType: "image/heic", public: true)
+        #expect(request.httpMethod == "PUT")
+        #expect(request.url?.absoluteString == "https://api.capybaraharmony.com/studio/upload?name=IMG%200412.heic&public=1&queue=1")
+        #expect(request.value(forHTTPHeaderField: "Content-Type") == "image/heic")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Api-Key \(key)")
+        let quiet = try client().shareUploadRequest(name: "a.mov", contentType: "video/quicktime", public: false)
+        #expect(quiet.url?.query == "name=a.mov&queue=1")
+        #expect(throws: CobaltError.noAPIKey) { try client(key: nil).shareUploadRequest(name: "a.mov", contentType: "video/quicktime", public: true) }
+    }
+
+    @Test func picturesAndSeveralFilesUploadEvenWithTheFullSheetOneVideoKeepsIt() {
+        let movie = NSItemProvider(item: URL(fileURLWithPath: "/tmp/clip.mov") as NSURL, typeIdentifier: UTType.quickTimeMovie.identifier)
+        let movie2 = NSItemProvider(item: URL(fileURLWithPath: "/tmp/clip2.mov") as NSURL, typeIdentifier: UTType.quickTimeMovie.identifier)
+        let photo = NSItemProvider(item: URL(fileURLWithPath: "/tmp/a.heic") as NSURL, typeIdentifier: UTType.heic.identifier)
+        let url = NSItemProvider(item: URL(string: "https://x.com/i/status/1")! as NSURL, typeIdentifier: UTType.url.identifier)
+        #expect(!InstantShare.uploadsEvenWithFullSheet([item([movie])]))
+        #expect(!InstantShare.uploadsEvenWithFullSheet([item([url])]))
+        #expect(InstantShare.uploadsEvenWithFullSheet([item([photo])]))
+        #expect(InstantShare.uploadsEvenWithFullSheet([item([movie, movie2])]))
+    }
+
+    @Test func aPngIsCopiedAsItIsUnderItsOwnName() async throws {
+        let source = try makeTempDirectory(), dir = try makeTempDirectory()
+        let png = try picture(.png, in: source, name: "Screenshot 2026-11-21.png")
+        let provider = try #require(NSItemProvider(contentsOf: png))
+        provider.suggestedName = "Screenshot 2026-11-21"
+        let job = UUID()
+        let copied = await ShareInbox.copyMedia([provider], into: dir, job: job)
+        #expect(copied.unsupported == 0)
+        let file = try #require(copied.files.first)
+        #expect(file.name == "Screenshot 2026-11-21.png" && file.contentType == "image/png" && file.bytes > 0)
+        #expect(file.file.deletingLastPathComponent().standardizedFileURL == dir.standardizedFileURL)
+        #expect(file.file.lastPathComponent == "upload-\(job.uuidString.lowercased())-0.png")
+        #expect(InstantShare.uploadSummary(copied.files) == "Screenshot 2026-11-21.png")
+    }
+
+    @Test func aTiffBecomesAJpegAndJunkIsSkipped() async throws {
+        let source = try makeTempDirectory(), dir = try makeTempDirectory()
+        let tiff = try picture(.tiff, in: source, name: "scan.tiff")
+        let provider = try #require(NSItemProvider(contentsOf: tiff))
+        let junk = NSItemProvider(object: "no file here" as NSString)
+        let copied = await ShareInbox.copyMedia([provider, junk], into: dir, job: UUID())
+        #expect(copied.unsupported == 1)
+        let file = try #require(copied.files.first)
+        #expect(file.contentType == "image/jpeg" && file.name.hasSuffix(".jpg") && file.file.pathExtension == "jpg")
+        #expect(MIME.sniff(try Data(contentsOf: file.file))?.contentType == "image/jpeg")
+        let left = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        #expect(left == [file.file.lastPathComponent], "the tiff copy is gone")
+    }
+
+    @Test func everyFileIsOneTaskOnOneUploadSession() async throws {
+        let dir = try makeTempDirectory()
+        let a = dir.appendingPathComponent("upload-j-0.heic"), b = dir.appendingPathComponent("upload-j-1.mov")
+        try Data([1, 2, 3]).write(to: a)
+        try Data([4, 5]).write(to: b)
+        let files = [
+            SharedUpload(file: a, name: "IMG_0412.heic", contentType: "image/heic", bytes: 3),
+            SharedUpload(file: b, name: "IMG_0413.mov", contentType: "video/quicktime", bytes: 2),
+        ]
+        let transport = FakeSaveTransport(background: true)
+        let job = UUID()
+        let result = await InstantUploadEngine(transport: transport).enqueue(files, client: client(), job: job)
+        #expect(result == .saved)
+        #expect(transport.sessions.count == 1 && transport.sessions.first?.identifier == BackgroundSessionID.uploadSave(job: job))
+        let uploads = transport.uploads.sorted { $0.task < $1.task }
+        #expect(uploads.map(\.label) == ["upload:upload-j-0.heic/IMG_0412.heic", "upload:upload-j-1.mov/IMG_0413.mov"])
+        #expect(uploads.map { $0.request.value(forHTTPHeaderField: "Content-Type") } == ["image/heic", "video/quicktime"])
+        #expect(uploads.map(\.body) == [Data([1, 2, 3]), Data([4, 5])])
+
+        // no background session (no app group): the full sheet, nothing queued
+        let foreground = FakeSaveTransport(background: false)
+        #expect(await InstantUploadEngine(transport: foreground).enqueue(files, client: client(), job: UUID()) == .needsSheet)
+        #expect(foreground.uploads.isEmpty)
+        #expect(await InstantUploadEngine(transport: transport).enqueue(files, client: client(key: nil), job: UUID()) == .failed(.noKey))
+    }
+}
+
+@MainActor
+@Suite(.serialized)
+struct InstantUploadAppTests {
+    private final class Heard: @unchecked Sendable {
+        let lock = NSLock()
+        var landed: [(UUID, [String])] = []
+        var failed: [(String, Int?)] = []
+        var refreshed = 0
+    }
+
+    @Test func theWakeDeletesTheCopiesKeepsNoOriginalAndSaysHowItWent() async throws {
+        let r = try SharesRig()
+        let dir = try makeTempDirectory()
+        r.fetcher.savesDirectory = { dir }
+        let heard = Heard()
+        r.fetcher.uploadsLanded = { job, names in heard.lock.withLock { heard.landed.append((job, names)) } }
+        r.fetcher.uploadFailed = { name, status in heard.lock.withLock { heard.failed.append((name, status)) } }
+        r.fetcher.uploadsChanged = { heard.lock.withLock { heard.refreshed += 1 } }
+        let job = UUID()
+        let id = BackgroundSessionID.uploadSave(job: job)
+        for n in 0..<3 { try Data([UInt8(n)]).write(to: dir.appendingPathComponent("upload-j-\(n).heic")) }
+        r.fetcher.saveAnswers.saveResponded(identifier: id, task: 1, label: "upload:upload-j-0.heic/IMG_1.heic", status: 201, body: Data(#"{"status":"success","item":{}}"#.utf8))
+        r.fetcher.saveAnswers.saveResponded(identifier: id, task: 2, label: "upload:upload-j-1.heic/IMG_2.heic", status: 201, body: created)
+        r.fetcher.saveAnswers.saveResponded(identifier: id, task: 3, label: "upload:upload-j-2.heic/IMG_3.heic", status: 413, body: Data())
+        await r.fetcher.handleWake(identifier: id)
+
+        #expect(heard.landed.count == 1 && heard.landed.first?.0 == job && heard.landed.first?.1 == ["IMG_1.heic", "IMG_2.heic"])
+        #expect(heard.failed.count == 1 && heard.failed.first?.0 == "IMG_3.heic" && heard.failed.first?.1 == 413)
+        #expect(heard.refreshed == 1)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty, "every copy is gone")
+        #expect(r.rig.pending.all().isEmpty && r.rig.session == nil, "the owner's own file is the original: nothing downloads")
+        #expect(r.told.failures.isEmpty, "not a link save's failure")
+    }
+
+    @Test func theNotificationsSayWhatLandedAndWhy() {
+        let job = UUID()
+        let one = Notifications.uploadedRequest(job: job, names: ["IMG_1.heic"])
+        #expect(one.identifier == Notifications.instantIdentifier(job) && one.content.title == "uploaded to capystore" && one.content.body == "IMG_1.heic")
+        #expect(Notifications.uploadedRequest(job: job, names: ["a", "b", "c"]).content.body == "3 files")
+        let failed = Notifications.uploadFailedRequest(name: "IMG_3.heic", status: 413)
+        #expect(failed.content.title == "capystore couldn't upload IMG_3.heic" && failed.content.body == "it's over the upload limit")
+        #expect(Notifications.uploadFailedReason(status: 415) == "that kind of file can't be uploaded")
+        #expect(Notifications.uploadFailedReason(status: nil) == "the server could not be reached")
     }
 }

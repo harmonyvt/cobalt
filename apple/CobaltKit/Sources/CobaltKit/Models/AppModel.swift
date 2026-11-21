@@ -382,6 +382,8 @@ public final class AppModel {
         fetcher.serverHoldsRequests = { [unowned model] in model.capabilities.sourceWait }
         // a gallery found by the foreground (a build with no app group) is followed as a job, not downloaded as one file
         fetcher.adoptGallery = { [unowned model] id, link in model.queue.adoptSharedGallery(session: id, link: link) }
+        // photos and videos uploaded from the share sheet (CONTRACT-SHARE-QUICK.md section 10) show in the library at once
+        fetcher.uploadsChanged = { [unowned model] in await model.library.refresh() }
         #if os(iOS) && canImport(ActivityKit)
         // First thing at launch, before any run: the push-to-start token observer (CONTRACT-LIVE.md 2.5). Every activity
         // is the job island (CONTRACT-JOBLIVE.md 5): one ActivityKit type, one adapter per manager picking its kinds.

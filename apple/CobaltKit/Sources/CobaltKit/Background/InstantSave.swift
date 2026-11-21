@@ -56,6 +56,10 @@ public enum InstantShare {
         case rejected(status: Int)
         /// No connection to the server.
         case unreachable
+        /// Every shared photo or video is over the server's upload limit (bytes).
+        case tooLarge(limit: Int64)
+        /// None of the shared files is a photo or video the server takes.
+        case unsupportedFile
     }
 
     public enum Result: Sendable, Equatable {
@@ -207,7 +211,8 @@ struct URLSessionSaveTransport: SaveTransport {
             if AppGroup.location.kind == .appGroup { config.sharedContainerIdentifier = AppGroup.id }
             config.isDiscretionary = false
             config.sessionSendsLaunchEvents = true
-            config.timeoutIntervalForResource = 10 * 60
+            // a shared video can take a while on a slow connection; a link save's request is tiny
+            config.timeoutIntervalForResource = BackgroundSessionID.isUploadSave(identifier) ? 6 * 60 * 60 : 10 * 60
         case .foreground:
             config = URLSessionConfiguration.ephemeral
             config.waitsForConnectivity = false

@@ -9,14 +9,14 @@ import UniformTypeIdentifiers
 /// What was shared, as far as the instant path cares.
 enum InstantIntake: Sendable, Equatable {
     case link(URL)
-    /// A movie file and no link: its upload runs inside the extension, so only the full sheet can do it.
-    case file
+    /// Photos or videos and no link: they upload from the share sheet (CONTRACT-SHARE-QUICK.md section 10).
+    case media
     case none
 }
 
 extension ShareInbox {
     /// The first link in what the host shared: a URL attachment, a URL in text, the item's own text. A link
-    /// wins over a movie file (saving the link server-side is the point). Nothing is copied or loaded
+    /// wins over a photo or a movie file (saving the link server-side is the point). Nothing is copied or loaded
     /// beyond the link itself.
     static func loadLinkOnly(_ items: [NSExtensionItem]) async -> InstantIntake {
         let providers = items.flatMap { $0.attachments ?? [] }
@@ -31,7 +31,7 @@ extension ShareInbox {
                 if let string, let link = LinkInfo.firstLink(in: string) { return .link(link) }
             }
         }
-        if providers.contains(where: { $0.hasItemConformingToTypeIdentifier(UTType.movie.identifier) }) { return .file }
+        if !mediaProviders(items).isEmpty { return .media }
         return .none
     }
 }
@@ -75,7 +75,9 @@ extension InstantShare {
         /// A link: the flow asks the server what it is. One item is saved and the extension closes without showing
         /// anything; a gallery gets the compact sheet (`ShareGalleryFlow`).
         case flow(ShareGalleryFlow)
-        /// A file, or anything the instant path cannot do: the caller builds the full sheet.
+        /// Photos or videos: their uploads are with the system (CONTRACT-SHARE-QUICK.md section 10); the extension closes without showing anything.
+        case uploaded(count: Int)
+        /// Anything the instant path cannot do (a file on a build with no app group): the caller builds the full sheet.
         case needsSheet
         /// Nothing could be queued: the caller shows its one-line card.
         case failed(Failure)
@@ -83,7 +85,8 @@ extension InstantShare {
 
     /// What `run` and `start` share: the link, the settings and a client for this process's key.
     private struct Prepared {
-        var link: LinkInfo
+        /// nil: photos or videos (`ShareInbox.mediaProviders`), no link.
+        var link: LinkInfo?
         var settings: Settings
         var client: HTTPCobaltClient
     }
@@ -91,9 +94,9 @@ extension InstantShare {
     @MainActor
     private static func prepare(inputItems: [NSExtensionItem]) async -> Either<Prepared, Result> {
         let intake = await ShareInbox.loadLinkOnly(inputItems)
-        let link: LinkInfo
+        let link: LinkInfo?
         switch intake {
-        case .file: return .right(.needsSheet)
+        case .media: link = nil
         case .none:
             Telemetry.log(.info, .share, "share instant", data: ["result": "no-link"])
             return .right(.failed(.noLink))
@@ -118,8 +121,9 @@ extension InstantShare {
         case left(L), right(R)
     }
 
-    /// The extension's whole path for a link (CONTRACT-GALLERY.md 1.12): the flow is started and returned. A file shared
-    /// without a link is `.needsSheet`; no key or no link is `.failed`.
+    /// The extension's whole path for a link (CONTRACT-GALLERY.md 1.12): the flow is started and returned. Photos and
+    /// videos shared without a link upload at once (`.uploaded`, CONTRACT-SHARE-QUICK.md section 10); no key or no link is
+    /// `.failed`.
     @MainActor
     public static func start(inputItems: [NSExtensionItem]) async -> Start {
         switch await prepare(inputItems: inputItems) {
@@ -127,7 +131,10 @@ extension InstantShare {
         case .right(.failed(let failure)): return .failed(failure)
         case .right(.saved): return .needsSheet
         case .left(let prepared):
-            let flow = ShareGalleryFlow.live(link: prepared.link, client: prepared.client, settings: prepared.settings)
+            guard let link = prepared.link else {
+                return await upload(ShareInbox.mediaProviders(inputItems), settings: prepared.settings, client: prepared.client)
+            }
+            let flow = ShareGalleryFlow.live(link: link, client: prepared.client, settings: prepared.settings)
             flow.begin()
             return .flow(flow)
         }
@@ -147,7 +154,8 @@ extension InstantShare {
         case .right(let result): return result
         case .left(let value): prepared = value
         }
-        let link = prepared.link, settings = prepared.settings, client = prepared.client
+        guard let link = prepared.link else { return .needsSheet }
+        let settings = prepared.settings, client = prepared.client
         let transport = URLSessionSaveTransport.current
         var engine = InstantShareEngine(transport: transport, directory: AppGroup.directory("Saves"))
         engine.makePublic = settings.newSavesPublic

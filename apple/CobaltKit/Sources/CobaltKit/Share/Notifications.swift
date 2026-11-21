@@ -116,6 +116,42 @@ enum Notifications {
         return UNNotificationRequest(identifier: "instant-failed-\(UUID().uuidString.lowercased())", content: content, trigger: nil)
     }
 
+    // MARK: Share-sheet uploads (CONTRACT-SHARE-QUICK.md section 10)
+
+    /// "uploaded to capystore", in place of the share's quiet "uploading" one. Quiet too: the file is where the owner
+    /// put it, nothing needs a look.
+    static func uploadedRequest(job: UUID, names: [String]) -> UNNotificationRequest {
+        instantSavingRequest(job: job, title: "uploaded to capystore", body: names.count == 1 ? names[0] : "\(names.count) files")
+    }
+
+    static func uploadFailedRequest(name: String, status: Int?) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.title = "capystore couldn't upload \(name)"
+        content.body = uploadFailedReason(status: status)
+        content.sound = .default
+        content.threadIdentifier = "cobalt-saves"
+        content.userInfo = ["url": openURL]
+        return UNNotificationRequest(identifier: "instant-failed-\(UUID().uuidString.lowercased())", content: content, trigger: nil)
+    }
+
+    static func uploadFailedReason(status: Int?) -> String {
+        switch status {
+        case 413: return "it's over the upload limit"
+        case 415: return "that kind of file can't be uploaded"
+        default: return instantFailedReason(status: status)
+        }
+    }
+
+    static func postUploaded(job: UUID, names: [String]) async {
+        guard runsInApp, !names.isEmpty else { return }
+        try? await UNUserNotificationCenter.current().add(uploadedRequest(job: job, names: names))
+    }
+
+    static func postUploadFailed(name: String, status: Int?) async {
+        guard runsInApp else { return }
+        try? await UNUserNotificationCenter.current().add(uploadFailedRequest(name: name, status: status))
+    }
+
     static func instantFailedReason(status: Int?) -> String {
         switch status {
         case 401, 403: return "the key was not accepted"
