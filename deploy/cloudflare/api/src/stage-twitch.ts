@@ -6,6 +6,9 @@
 export const TWITCH_OAUTH = "https://id.twitch.tv/oauth2";
 export const TWITCH_HELIX = "https://api.twitch.tv/helix";
 export const REWARD_SCOPE = "channel:manage:redemptions";
+// What the app's twitch tab needs on top (section 70, "Twitch watch and chat"): read and send chat, follows, emotes, clips.
+export const CHAT_SCOPES = "chat:read chat:edit user:read:follows user:read:emotes user:read:chat user:write:chat clips:edit";
+export const AUTHORIZE_SCOPES = `${REWARD_SCOPE} ${CHAT_SCOPES}`;
 export const REDEMPTION_EVENT = "channel.channel_points_custom_reward_redemption.add";
 
 export type TwitchConfig = { clientId: string; clientSecret: string; eventsubSecret: string };
@@ -158,7 +161,7 @@ export function twitchClient(
                 response_type: "code",
                 client_id: cfg.clientId,
                 redirect_uri: redirectUri,
-                scope: REWARD_SCOPE,
+                scope: AUTHORIZE_SCOPES,
                 state,
                 force_verify: "true",
             });

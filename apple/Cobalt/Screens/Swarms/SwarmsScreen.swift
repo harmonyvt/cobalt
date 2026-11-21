@@ -18,7 +18,7 @@ struct SwarmsScreen: View {
     private var store: SwarmStore { model.swarms }
 
     private var wide: Bool {
-        if width > 0 { return width >= 760 }
+        if width > 0 { return width >= Spread.minWidth }
         return tier != .compact
     }
 
@@ -90,8 +90,8 @@ struct SwarmsScreen: View {
     /// The Mac and a wide iPad: the list on the left, the same screen on the right.
     private var split: some View {
         HStack(spacing: 0) {
-            list.frame(width: 320)
-            Divider()
+            list.frame(width: Spread.listWidth)
+            HingeSeam(queue: model.queue)
             Group {
                 if let dest = open {
                     NavigationStack { SwarmScreen(model: model, dest: dest) }

@@ -11,7 +11,7 @@ struct CollectionPickerSheet: View {
     let picks: [LibraryRow]
     let file: (LibraryController.CollectionTarget) -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    var dismiss = SheetOrPaneDismiss()
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var newName = ""
     @FocusState private var naming: Bool

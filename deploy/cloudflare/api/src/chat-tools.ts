@@ -201,6 +201,8 @@ export type ChatCollect = {
     lookOpts?: Record<string, { grid?: boolean; frames?: boolean; box?: { x: number; y: number; w: number; h: number } }>;
     // look({ media }) (section 62.1): media refs to show, as given (resolved when the pictures are made)
     lookMedia?: string[];
+    // look({ media, frames: true }) (section 63.3): the refs whose emote frames are wanted
+    lookMediaFrames?: string[];
     show: string[];
     collage?: { title: string | null; query: string | null; ids: string[] } | null;
     ranked?: Ranked | null;
@@ -355,6 +357,7 @@ export function chatTools(d: ChatToolDeps, collect: ChatCollect): ChatTools {
             if (media) {
                 const list = (collect.lookMedia ??= []);
                 if (!list.includes(media) && collect.look.length + list.length < LOOK_MAX) list.push(media);
+                if (opts?.frames && list.includes(media)) (collect.lookMediaFrames ??= []).push(media);
             }
             const ok = ids === undefined || ids === null ? [] : await known(idList(ids));
             for (const i of ok) {

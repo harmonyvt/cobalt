@@ -34,6 +34,7 @@ enum Copy {
         case .swarms: return Swarms.title
         case .stage: return Stage.title
         case .sevenTv: return SevenTv.title
+        case .twitch: return Twitch.title
         case .names: return Names.tabTitle
         case .queue: return "queue"
         case .settings: return "settings"

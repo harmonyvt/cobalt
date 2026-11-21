@@ -12,6 +12,8 @@ struct ChatScreen: View {
 
     @Environment(\.shell) private var shell
     @State private var controller: ChatController
+    /// The tab's own width: from `Spread.minWidth` the thread opens beside the list instead of on top of it.
+    @State private var width: CGFloat = 0
 
     init(model: AppModel, tier: Tier) {
         self.model = model
@@ -32,9 +34,17 @@ struct ChatScreen: View {
         }
     }
 
+    private var spread: Bool {
+        if width > 0 { return width >= Spread.minWidth }
+        return tier != .compact
+    }
+
     var body: some View {
-        content
+        Group {
+            if spread { split } else { pushed }
+        }
             .background(CobaltColor.bg)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .navigationTitle(Copy.Chat.title)
             .toolbar {
                 #if os(iOS)
@@ -60,10 +70,34 @@ struct ChatScreen: View {
                 #endif
             }
             .task { await store.refresh() }
+            .chatPresentations(controller)
+    }
+
+    /// iPhone and a narrow window: the list, and a thread pushed on it.
+    private var pushed: some View {
+        content
             .navigationDestination(item: openedThread) { route in
                 ChatThreadScreen(model: model, threadID: route.id, tier: tier)
             }
-            .chatPresentations(controller)
+    }
+
+    /// A spread (two screens, a landscape iPad, the Mac): the list on the left, the open thread on the right.
+    private var split: some View {
+        HStack(spacing: 0) {
+            content.frame(width: Spread.listWidth)
+            HingeSeam(queue: model.queue)
+            Group {
+                if let id = store.openThreadID {
+                    NavigationStack { ChatThreadScreen(model: model, threadID: id, tier: tier) }
+                        .id(id)
+                } else {
+                    Text(Copy.Duo.pickChat)
+                        .font(CobaltType.body).foregroundStyle(CobaltColor.caption)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
     }
 
     private var openedThread: Binding<ChatRoute?> {

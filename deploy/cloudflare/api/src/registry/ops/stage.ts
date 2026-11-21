@@ -4,7 +4,8 @@
 // Twitch connect stay owner-only (no AI call).
 import * as z from "zod";
 import { stageDepsFrom } from "../../deps";
-import { EMOTE_SORT_KEYS, FIND_MANY_MAX, findManyEmotes, saveEmote, searchEmotes, type EmoteSort } from "../../emotes";
+import { EMOTE_SORT_KEYS, FIND_MANY_MAX, VARIANT_PAGES_MAX, VARIANT_WORDS_MAX, deepVariants, findManyEmotes, saveEmote, searchEmotes, type EmoteSort } from "../../emotes";
+import { parseMediaRef } from "../../media-refs";
 import { stageKeyed, type StageDeps, type StageOp } from "../../stage";
 import type { StudioReply } from "../../studio";
 import { defineOp, ok, OpError, type OpContext, type OpReply } from "../op";
@@ -36,6 +37,11 @@ const stageRoute = (op: StageOp, method: "GET" | "POST" | "PATCH" | "DELETE", pa
         handler: async (ctx): Promise<OpReply> => {
             const d = stageDeps(ctx);
             if (!d) return { status: 404, body: offBody };
+            // the token goes to a signed-in device only, never to a key for tools
+            if (op === "twitch_session") {
+                const row = await ctx.db.prepare("SELECT kind FROM api_keys WHERE id = ?1").bind(ctx.keyId).first<{ kind: string }>();
+                if (row?.kind !== "session") return { status: 403, body: { status: "error", error: { code: "error.stage.twitch_session_device_only" } } };
+            }
             const r = await stageKeyed(d, op, ctx.request!, ctx.params, ctx.query);
             return { status: r.status, body: r.body };
         },
@@ -50,6 +56,7 @@ const STAGE_ROUTES = [
     stageRoute("redemptions", "GET", "/stage/redemptions"),
     stageRoute("twitch_delete", "DELETE", "/stage/twitch"),
     stageRoute("twitch_connect", "POST", "/stage/twitch/connect"),
+    stageRoute("twitch_session", "GET", "/stage/twitch/session"),
     stageRoute("reward", "PATCH", "/stage/rewards/:action", { action: STAGE_ACTION_REGEX }),
 ];
 
@@ -444,6 +451,72 @@ export const emotesSaveOp = defineOp({
     handler: async (ctx, input) => ok(unwrap(await saveEmote(ctx.app(), bodyRequest("POST", { id: input.id }), ctx.keyId!), EMOTE_MESSAGES)),
 });
 
+// Section 63.2: every same-name and seasonal-named upload of an emote, across all result pages.
+export const emotesVariantsOp = defineOp({
+    name: "emotes.variants",
+    auth: "key",
+    runs: "worker",
+    cors: false,
+    input: z
+        .object({
+            emote: z.string().trim().min(1).max(200).optional().describe("the emote: a 7TV emote id or 7tv.app link (its own name, animated flag and shape are then the filters)"),
+            name: z.string().trim().min(1).max(64).optional().describe("or just a name to look for (use the emote's real 7TV name, not a set alias)"),
+            season: z.string().trim().max(20).optional().describe("christmas, halloween, valentine, easter, newyear or summer: also names with its words (xmas, santa...)"),
+            words: z.array(z.string().trim().min(2).max(20)).max(VARIANT_WORDS_MAX).optional().describe("extra words a variant's name may carry"),
+            animated: z.enum(["same", "any", "yes", "no"]).optional().describe("same (default when an emote is given) = the emote's own flag"),
+            size: z.enum(["same", "any"]).optional().describe("same (default when an emote is given) = width:height within 8% of the emote's"),
+            max_pages: z.number().int().min(1).max(VARIANT_PAGES_MAX).optional().describe(`pages of 24 per search (default and most ${VARIANT_PAGES_MAX})`),
+        })
+        .refine((v) => !!v.emote || !!v.name, { message: "give an emote or a name" }),
+    output: z.object({
+        name: z.string(),
+        base: z.object({ emote_id: z.string(), animated: z.boolean(), width: z.number(), height: z.number() }).optional(),
+        words: z.array(z.string()),
+        filters: z.object({ animated: z.string(), size: z.string() }),
+        pages_read: z.object({ same_name: z.number(), contains: z.number(), seasonal: z.number() }),
+        complete: z.boolean().describe("every result page was read (false: more than max_pages)"),
+        found: z.number().describe("matches before the animated and size filters"),
+        dropped: z.object({ animated: z.number(), size: z.number() }),
+        variants: z.array(
+            z.object({
+                emote_id: z.string(),
+                name: z.string(),
+                match: z.enum(["same_name", "contains", "seasonal"]),
+                word: z.string().optional(),
+                animated: z.boolean(),
+                frames: z.number().nullable(),
+                width: z.number(),
+                height: z.number(),
+                preview_url: z.string(),
+                page_url: z.string(),
+                library_id: z.string().nullable(),
+            }),
+        ),
+    }),
+    ai: {
+        tier: "free",
+        only: true,
+        summary:
+            "Deep 7TV variant search: every upload with the emote's same name (any case), its name inside a longer one, and seasonal names (season: christmas finds LaPeaceXmas, SantaLaPeace...), across ALL result pages (not just the top few), filtered to the same animated flag and shape. Festive edits are often deep in the results. Then compare.canvas to look at them.",
+        params: ["emote"],
+        options: true,
+    },
+    handler: async (ctx, input) => {
+        const p = input.emote ? parseMediaRef(input.emote, { mediaBaseUrl: ctx.mediaBaseUrl, hosts: [] }) : null;
+        if (input.emote && p?.kind !== "emote") throw new OpError(400, "error.emote.query", "emotes.variants: emote is a 7TV emote id or link; give a plain name as name");
+        const r = await deepVariants(ctx.app(), {
+            ...(p?.kind === "emote" ? { emote_id: p.id } : {}),
+            ...(input.name ? { name: input.name } : {}),
+            ...(input.season ? { season: input.season } : {}),
+            ...(input.words ? { words: input.words } : {}),
+            ...(input.animated ? { animated: input.animated } : {}),
+            ...(input.size ? { size: input.size } : {}),
+            ...(input.max_pages ? { max_pages: input.max_pages } : {}),
+        });
+        return ok(unwrap(r, EMOTE_MESSAGES));
+    },
+});
+
 export const STAGE_OPS = [
     ...STAGE_ROUTES,
     ...EMOTE_ROUTES,
@@ -456,4 +529,5 @@ export const STAGE_OPS = [
     emotesSearchOp,
     emotesFindManyOp,
     emotesSaveOp,
+    emotesVariantsOp,
 ];

@@ -21,8 +21,15 @@ struct LibrarySelectPill: View {
     let makeLink: () -> Void
     let file: (LibraryController.CollectionTarget) -> Void
     let share: () -> Void
+    /// Drawn on the other screen of a spread (Duo building blocks): the whole panel there, the picks on the left.
+    var inPane = false
+    /// The inline copy's sheet flags, for the pane's copy.
+    var collectionShown: Binding<Bool>? = nil
+    var deleteShown: Binding<Bool>? = nil
 
     @State private var pickingCollection = false
+    @Environment(\.spreadPane) private var host
+    @Environment(\.isSpread) private var spread
     @State private var editNote: String?
     /// The trash circle's sheet is up.
     @State private var deleting = false
@@ -34,9 +41,42 @@ struct LibrarySelectPill: View {
     private var offersStatus: Bool { model.capabilities.hidden }
     private var addsToLinks: Bool { controller.addsToLinks }
 
+    /// The panel belongs on the other screen: a spread, while selecting.
+    private var wantsPane: Bool { !inPane && spread && host != nil && controller.selecting }
+
+    private static let paneID = "library-select"
+
     var body: some View {
+        if inPane {
+            ScrollView { panel.padding(16) }
+                .scrollBounceBehavior(.basedOnSize)
+        } else {
+            inline
+                .onChange(of: wantsPane, initial: true) { _, on in
+                    if on { showPane() } else { host?.close(id: Self.paneID) }
+                }
+                // a sheet of the panel (collection, delete) took the pane: the panel comes back when it closes
+                .onChange(of: host?.pane == nil) { _, empty in
+                    if empty, wantsPane { showPane() }
+                }
+        }
+    }
+
+    private func showPane() {
+        guard let host, !host.isShowing(Self.paneID) else { return }
+        // the pane's copy asks this copy's sheets: this one stays on screen, so its sheets outlive the pane they replace
+        let pane = LibrarySelectPill(
+            model: model, controller: controller, rows: rows, toggle: toggle, makeLink: makeLink, file: file, share: share,
+            inPane: true, collectionShown: $pickingCollection, deleteShown: $deleting)
+        // closing the panel is its own close button (it ends selecting); a sheet replacing it changes nothing here
+        host.show(id: Self.paneID, content: AnyView(pane)) {}
+    }
+
+    private var inline: some View {
         Group {
-            if controller.selecting {
+            if controller.selecting, wantsPane {
+                Color.clear.frame(height: 0)
+            } else if controller.selecting {
                 panel
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
@@ -51,14 +91,12 @@ struct LibrarySelectPill: View {
         .padding(.bottom, 6)
         #endif
         .frame(maxWidth: .infinity)
-        .sheet(isPresented: $pickingCollection) {
-            CollectionPickerSheet(store: store, picks: controller.pickedRows(rows), file: file)
-        }
-        .sheet(isPresented: $deleting) {
-            LibraryDeleteSheet(
-                picks: controller.pickedRows(rows).map(\.item).filter { controller.canDelete($0) },
-                delete: controller.deletePicks)
-        }
+        .modifier(sheets)
+    }
+
+    private var sheets: SelectSheets {
+        SelectSheets(
+            pickingCollection: $pickingCollection, deleting: $deleting, model: model, controller: controller, rows: rows, file: file)
     }
 
     // MARK: the pill
@@ -114,7 +152,7 @@ struct LibrarySelectPill: View {
             }
         }
         .padding(12)
-        .frame(maxWidth: 520)
+        .frame(maxWidth: inPane ? .infinity : 520)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .motion(Motion.rows, value: picks.map(\.id))
         .motion(Motion.rows, value: verdict)
@@ -158,7 +196,7 @@ struct LibrarySelectPill: View {
 
     /// The trash circle (last, in the error red): the sheet that says what goes, and lets a post's files be chosen.
     private func trashButton(_ picks: [LibraryRow]) -> some View {
-        Button { deleting = true } label: {
+        Button { if let deleteShown { deleteShown.wrappedValue = true } else { deleting = true } } label: {
             Label(Copy.DeletePicks.delete, systemImage: Symbol.Library.deleteEverything)
         }
         .buttonStyle(.cobaltIcon(tint: CobaltColor.errorText))
@@ -193,7 +231,7 @@ struct LibrarySelectPill: View {
             .accessibilityHint(Copy.Links.makeA11yHint)
         }
         if files {
-            Button { pickingCollection = true } label: {
+            Button { if let collectionShown { collectionShown.wrappedValue = true } else { pickingCollection = true } } label: {
                 Label(Copy.Library2.collection, systemImage: Symbol.Library.collectionFile)
             }
             .buttonStyle(.cobaltIcon(tint: CobaltColor.collection))
@@ -318,5 +356,28 @@ private struct PickThumb: View {
         .peekOnHold(row, controller: controller)
         .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
         .accessibilityHint(Copy.Library2.unpickHint)
+    }
+}
+
+/// The panel's two sheets (collection, delete), on whichever copy of the panel is drawn.
+private struct SelectSheets: ViewModifier {
+    @Binding var pickingCollection: Bool
+    @Binding var deleting: Bool
+    let model: AppModel
+    let controller: LibraryController
+    let rows: [LibraryRow]
+    let file: (LibraryController.CollectionTarget) -> Void
+
+    private var store: ShareSetStore { model.shareSets }
+
+    func body(content: Content) -> some View {
+        content
+        .spreadSheet(isPresented: $pickingCollection, id: "library-collection") {
+            CollectionPickerSheet(store: store, picks: controller.pickedRows(rows), file: file)
+        }
+        .spreadSheet(isPresented: $deleting, id: "library-delete") {
+            let picks = controller.pickedRows(rows).map(\.item).filter { controller.canDelete($0) }
+            LibraryDeleteSheet(picks: picks, impact: DeleteImpact(picks: picks, model: model), delete: controller.deletePicks)
+        }
     }
 }

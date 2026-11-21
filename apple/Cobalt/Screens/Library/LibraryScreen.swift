@@ -72,6 +72,10 @@ private struct LibraryContent: View {
     @Bindable var controller: LibraryController
 
     @Environment(\.shell) private var shell
+    @Environment(\.spreadPane) private var spreadPane
+    @Environment(\.isSpread) private var isSpread
+    /// A hold shows the post on the other screen of a spread instead of over the grid.
+    private var peeksInPane: Bool { isSpread && spreadPane != nil }
     @Environment(\.hapticsEnabled) private var haptics
     @Environment(\.scenePhase) private var scenePhase
     @Namespace private var zoomSpace
@@ -224,7 +228,8 @@ private struct LibraryContent: View {
         let pickedCount = controller.selecting ? controller.pickedRows(rows).count : 0
         let shownRows: [LibraryRow] = holding ? heldRows : rows
         let shownPhase: LibraryPhase = holding ? .rows : phase
-        content(rows: shownRows, phase: shownPhase, shareIndex: shareIndex, held: holding)
+        // split in two: one chain this long is past the type checker's time limit on the Mac
+        let core = content(rows: shownRows, phase: shownPhase, shareIndex: shareIndex, held: holding)
             .modifier(LibraryHoldRows(rows: rows, showing: phase == .rows, album: library.showingHidden, held: $heldRows))
             .navigationTitle(Copy.library)
             #if os(iOS)
@@ -283,10 +288,25 @@ private struct LibraryContent: View {
             .motion(Motion.rows, value: controller.selecting)
             // hold a tile or a pick to see its media; lifting the finger closes it
             .overlay {
-                if let row = controller.peek {
+                if let row = controller.peek, !peeksInPane {
                     LibraryPeek(row: row)
                         .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
+            }
+            // on a spread the held post plays on the other screen and the grid stays as it is (Duo building blocks)
+            .onChange(of: controller.peek?.id) { _, _ in
+                guard peeksInPane, let spreadPane else { return }
+                if let row = controller.peek {
+                    spreadPane.show(id: "library-peek", content: AnyView(LibraryPeek(row: row, dims: false))) {}
+                } else {
+                    spreadPane.close(id: "library-peek")
+                }
+            }
+            // a search on a spread opens its best match beside the results: the query and the top hit both in view
+            .onChange(of: library.searchState) { _, state in
+                guard isSpread, !controller.selecting, case .results(let count, _) = state, count > 0,
+                      let best = rows.first else { return }
+                controller.open(best.item, initial: nil)
             }
             .motion(Motion.card, value: controller.peek?.id)
             .haptic(.impact(weight: .light), trigger: controller.peek?.id, enabled: haptics) { $0 != nil }
@@ -350,6 +370,7 @@ private struct LibraryContent: View {
                 }
             }
             .motion(Motion.card, value: controller.preparingShare)
+        core
             // a tick, select mode on and off, and the share sheet ready: felt as well as seen (Settings › haptics)
             .haptic(.selection, trigger: controller.picked, enabled: haptics)
             .haptic(.impact(weight: .light), trigger: controller.selecting, enabled: haptics)

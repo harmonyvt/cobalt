@@ -9,6 +9,8 @@ import { CHAT_VIDEO_OPS } from "./ops/chat-video";
 import { CHAT_SHARE_OPS } from "./ops/chat-share";
 import { EDITOR_OPS } from "./ops/editor";
 import { FRAME_OPS } from "./ops/frames";
+import { COMPARE_OPS } from "./ops/compare";
+import { EXPORT_OPS } from "./ops/export";
 import { POST_FRAME_OPS } from "./ops/post-frame";
 import { HIDDEN_OPS } from "./ops/hidden";
 import { HOST_OPS } from "./ops/hosts";
@@ -54,6 +56,8 @@ export const REGISTRY = new Registry([
     ...BOX_OPS,
     ...YTDLP_OPS,
     ...FRAME_OPS,
+    ...COMPARE_OPS,
+    ...EXPORT_OPS,
     ...LIVE_OPS,
     ...SYSTEM_OPS,
     ...MCP_OPS,

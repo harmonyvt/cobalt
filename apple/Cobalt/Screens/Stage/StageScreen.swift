@@ -118,7 +118,7 @@ private struct StageBody: View {
     private var store: StageStore { controller.store }
 
     private var wide: Bool {
-        if width > 0 { return width >= 780 }
+        if width > 0 { return width >= Spread.minWidth }
         return tier != .compact
     }
 

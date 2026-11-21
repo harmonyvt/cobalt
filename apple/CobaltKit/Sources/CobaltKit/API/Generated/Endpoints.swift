@@ -691,6 +691,11 @@ enum Endpoints {
         APIEndpoint(op: "stage_owner.twitch_connect", method: "POST", path: "/stage/twitch/connect", auth: .key)
     }
 
+    /// `GET /stage/twitch/session` (op `stage_owner.twitch_session`, auth key): GET /stage/twitch/session
+    static func stageOwnerTwitchSession() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "stage_owner.twitch_session", method: "GET", path: "/stage/twitch/session", auth: .key)
+    }
+
     /// `PATCH /stage/rewards/:action` (op `stage_owner.reward`, auth key): PATCH /stage/rewards/:action
     static func stageOwnerReward(action: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "stage_owner.reward", method: "PATCH", path: "/stage/rewards/\(HTTPCobaltClient.encode(action))", auth: .key)
@@ -944,6 +949,11 @@ enum Endpoints {
     /// `OPTIONS /mcp/upload/:token` (op `mcp.upload.preflight`, auth open): The preflight of an MCP upload link's PUT (OPTIONS /mcp/upload/<token>).
     static func mcpUploadPreflight(token: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "mcp.upload.preflight", method: "OPTIONS", path: "/mcp/upload/\(HTTPCobaltClient.encode(token))", auth: .open)
+    }
+
+    /// `GET /mcp/download/:token` (op `mcp.download`, auth capability): A file an MCP tool exported (GET /mcp/download/<token>), for one hour.
+    static func mcpDownload(token: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "mcp.download", method: "GET", path: "/mcp/download/\(HTTPCobaltClient.encode(token))", auth: .capability)
     }
 
     /// `GET /mcp/settings` (op `mcp.settings`, auth key_or_service): How agents reach the MCP: the mode and the private link's use (GET /mcp/settings).

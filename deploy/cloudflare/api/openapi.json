@@ -6533,6 +6533,41 @@
         }
       }
     },
+    "/mcp/download/{token}": {
+      "get": {
+        "operationId": "mcp.download",
+        "summary": "A file an MCP tool exported (GET /mcp/download/<token>), for one hour.",
+        "tags": [
+          "mcp"
+        ],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,600}\\.[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [],
+        "x-cobalt": {
+          "auth": "capability",
+          "runs": "worker",
+          "cors": false,
+          "no_store": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/mcp/k/{secret}": {
       "post": {
         "operationId": "mcp.link",
@@ -8885,6 +8920,33 @@
       "post": {
         "operationId": "stage_owner.twitch_connect",
         "summary": "POST /stage/twitch/connect",
+        "tags": [
+          "stage_owner"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/stage/twitch/session": {
+      "get": {
+        "operationId": "stage_owner.twitch_session",
+        "summary": "GET /stage/twitch/session",
         "tags": [
           "stage_owner"
         ],

@@ -32,7 +32,9 @@ describe("connecting (30.8)", () => {
         expect(u.searchParams.get("response_type")).toBe("code");
         expect(u.searchParams.get("client_id")).toBe("twitch-client-id");
         expect(u.searchParams.get("redirect_uri")).toBe(`${STAGE}twitch/callback`);
-        expect(u.searchParams.get("scope")).toBe("channel:manage:redemptions");
+        expect(u.searchParams.get("scope")).toBe(
+            "channel:manage:redemptions chat:read chat:edit user:read:follows user:read:emotes user:read:chat user:write:chat clips:edit",
+        );
         expect(u.searchParams.get("force_verify")).toBe("true");
         expect(u.searchParams.get("state")).toMatch(/^[A-Za-z0-9]{32}$/);
         expect(w.stageRow()).toMatchObject({ oauth_state: u.searchParams.get("state"), oauth_state_at: T0 });
@@ -978,5 +980,101 @@ describe("a stale search pool never holds a request up (30.3)", () => {
         await w.redeem("summon", itemCode(w, files[0]!.id));
         expect(lastRow(w)).toMatchObject({ status: "done", item_id: files[0]!.id });
         expect(Date.now() - started).toBeLessThan(2000);
+    });
+});
+
+describe("GET /stage/twitch/session (30.x, section 70)", () => {
+    // the test key is a key for tools; the app calls this as a signed-in device
+    const asDevice = (w: World) => w.db.raw.prepare("UPDATE api_keys SET kind = 'session' WHERE id = 'key-1'").run();
+    const CHAT = "channel:manage:redemptions chat:read chat:edit user:read:chat";
+
+    it("is 404 error.stage.twitch_off without the Twitch secrets", async () => {
+        const w = await world({ twitch: false });
+        asDevice(w);
+        const r = await w.owner("GET", "/stage/twitch/session");
+        expect(r.status).toBe(404);
+        expect(r.body.error.code).toBe("error.stage.twitch_off");
+    });
+
+    it("is refused for a key for tools (403 error.stage.twitch_session_device_only)", async () => {
+        const w = await world();
+        await w.connectTwitch();
+        const r = await w.owner("GET", "/stage/twitch/session");
+        expect(r.status).toBe(403);
+        expect(r.body.error.code).toBe("error.stage.twitch_session_device_only");
+    });
+
+    it("answers connected: false before the owner connects", async () => {
+        const w = await world();
+        asDevice(w);
+        const r = await w.owner("GET", "/stage/twitch/session");
+        expect(r.status).toBe(200);
+        expect(r.body).toEqual({ status: "success", connected: false });
+        expect(r.res.headers.get("cache-control")).toBe("no-store");
+    });
+
+    it("hands out the stored token while it is fresh (no Twitch call), and can_chat follows the scopes", async () => {
+        const w = await world();
+        await w.connectTwitch();
+        asDevice(w);
+        let r = await w.owner("GET", "/stage/twitch/session");
+        expect(r.status).toBe(200);
+        expect(r.body).toEqual({
+            status: "success",
+            connected: true,
+            client_id: "twitch-client-id",
+            user_id: "b123",
+            login: "harmony",
+            display_name: "Harmony",
+            access_token: "at-1",
+            expires_at: T0 + 14400 * 1000,
+            scopes: ["channel:manage:redemptions"],
+            can_chat: false,
+            reconnect: false,
+        });
+        expect(w.twitch.called("POST", "/oauth2/token").filter((c) => c.body.grant_type === "refresh_token")).toHaveLength(0);
+        w.db.raw.prepare("UPDATE stage_twitch SET scopes = ?").run(CHAT);
+        r = await w.owner("GET", "/stage/twitch/session");
+        expect(r.body.scopes).toEqual(CHAT.split(" "));
+        expect(r.body.can_chat).toBe(true);
+    });
+
+    it("refreshes a token that expires within 5 minutes and answers the new one", async () => {
+        const w = await world();
+        await w.connectTwitch();
+        asDevice(w);
+        w.tick(14400 * 1000 - 60_000);
+        const r = await w.owner("GET", "/stage/twitch/session");
+        expect(r.status).toBe(200);
+        expect(r.body.access_token).not.toBe("at-1");
+        expect(r.body.access_token).toMatch(/^at-/);
+        expect(r.body.expires_at).toBe(w.one("SELECT expires_at FROM stage_twitch").expires_at);
+        expect(r.body.expires_at).toBeGreaterThan(T0 + 14400 * 1000);
+        expect(r.body.reconnect).toBe(false);
+        expect(w.twitch.called("POST", "/oauth2/token").filter((c) => c.body.grant_type === "refresh_token")).toHaveLength(1);
+    });
+
+    it("answers reconnect: true with no token when the refresh is refused", async () => {
+        const w = await world();
+        await w.connectTwitch();
+        asDevice(w);
+        w.db.raw.prepare("UPDATE stage_twitch SET scopes = ?").run(CHAT);
+        w.twitch.refreshFails = true;
+        w.tick(14400 * 1000 - 60_000);
+        const r = await w.owner("GET", "/stage/twitch/session");
+        expect(r.status).toBe(200);
+        expect(r.body).toEqual({
+            status: "success",
+            connected: true,
+            client_id: "twitch-client-id",
+            user_id: "b123",
+            login: "harmony",
+            display_name: "Harmony",
+            access_token: null,
+            expires_at: null,
+            scopes: CHAT.split(" "),
+            can_chat: false,
+            reconnect: true,
+        });
     });
 });

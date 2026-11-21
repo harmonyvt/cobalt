@@ -144,7 +144,7 @@ describe("tools/list: the app tools, then the chat's tools that are not retired"
         const appNames = APP_TOOLS.filter((t) => !t.when || t.when({ search: false, box: false, mcp: true })).map((t) => t.name);
         expect(all.slice(0, appNames.length).map((t) => t.name)).toEqual(appNames);
         const tools = all.slice(appNames.length);
-        const chat = REGISTRY.toolsFor("chat", { search: false, box: false })
+        const chat = REGISTRY.toolsFor("chat", { search: false, box: false, mcp: true })
             .filter((o) => !MCP_SKIPPED_CALLS.has(o.callName) && !MCP_RETIRED_CALLS.has(o.callName))
             .map((o) => mcpToolName(o.callName));
         expect(tools.map((t) => t.name)).toEqual(chat);
@@ -409,5 +409,87 @@ describe("MCP calls to ops that have an ai.args mapping", () => {
             expect(r.structuredContent.items[0]).toMatchObject({ id: "Ab3dE6gH9jK2mN5p", status: "public" });
             expect(r.content[0].text).toContain("by meaning");
         });
+    });
+});
+
+// Section 63.6-63.7: media_export writes a JSON file of data URIs (or a sprite) and answers a one-hour link that opens
+// only with the key that made it, through GET /mcp/download/<token>.
+describe("media_export and GET /mcp/download/<token>", () => {
+    const EMOTE = "01F6MQ33FG000FFJ97ZB8MWV52";
+    const gif = new Uint8Array(readFileSync(new URL("./fixtures/anim.gif", import.meta.url)));
+    const webp = new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 69, 66, 80, 86, 80, 56, 88]);
+    const images = (["webp", "gif"] as const).flatMap((ext) =>
+        [1, 2, 3, 4].map((s) => ({ url: `https://cdn.7tv.app/emote/${EMOTE}/${s}x.${ext}`, mime: `image/${ext}`, size: 1000 * s, scale: s, width: 40 * s, height: 30 * s, frameCount: 4 })),
+    );
+    let fetched: string[];
+    beforeEach(() => {
+        fetched = [];
+        vi.stubGlobal("fetch", async (input: unknown) => {
+            const url = String(input instanceof Request ? input.url : input);
+            fetched.push(url);
+            if (url === "https://7tv.io/v4/gql") return Response.json({ data: { emotes: { e0: { id: EMOTE, defaultName: "catJAM", deleted: false, flags: { animated: true }, images } } } });
+            if (url.endsWith(".gif")) return new Response(gif);
+            if (url.endsWith(".webp")) return new Response(webp, { headers: { "content-type": "image/webp" } });
+            throw new Error(`unexpected fetch ${url}`);
+        });
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    const download = (url: string) => send(new Request(url));
+
+    it("data URIs: an animated emote stays its own animated WebP at the scale that covers the size", async () => {
+        const r = await call("media_export", { refs: [EMOTE, "https://evil.example/x.png"], size: 64 });
+        expect(r.isError).toBeUndefined();
+        const out = r.structuredContent;
+        expect(out.items).toEqual([{ ref: EMOTE, label: "catJAM", width: 120, height: 90, bytes: webp.length, animated: true }]);
+        expect(out.failed).toHaveLength(1);
+        expect(fetched).toContain(`https://cdn.7tv.app/emote/${EMOTE}/3x.webp`);
+        expect(out.inline.items[0].data_uri).toBe(`data:image/webp;base64,${Buffer.from(webp).toString("base64")}`);
+        expect(out.curl).toBe(`curl -sS -o images.json '${out.url}'`);
+
+        const res = await download(out.url);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-disposition")).toBe('attachment; filename="images.json"');
+        expect(await res.json()).toEqual(out.inline);
+        // a changed token, or the key revoked: the link is dead
+        expect((await download(out.url.replace(/.$/, (c: string) => (c === "A" ? "B" : "A")))).status).toBe(401);
+        db.raw.prepare("UPDATE api_keys SET revoked_at = 1 WHERE id = ?").run(KEY_ID);
+        expect((await download(out.url)).status).toBe(401);
+    });
+
+    it("compare_canvas: pairs in, a private canvas PNG out, no box", async () => {
+        const r = await call("compare_canvas", { pairs: [{ original: EMOTE, variant: EMOTE, label: "catJAM" }, { original: EMOTE, variant: "01F6MQ33FG000FFJ97ZB8MWV99" }], frames: 2 });
+        expect(r.isError).toBeUndefined();
+        const c = r.structuredContent.canvases;
+        expect(c).toHaveLength(1);
+        expect(c[0]).toMatchObject({ width: 190 + 2 * 2 * 118 + 60, height: 30 + 2 * 138 });
+        expect(c[0].rows[0]).toMatchObject({ n: 1, label: "catJAM", original_frames: 4, variant_frames: 4 });
+        expect(c[0].rows[1].error).toBeTruthy();
+        const row = db.raw.prepare("SELECT kind, content_type, bucket FROM media_items WHERE id = ?").get(c[0].file_id) as any;
+        expect(row).toMatchObject({ kind: "private", content_type: "image/png", bucket: "originals" });
+        expect(doCalls).toEqual([]);
+    });
+
+    it("look with frames on an animated emote sends one strip of its frames", async () => {
+        const r = await call("look", { media: EMOTE, frames: true });
+        expect(r.isError).toBeUndefined();
+        const pics = r.content.filter((c: any) => c.type === "image");
+        expect(pics).toHaveLength(1);
+        expect(JSON.stringify(r.content)).toContain("4 frames in all");
+    });
+
+    it("a sprite: one sheet with each tile's place and css, made from the emote's first GIF frame", async () => {
+        const r = await call("media_export", { refs: [EMOTE, EMOTE], size: 32, format: "sprite", labels: ["a", "b"] });
+        expect(r.isError).toBeUndefined();
+        const out = r.structuredContent;
+        expect(out.sprite).toMatchObject({ width: 64, height: 32, tile: 32 });
+        expect(out.items.map((i: any) => [i.label, i.x, i.y])).toEqual([
+            ["a", 0, 0],
+            ["b", 32, 0],
+        ]);
+        expect(out.inline.sprite.data_uri).toMatch(/^data:image\/png;base64,/);
+        expect(out.inline.css).toContain(".sprite-1{background-position:-32px 0px}");
+        clock += 3_600_001;
+        expect((await download(out.url)).status).toBe(401);
     });
 });

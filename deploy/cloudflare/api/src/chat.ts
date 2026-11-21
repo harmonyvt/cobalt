@@ -590,10 +590,11 @@ const lookDepsOf = (d: ChatDeps): LookDeps => {
     const env = (d.base?.env ?? {}) as { ORIGINALS?: unknown; MEDIA?: unknown; IMAGES?: unknown };
     return { db: d.db, mediaBaseUrl: d.mediaBaseUrl, originals: env.ORIGINALS as never, media: env.MEDIA as never, images: (env.IMAGES ?? null) as never };
 };
+const framesOf = (refs: string[] | undefined) => Object.fromEntries((refs ?? []).map((r) => [r, { frames: true }]));
 const mediaLookDepsOf = (d: ChatDeps): MediaLookDeps => {
     const env = (d.base?.env ?? {}) as { MEDIA_HOSTS?: string };
     const shareBaseUrl = d.shareBaseUrl ?? d.base?.shareBaseUrl;
-    return { ...lookDepsOf(d), shareBaseUrl, hosts: mediaHostsOf(env, { mediaBaseUrl: d.mediaBaseUrl, shareBaseUrl }) };
+    return { ...lookDepsOf(d), shareBaseUrl, hosts: mediaHostsOf(env, { mediaBaseUrl: d.mediaBaseUrl, shareBaseUrl }), now: d.now };
 };
 
 // Consecutive turns of one role become one (a failed reply can leave two user turns in a row).
@@ -1053,7 +1054,7 @@ async function reply(d: ChatDeps, c: ReplyCtx): Promise<void> {
                 const freshMedia = (collect.lookMedia ?? []).slice(lookedMedia);
                 lookedMedia = collect.lookMedia?.length ?? 0;
                 if (freshMedia.length > 0) {
-                    const imgs = await lookMediaImages(mediaLookDepsOf(d), freshMedia).catch(() => new Map());
+                    const imgs = await lookMediaImages(mediaLookDepsOf(d), freshMedia, {}, framesOf(collect.lookMediaFrames)).catch(() => new Map());
                     for (const ref of freshMedia) content.push(...lookMediaBlocks(ref, imgs.get(ref)));
                 }
                 results.push({ type: "tool_result", tool_use_id: u.id, ...(out.error !== undefined ? { is_error: true } : {}), content });
