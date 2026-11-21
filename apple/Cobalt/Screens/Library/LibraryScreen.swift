@@ -43,7 +43,7 @@ struct LibraryScreen: View {
                 .id(controller.stackID)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { ownWidth = $0 }
                 // UIKit keeps the bar it built for the old width (a half-width bar with no "…" after the pane closed or
-                // the phone unfolded, a row down below the iPad's tab bar): a new width class gets a new stack
+                // the phone unfolded): a new width class bounces the inspector once (LibraryController.tierChanged)
                 .onChange(of: measuredTier) { was, now in
                     if let was, let now, was != now { controller.tierChanged() }
                 }
@@ -402,7 +402,10 @@ private struct LibraryContent: View {
                 if wholeLibraryStep == 1 { await library.loadAll() }
             }
             // the album: locked at every open, its first page once the owner is in
-            .onChange(of: library.showingHidden, initial: true) { _, open in
+            .onChange(of: library.showingHidden, initial: true) { was, open in
+                // a rebuilt stack (the zoom-back fix) runs this again with the album still closed: nothing changed, so
+                // the selection and the sheets stay (it cleared the inspector after the pane closed)
+                if !open, !was { return }
                 if open, !model.capabilities.hidden { library.showingHidden = false; return }
                 controller.hiddenAlbumChanged(open: open)
                 #if DEBUG
