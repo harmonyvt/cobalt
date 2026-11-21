@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Archive the capystore app signed for App Store Connect and upload it to TestFlight (iOS, or the Mac with --mac).
 #
-# Usage: deploy/apple/testflight.sh [--mac] [--dry-run] [--build <n>] [--keep-archive]
+# Usage: deploy/apple/testflight.sh [--mac] [--dry-run] [--build <n>] [--keep-archive] [--no-launch-gate]
 #
 #   --mac            the Mac app (sandboxed, a signed .pkg) instead of the iOS app; same app record (universal purchase)
 #   --dry-run        archive and export a signed App Store ipa (or pkg) into apple/.build/testflight/; upload nothing
 #   --build <n>      use this build number (default: one past the newest build of the Feather source, the TestFlight
 #                    log and apple/project.yml, so both channels share one rising build number)
 #   --keep-archive   keep the .xcarchive (default: deleted after the export to save disk; the dSYMs are copied first)
+#   --no-launch-gate skip deploy/apple/launch-gate.sh (builds the Release app, launches it, fails if it dies or never
+#                    shows a window); the gate also runs in --dry-run. Skipping prints a warning: use it only to ship a fix
+#                    for the gate itself.
 #
 # Signing is automatic: xcodebuild signs in to the developer account with the App Store Connect API key below
 # (-allowProvisioningUpdates), registers the bundle ids, the app group and push for the app and its extensions, and
@@ -34,6 +37,7 @@ TF_LOG="$IPA_ARCHIVE/testflight.tsv"
 
 DRY_RUN=0
 KEEP_ARCHIVE=0
+LAUNCH_GATE=1
 PLATFORM=ios
 BUILD_ARG=""
 
@@ -42,13 +46,14 @@ while [ $# -gt 0 ]; do
         --dry-run) DRY_RUN=1 ;;
         --mac|--macos) PLATFORM=mac ;;
         --keep-archive) KEEP_ARCHIVE=1 ;;
+        --no-launch-gate) LAUNCH_GATE=0 ;;
         --build)
             [ $# -ge 2 ] || { echo "testflight.sh: --build needs a number" >&2; exit 2; }
             BUILD_ARG="$2"
             shift
             ;;
         -h|--help)
-            sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -151,6 +156,17 @@ step "capystore $LABEL $VERSION ($BUILD) for TestFlight$([ "$DRY_RUN" -eq 1 ] &&
 
 step "xcodegen generate"
 (cd "$APPLE" && xcodegen generate)
+
+# The gate builds and launches the Release app from the project xcodegen just wrote; a launch crash stops the upload.
+if [ "$LAUNCH_GATE" -eq 1 ]; then
+    step "launch gate ($PLATFORM)"
+    "$ROOT/deploy/apple/launch-gate.sh" "$PLATFORM" || die "the launch gate failed; nothing was archived (--no-launch-gate skips it)"
+else
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+    echo "WARNING: --no-launch-gate: this build was NOT launched before archiving." >&2
+    echo "         A launch crash (like 8.27's) would reach TestFlight." >&2
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+fi
 
 step "xcodebuild archive (Release, signed by team $TEAM_ID)"
 if ! xcodebuild \

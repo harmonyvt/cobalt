@@ -1,0 +1,42 @@
+# Lifecycle code that still decides for itself what AppLifecycle should (the lifecycle audit): scenePhase reads,
+# app lifecycle notifications, live state in App/Scene bodies or `.commands`, `onChange(initial: true)` that
+# clears state. One `<finding> # reason` per line; LifecycleLintTests fails on anything new and on entries that
+# no longer match, so this list may only shrink. `[scene-config]` is never listed. Regenerate with
+# UPDATE_LIFECYCLE_ALLOWLIST=1 (reasons are kept).
+
+[app-notification] CobaltKit/Sources/CobaltKit/Background/ContinuedProcessing.swift: center.addObserver(forName: Notification.Name("UIApplicationDidBecomeActiveNotification"), object: nil, queue: .main) { [weak self] _ in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[app-notification] CobaltKit/Sources/CobaltKit/Background/ContinuedProcessing.swift: center.addObserver(forName: Notification.Name("UIApplicationWillResignActiveNotification"), object: nil, queue: .main) { [weak self] _ in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[app-notification] CobaltKit/Sources/CobaltKit/Folder/MacFolder.swift: forName: NSApplication.didBecomeActiveNotification, object: nil, queue: nil # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[app-notification] CobaltKit/Sources/CobaltKit/Live/LiveActivityManager.swift: forName: Notification.Name("UIApplicationDidEnterBackgroundNotification"), object: nil, queue: .main # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[app-notification] CobaltKit/Sources/CobaltKit/Live/LiveActivityManager.swift: forName: Notification.Name("UIApplicationWillEnterForegroundNotification"), object: nil, queue: .main # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[app-notification] CobaltKit/Sources/CobaltKit/Media/Platform.swift: let becameActive = "NSApplicationDidBecomeActiveNotification" # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[app-notification] CobaltKit/Sources/CobaltKit/Media/Platform.swift: let becameActive = "UIApplicationDidBecomeActiveNotification" # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[app-notification] CobaltKit/Sources/CobaltKit/Media/Platform.swift: let resigned = "NSApplicationDidResignActiveNotification" # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[app-notification] CobaltKit/Sources/CobaltKit/Media/Platform.swift: let resigned = "UIApplicationWillResignActiveNotification" # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[initial-clear] Cobalt/Screens/Duo/SpreadPane.swift: .onChange(of: item.map { AnyHashable($0.id) }, initial: true) { _, id in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[initial-clear] Cobalt/Screens/Home/HomeScreen.swift: .onChange(of: model.requestedMediaID, initial: true) { _, id in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[initial-clear] Cobalt/Screens/Library/LibraryScreen.swift: .onChange(of: library.expandedPostID, initial: true) { _, id in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[initial-clear] Cobalt/Screens/Library/LibraryTable.swift: .onChange(of: controller.reveal, initial: true) { _, request in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/App/AlertsPromptSheet.swift: .onChange(of: scenePhase) { _, phase in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/App/AlertsPromptSheet.swift: @Environment(\.scenePhase) private var scenePhase # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/App/AppShell.swift: .onChange(of: scenePhase) { _, phase in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/App/AppShell.swift: @Environment(\.scenePhase) private var scenePhase # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/App/AppShell.swift: DebugHooks.log("scenePhase \(String(describing: phase))") # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Library/LibraryHidden.swift: @Environment(\.scenePhase) private var scenePhase # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Library/LibraryHidden.swift: if controller.albumOpen, scenePhase != .active { HiddenCover() } # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Library/LibraryScreen.swift: .onChange(of: scenePhase) { _, phase in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Library/LibraryScreen.swift: @Environment(\.scenePhase) private var scenePhase # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Library/SyncGlowView.swift: "\(state.rawValue)-\(onScreen)-\(scenePhase == .active)" # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Library/SyncGlowView.swift: @Environment(\.scenePhase) private var scenePhase # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Library/SyncGlowView.swift: sceneActive: scenePhase == .active) # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Settings/SettingsScreen.swift: .onChange(of: scenePhase) { _, phase in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Settings/SettingsScreen.swift: @Environment(\.scenePhase) private var scenePhase # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/SkyMap/SkyMapView.swift: @Environment(\.scenePhase) private var scenePhase # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/SkyMap/SkyMapView.swift: TimelineView(.animation(minimumInterval: settling ? 1.0 / 30 : 1.0 / 12, paused: reduceMotion || scenePhase != .active)) { timeline in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Stage/StageScreen.swift: .onChange(of: scenePhase) { _, _ in syncPolling() } # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Stage/StageScreen.swift: @Environment(\.scenePhase) private var scenePhase # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Stage/StageScreen.swift: if scenePhase == .active && model.selectedTab == .stage { # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Swarms/SwarmsScreen.swift: .onChange(of: scenePhase) { _, phase in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Swarms/SwarmsScreen.swift: @Environment(\.scenePhase) private var scenePhase # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Twitch/TwitchScreen.swift: .onChange(of: scenePhase) { _, phase in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[scenePhase] Cobalt/Screens/Twitch/TwitchScreen.swift: @Environment(\.scenePhase) private var scenePhase # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle

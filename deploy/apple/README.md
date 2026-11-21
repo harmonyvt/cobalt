@@ -140,6 +140,16 @@ and starts one for share-sheet runs. To turn that on, create an APNs key (develo
 & Profiles > Keys > +, Apple Push Notifications service, environment Sandbox & Production), add it to the secrets file as
 in `deploy/cloudflare/README.md` ("Live Activities"), deploy the API, then check `GET /live/selftest`.
 
+## Launch gate
+
+`launch-gate.sh ios|mac [--timeout 15] [--skip-layout]` builds the Release app (`apple/.build/gate-ios` or `gate-mac`, no
+signing), launches it (iPhone 17 Pro simulator, override with `COBALT_GATE_SIM`; or this Mac) and passes only if the
+process is still alive after the wait AND `Caches/launch-ok` exists (`LaunchMarker` writes it when the first window
+appears). On failure it prints the failed check, the app's last log lines and the newest crash report path. The iOS gate
+then runs `deploy/apple/layout-checks.sh` when that exists. `testflight.sh` runs the gate before archiving (also with
+`--dry-run`); `--no-launch-gate` skips it with a loud warning. It needs the xcodegen'd project, which `testflight.sh`
+generates just before.
+
 ## dSYMs
 
 Every run copies the Release dSYMs to `~/cobalt-dsyms/<version>-<build>/` and prints the app binary UUID. Keep them: they

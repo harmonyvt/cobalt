@@ -1,4 +1,4 @@
-# Apple app architecture: the main thread is display-only (8.17)
+# Apple app architecture: the main thread is display-only (8.17), and every thing has one owner (8.29)
 
 House rules for the native app (`apple/`): iPhone, iPad and Mac, iOS 18 / macOS 15, Swift 6 strict concurrency,
 SwiftUI with `@Observable`. They are short on purpose and each one is enforced by a test, an assertion or telemetry.
@@ -181,11 +181,106 @@ Reading it: PostHog project "capystore", events `engine_ops` (where time goes), 
 `hang_stack` (what main was doing). A rising `engine_ops` p50 with flat `frames` is fine; a `hang_stack` whose top
 frames are in an engine means rule 1 or 2 was broken.
 
+## Who owns what: windows, lifecycle and memory (8.29)
+
+The rules above decide where work runs. These decide who owns a thing and for how long. 8.27 crashed on every launch,
+and #113 looped the Mac launch twice, for one reason: our code and SwiftUI both acted as owner of the same thing and
+kept answering each other. The audit and explainer: `/mnt/project-files/lifecycle-audit/` (index.html, learn.html).
+
+### Four lifetimes
+
+Every piece of state belongs to exactly one:
+
+| Lifetime | Lives as long as | Examples | Owner |
+| --- | --- | --- | --- |
+| process | the app runs | AppModel, engines, caches, the Twitch player, Live Activity managers | made once at launch; told about the app's state by `AppLifecycle` |
+| window | one scene is connected | which sheet is open, the editor cover, the TV window | that window (SwiftUI), never the shared model |
+| view | one view's identity | scroll physics, hover, an animation in flight | the view's `@State`; safe to lose |
+| job | one save or render | a pipeline run, its Live Activity, its background download | the job; it ends itself |
+
+What the owner chose (selection, an open sheet, a scroll target) is not view state: it lives in a model keyed by id,
+because a fold, a split pane closing, rotation or a tab switch rebuilds views. iPad multi-window is off (no scene
+manifest); per-window state is not built until it is wanted.
+
+### Rule 8: SwiftUI owns windows
+
+SwiftUI makes every scene, its delegate and its window. `CobaltAppDelegate` only does what SwiftUI has no API for:
+notification taps, the TV screen (`windowExternalDisplayNonInteractive`, `TwitchTVSceneDelegate`), Mac quit and reopen.
+
+- Why: 8.27 returned `connectingSceneSession.configuration` (which names SwiftUI's own scene delegate) and SwiftUI
+  forwarded to itself until the stack ran out.
+- Enforced: `LifecycleLintTests` rule `scene-config`, no allowlist escape; the TestFlight launch gate.
+- Mac windows are found by `NSWindow.identifier` (`MacWindows`), never by title.
+
+### Rule 9: one listener hears the OS
+
+`AppLifecycle.shared` (CobaltKit/Lifecycle) is the only thing that watches the app's notifications (active, resign,
+foreground, background, terminate, memory warning, thermal; on the Mac also hide/unhide). The app delegate starts it
+before any window exists, so a background wake (a finished download, an intent) is heard too. Process objects conform to
+`LifecycleAware` and register once with an order (telemetry, work, liveActivities, media, screens); caches conform to
+`Purgeable` and give back memory on background and on a memory warning (never disk). What an event means is one pure
+function, `LifecycleRules.apply`, with unit tests.
+
+- Why: 37 places each read scenePhase or a notification, with mixed Will/Did names; the Live Activity resume ran twice;
+  scenePhase never fires without a window and misses most Mac events; a memory warning freed nothing.
+- Enforced: `LifecycleLintTests` rules `scenePhase` and `app-notification`, with `apple/lifecycle-allowlist.txt` (only
+  shrinks).
+
+```swift
+// don't
+@Environment(\.scenePhase) private var phase
+NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, ...)
+// do: a view
+@Environment(\.lifecycle) private var lifecycle          // a LifecycleSnapshot value
+.onChange(of: lifecycle.phase) { ... }
+// do: a process object
+AppLifecycle.shared.register(self, order: .work)          // func lifecycle(_ event:snapshot:)
+AppLifecycle.shared.register(purgeable: self)             // func purge(_ level:)
+```
+
+### Rule 10: App and Scene bodies read nothing live
+
+`App.body`, every `some Scene`, and `.commands` builders are part of SwiftUI's dependency graph. They read no
+`@Observable` property and write no binding the system also writes (`MenuBarExtra(isInserted:)`). A menu item that
+needs live state is a View inside the CommandGroup, observing in its own body. `AppLifecycle` is deliberately not
+`@Observable`; the root window view copies its snapshots into the Environment (`publishesLifecycle()`).
+
+- Why: both #113 loops (the menu bar switch written back during the update; `.commands` reading live state).
+- Enforced: `LifecycleLintTests` rule `scene-body-read` (a heuristic, with the allowlist).
+
+### Rule 11: `onChange(initial: true)` reads, it never clears
+
+A handler that runs on `initial` runs again whenever SwiftUI re-creates the view. It may load or sync, never reset owner
+state; clearing happens only when the value it depends on really changed (compare old and new).
+
+- Why: closing the iPad split pane cleared the library selection and its "…" menu.
+- Enforced: `LifecycleLintTests` rule `initial-clear`; `CobaltUITests` (rotate, background and back, pane) in the gate.
+
+### Rule 12: heavy things are pooled
+
+Video players come from `PlayerPool` (a cap on decoders playing at once, paused on background, idle ones freed on a
+memory warning). The Twitch web view stops in the background unless the TV window shows it, and is released after
+idle minutes. Anything that decodes animation stops in `deinit` too, not only in `onDisappear`.
+
+### Rule 13: prove it by running it
+
+`deploy/apple/testflight.sh` runs `deploy/apple/launch-gate.sh` before every upload: the release build on an iOS 27
+simulator (or the Mac app) must still be alive after 15 s and must have written `Caches/launch-ok` (`LaunchMarker`, when
+the first window appears), then `deploy/apple/layout-checks.sh` runs the UI checks. `--no-launch-gate` skips it, loudly.
+
+### Prompting with it
+
+Say where a new piece lives: "it lives for the window" (or the process, a view, a job); "it hears the app state from the
+listener"; "it takes a player from the pool".
+
 ## Adding code: a checklist
 
 1. Does it touch disk, JSON or pixels? It goes in an engine (an actor, or `nonisolated` + `@concurrent`), starts with
    `MainThreadGuard.assertOffMain()` and is wrapped in `EngineClock.measure`.
 2. Does it return data to the UI? As a `Sendable, Equatable` snapshot; the model assigns only when it changed.
 3. Does a view need it? Pass the values the view draws, not the model.
-4. Run `cd apple/CobaltKit && swift test --filter MainThreadLint`. If you moved work off main, delete its allowlist
-   line; `UPDATE_MAIN_THREAD_ALLOWLIST=1` rewrites the list from the tree and keeps every reason.
+4. Does it outlive a view, react to the app's state, or hold memory? Name its lifetime, register it with `AppLifecycle`,
+   take players from the pool (rules 8 to 12).
+5. Run `cd apple/CobaltKit && swift test --filter MainThreadLint`. If you moved work off main, delete its allowlist
+   line; `UPDATE_MAIN_THREAD_ALLOWLIST=1` rewrites the list from the tree and keeps every reason. Same for
+   `--filter LifecycleLint` and `UPDATE_LIFECYCLE_ALLOWLIST=1`.
