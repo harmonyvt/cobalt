@@ -159,10 +159,10 @@ final class LibraryController {
         unstick("tap")
     }
 
-    /// The pane beside the library closed: UIKit keeps the bar a row down (where it sat below the iPad's tab bar while
-    /// the pane showed) until the stack is rebuilt, so rebuild it once.
-    func paneClosed() {
-        Breadcrumbs.add("library.paneClosed")
+    /// The library's width class changed (a pane opened or closed beside it, a fold, a rotation): UIKit keeps the bar it
+    /// built for the old one, so the stack is built again.
+    func tierChanged() {
+        Breadcrumbs.add("library.tierChanged")
         stackID += 1
     }
 

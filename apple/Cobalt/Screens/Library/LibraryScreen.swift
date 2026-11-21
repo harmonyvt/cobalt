@@ -18,7 +18,6 @@ struct LibraryScreen: View {
 
     @State private var controller: LibraryController
     #if os(iOS)
-    @Environment(\.hingeEdge) private var hingeEdge
     /// The library's own width: in a spread it is one column, and the shell's tier for it did not always come back
     /// to the window's when the pane closed (a half-width bar, no "…", at full width).
     @State private var ownWidth: CGFloat = 0
@@ -31,7 +30,8 @@ struct LibraryScreen: View {
     }
 
     #if os(iOS)
-    private var shownTier: Tier { ownWidth > 0 ? Tier(width: ownWidth) : tier }
+    private var measuredTier: Tier? { ownWidth > 0 ? Tier(width: ownWidth) : nil }
+    private var shownTier: Tier { measuredTier ?? tier }
     #endif
 
     var body: some View {
@@ -42,7 +42,11 @@ struct LibraryScreen: View {
                 // rebuilt when the zoom back from a video leaves the grid out of the stack (LibraryController.checkStackSoon)
                 .id(controller.stackID)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { ownWidth = $0 }
-                .onChange(of: hingeEdge) { was, now in if was == .trailing, now == nil { controller.paneClosed() } }
+                // UIKit keeps the bar it built for the old width (a half-width bar with no "…" after the pane closed or
+                // the phone unfolded, a row down below the iPad's tab bar): a new width class gets a new stack
+                .onChange(of: measuredTier) { was, now in
+                    if let was, let now, was != now { controller.tierChanged() }
+                }
             #else
             if tier == .compact {
                 NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
