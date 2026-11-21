@@ -541,7 +541,7 @@ public final class OfflineStore {
         let keep = keep && canKeep
         let fm = FileManager.default
         let id = UUID().uuidString.lowercased()
-        let ext = file.pathExtension.isEmpty ? (kind == .webp ? "webp" : "mp4") : file.pathExtension.lowercased()
+        let ext = FileSniff.storedExtension(for: file, fallback: kind == .webp ? "webp" : "mp4")
         var fileName = "\(id).\(ext)"
         var destination: URL
         let backedUp = Self.hasServerCopy(kind: kind, sessionID: sessionID, remoteURL: remoteURL, publicURL: publicURL, libraryID: libraryID)
@@ -724,8 +724,7 @@ public final class OfflineStore {
             Telemetry.log(.info, .store, "store attach skipped", data: ["reason": "already kept"])
             return current
         }
-        let ext = file.pathExtension.isEmpty
-            ? (existing.kind == .webp ? "webp" : "mp4") : file.pathExtension.lowercased()
+        let ext = FileSniff.storedExtension(for: file, fallback: existing.kind == .webp ? "webp" : "mp4")
         var fileName = "\(id)-\(UUID().uuidString.prefix(6).lowercased()).\(ext)"
         var destination: URL
         do {
