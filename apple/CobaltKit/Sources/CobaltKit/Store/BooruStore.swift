@@ -38,8 +38,9 @@ public final class BooruStore {
         didSet { if safeMode != oldValue, phase != .idle { Task { await reload() } } }
     }
 
-    /// The level asked for: general in safe mode, else nil (the device's own).
-    var askedLevel: BooruLevel? { safeMode ? .general : nil }
+    /// The level asked for: general in safe mode, else the device's own (so Danbooru is asked for those ratings only and a
+    /// page is not mostly posts the server then drops). The server never answers above the device's level either way.
+    var askedLevel: BooruLevel? { safeMode ? .general : settings?.level }
     public var effectiveLevel: BooruLevel { safeMode ? .general : (settings?.level ?? .general) }
     public var available: Bool { client != nil }
 
@@ -79,9 +80,11 @@ public final class BooruStore {
         guard let client else { return false }
         do {
             let s = try await client.updateBooruSettings(patch)
-            if s != settings { settings = s }
+            let changed = s != settings
+            if changed { settings = s }
             settingsError = nil
-            await reload()
+            // new filters: start the grid over (blank, loading, page 1) so the change is plain to see
+            if changed { await reload(fresh: true) }
             return true
         } catch {
             settingsError = Self.code(error)
@@ -105,13 +108,19 @@ public final class BooruStore {
         await reload()
     }
 
-    public func reload() async {
+    /// Page 1 again. `fresh` drops the posts shown first, so the grid shows loading instead of the old filters' posts.
+    public func reload(fresh: Bool = false) async {
         guard let client else { return }
         generation += 1
         let gen = generation
         if query.tooManyTags {
             phase = .failed("error.booru.too_many_tags")
             return
+        }
+        if fresh {
+            posts = []
+            hidden = BooruHidden()
+            nextPage = nil
         }
         phase = .loading
         revealed = []
