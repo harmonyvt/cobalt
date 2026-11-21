@@ -191,6 +191,7 @@ struct DetailActions: View {
             ForEach(items, id: \.self) { secondary($0) }
             SevenTvUploadIcon(model: model, file: rendition.file, title: item.titleText)  // 7TV upload (57.9)
             EmoteEditorIcon(model: model, rendition: rendition, title: item.titleText)  // emote editor (71)
+            WallpaperIcon(model: model, rendition: rendition)  // wallpaper maker (CONTRACT-WALLPAPER)
         }
     }
 

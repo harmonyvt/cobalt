@@ -4,6 +4,8 @@ import Foundation
 extension Copy {
     enum Wallpaper {
         static let menu = "make wallpaper…"
+        /// The icon in the detail's button row (its name shows on a long press).
+        static let button = "make wallpaper"
         static let title = "wallpaper"
         static let loading = "opening…"
         static let unreadable = "this file can't be made into a wallpaper"

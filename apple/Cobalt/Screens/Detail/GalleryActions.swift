@@ -196,6 +196,7 @@ struct GalleryActions: View {
         IconRow {
             ForEach(items, id: \.self) { secondary($0) }
             SevenTvUploadIcon(model: model, file: r.file, title: item.titleText)  // 7TV upload (57.9)
+            WallpaperIcon(model: model, rendition: r)  // wallpaper maker (CONTRACT-WALLPAPER)
         }
     }
 
