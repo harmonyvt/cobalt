@@ -91,7 +91,8 @@ struct HomeScreen: View {
     /// The job the star was born for: a star never morphs into another job's planet.
     @State private var starJob: UUID?
 
-    @Environment(\.scenePhase) private var scenePhase
+    /// The whole app's state (AppLifecycle), not this window's phase: the orbit stops when the app is not active.
+    @Environment(\.lifecycle) private var lifecycle
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
@@ -162,7 +163,11 @@ struct HomeScreen: View {
         #endif
     }
 
-    private var motionAllowed: Bool { !reduceMotion && !lowPower && scenePhase == .active && homeVisible }
+    private var motionAllowed: Bool { !reduceMotion && !lowPower && appActive && homeVisible }
+
+    /// Active, or still launching: the first "became active" can land a moment after the first frame (and previews never
+    /// get one), and an orbit that waits for it starts with a jolt. Inactive and background stop it.
+    private var appActive: Bool { lifecycle.isActive || lifecycle.phase == .launching }
 
     /// How fast the orbit turns: 1 at rest, about 0.3 behind a focused planet, still under Reduce Motion,
     /// Low Power Mode and when the app is not on screen.

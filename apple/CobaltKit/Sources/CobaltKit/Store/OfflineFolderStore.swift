@@ -132,6 +132,7 @@ extension OfflineStore {
     /// `removeOfflineCopy`; on one without, it only clears the wish.
     @discardableResult
     public func setKeep(_ keep: Bool, ids: [String]) async -> [String] {
+        await boot() // before the first load lands the list is empty (two-step launch)
         let wanted = Set(ids)
         guard !wanted.isEmpty else { return [] }
         if keep {
@@ -353,6 +354,7 @@ extension OfflineStore {
     /// (an unknown record, a tag that could not be read, an index that could not be written).
     @discardableResult
     public func replaceMade(_ id: String) async -> Bool {
+        await boot()
         guard let record = records.first(where: { $0.id == id }) else { return false }
         // A crop is never replaced: the server keeps every crop (it replaces exports only), so no remake makes one stale.
         guard record.role != .crop else { return false }

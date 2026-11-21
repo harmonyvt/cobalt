@@ -110,6 +110,8 @@ struct LibraryTile: View, Equatable {
             .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
             .modifier(accessibilityValue)
             .accessibilityAddTraits(selected || ticked ? [.isButton, .isSelected] : .isButton)
+            // the layout checks (apple/CobaltUITests) find the tiles by this, whatever their titles
+            .accessibilityIdentifier("library.tile")
             // date order for VoiceOver, not column order
             .accessibilitySortPriority(Double(-index))
     }

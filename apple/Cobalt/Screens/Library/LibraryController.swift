@@ -159,24 +159,37 @@ final class LibraryController {
         unstick("tap")
     }
 
-    /// The library's width class changed (a pane opened or closed beside it, a fold, a rotation): UIKit keeps the bar it
-    /// built for the old one, so the inspector column goes out and back in once.
-    /// Waits for the change to settle first: a pane opening or closing animates the column's width and the bar's row,
-    /// and a stack built mid-animation came up with a half-width bar and no "…" at full width.
+    /// The library's width class changed (a pane opened or closed beside it, a fold, a rotation). Nothing the owner chose
+    /// depends on the width: the selection, the picks, the album and the sheets are this controller's and stay as they
+    /// are. The only thing done here works around iPadOS (below).
+    ///
+    /// The iPadOS part, and only that: when the library's column changes width under an open inspector, UIKit keeps the
+    /// navigation bar it laid out for the old width (a half-width bar with no "…", no queue and no search at full width;
+    /// seen on the iPad simulator after the spread pane closed, PR #203) until the split's columns change once. A new
+    /// navigation stack does not clear it. Closing and reopening the inspector, with no animation, does. Two costs, both
+    /// accepted: the detail in the inspector is built again (its own tab and scroll start over; the post shown,
+    /// `selection`, stays), and the bounce is not remembered as the owner's choice (`bouncing`). With the inspector closed
+    /// there is nothing to bounce.
+    /// Waits for the change to settle first: a pane opening or closing animates the column's width and the bar's row, and
+    /// a fix applied mid-animation (the stack rebuild this replaced) came up with the same half-width bar.
+    ///
+    /// (05a9bfe called this a rebuild's fix too: the stack rebuild it replaced re-ran the album's `initial` watcher, which
+    /// cleared the selection. That watcher now compares with what it last saw (`albumSeen`), so no rebuild clears anything.)
     func tierChanged() {
         tierRebuild?.cancel()
         tierRebuild = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled, let self else { return }
             Breadcrumbs.add("library.tierChanged")
-            // UIKit keeps the bar it laid out for the old width until the library's column changes once; a new stack did
-            // not do it (and re-ran the album's initial onChange, which cleared the selection). An inspector out and back
-            // in, with no animation, is that change: "…", queue and search come back, and the header with the selection.
             guard !self.compact, self.inspectorOpen else { return }
             try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
             var quiet = Transaction(); quiet.disablesAnimations = true
+            self.bouncing = true
+            defer { self.bouncing = false }
             withTransaction(quiet) { self.inspectorOpen = false }
             try? await Task.sleep(for: .milliseconds(60))
+            // cancelled in between (another width change): open it again anyway, the next bounce starts from open
             withTransaction(quiet) { self.inspectorOpen = true }
         }
     }
@@ -192,8 +205,17 @@ final class LibraryController {
     var selection: String?
     /// The inspector's open state (remembered per device once the owner or the width decides).
     var inspectorOpen: Bool {
-        didSet { if inspectorOpen != oldValue { Self.defaults.set(inspectorOpen, forKey: Self.inspectorKey); decided = true } }
+        didSet {
+            guard inspectorOpen != oldValue, !bouncing else { return }
+            Self.defaults.set(inspectorOpen, forKey: Self.inspectorKey)
+            decided = true
+        }
     }
+    /// `tierChanged`'s iPadOS bounce is running: its close and reopen are not the owner's and are not stored.
+    @ObservationIgnored private var bouncing = false
+    /// The `showingHidden` this controller last acted on (nil before the screen first showed it): what `albumSeen`
+    /// compares with, so a view built again does not start the album over.
+    @ObservationIgnored var albumShown: Bool?
     /// The post "open in library" lit, for 1.6 s.
     var lit: String?
     var reveal: LibraryReveal?

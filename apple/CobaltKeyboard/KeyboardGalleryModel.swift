@@ -416,12 +416,16 @@ final class KeyboardGalleryModel {
     }
 
     /// A file already on this phone: the shelf the app published, else the shared cache. Nil downloads.
-    func prepareLocal(_ rendition: Rendition) -> URL? {
+    /// The manifest and index are read and decoded off the main thread.
+    func prepareLocal(_ rendition: Rendition) async -> URL? {
         guard let root = Self.videosRoot() else { return nil }
         let ids = Set([rendition.file?.id, rendition.hosted?.id].compactMap { $0 })
         let link = rendition.publicURL?.absoluteString
-        if let match = Self.shelfMatch(root: root, ids: ids, link: link) { return match }
-        return Self.indexMatch(root: root, ids: ids, link: link, remote: rendition.publicURL)
+        let remote = rendition.publicURL
+        return await Task.detached(priority: .userInitiated) {
+            if let match = Self.shelfMatch(root: root, ids: ids, link: link) { return match }
+            return Self.indexMatch(root: root, ids: ids, link: link, remote: remote)
+        }.value
     }
 
     /// Nil when the rendition has nothing to copy. Throws when the download fails.
@@ -454,9 +458,9 @@ final class KeyboardGalleryModel {
         return container.appendingPathComponent("Videos", isDirectory: true)
     }
 
-    private static func shelfMatch(root: URL, ids: Set<String>, link: String?) -> URL? {
+    private nonisolated static func shelfMatch(root: URL, ids: Set<String>, link: String?) -> URL? {
         let manifest = root.appendingPathComponent("for-keyboard/manifest.json")
-        guard let data = try? Data(contentsOf: manifest),
+        guard let data = try? Data(contentsOf: manifest, options: .alwaysMapped),
               let entries = try? JSONDecoder().decode([ShelfEntry].self, from: data) else { return nil }
         let hit = entries.first { entry in
             if let id = entry.libraryID, ids.contains(id) { return true }
@@ -468,9 +472,9 @@ final class KeyboardGalleryModel {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    private static func indexMatch(root: URL, ids: Set<String>, link: String?, remote: URL?) -> URL? {
+    private nonisolated static func indexMatch(root: URL, ids: Set<String>, link: String?, remote: URL?) -> URL? {
         let index = root.appendingPathComponent("index.json")
-        guard let data = try? Data(contentsOf: index) else { return nil }
+        guard let data = try? Data(contentsOf: index, options: .alwaysMapped) else { return nil }
         let rows = (try? JSONDecoder().decode([IndexEntry].self, from: data)) ?? []
         let hit = rows.first { entry in
             guard let name = entry.fileName, !name.isEmpty else { return false }

@@ -87,6 +87,21 @@ actor OfflineIndexEngine {
         return stamp(records, ())
     }
 
+    /// The launch's first load (`OfflineStore.boot()`): the reconcile, then the inbox leftovers of a run that never
+    /// finished. Both ran in the store's initializer on the main thread, before the first frame; here they run first in
+    /// the engine's line, so every write the app queues after launch re-reads what the reconcile fixed.
+    /// `launch.store` is what the owner's phone reports for it, beside `store.reconcile`.
+    func boot() -> OfflineIndexSnapshot<Void> {
+        MainThreadGuard.assertOffMain()
+        let root = root
+        let records = EngineClock.measure("launch.store") { () -> [OfflineStore.Record] in
+            let records = OfflineStore.reconciled(root: root)
+            OfflineStore.purgeInbox(root: root, olderThan: OfflineStore.inboxLifetime)
+            return records
+        }
+        return stamp(records, ())
+    }
+
     /// One pass of the limit over the index as it is on disk. The plan is made from one read; only when it would take
     /// something does the coordinated write run (it re-reads, as every write does, and enforces again on what it read).
     /// Nothing to take: the read itself is the snapshot, with no second read. Nil when the index cannot be read (the store

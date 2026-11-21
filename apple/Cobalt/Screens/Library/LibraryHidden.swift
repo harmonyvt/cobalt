@@ -104,12 +104,12 @@ struct HiddenCover: View {
 /// the library screen, and again inside the pushed detail and the inspector, which are not under the screen's own overlay.
 struct HiddenCoverModifier: ViewModifier {
     let controller: LibraryController
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.lifecycle) private var lifecycle
 
     func body(content: Content) -> some View {
         content.overlay {
             #if os(iOS)
-            if controller.albumOpen, scenePhase != .active { HiddenCover() }
+            if controller.albumOpen, !lifecycle.isActive { HiddenCover() }
             #endif
         }
     }

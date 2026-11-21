@@ -111,6 +111,9 @@ private struct FullScreenVideo: View {
     let start: CMTime
     let close: (CMTime?) -> Void
     @State private var player = AVPlayer()
+    /// The audio session was given back (by the close button, or by going away some other way: a swipe, the sheet
+    /// closed by the system). Once only, whichever comes first.
+    @State private var audioReleased = false
 
     // Session replay (APP-API-CONTRACT 58): media is always masked.
     var body: some View { mediaBody.mediaMask() }
@@ -142,20 +145,30 @@ private struct FullScreenVideo: View {
             player.replaceCurrentItem(with: item)
             player.isMuted = false
             await item.seek(to: start.isValid ? start : .zero)
-            player.play()
+            PlayerPool.shared.play(player, as: .hero)
         }
-        // emptied as it goes, so a streamed clip's connections close now rather than whenever the player is freed
+        // emptied as it goes, so a streamed clip's connections close now rather than whenever the player is freed; the
+        // sound is given back here too, so a dismissal that skips `finish` never leaves the session in playback
         .onDisappear {
             player.pause()
+            PlayerPool.shared.forget(player)
             player.replaceCurrentItem(with: nil)
+            releaseAudio()
         }
     }
 
     private func finish() {
         let time = player.currentTime()
         player.pause()
-        AudioPolicy.release()
+        releaseAudio()
         close(time.isValid ? time : nil)
+    }
+
+    /// Back to ambient, once: after the player has paused (deactivating with audio running held the main thread).
+    private func releaseAudio() {
+        guard !audioReleased else { return }
+        audioReleased = true
+        AudioPolicy.release()
     }
 }
 

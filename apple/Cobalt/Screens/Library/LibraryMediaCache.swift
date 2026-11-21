@@ -26,18 +26,35 @@ enum LibraryPictureSource: Hashable, Sendable {
 /// The library's `URLSession`: a disk cache of 200 MB (a public webp is fetched once, for its first frame and
 /// again for the animation), and `-previewMediaDir` (DEBUG) to read public media from a local folder.
 enum LibraryMediaCache {
+    static let memoryCapacity = 24 * 1024 * 1024
+
     static let session: URLSession = {
         let config = URLSessionConfiguration.default
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        config.urlCache = URLCache(
-            memoryCapacity: 24 * 1024 * 1024, diskCapacity: 200 * 1024 * 1024,
+        let cache = URLCache(
+            memoryCapacity: LibraryMediaCache.memoryCapacity, diskCapacity: 200 * 1024 * 1024,
             directory: caches.appendingPathComponent("cobalt-library-media", isDirectory: true))
+        config.urlCache = cache
         config.requestCachePolicy = .useProtocolCachePolicy
         config.timeoutIntervalForRequest = 30
         config.waitsForConnectivity = false
+        purgesMemory(of: cache)
         return URLSession(configuration: config)
     }()
+
+    /// The app leaving the screen or a memory warning empties the cache's memory copy only: its capacity goes to zero and
+    /// back (`removeAllCachedResponses` would delete the 200 MB on disk too, and every webp would be fetched again).
+    private static func purgesMemory(of cache: URLCache) {
+        // URLCache is thread safe; it is only resized here
+        nonisolated(unsafe) let cache = cache
+        Task { @MainActor in
+            PurgeHook.register { _ in
+                cache.memoryCapacity = 0
+                cache.memoryCapacity = LibraryMediaCache.memoryCapacity
+            }
+        }
+    }
 
     /// `-previewMediaDir /some/folder` (DEBUG) reads the public media from a local folder instead of the
     /// network, so the simulator evidence run shows real posters without the server. A name the folder lacks

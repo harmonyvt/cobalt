@@ -76,6 +76,19 @@ extension LibraryController {
         closeAlbumState()
     }
 
+    /// The screen saw `showingHidden`: when it first shows, and at every change. Only a real open or close (a value other
+    /// than the one last acted on) starts the album over; the same value seen again by a view built again (the zoom-back
+    /// fix's new stack, a fold, a rotation, the spread pane) changes nothing, so the selection, the picks and the sheets
+    /// stay. The first look at a closed album has nothing to drop. True when the album was started over.
+    @discardableResult
+    func albumSeen(open: Bool) -> Bool {
+        let was = albumShown
+        albumShown = open
+        guard was != open, was != nil || open else { return false }
+        hiddenAlbumChanged(open: open)
+        return true
+    }
+
     /// `showingHidden` changed (the chip, settings › open hidden, a kind chip). Always starts locked.
     func hiddenAlbumChanged(open: Bool) {
         lockEpoch += 1

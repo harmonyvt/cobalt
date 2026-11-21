@@ -286,7 +286,13 @@ public final class UnifiedQueue {
         reschedule()
     }
 
-    /// The app came to the front (true) or left it (false): scenePhase `.active` or not.
+    /// The queue tab polls only while the app is in front (active; on the Mac, not hidden), through the app's one listener (`AppLifecycle`, `.work`).
+    /// Called once, by `AppModel.live()`.
+    func observeLifecycle(_ lifecycle: AppLifecycle = .shared) {
+        lifecycle.register(self, order: .work)
+    }
+
+    /// The app came to the front (true) or left it (false): the lifecycle's `isActive` (the Mac: `isForeground`).
     public func setForeground(_ foreground: Bool) {
         guard isForeground != foreground else { return }
         isForeground = foreground
@@ -622,5 +628,16 @@ public final class UnifiedQueue {
             }
         }
         return s
+    }
+}
+
+extension UnifiedQueue: LifecycleAware {
+    public func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        #if os(macOS)
+        // the Mac: in front unless hidden, as scenePhase was (it never left `.active` for Cmd-Tab)
+        setForeground(snapshot.isForeground)
+        #else
+        setForeground(snapshot.isActive)
+        #endif
     }
 }

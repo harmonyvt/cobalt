@@ -85,7 +85,9 @@ struct KeyboardShelfPublisher: View {
         Color.clear
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
-            .task(id: store.videos) {
+            // nil until the store's first load lands, so a slow boot never publishes an empty shelf
+            .task(id: store.isLoaded ? store.videos : nil) {
+                guard store.isLoaded else { return }
                 let videos = store.videos
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }

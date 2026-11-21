@@ -11,7 +11,7 @@ struct SwarmsScreen: View {
     let model: AppModel
     let tier: Tier
 
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.lifecycle) private var lifecycle
     @State private var open: SwarmDestination?
     @State private var width: CGFloat = 0
 
@@ -53,9 +53,9 @@ struct SwarmsScreen: View {
         .onChange(of: open?.id) { _, id in
             if let id { Task { await store.show(id: id) } } else { store.hide() }
         }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: inFront) { _, inFront in
             // nothing is read while the app is away; coming back reads the list and the open swarm again
-            if phase == .active {
+            if inFront {
                 Task {
                     await store.loadList()
                     if let id = open?.id { await store.show(id: id) }
@@ -68,6 +68,17 @@ struct SwarmsScreen: View {
             if tab != .swarms { store.hide() } else if let id = open?.id { Task { await store.show(id: id) } }
         }
         .onDisappear { if open == nil { store.hide() } }
+    }
+
+    /// Whether the app counts as in front for this screen. iPhone and iPad: active (a pulled-down Control Center is
+    /// away, as it was with scenePhase). The Mac: not hidden, because scenePhase never left `.active` for Cmd-Tab, and
+    /// hiding the swarm there would drop the open board's search and sort every time another app came to the front.
+    private var inFront: Bool {
+        #if os(macOS)
+        return lifecycle.isForeground
+        #else
+        return lifecycle.isActive
+        #endif
     }
 
     /// A link (or a launch argument) asked for a swarm, its check screen or its board: go there and clear the request.

@@ -15,7 +15,8 @@ final class MenuBarHandoff {
     private(set) var token = 0
     private var items: [PastedContent] = []
     private var focus: Job.ID?
-    /// Opens the main window. The menu bar label sets it; the Dock uses it when the window was closed.
+    /// Opens the main window. The menu bar label sets it; nil while the menu bar icon has not appeared (`MacWindows.reveal`
+    /// then does it from the window's own stored action).
     var reveal: (() -> Void)?
 
     func stage(items: [PastedContent]) {
@@ -44,17 +45,5 @@ final class MenuBarHandoff {
 final class MenuBarPresence {
     static let shared = MenuBarPresence()
     var staysRunning = true
-}
-
-enum MacWindows {
-    @MainActor static func reveal(_ open: OpenWindowAction) {
-        NSApp.activate()
-        if let window = NSApp.windows.first(where: { $0.title == "capystore" }) {
-            if window.isMiniaturized { window.deminiaturize(nil) }
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            open(id: "main")
-        }
-    }
 }
 #endif

@@ -10,11 +10,41 @@ import SQLite3
 actor SyncStore {
     /// Owns the connection so the actor's deinit never touches a non-Sendable pointer. Every statement
     /// still runs on this actor; the box only closes the database when the store is released.
-    private let connection: Connection
+    private var connection: Connection?
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    private var db: OpaquePointer? { connection.db }
+    private let fileURL: URL
+    /// Why the database could not be opened, once that was tried (it is not tried again this launch).
+    private var openFailure: SyncStoreError?
+    /// The connection, opened on first use, on this actor. Nil when it could not be opened: every statement then throws
+    /// "database is closed", as on a closed store.
+    private var db: OpaquePointer? {
+        if connection == nil, openFailure == nil { try? open() }
+        return connection?.db
+    }
 
+    /// Cheap: nothing is opened here. The app makes the store at launch, on the main thread, and the open (a directory,
+    /// the WAL, the schema, the outbox reset) used to run in this initializer before the first frame; it now runs on this
+    /// actor at the first call (`open()`, which `LibrarySync.start` makes first). `throws` is kept for callers written
+    /// against the opening initializer.
     init(fileURL: URL) throws {
+        self.fileURL = fileURL
+    }
+
+    /// Opens the database if it is not open yet (`launch.syncStore`); throws why it cannot be. Only the first attempt does
+    /// the work: a failure is kept, and every later call throws it again.
+    func open() throws {
+        if connection != nil { return }
+        if let openFailure { throw openFailure }
+        do {
+            connection = Connection(try EngineClock.measure("launch.syncStore") { try Self.openDatabase(at: fileURL) })
+        } catch {
+            let failure = error as? SyncStoreError ?? SyncStoreError(message: String(describing: error))
+            openFailure = failure
+            throw failure
+        }
+    }
+
+    private static func openDatabase(at fileURL: URL) throws -> OpaquePointer {
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         var opened: OpaquePointer?
         let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
@@ -24,17 +54,20 @@ actor SyncStore {
             sqlite3_close(opened)
             throw SyncStoreError(message: message)
         }
-        connection = Connection(opened)
-        // `init` is nonisolated, so the schema is applied with the pointer in hand rather than through
-        // the actor's methods.
-        try Self.exec(opened, "PRAGMA journal_mode=WAL")
-        try Self.exec(opened, "PRAGMA busy_timeout=2000")
-        try Self.exec(opened, Self.schema)
-        try Self.addSendingColumn(opened)
-        // A send the last launch never heard back from (the app was closed or killed mid-request). The
-        // server may hold it, so it counts as one try: nothing is merged into it and it goes out again
-        // under the same key.
-        try Self.exec(opened, "UPDATE outbox SET tries = MAX(tries, 1), sending = 0 WHERE sending = 1")
+        do {
+            try exec(opened, "PRAGMA journal_mode=WAL")
+            try exec(opened, "PRAGMA busy_timeout=2000")
+            try exec(opened, schema)
+            try addSendingColumn(opened)
+            // A send the last launch never heard back from (the app was closed or killed mid-request). The
+            // server may hold it, so it counts as one try: nothing is merged into it and it goes out again
+            // under the same key.
+            try exec(opened, "UPDATE outbox SET tries = MAX(tries, 1), sending = 0 WHERE sending = 1")
+        } catch {
+            sqlite3_close(opened)
+            throw error
+        }
+        return opened
     }
 
     // MARK: - Posts

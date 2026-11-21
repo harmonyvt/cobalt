@@ -1,0 +1,9 @@
+# Lifecycle code that still decides for itself what AppLifecycle should (the lifecycle audit): scenePhase reads,
+# app lifecycle notifications, live state in App/Scene bodies or `.commands`, `onChange(initial: true)` that
+# clears state. One `<finding> # reason` per line; LifecycleLintTests fails on anything new and on entries that
+# no longer match, so this list may only shrink. `[scene-config]` is never listed. Regenerate with
+# UPDATE_LIFECYCLE_ALLOWLIST=1 (reasons are kept).
+[initial-clear] Cobalt/Screens/Duo/SpreadPane.swift: .onChange(of: item.map { AnyHashable($0.id) }, initial: true) { _, id in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[initial-clear] Cobalt/Screens/Home/HomeScreen.swift: .onChange(of: model.requestedMediaID, initial: true) { _, id in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[initial-clear] Cobalt/Screens/Library/LibraryScreen.swift: .onChange(of: library.expandedPostID, initial: true) { _, id in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle
+[initial-clear] Cobalt/Screens/Library/LibraryTable.swift: .onChange(of: controller.reveal, initial: true) { _, request in # lifecycle baseline 2026-11-21, move to AppLifecycle / \.lifecycle

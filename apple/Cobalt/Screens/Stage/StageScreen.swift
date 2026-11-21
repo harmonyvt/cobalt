@@ -11,7 +11,7 @@ struct StageScreen: View {
     let model: AppModel
     let tier: Tier
 
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.lifecycle) private var lifecycle
     @State private var controller: StageController
 
     init(model: AppModel, tier: Tier) {
@@ -55,7 +55,7 @@ struct StageScreen: View {
             .task { await loadCollections() }
             .onAppear { syncPolling() }
             .onDisappear { store.stopPolling() }
-            .onChange(of: scenePhase) { _, _ in syncPolling() }
+            .onChange(of: inFront) { _, _ in syncPolling() }
             .onChange(of: model.selectedTab) { _, _ in syncPolling() }
             #if os(macOS)
             // a rotated link (or another server's stage) carries over to the wallpaper
@@ -69,9 +69,19 @@ struct StageScreen: View {
         if model.capabilities.shareCollections || model.capabilities.shareGroups { await model.shareSets.refresh() }
     }
 
-    /// The feed is read only while this screen is in front of an active app.
+    /// The app is in front for the feed. iPhone and iPad: active. The Mac: not hidden, as it was with scenePhase (which
+    /// never left `.active` for Cmd-Tab), so the feed stays live while OBS is the frontmost app.
+    private var inFront: Bool {
+        #if os(macOS)
+        return lifecycle.isForeground
+        #else
+        return lifecycle.isActive
+        #endif
+    }
+
+    /// The feed is read only while this screen is in front of an active app (on the Mac: a shown one).
     private func syncPolling() {
-        if scenePhase == .active && model.selectedTab == .stage {
+        if inFront && model.selectedTab == .stage {
             store.startPolling()
         } else {
             store.stopPolling()

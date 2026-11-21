@@ -853,6 +853,13 @@ public final class JobQueue {
         }
     }
 
+    /// Leaving the screen through the app's one listener (`AppLifecycle`, `.work`): `appLeft()` on entering the
+    /// background (iOS) or being hidden (Mac). Called once, by `AppModel.live()`; coming back stays
+    /// `AppModel.pickUpSharedJobs`' (`appForegrounded`), after the server check.
+    func observeLifecycle(_ lifecycle: AppLifecycle = .shared) {
+        lifecycle.register(self, order: .work)
+    }
+
     /// The app is on screen again: the summary is taken back.
     public func appForegrounded() {
         ctx.queueLineCancel()
@@ -961,5 +968,12 @@ extension JobQueue {
     public func seamFraction(now: Date) -> Double? {
         guard let job = live.first else { return nil }
         return ContinuedProgress.fraction(of: job.pipeline, now: now)
+    }
+}
+
+extension JobQueue: LifecycleAware {
+    public func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        // leaving with work on the server: one summary opt-in for all of it (CONTRACT-PARALLEL 6; idempotent)
+        if event == .didEnterBackground || event == .hidden { appLeft() }
     }
 }

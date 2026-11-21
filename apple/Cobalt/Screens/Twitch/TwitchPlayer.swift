@@ -1,3 +1,4 @@
+import CobaltKit
 import SwiftUI
 import WebKit
 
@@ -11,6 +12,11 @@ import WebKit
 // The embed's "Log in" opens twitch.tv's sign-in in a popup (window.open): the popup opens in a sheet over the player, in a
 // web view made from the configuration WebKit hands over, so it shares the player's cookies. When the sign-in closes it
 // (or the owner does), the player reloads signed in, and subscriptions apply.
+//
+// The app leaving the screen (iOS background, Mac hidden) stops the stream, page and stats timer included, unless capystore's
+// TV window is showing it; it starts again on return if a view still wants it. Five minutes stopped with no view wanting
+// it, or a memory warning, lets the web view itself go (a new one is built on the next claim). The Twitch sign-in is in the
+// default website data store, not the view, so it survives that.
 
 enum TwitchEmbed {
     static let parent = "cobalt.capybaraharmony.com"
@@ -66,6 +72,7 @@ enum TwitchEmbed {
         """
     }
 
+    /// The persistent `.default()` data store keeps the Twitch sign-in's cookies when the web view is let go and rebuilt.
     static func configuration(handler proxy: WKScriptMessageHandler) -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -83,8 +90,11 @@ enum TwitchEmbed {
 /// and when that view goes the one before it takes it back (the TV window can borrow the stream from the phone this way).
 /// With no view left the stream stops.
 @MainActor @Observable
-final class TwitchPlayerHost {
+final class TwitchPlayerHost: LifecycleAware, Purgeable {
     static let shared = TwitchPlayerHost()
+
+    /// How long a stopped stream with no view wanting it keeps its web view (and WebKit's page process) around.
+    static let releaseAfter: Duration = .seconds(300)
 
     /// How far behind its best the stream may drift before it counts as behind (seconds).
     static let behindBy: Double = 2.5
@@ -117,8 +127,14 @@ final class TwitchPlayerHost {
     }
     var isBehind: Bool { (behind ?? 0) >= Self.behindBy }
 
-    @ObservationIgnored let webView: WKWebView
+    /// The web view while there is one; `webView` builds it on demand.
+    @ObservationIgnored private var made: WKWebView?
     @ObservationIgnored private let proxy: TwitchMessageProxy
+    @ObservationIgnored private var releaseTask: Task<Void, Never>?
+    /// The app is off screen and the stream was stopped for it.
+    @ObservationIgnored private var suspended = false
+    /// The channel to play again when the app is back (the one stopped for the background, or one asked for meanwhile).
+    @ObservationIgnored private var resumeChannel: String?
     @ObservationIgnored private var claims: [UUID] = []
     @ObservationIgnored private var behindRun = 0
     @ObservationIgnored private var lastJump: Date = .distantPast
@@ -128,6 +144,15 @@ final class TwitchPlayerHost {
 
     private init() {
         let proxy = TwitchMessageProxy()
+        self.proxy = proxy
+        proxy.host = self
+        AppLifecycle.shared.register(self, order: .media)
+        AppLifecycle.shared.register(purgeable: self)
+    }
+
+    /// The app's one player web view, built on first need and again after it was let go (`releaseWebView`).
+    var webView: WKWebView {
+        if let made { return made }
         let view = WKWebView(frame: .zero, configuration: TwitchEmbed.configuration(handler: proxy))
         view.uiDelegate = proxy
         #if os(iOS)
@@ -138,9 +163,8 @@ final class TwitchPlayerHost {
         #else
         view.setValue(false, forKey: "drawsBackground")
         #endif
-        webView = view
-        self.proxy = proxy
-        proxy.host = self
+        made = view
+        return view
     }
 
     // MARK: holders
@@ -149,6 +173,8 @@ final class TwitchPlayerHost {
     func claim(_ id: UUID, channel: String) {
         stopTask?.cancel()
         stopTask = nil
+        releaseTask?.cancel()
+        releaseTask = nil
         claims.removeAll { $0 == id }
         claims.append(id)
         holder = id
@@ -173,7 +199,13 @@ final class TwitchPlayerHost {
 
     func play(_ channel: String) {
         let c = TwitchEmbed.safe(channel)
-        guard !c.isEmpty, c != self.channel else { return }
+        guard !c.isEmpty else { return }
+        // off screen: nothing plays until the app is back, then this channel does
+        if suspended {
+            resumeChannel = c
+            return
+        }
+        guard c != self.channel else { return }
         self.channel = c
         reset()
         if pageLoaded {
@@ -184,11 +216,13 @@ final class TwitchPlayerHost {
         }
     }
 
+    /// Blanks the page, which ends the embed and its stats timer. A web view nobody wants goes after `releaseAfter`.
     func stop() {
         channel = nil
         pageLoaded = false
         reset()
-        webView.loadHTMLString("<html><body style=\"background:#000\"></body></html>", baseURL: nil)
+        made?.loadHTMLString("<html><body style=\"background:#000\"></body></html>", baseURL: nil)
+        scheduleRelease()
     }
 
     /// Back to the live edge: pause and play, and if the stream is still behind a few seconds later, reload the player.
@@ -197,13 +231,13 @@ final class TwitchPlayerHost {
         lastJump = .now
         behindRun = 0
         isCatchingUp = true
-        webView.evaluateJavaScript("window.cobaltJumpToLive && window.cobaltJumpToLive()")
+        made?.evaluateJavaScript("window.cobaltJumpToLive && window.cobaltJumpToLive()")
         jumpCheck?.cancel()
         jumpCheck = Task { [weak self] in
             try? await Task.sleep(for: .seconds(6))
             guard let self, !Task.isCancelled else { return }
             if self.isBehind {
-                self.webView.evaluateJavaScript("window.cobaltRebuild && window.cobaltRebuild()", completionHandler: nil)
+                self.made?.evaluateJavaScript("window.cobaltRebuild && window.cobaltRebuild()", completionHandler: nil)
                 try? await Task.sleep(for: .seconds(6))
                 guard !Task.isCancelled else { return }
                 // still behind after a reload: this is as close as the stream gets now, so it becomes the new best
@@ -218,6 +252,67 @@ final class TwitchPlayerHost {
         guard let channel else { return }
         reset()
         webView.loadHTMLString(TwitchEmbed.html(channel: channel), baseURL: TwitchEmbed.base)
+    }
+
+    // MARK: the app's state
+
+    func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        switch event {
+        case .didEnterBackground, .hidden: suspend()
+        case .becameActive, .unhidden: resume()
+        default: break
+        }
+    }
+
+    /// Stops the stream for the background, remembering the channel. Not while capystore's TV window shows it: the owner
+    /// is watching on the TV with the phone locked. (Picture in picture of the web video is not tracked: WebKit says
+    /// nothing about it, so it stops too.)
+    private func suspend() {
+        guard !suspended else { return }
+        #if os(iOS)
+        if TwitchTV.shared.onTV { return }
+        #endif
+        suspended = true
+        resumeChannel = channel
+        if channel != nil { stop() }
+    }
+
+    /// Back on screen: the stream starts again if a view still holds a claim.
+    private func resume() {
+        guard suspended else { return }
+        suspended = false
+        let channel = resumeChannel
+        resumeChannel = nil
+        if let channel, !claims.isEmpty { play(channel) }
+    }
+
+    /// A memory warning, or the app leaving the screen, lets an unwanted web view go at once.
+    func purge(_ level: PurgeLevel) {
+        releaseWebView()
+    }
+
+    private func scheduleRelease() {
+        releaseTask?.cancel()
+        releaseTask = nil
+        guard claims.isEmpty, made != nil else { return }
+        releaseTask = Task { [weak self] in
+            try? await Task.sleep(for: TwitchPlayerHost.releaseAfter)
+            guard !Task.isCancelled else { return }
+            self?.releaseWebView()
+        }
+    }
+
+    /// Lets the web view go when nothing wants it: no view, no channel, no sign-in open. `webView` builds a new one.
+    private func releaseWebView() {
+        guard claims.isEmpty, channel == nil, popup == nil, let view = made else { return }
+        releaseTask?.cancel()
+        releaseTask = nil
+        made = nil
+        pageLoaded = false
+        view.stopLoading()
+        view.configuration.userContentController.removeScriptMessageHandler(forName: TwitchEmbed.handler)
+        view.uiDelegate = nil
+        view.removeFromSuperview()
     }
 
     // MARK: popups
@@ -434,8 +529,10 @@ private struct TwitchPlayerSlot: UIViewRepresentable {
     }
 
     func updateUIView(_ slot: UIView, context: Context) {
+        // only a holder asks for the web view, so a slot left on screen never rebuilds one that was let go
+        guard holds else { return }
         let web = TwitchPlayerHost.shared.webView
-        guard holds, web.superview !== slot else { return }
+        guard web.superview !== slot else { return }
         web.removeFromSuperview()
         web.frame = slot.bounds
         web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -454,8 +551,10 @@ private struct TwitchPlayerSlot: NSViewRepresentable {
     }
 
     func updateNSView(_ slot: NSView, context: Context) {
+        // only a holder asks for the web view, so a slot left on screen never rebuilds one that was let go
+        guard holds else { return }
         let web = TwitchPlayerHost.shared.webView
-        guard holds, web.superview !== slot else { return }
+        guard web.superview !== slot else { return }
         web.removeFromSuperview()
         web.frame = slot.bounds
         web.autoresizingMask = [.width, .height]

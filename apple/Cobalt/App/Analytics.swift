@@ -18,6 +18,8 @@ import AppKit
 ///   every image masked by the SDK and every media view masked by `.mediaMask()`. Text inputs are masked too.
 /// - One person: `owner`, the same distinct id the Worker's events use, so a replay and its server calls sit together.
 ///   The SDK's session id goes on every request to the server (`AnalyticsContext`).
+/// - The SDK starts after the first frame, not in it (`setup` loads its files, its flags and replay's hooks on the main
+///   thread): the first `sync` that wants it schedules the start (`launch.posthog`), and the next `sync` finishes it.
 /// - The main thread never waits on the SDK (8.17): PostHog's `capture` and `register` encode JSON and write a file on
 ///   the calling thread, so every one of them runs on `queue`, one at a time and in order. A caller only builds a small
 ///   flat `[String: TelemetryValue]`.
@@ -25,6 +27,11 @@ import AppKit
 enum Analytics {
     private static var configured: PostHogProject?
     private static var running = false
+    /// The deferred first start, while it waits for the first frame to be on screen.
+    private static var starting: Task<Void, Never>?
+    /// Sends the engines' timings when the app leaves (registered with AppLifecycle by `watch()`; held here, since
+    /// AppLifecycle holds its subscribers weakly).
+    private static var lifecycle: AnalyticsLifecycle?
 
     /// Whether the SDK is on and sending (the hang sampler's reports are dropped while it is not).
     static var isRunning: Bool { running }
@@ -49,12 +56,25 @@ enum Analytics {
         let settings = model.settings
         let project = model.isPreview ? nil : model.capabilities.postHog
         let wanted = project != nil && settings.sendTelemetry
-        if wanted, let project {
+        if wanted {
             replayWanted = settings.recordSessions
             if configured == nil {
-                setup(project, replay: replayWanted && !replayKilled)
-                configured = project
-                watch()
+                // The first start waits until the first frame is on screen; the rest of this runs when it has.
+                if starting == nil {
+                    starting = Task { @MainActor in
+                        await afterFirstFrame()
+                        starting = nil
+                        // what the owner and the server say now: either may have changed while it waited
+                        guard configured == nil, !model.isPreview, let now = model.capabilities.postHog,
+                              model.settings.sendTelemetry else { return }
+                        replayWanted = model.settings.recordSessions
+                        timedSetup(now, replay: replayWanted && !replayKilled)
+                        configured = now
+                        watch()
+                        sync(model: model)
+                    }
+                }
+                return
             }
             // The SDK saves an opt-out on the phone and reads it back in setup(): an optOut() from an earlier launch
             // (the server stopped sending the project, or "send logs" was off) would otherwise keep it silent for good
@@ -78,6 +98,11 @@ enum Analytics {
             live.store(false, ordering: .relaxed)
             AnalyticsContext.setSessionProvider(nil)
         }
+    }
+
+    /// `setup`, timed as `launch.posthog`. Synchronous on purpose, so the timing wraps only the SDK's own start.
+    private static func timedSetup(_ project: PostHogProject, replay: Bool) {
+        EngineClock.measure("launch.posthog") { setup(project, replay: replay) }
     }
 
     private static func setup(_ project: PostHogProject, replay: Bool) {
@@ -106,6 +131,13 @@ enum Analytics {
             userProperties: ["platform": AnalyticsContext.client, "install": TelemetryInstall.id()])
     }
 
+    /// Hands the main thread back until the first frame is on screen: the scene's first `sync` runs inside the first view
+    /// update, and a task that only yielded could still run before that frame is committed.
+    private static func afterFirstFrame() async {
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(100))
+    }
+
     /// The feature flags (for the replay kill switch) and the background (to send the engines' timings before the app
     /// may be ended). Once per launch.
     private static func watch() {
@@ -114,14 +146,10 @@ enum Analytics {
         PostHogSDK.shared.onFeatureFlags { _ in
             MainActor.assumeIsolated { Analytics.flagsLoaded() }
         }
-        #if os(iOS)
-        let background = UIApplication.didEnterBackgroundNotification
-        #else
-        let background = NSApplication.didResignActiveNotification
-        #endif
-        _ = NotificationCenter.default.addObserver(forName: background, object: nil, queue: nil) { _ in
-            EngineClock.drain()
-        }
+        // AppLifecycle is the one listener of the app's state (the lifecycle audit): this only subscribes.
+        let subscriber = AnalyticsLifecycle()
+        lifecycle = subscriber
+        AppLifecycle.shared.register(subscriber, order: .telemetry)
     }
 
     // MARK: replay
@@ -232,5 +260,19 @@ enum Analytics {
             }
         }
         return props
+    }
+}
+
+/// Sends the engines' timings (`EngineClock.drain()`) as the app leaves the screen, before it may be ended: the background
+/// on iPhone and iPad, losing the front on the Mac (which has no background).
+@MainActor
+private final class AnalyticsLifecycle: LifecycleAware {
+    func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        #if os(iOS)
+        guard event == .didEnterBackground else { return }
+        #else
+        guard event == .willResignActive else { return }
+        #endif
+        EngineClock.drain()
     }
 }

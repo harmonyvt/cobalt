@@ -77,7 +77,7 @@ public final class MacFolder {
     @ObservationIgnored private let ledger: FolderLedger?
     @ObservationIgnored private let provider: MacRootProvider?
     @ObservationIgnored private var pending: Prepared?
-    @ObservationIgnored private var activationObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var observingActivation = false
     private var movingProgress: Moving?
     var previewStatus: Status?
 
@@ -280,19 +280,22 @@ public final class MacFolder {
     #if os(macOS)
     /// Looks at the root again when the app comes to the front. A root that was not usable is the case this is for (a disk
     /// that came back, a folder the owner re-made): the store's `reload()` then resolves it, adopts, scans and moves in what
-    /// waited. Every other foreground is `AppModel.pickUpSharedJobs`' (scene phase). The notification closure is called by
-    /// the system on a thread of its choosing: `@Sendable`, and it hops to the main actor explicitly.
-    public func observeActivation() {
-        guard activationObserver == nil, let store else { return }
-        activationObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: nil
-        ) { @Sendable [weak store] _ in
-            Task { @MainActor [weak store] in
-                guard let store else { return }
-                let before = store.rootState
-                let after = await store.resolveRoot()
-                if before != .ready || after != .ready || store.rootDiskFull { await store.reload() }
-            }
+    /// waited. Every other foreground is `AppModel.pickUpSharedJobs`'. "Comes to the front" is the app's one listener
+    /// (`AppLifecycle`, `.work`).
+    public func observeActivation(_ lifecycle: AppLifecycle = .shared) {
+        guard !observingActivation, store != nil else { return }
+        observingActivation = true
+        lifecycle.register(self, order: .work)
+    }
+
+    /// The root again, off the event: the store's checks are async.
+    private func activated() {
+        guard let store else { return }
+        Task { @MainActor [weak store] in
+            guard let store else { return }
+            let before = store.rootState
+            let after = await store.resolveRoot()
+            if before != .ready || after != .ready || store.rootDiskFull { await store.reload() }
         }
     }
     #endif
@@ -308,3 +311,11 @@ public final class MacFolder {
         previewStatus = status
     }
 }
+
+#if os(macOS)
+extension MacFolder: LifecycleAware {
+    public func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        if event == .becameActive { activated() }
+    }
+}
+#endif

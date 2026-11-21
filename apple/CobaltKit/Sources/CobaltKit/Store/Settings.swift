@@ -214,12 +214,71 @@ public final class Settings {
     /// the original server is set back; `clearAPIKey()` forgets it).
     public private(set) var hasAPIKey: Bool
 
-    public init(defaults: UserDefaults, keychain: Keychain) {
+    /// The scope `hasAPIKey` was last true for ("" when it was false), in the defaults: what the first frame shows while the
+    /// keychain is read off the main thread (`Settings.shared()`).
+    nonisolated static let keyCacheKey = "apiKey.cachedScope"
+    /// The keychain read `shared()` started, while it runs.
+    @ObservationIgnored private var keyCheck: Task<Void, Never>?
+    /// Counts every answer `hasAPIKey` got here (a paste, a sign-out, a server change), so a keychain read that started
+    /// before one of them never puts back what it read.
+    @ObservationIgnored private var keyAnswers = 0
+
+    public convenience init(defaults: UserDefaults, keychain: Keychain) {
+        self.init(defaults: defaults, keychain: keychain, checksKeyLater: false)
+    }
+
+    /// `checksKeyLater`: start from the last answer kept in the defaults and read the keychain off the main thread (the
+    /// keychain is a securityd round trip, before the first frame in every process that opens Settings). With no last
+    /// answer (the first launch of this build) the keychain is read here, as before.
+    init(defaults: UserDefaults, keychain: Keychain, checksKeyLater: Bool) {
         self.defaults = defaults
         self.keychain = keychain
         let server = defaults.string(forKey: "serverURL").flatMap(URL.init(string:)) ?? Settings.defaultServer
         self.serverURL = server
-        self.hasAPIKey = Settings.apiKey(in: keychain, forServer: server) != nil
+        if checksKeyLater, let cached = defaults.string(forKey: Settings.keyCacheKey) {
+            self.hasAPIKey = !cached.isEmpty && cached == Settings.keyScope(of: server)
+            checkKey()
+        } else {
+            self.hasAPIKey = Settings.apiKey(in: keychain, forServer: server) != nil
+            if checksKeyLater { remember() }                     // the next launch starts from this answer
+        }
+    }
+
+    /// Waits for the keychain read `shared()` started (at once when there is none). A caller that acts on `hasAPIKey`
+    /// right after launch in a way that is not undone by the next answer (removing the Finder domain, resetting the
+    /// account) awaits this first.
+    public func boot() async {
+        guard let keyCheck else { return }
+        await keyCheck.value
+    }
+
+    private func checkKey() {
+        let (keychain, server, answers) = (keychain, serverURL, keyAnswers)
+        keyCheck = Task { [weak self] in
+            let has = await Task.detached(priority: .userInitiated) { Settings.hasKey(in: keychain, forServer: server) }.value
+            guard let self else { return }
+            self.keyCheck = nil
+            guard self.keyAnswers == answers else { return }      // answered since: that answer is newer
+            if self.hasAPIKey != has { self.hasAPIKey = has }
+            self.remember()
+        }
+    }
+
+    /// The keychain read behind `checkKey()`, timed (`launch.keychain`). Synchronous on purpose: called inside the detached
+    /// task, so the timing wraps only the read.
+    nonisolated private static func hasKey(in keychain: Keychain, forServer server: URL) -> Bool {
+        EngineClock.measure("launch.keychain") { apiKey(in: keychain, forServer: server) != nil }
+    }
+
+    /// `hasAPIKey` changed here: the new answer, kept for the next launch's first frame.
+    private func answerKey(_ has: Bool) {
+        keyAnswers &+= 1
+        hasAPIKey = has
+        remember()
+    }
+
+    private func remember() {
+        defaults.set(hasAPIKey ? Settings.keyScope(of: serverURL) : "", forKey: Settings.keyCacheKey)
     }
 
     private static var sharedInstance: Settings?
@@ -234,7 +293,7 @@ public final class Settings {
         #else
         let keychain: Keychain = .shared
         #endif
-        let s = Settings(defaults: AppGroup.defaults(), keychain: keychain)
+        let s = Settings(defaults: AppGroup.defaults(), keychain: keychain, checksKeyLater: true)
         sharedInstance = s
         return s
     }
@@ -530,13 +589,13 @@ public final class Settings {
             try? keychain.set(previousHost, for: Settings.keyHostAccount)
             throw .couldNotSave
         }
-        hasAPIKey = true
+        answerKey(true)
     }
 
     public func clearAPIKey() {
         try? keychain.set(nil, for: Settings.keyAccount)
         try? keychain.set(nil, for: Settings.keyHostAccount)
-        hasAPIKey = false
+        answerKey(false)
     }
 
     /// First http(s) URL in the text, path dropped.
@@ -553,7 +612,7 @@ public final class Settings {
         guard let url = comps.url else { throw .notAURL }
         defaults.set(url.absoluteString, forKey: "serverURL")
         serverURL = url
-        hasAPIKey = Settings.apiKey(in: keychain, forServer: url) != nil
+        answerKey(Settings.apiKey(in: keychain, forServer: url) != nil)
         if defaults.bool(forKey: FinderBridge.enabledDefaultsKey) {
             FinderBridge.noteServer(url)
             FinderLibraryEvents.noteRefresh()
@@ -570,7 +629,7 @@ public final class Settings {
     public func resetServer() {
         defaults.removeObject(forKey: "serverURL")
         serverURL = Settings.defaultServer
-        hasAPIKey = Settings.apiKey(in: keychain, forServer: serverURL) != nil
+        answerKey(Settings.apiKey(in: keychain, forServer: serverURL) != nil)
         if defaults.bool(forKey: FinderBridge.enabledDefaultsKey) {
             FinderBridge.noteServer(serverURL)
             FinderLibraryEvents.noteRefresh()

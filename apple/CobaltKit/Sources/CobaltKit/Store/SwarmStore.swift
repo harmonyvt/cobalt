@@ -566,3 +566,16 @@ public enum SwarmRoute: Hashable, Sendable {
         }
     }
 }
+
+// The swarms screen shows and hides a swarm (`SwarmsScreen`); the store also stops its poll itself when the app leaves
+// the screen, so a screen kept alive behind another tab cannot keep reading. Coming back is the screen's (it reads the
+// list and its open swarm again); registered once by `AppModel.observeLifecycle`.
+extension SwarmStore: LifecycleAware {
+    func observeLifecycle(_ lifecycle: AppLifecycle = .shared) {
+        lifecycle.register(self, order: .work)
+    }
+
+    public func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        if (event == .didEnterBackground || event == .hidden), showingID != nil { hide() }
+    }
+}

@@ -416,3 +416,16 @@ public final class StageStore {
         poolState = .idle
     }
 }
+
+// The screen starts and stops the feed (`StageScreen.syncPolling`); the store also stops it itself when the app leaves the
+// screen, so a studio screen kept alive behind another tab or window cannot keep reading. Coming back is the screen's
+// (it knows whether it is in front); registered once by `AppModel.observeLifecycle`.
+extension StageStore: LifecycleAware {
+    func observeLifecycle(_ lifecycle: AppLifecycle = .shared) {
+        lifecycle.register(self, order: .work)
+    }
+
+    public func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        if event == .didEnterBackground || event == .hidden { stopPolling() }
+    }
+}

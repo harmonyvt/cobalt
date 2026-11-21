@@ -33,12 +33,14 @@ public enum MediaPipeline {
     // MARK: the shared memory cache
 
     /// Decoded pictures for the whole app: about 192 MB of decoded bytes in the app (the library needed 160 MB to find its
-    /// pictures again on scroll back, 8.15), 24 MB in an extension, whose whole memory allowance is far smaller.
+    /// pictures again on scroll back, 8.15), 24 MB in an extension, whose whole memory allowance is far smaller. Emptied
+    /// when the app leaves the screen and on a memory warning (`purgedWithApp`); every picture is decoded again from disk.
     public static let memory: MediaMemoryCache = {
         let inExtension = Bundle.main.bundleURL.pathExtension == "appex"
         return MediaMemoryCache(
             costLimit: (inExtension ? 24 : 192) * 1024 * 1024,
             countLimit: inExtension ? 300 : 1_000)
+            .purgedWithApp()
     }()
 
     /// The cache key of one picture at one size. `kind` keeps a file's still apart from an emote's or a video's frame.
@@ -153,6 +155,22 @@ public final class MediaMemoryCache: @unchecked Sendable {
     public func remove(forKey key: String) {
         cache.removeObject(forKey: key as NSString)
     }
+
+    /// Forgets every picture (memory only: nothing here is on disk).
+    public func removeAll() {
+        cache.removeAllObjects()
+    }
+
+    /// Signs this cache up to be emptied by `AppLifecycle` (the app leaving the screen, a memory warning). Call it once,
+    /// where the cache is made; returns the cache so a `static let` can end with it.
+    @discardableResult
+    public func purgedWithApp() -> MediaMemoryCache {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            PurgeHook.register { [weak self] _ in self?.removeAll() }
+        }
+        return self
+    }
 }
 
 // MARK: - moving pictures
@@ -176,7 +194,9 @@ final class FrameGate: Sendable {
 
 /// One playing webp or gif. ImageIO keeps time and calls back once a frame; that callback only claims the gate and hands
 /// the frame to a background task, which shrinks it to `maxPixel`, so the main actor gets one small display-ready frame
-/// at a time whatever queue ImageIO calls back on. `stop()` ends it at the next frame; the owner must call it.
+/// at a time whatever queue ImageIO calls back on. `stop()` ends it at the next frame; the owner must call it, or hold it
+/// in a `MediaAnimationSlot`, which stops it when the slot is freed. (A deinit here could never run while it plays:
+/// ImageIO's frame block holds the animation until it halts.)
 public final class MediaAnimation: Sendable {
     private let stopped = Mutex(false)
     private let gate = FrameGate()
@@ -225,4 +245,31 @@ public final class MediaAnimation: Sendable {
             }
         }
     }
+}
+
+/// Holds an owner's one `MediaAnimation` and stops it when it is replaced, cleared, or freed along with its owner. The
+/// safety net for a view torn down without `onDisappear` (a parent that went away whole, a model dropped by SwiftUI): a
+/// model keeps one of these as a `let`, so its animation stops decoding without the model's deinit touching main-actor
+/// state (the app's deployment targets have no `isolated deinit`).
+public final class MediaAnimationSlot: Sendable {
+    private let current = Mutex<MediaAnimation?>(nil)
+
+    public init() {}
+
+    /// The animation playing now, nil when none.
+    public var animation: MediaAnimation? { current.withLock { $0 } }
+
+    /// Puts `next` in (nil empties the slot); the one it replaces stops.
+    public func set(_ next: MediaAnimation?) {
+        let old = current.withLock { value -> MediaAnimation? in
+            let old = value
+            value = next
+            return old
+        }
+        if let old, old !== next { old.stop() }
+    }
+
+    public func stop() { set(nil) }
+
+    deinit { current.withLock { $0 }?.stop() }
 }

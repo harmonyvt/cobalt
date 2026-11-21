@@ -17,7 +17,7 @@ struct SyncGlowBand: View {
     var status: SyncGlowStatus?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.lifecycle) private var lifecycle
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -76,7 +76,7 @@ struct SyncGlowBand: View {
     }
 
     private func taskKey(_ state: SyncGlowState) -> String {
-        "\(state.rawValue)-\(onScreen)-\(scenePhase == .active)"
+        "\(state.rawValue)-\(onScreen)-\(lifecycle.isForeground)"
     }
 
     @ViewBuilder
@@ -112,7 +112,7 @@ struct SyncGlowBand: View {
             intensity: SyncGlowComposer.defaultIntensity,
             dark: colorScheme == .dark,
             visible: onScreen,
-            sceneActive: scenePhase == .active)
+            sceneActive: lifecycle.isForeground)
         return draw
     }
 }

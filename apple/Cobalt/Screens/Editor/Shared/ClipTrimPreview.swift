@@ -80,9 +80,14 @@ final class ClipTrimPreview {
         show(selection.start)
     }
 
+    /// Pauses and empties the player: its decoder and the file's buffers go now, not whenever the player is freed.
     func stop() {
         generation += 1
-        player?.pause()
+        if let player {
+            player.pause()
+            PlayerPool.shared.forget(player)
+            player.replaceCurrentItem(with: nil)
+        }
         subscriptions.removeAll()
         player = nil
         url = nil
@@ -130,17 +135,17 @@ final class ClipTrimPreview {
         let t = playheadSeconds()
         if t < selection.start - 0.0005 || t >= selection.end - 0.0005 {
             exactSeek(selection.start) { [weak self] in
-                guard let self, self.isPlaying else { return }
-                self.player?.play()
+                guard let self, self.isPlaying, let player = self.player else { return }
+                PlayerPool.shared.play(player, as: .trim)
             }
         } else {
-            player.play()
+            PlayerPool.shared.play(player, as: .trim)
         }
         bump()
     }
 
     func pause() {
-        player?.pause()
+        if let player { PlayerPool.shared.pause(player) }
         guard isPlaying else { return }
         isPlaying = false
         bump()
@@ -168,8 +173,8 @@ final class ClipTrimPreview {
         guard !isScrubbing else { return }
         if loop, isPlaying {
             exactSeek(selection.start) { [weak self] in
-                guard let self, self.isPlaying, self.loop else { return }
-                self.player?.play()
+                guard let self, self.isPlaying, self.loop, let player = self.player else { return }
+                PlayerPool.shared.play(player, as: .trim)
             }
         } else {
             isPlaying = false
@@ -187,7 +192,7 @@ final class ClipTrimPreview {
         seekInFlight = false
         wanted = nil
         pin = false
-        player?.pause()
+        if let player { PlayerPool.shared.pause(player) }
         isPlaying = false
         // A drag may go past the old out point. The end time must not clamp the seeks.
         player?.currentItem?.forwardPlaybackEndTime = .invalid

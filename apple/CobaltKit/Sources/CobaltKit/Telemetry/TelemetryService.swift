@@ -12,7 +12,6 @@ public final class TelemetryService {
     @ObservationIgnored private let settings: Settings
     @ObservationIgnored private let capabilities: @MainActor () -> Capabilities
     @ObservationIgnored private let makeTransport: @MainActor (URL, String) -> any TelemetryTransport
-    @ObservationIgnored private var observers: [any NSObjectProtocol] = []
 
     init(
         runtime: TelemetryRuntime, settings: Settings,
@@ -48,7 +47,7 @@ public final class TelemetryService {
         guard let runtime = Telemetry.runtime else { return nil }
         let service = TelemetryService(runtime: runtime, settings: settings, capabilities: capabilities)
         Telemetry.crashIngested = { @Sendable [weak service] in Task { @MainActor in service?.uploadSoon() } }
-        service.observeLifecycle()
+        service.observeLifecycle(AppLifecycle.shared)
         return service
     }
 
@@ -78,26 +77,13 @@ public final class TelemetryService {
 
     // MARK: - Lifecycle
 
-    /// The app's own notifications, by name (CobaltKit builds into extensions, where there is no
-    /// application object): active → mark running and upload; background → mark clean, flush, upload
-    /// under a grace period; terminate → mark clean; memory warning → note how much is left.
-    func observeLifecycle() {
-        let center = NotificationCenter.default
-        func watch(_ name: String, _ body: @escaping @MainActor (TelemetryService) -> Void) {
-            observers.append(center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { if let self { body(self) } }
-            })
-        }
-        #if os(iOS)
-        watch("UIApplicationDidBecomeActiveNotification") { $0.becameActive() }
-        watch("UIApplicationDidEnterBackgroundNotification") { $0.enteredBackground() }
-        watch("UIApplicationWillTerminateNotification") { $0.terminating() }
-        watch("UIApplicationDidReceiveMemoryWarningNotification") { $0.memoryWarning() }
-        #else
-        watch("NSApplicationDidBecomeActiveNotification") { $0.becameActive() }
-        watch("NSApplicationDidResignActiveNotification") { $0.enteredBackground() }
-        watch("NSApplicationWillTerminateNotification") { $0.terminating() }
-        #endif
+    /// The app's lifecycle, through the one listener (`AppLifecycle`, called first: `.telemetry`, so the log shows
+    /// the event before what it caused): active → mark running and upload; background → mark clean, flush, upload
+    /// under a grace period; terminate → mark clean; memory warning → note how much is left. Only the app builds a
+    /// service (`live` needs `Telemetry.start(process: .app)`); extensions never get here, and there the listener is
+    /// never started anyway.
+    func observeLifecycle(_ lifecycle: AppLifecycle) {
+        lifecycle.register(self, order: .telemetry)
     }
 
     func becameActive() {
@@ -152,5 +138,22 @@ public final class TelemetryService {
         uploadSoon()
         #endif
     }
+}
 
+extension TelemetryService: LifecycleAware {
+    public func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        switch event {
+        case .becameActive: becameActive()
+        #if os(iOS)
+        case .didEnterBackground: enteredBackground()
+        #else
+        // the Mac's "background" has always been "another app is in front" (it used NSApplicationDidResignActive);
+        // the listener hears the Will form, a moment earlier
+        case .willResignActive: enteredBackground()
+        #endif
+        case .willTerminate: terminating()
+        case .memoryWarning: memoryWarning()
+        default: break
+        }
+    }
 }

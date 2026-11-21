@@ -50,30 +50,20 @@ final class AlwaysActive: AppActivity {
     var isActive: Bool { true }
 }
 
-/// Follows the platform's active/resign notifications by name (no UIKit/AppKit symbol, so the
-/// same file builds into extensions). Starts inactive: the first "did become active" of a launch
-/// in the foreground arrives right after the app model is made.
+/// The app's one listener's answer (`AppLifecycle`): active from "did become active" until "will resign active", on
+/// both platforms. Read from the snapshot each time rather than copied on an event, so it is never a step behind
+/// another subscriber reacting to the same event. Only the app makes one (`AppModel.live()`); extensions keep
+/// `AlwaysActive`. Where the listener never starts (an extension, a test) the snapshot stays `.launching`, so this
+/// reads inactive, as the old notification-fed copy started out until the first "did become active".
 @MainActor
 final class SystemAppActivity: AppActivity {
-    private(set) var isActive = false
-    private var observers: [any NSObjectProtocol] = []
+    private let lifecycle: AppLifecycle
 
-    init() {
-        let center = NotificationCenter.default
-        #if os(macOS)
-        let becameActive = "NSApplicationDidBecomeActiveNotification"
-        let resigned = "NSApplicationDidResignActiveNotification"
-        #else
-        let becameActive = "UIApplicationDidBecomeActiveNotification"
-        let resigned = "UIApplicationWillResignActiveNotification"
-        #endif
-        observers.append(center.addObserver(forName: Notification.Name(becameActive), object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.isActive = true }
-        })
-        observers.append(center.addObserver(forName: Notification.Name(resigned), object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.isActive = false }
-        })
+    init(lifecycle: AppLifecycle = .shared) {
+        self.lifecycle = lifecycle
     }
+
+    var isActive: Bool { lifecycle.snapshot.isActive }
 }
 
 // MARK: - Photos

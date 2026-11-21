@@ -400,11 +400,7 @@ private struct KeyboardTile: View {
         ZStack {
             CobaltColor.elevated
             if let face, let url = KeyboardFace.thumbnailURL(post: post, face: face) {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().scaledToFill()
-                    }
-                }
+                KeyboardThumb(url: url)
             }
             if several {
                 mark("+")
