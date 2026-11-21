@@ -197,12 +197,29 @@ struct SpreadPaneColumn<Content: View>: View {
 
     var body: some View {
         SpreadColumns {
+            // both columns start below the iPad's floating tab bar while the pane shows, so each column's own bar (title,
+            // search, toolbar) draws in its column instead of under the bar
             content
+                .padding(.top, shows ? SpreadTopRow.height : 0)
             if shows, let host {
                 SpreadPaneView(host: host, queue: queue)
             }
         }
+        .background(CobaltColor.bg.ignoresSafeArea())
         .animation(Motion.card, value: shows ? host?.pane?.id : nil)
+    }
+}
+
+/// The top row of an iPad window, where the floating tab bar sits over the content. It is no safe-area inset, and a
+/// column's navigation bar that starts at the window's top shares that row with it: on a spread, the right column's
+/// title and buttons drew under the bar as ghost glyphs (8.26 shots). A column that starts below it gets a bar of its own.
+enum SpreadTopRow {
+    static var height: CGFloat {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .pad ? 80 : 0
+        #else
+        return 0
+        #endif
     }
 }
 
@@ -211,37 +228,31 @@ struct SpreadPaneView: View {
     let host: SpreadPaneHost
     let queue: JobQueue
 
-    /// The iPad's tab bar floats in the top row of the window, over both columns, and is no safe-area inset: the pane's
-    /// own bar, title and close button sat under it (seen in the 8.26 shots as ghost glyphs and a clipped circle). The pane
-    /// starts below that row instead. An iPhone's tab bar is at the bottom or the side, so nothing is needed there.
-    private var topRow: CGFloat {
-        #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .pad ? 56 : 0
-        #else
-        return 0
-        #endif
-    }
-
     var body: some View {
         if let pane = host.pane {
             HStack(spacing: 0) {
                 HingeSeam(queue: queue)
                     .ignoresSafeArea()
-                ZStack(alignment: .topLeading) {
+                VStack(spacing: 0) {
+                    // the close button has a row of its own, above the content's own bar, so it never covers a title or a row
+                    if pane.closable {
+                        HStack {
+                            CloseButton(cancels: true) { host.close(id: pane.id) }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                    }
                     pane.content
                         .environment(\.paneClose, SheetCloseAction { host.close(id: pane.id) })
                         .sheetClose { host.close(id: pane.id) }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(CobaltColor.bg)
                         .id(host.generation)
-                    if pane.closable {
-                        CloseButton(cancels: true) { host.close(id: pane.id) }
-                            .padding(12)
-                    }
                 }
                 // a little room from the hinge, so a large title or a row never touches the line
-                .safeAreaPadding(.leading, 8)
-                .safeAreaPadding(.top, topRow)
+                .padding(.leading, 8)
+                .padding(.top, SpreadTopRow.height)
             }
             .background(CobaltColor.bg.ignoresSafeArea())
             .transition(.move(edge: .trailing).combined(with: .opacity))
