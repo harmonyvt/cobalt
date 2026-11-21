@@ -350,6 +350,9 @@ private struct LibraryContent: View {
             .modifier(LibraryImageCropPresenter(
                 model: model, target: $controller.croppingPicture, done: { line in controller.showStatus(line) }))
             .modifier(EmoteEditorPresenter(model: model, target: $controller.makingEmote))
+            #if os(iOS)
+            .modifier(WallpaperPresenter(model: model, target: $controller.makingWallpaper))
+            #endif
             .confirmationDialog(
                 Copy.Media.deleteEverythingTitle, isPresented: deletingPresented, titleVisibility: .visible,
                 presenting: controller.deleting
