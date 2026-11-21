@@ -83,6 +83,13 @@ struct LibraryMenuItems: View {
         if controller.croppablePicture(item) != nil {
             Button(Copy.Editor.cropAPicture, systemImage: Symbol.Editor.imageCrop) { controller.cropPicture(item) }
         }
+        #if os(iOS)
+        if WallpaperPick.canMake(item.face) {
+            Button(Copy.Wallpaper.menu, systemImage: Symbol.Wallpaper.menu) {
+                controller.makingWallpaper = WallpaperPick(rendition: item.face)
+            }
+        }
+        #endif
         OfflineMenuItems(item: item, controller: controller, askRemove: askRemove)
         ShowInFilesButton(model: controller.model, item: item)
         ShowInFinderButton(model: controller.model, item: item)

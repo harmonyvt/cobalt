@@ -218,6 +218,10 @@ final class LibraryController {
     var combining: MediaItem?
     /// The picture the owner chose `crop a copy…` for: the crop sheet is open on it (`LibraryImageCropHook.swift`).
     var croppingPicture: LibraryImageCropTarget?
+    #if os(iOS)
+    /// The file the owner chose `make wallpaper…` for: the wallpaper maker is open on it (`Screens/Wallpaper`).
+    var makingWallpaper: WallpaperPick?
+    #endif
     /// The sky map (`SkyMap/LibrarySkyMapHook.swift`) is open.
     var showingSkyMap = false
     /// The posts `add to link` is picking a link for (`LibraryAddToLinkHook.swift`): the link picker is up.
