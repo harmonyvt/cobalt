@@ -121,6 +121,7 @@ final class EmotePlayback {
     /// The `draftRevision` this plays; a view uses the draft only while it equals the editor's.
     private(set) var revision = -1
     @ObservationIgnored private var animation: MediaAnimation?
+    @ObservationIgnored private var stillTask: Task<Void, Never>?
 
     func play(data: Data, animated: Bool, revision: Int, reduceMotion: Bool, maxPixel: Int = 512) {
         stop()
@@ -131,15 +132,23 @@ final class EmotePlayback {
             }
             if animation != nil { return }
         }
-        frame = Self.firstFrame(of: data, maxPixel: maxPixel)
+        stillTask = Task { [weak self] in
+            let image = await Self.firstFrame(of: data, maxPixel: maxPixel)
+            guard let self, !Task.isCancelled, self.revision == revision else { return }
+            self.frame = image
+        }
     }
 
     func stop() {
+        stillTask?.cancel()
+        stillTask = nil
         animation?.stop()
         animation = nil
     }
 
-    static func firstFrame(of data: Data, maxPixel: Int) -> CGImage? {
+    @concurrent
+    nonisolated static func firstFrame(of data: Data, maxPixel: Int) async -> CGImage? {
+        MainThreadGuard.assertOffMain()
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,

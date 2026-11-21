@@ -143,7 +143,7 @@ struct EmoteEditorModelTests {
     @Test func theFirstDraftIsMadeAtOnceAndTheFileIsRead() async throws {
         let model = editor()
         model.start()
-        try await wait { model.draftData != nil }
+        try await wait { model.draftData != nil && !model.remaking }
         let draft = try #require(model.draft)
         #expect(model.isCurrent && model.canUseDraft && model.error == nil && !model.remaking)
         #expect(draft.width == 512 && draft.height == 384)

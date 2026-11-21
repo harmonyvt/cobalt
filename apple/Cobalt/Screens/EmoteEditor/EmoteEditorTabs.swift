@@ -148,7 +148,7 @@ private struct EmoteSquashControls: View {
     private var presets: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                LinkChip(linked: Binding(get: { editor.linked }, set: { editor.linked = $0 }))
+                EmoteLinkChip(linked: Binding(get: { editor.linked }, set: { editor.linked = $0 }))
                 PresetChip(title: Copy.EmoteEditor.presetSquish, symbol: Symbol.EmoteEditor.squish) { editor.apply(.squish) }
                 PresetChip(title: Copy.EmoteEditor.presetTall, symbol: Symbol.EmoteEditor.tallBoi) { editor.apply(.tall) }
                 PresetChip(title: Copy.EmoteEditor.presetWide, symbol: Symbol.EmoteEditor.wideThree) { editor.apply(.wide) }
@@ -195,7 +195,7 @@ private struct EmoteStretchSlider: View {
     }
 }
 
-private struct LinkChip: View {
+private struct EmoteLinkChip: View {
     @Binding var linked: Bool
 
     var body: some View {

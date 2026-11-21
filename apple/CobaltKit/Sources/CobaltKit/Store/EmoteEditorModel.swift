@@ -433,9 +433,10 @@ public final class EmoteEditorModel {
         let name = source.suggestedName
         let ext = draft.format.fileExtension
         let old = shareFolder
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cobalt-emote-\(draft.draftID.prefix(8))", isDirectory: true)
+        let folderName = "cobalt-emote-\(draft.draftID.prefix(8))"
         let url: URL? = await Task.detached(priority: .utility) {
             let fm = FileManager.default
+            let folder = fm.temporaryDirectory.appendingPathComponent(folderName, isDirectory: true)
             if let old { try? fm.removeItem(at: old) }
             do {
                 try fm.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -446,7 +447,7 @@ public final class EmoteEditorModel {
                 return nil
             }
         }.value
-        shareFolder = url == nil ? nil : folder
+        shareFolder = url?.deletingLastPathComponent()
         return url
     }
 
@@ -471,7 +472,11 @@ public final class EmoteEditorModel {
         remaking = false
         let id = draft?.draftID
         if let id { Task { [client] in try? await client.deleteEmoteDraft(id: id) } }
-        if let folder = shareFolder { try? FileManager.default.removeItem(at: folder) }
+        if let folder = shareFolder {
+            Task.detached(priority: .utility) {
+                try? FileManager.default.removeItem(at: folder)
+            }
+        }
         shareFolder = nil
     }
 }
