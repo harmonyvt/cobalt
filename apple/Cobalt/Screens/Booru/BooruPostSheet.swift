@@ -10,7 +10,8 @@ struct BooruPostSheet: View {
     /// A tag was picked: (tag, replace the search) or add it to the search.
     let pick: (String, Bool) -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    /// The close works in a sheet and in the spread pane alike (a plain `dismiss` did nothing in the pane, 8.34).
+    var dismiss = SheetOrPaneDismiss()
     @State private var saved = false
     @State private var hiddenTags: Set<String> = []
 
@@ -44,6 +45,7 @@ struct BooruPostSheet: View {
                 }
             }
         }
+        .panelDrawsOwnClose()
     }
 
     private var picture: some View {

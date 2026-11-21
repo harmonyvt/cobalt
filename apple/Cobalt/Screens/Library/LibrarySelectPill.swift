@@ -69,7 +69,7 @@ struct LibrarySelectPill: View {
             model: model, controller: controller, rows: rows, toggle: toggle, makeLink: makeLink, file: file, share: share,
             inPane: true, collectionShown: $pickingCollection, deleteShown: $deleting)
         // closing the panel is its own close button (it ends selecting); a sheet replacing it changes nothing here
-        host.show(id: Self.paneID, content: AnyView(pane)) {}
+        host.show(id: Self.paneID, content: AnyView(pane.panelDrawsOwnClose())) {}
     }
 
     private var inline: some View {
@@ -377,11 +377,12 @@ private struct SelectSheets: ViewModifier {
     func body(content: Content) -> some View {
         content
         .spreadSheet(isPresented: $pickingCollection, id: "library-collection") {
-            CollectionPickerSheet(store: store, picks: controller.pickedRows(rows), file: file)
+            CollectionPickerSheet(store: store, picks: controller.pickedRows(rows), file: file).panelDrawsOwnClose()
         }
         .spreadSheet(isPresented: $deleting, id: "library-delete") {
             let picks = controller.pickedRows(rows).map(\.item).filter { controller.canDelete($0) }
             LibraryDeleteSheet(picks: picks, impact: DeleteImpact(picks: picks, model: model), delete: controller.deletePicks)
+                .panelDrawsOwnClose()
         }
     }
 }

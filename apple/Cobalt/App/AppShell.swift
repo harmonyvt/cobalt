@@ -120,7 +120,7 @@ struct AppShell: View {
                 .photosPickerStyle(.inline)
                 .photosPickerDisabledCapabilities([.selectionActions])
                 .ignoresSafeArea(edges: .bottom)
-            spreadPane.show(id: Self.photosPaneID, content: AnyView(picker), closable: true) {}
+            spreadPane.show(id: Self.photosPaneID, content: AnyView(picker)) {}
             return
         }
         #endif
