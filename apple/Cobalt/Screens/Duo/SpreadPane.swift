@@ -2,11 +2,11 @@ import CobaltKit
 import SwiftUI
 
 // The other screen (Duo building blocks, /mnt/project-files/iphone-duo/building-blocks.html). On a spread the shell keeps
-// one pane over the right half of the window: a sheet, a picker, a confirm or a second tab opens there instead of
+// one pane as the right half of the selected tab (`SpreadPaneColumn`; the screen on the left reflows into the other half): a sheet, a picker, a confirm or a second tab opens there instead of
 // covering the screen it came from, which stays live and touchable. Folded, on an iPhone and on the Mac the same calls
 // are ordinary sheets.
 
-/// The pane the shell draws over the right half of a spread.
+/// The pane the shell draws as the right half of a spread.
 @MainActor @Observable
 final class SpreadPaneHost {
     struct Pane {
@@ -47,6 +47,8 @@ private struct SpreadPaneKey: EnvironmentKey {
     static let defaultValue: SpreadPaneHost? = nil
 }
 
+private struct HingeEdgeKey: EnvironmentKey { static let defaultValue: HorizontalEdge? = nil }
+
 private struct IsSpreadKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -60,6 +62,13 @@ extension EnvironmentValues {
     var spreadPane: SpreadPaneHost? {
         get { self[SpreadPaneKey.self] }
         set { self[SpreadPaneKey.self] = newValue }
+    }
+
+    /// The side of this screen the hinge is on, while it is one column of a spread with a pane open; nil when it has the
+    /// whole window.
+    var hingeEdge: HorizontalEdge? {
+        get { self[HingeEdgeKey.self] }
+        set { self[HingeEdgeKey.self] = newValue }
     }
 
     /// The window is a spread: two screens' width (`Spread.minWidth` and up) on iPhone and iPad.
@@ -161,7 +170,78 @@ private struct SpreadSheetFlag<Pane: View>: ViewModifier {
     }
 }
 
-/// The pane itself: the right half of the window, over whatever is there, with the hinge on its left edge.
+/// Two equal columns: the tab's screen and, while the other screen shows something, the pane. Both are laid out at their
+/// real width, so the screen on the left reflows into its half instead of running on under the pane (owner, 8.26: "it just
+/// overlays"). With one child the screen takes the whole width.
+struct SpreadColumns: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count > 1 else {
+            subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+            return
+        }
+        let left = (bounds.width / 2).rounded()
+        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(width: left, height: bounds.height))
+        subviews[1].place(
+            at: CGPoint(x: bounds.minX + left, y: bounds.minY),
+            proposal: ProposedViewSize(width: bounds.width - left, height: bounds.height))
+    }
+}
+
+/// A tab's screen with the other screen beside it on a spread. Only the selected tab draws the pane (a tab view keeps the
+/// others alive, and one pane's content must exist once). It sits inside the tab, so the tab bar or rail stays the
+/// window's and is never covered.
+struct SpreadPaneColumn<Content: View>: View {
+    let active: Bool
+    let queue: JobQueue
+    @ViewBuilder let content: Content
+
+    @Environment(\.spreadPane) private var host
+    @Environment(\.isSpread) private var spread
+
+    private var shows: Bool { active && spread && host?.pane != nil }
+
+    var body: some View {
+        SpreadColumns {
+            // both columns start below the iPad's floating tab bar while the pane shows, so each column's own bar (title,
+            // search, toolbar) draws in its column instead of under the bar
+            content
+                .padding(.top, shows ? SpreadTopRow.height : 0)
+                .environment(\.hingeEdge, shows ? .trailing : nil)
+            if shows, let host {
+                SpreadPaneView(host: host, queue: queue)
+            }
+        }
+        .background(CobaltColor.bg.ignoresSafeArea())
+        // the pane's close sits on the hinge at the bottom, so neither column gives up a row for it and their tops line up
+        .overlay(alignment: .bottom) {
+            if shows, let host, let pane = host.pane, pane.closable {
+                CloseButton(cancels: true) { host.close(id: pane.id) }
+                    .padding(.bottom, 14)
+                    .transition(.opacity)
+            }
+        }
+        .animation(Motion.card, value: shows ? host?.pane?.id : nil)
+    }
+}
+
+/// The top row of an iPad window, where the floating tab bar sits over the content. It is no safe-area inset, and a
+/// column's navigation bar that starts at the window's top shares that row with it: on a spread, the right column's
+/// title and buttons drew under the bar as ghost glyphs (8.26 shots). A column that starts below it gets a bar of its own.
+enum SpreadTopRow {
+    static var height: CGFloat {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .pad ? 58 : 0
+        #else
+        return 0
+        #endif
+    }
+}
+
+/// The pane itself: the right column of a spread, with the hinge on its left edge.
 struct SpreadPaneView: View {
     let host: SpreadPaneHost
     let queue: JobQueue
@@ -170,18 +250,17 @@ struct SpreadPaneView: View {
         if let pane = host.pane {
             HStack(spacing: 0) {
                 HingeSeam(queue: queue)
+                    .ignoresSafeArea()
                 pane.content
+                    .environment(\.hingeEdge, .leading)
                     .environment(\.paneClose, SheetCloseAction { host.close(id: pane.id) })
                     .sheetClose { host.close(id: pane.id) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(CobaltColor.bg)
                     .id(host.generation)
-                    .overlay(alignment: .topLeading) {
-                        if pane.closable {
-                            CloseButton(cancels: true) { host.close(id: pane.id) }
-                                .padding(12)
-                        }
-                    }
+                // a little room from the hinge, so a large title or a row never touches the line
+                .padding(.leading, 8)
+                .padding(.top, SpreadTopRow.height)
             }
             .background(CobaltColor.bg.ignoresSafeArea())
             .transition(.move(edge: .trailing).combined(with: .opacity))

@@ -132,7 +132,6 @@ struct EditorWindowContent: View {
             }
         }
         .background(CobaltColor.bg.ignoresSafeArea())
-        .syncGlow(model.library.syncStatus)
         .modifier(EditorLoadWatch(model: model, dismiss: dismiss))
         #if os(macOS)
         .background {

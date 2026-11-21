@@ -159,6 +159,29 @@ final class LibraryController {
         unstick("tap")
     }
 
+    /// The library's width class changed (a pane opened or closed beside it, a fold, a rotation): UIKit keeps the bar it
+    /// built for the old one, so the inspector column goes out and back in once.
+    /// Waits for the change to settle first: a pane opening or closing animates the column's width and the bar's row,
+    /// and a stack built mid-animation came up with a half-width bar and no "…" at full width.
+    func tierChanged() {
+        tierRebuild?.cancel()
+        tierRebuild = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled, let self else { return }
+            Breadcrumbs.add("library.tierChanged")
+            // UIKit keeps the bar it laid out for the old width until the library's column changes once; a new stack did
+            // not do it (and re-ran the album's initial onChange, which cleared the selection). An inspector out and back
+            // in, with no animation, is that change: "…", queue and search come back, and the header with the selection.
+            guard !self.compact, self.inspectorOpen else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            var quiet = Transaction(); quiet.disablesAnimations = true
+            withTransaction(quiet) { self.inspectorOpen = false }
+            try? await Task.sleep(for: .milliseconds(60))
+            withTransaction(quiet) { self.inspectorOpen = true }
+        }
+    }
+    @ObservationIgnored private var tierRebuild: Task<Void, Never>?
+
     private func unstick(_ how: String) {
         Breadcrumbs.add("library.unstuck", ["how": .string(how)])
         stackID += 1

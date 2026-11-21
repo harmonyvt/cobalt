@@ -367,7 +367,7 @@ struct LenientRoleTests {
             file: file, kind: .webp, media: MediaInfo(name: "n", duration: nil, width: 4, height: 5, bytes: nil, isImage: true),
             sessionID: "S1", link: nil, remoteURL: nil, move: true, keep: false, role: .slideshow, libraryID: "m1")
         let plain = try await store.add(
-            file: try { let u = dir.appendingPathComponent("b.mp4"); try PreviewMedia.placeholderBytes.write(to: u); return u }(),
+            file: try { let u = dir.appendingPathComponent("b.mp4"); try PreviewMedia.placeholder(for: u).write(to: u); return u }(),
             kind: .original, media: MediaInfo(name: "p", duration: 3, width: 4, height: 5, bytes: nil, isImage: false),
             sessionID: "S2", link: nil, remoteURL: nil, move: true, keep: false)
         // a later build wrote a role this one has never heard of

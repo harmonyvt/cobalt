@@ -87,6 +87,15 @@ struct AppShell: View {
         #endif
     }
 
+    /// The tier of one column: half the window while the other screen holds a pane (a screen laid out for the whole width
+    /// in half of it opened the library's inspector over its own grid), else the window's.
+    private var columnTier: Tier {
+        #if os(iOS)
+        if isSpread, spreadPane.pane != nil { return Tier(width: width / 2) }
+        #endif
+        return tier
+    }
+
     /// Two screens' width on iPhone and iPad (`Spread.minWidth`): the pane and the hinge notices are on. The Mac keeps
     /// its sheets.
     private var isSpread: Bool {
@@ -127,25 +136,14 @@ struct AppShell: View {
             .environment(\.photoImport, photoImport)
             .environment(\.spreadPane, spreadPane)
             .environment(\.isSpread, isSpread)
-            .overlay(alignment: .trailing) {
-                if isSpread {
-                    SpreadPaneView(host: spreadPane, queue: model.queue)
-                        .frame(width: width / 2)
-                        .environment(\.shell, actions)
-                        .environment(\.photoImport, photoImport)
-                        .environment(\.spreadPane, spreadPane)
-                        .environment(\.isSpread, isSpread)
-                        .cobaltRoot(model: model)
-                }
-            }
-            .animation(Motion.card, value: spreadPane.pane?.id)
+            // the pane itself is a column inside the selected tab (`SpreadPaneColumn`), not an overlay
             .onChange(of: isSpread) { _, spread in if !spread { spreadPane.close() } }
             #if os(iOS)
             // a second tab on the other screen; picking the same tab on the main screen closes it there
             .onChange(of: spreadPane.tabRequest) { _, tab in
                 guard let tab else { return }
                 spreadPane.tabRequest = nil
-                spreadPane.show(id: "tab-\(tab)", content: AnyView(tabRoot(tab)), closable: true) {}
+                spreadPane.show(id: "tab-\(tab)", content: AnyView(tabRoot(tab, tier: Tier(width: width / 2))), closable: true) {}
             }
             .onChange(of: model.selectedTab) { _, tab in spreadPane.close(id: "tab-\(tab)") }
             #endif
@@ -216,6 +214,13 @@ struct AppShell: View {
             #if DEBUG
             .onAppear {
                 if let kind = UserDefaults.standard.string(forKey: "previewTitleSheet") { debugTitleSheet(kind) }
+                // `-previewOtherTab sevenTv` (simulator evidence): that tab opens on the other screen of a spread
+                if let raw = UserDefaults.standard.string(forKey: "previewOtherTab"), let tab = AppTab(rawValue: raw) {
+                    Task {
+                        try? await Task.sleep(for: .seconds(1))
+                        spreadPane.tabRequest = tab
+                    }
+                }
                 if let n = UserDefaults.standard.string(forKey: "previewDetail").flatMap(Int.init), model.store.media.indices.contains(n) {
                     debugDetail = model.mediaItem(for: model.store.media[n])
                 }
@@ -401,7 +406,7 @@ struct AppShell: View {
         Group {
             if UIDevice.current.userInterfaceIdiom == .phone {
                 // iPhone: four tabs and our own "more" (one stack), never the system More (see `PhoneTabs`)
-                PhoneTabs(model: model, tabs: model.visibleTabs.filter { $0 != .queue }, glowSuppressed: tabGlowSuppressed) { tab in
+                PhoneTabs(model: model, tabs: model.visibleTabs.filter { $0 != .queue }) { tab in
                     tabScreen(tab)
                 }
             } else {
@@ -410,8 +415,9 @@ struct AppShell: View {
                     // save, library, links and chat (apple/CONTRACT.md 12; `AppModel.showQueue()`)
                     ForEach(model.visibleTabs.filter { $0 != .queue }, id: \.self) { tab in
                         Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
-                            tabRoot(tab)
-                                .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
+                            SpreadPaneColumn(active: tab == model.selectedTab, queue: model.queue) {
+                                tabRoot(tab)
+                            }
                         }
                         .badge(tab == .swarms ? model.swarms.waitingCount : 0)
                     }
@@ -452,8 +458,6 @@ struct AppShell: View {
                 case .settings: SettingsScreen(model: model)
                 }
             }
-            // Bottom of the detail column, under the window's content and clear of the sidebar.
-            .syncGlow(model.library.syncStatus)
         }
         #endif
     }
@@ -461,7 +465,8 @@ struct AppShell: View {
     #if os(iOS)
     /// A tab's screen with no navigation stack around it.
     @ViewBuilder
-    private func tabScreen(_ tab: AppTab) -> some View {
+    private func tabScreen(_ tab: AppTab, tier: Tier? = nil) -> some View {
+        let tier = tier ?? columnTier
         switch tab {
         case .save: HomeScreen(model: model, tier: tier)
         // the screen brings its own navigation stack, so a width change (a rotation, a split view) never replaces it and its
@@ -482,21 +487,14 @@ struct AppShell: View {
 
     /// A tab's screen in the stack of its own (the iPad's tabs).
     @ViewBuilder
-    private func tabRoot(_ tab: AppTab) -> some View {
+    private func tabRoot(_ tab: AppTab, tier: Tier? = nil) -> some View {
         if tab == .library {
-            tabScreen(tab)
+            tabScreen(tab, tier: tier)
         } else {
-            NavigationStack { tabScreen(tab) }
+            NavigationStack { tabScreen(tab, tier: tier) }
         }
     }
 
-    /// A tab's band steps aside while the queue sheet or the editor cover draws one of its own, so two
-    /// Metal views are never drawing in this window at once.
-    private var tabGlowSuppressed: Bool {
-        !SyncGlowPlacement.tabShowsBand(
-            queueSheet: model.queueShown,
-            editorCover: model.editor.session != nil || EditorLauncher.shared.isBusy)
-    }
     #endif
 
     #if os(iOS)
@@ -507,7 +505,6 @@ struct AppShell: View {
                 .sheetCorner()
                 .sheetClose { model.queueShown = false }
         }
-        .syncGlow(model.library.syncStatus)
         .presentationDetents([.large])
         .cobaltRoot(model: model)
         .environment(\.shell, actions)

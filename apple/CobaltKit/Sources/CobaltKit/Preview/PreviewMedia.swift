@@ -6,6 +6,15 @@ enum PreviewMedia {
     static let placeholderBytes = Data(base64Encoded:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")!
 
+    /// The start of an mp4 (an `ftyp` box): enough for the stores, which read a file's first bytes to tell a picture from a
+    /// video (`FileSniff`), to take a preview video for a video.
+    static let placeholderVideoBytes = Data([0, 0, 0, 0x18] + Array("ftypisom".utf8) + [0, 0, 2, 0] + Array("isommp41".utf8))
+
+    /// What a preview download or copy writes at `url`: a video's first bytes for a video name, a 1×1 png otherwise.
+    static func placeholder(for url: URL) -> Data {
+        ["mp4", "mov", "m4v"].contains(url.pathExtension.lowercased()) ? placeholderVideoBytes : placeholderBytes
+    }
+
     /// The boards' frame placeholder: a grey gradient (`#4a4a4f → #232326`), tilted like 170deg.
     static func gradient(width: Int, height: Int) -> CGImage? {
         let space = CGColorSpaceCreateDeviceRGB()
@@ -85,7 +94,7 @@ struct PreviewIntake: FileIntake {
         if fm.fileExists(atPath: file.url.path) {
             try fm.copyItem(at: file.url, to: destination)
         } else {
-            try PreviewMedia.placeholderBytes.write(to: destination)
+            try PreviewMedia.placeholder(for: destination).write(to: destination)
         }
         return destination
     }

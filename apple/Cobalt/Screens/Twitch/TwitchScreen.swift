@@ -29,6 +29,9 @@ struct TwitchScreen: View {
         .navigationTitle(store.channel.map { store.channelInfo?.displayName ?? $0 } ?? Copy.Twitch.title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        // watching is a state, not a push: our "back" closes the channel, so the stack's own back button (to "more")
+        // would be a second one beside it
+        .navigationBarBackButtonHidden(store.channel != nil)
         #endif
         .toolbar {
             if store.channel != nil {

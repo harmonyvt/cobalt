@@ -15,7 +15,6 @@ struct PhoneTabs<Screen: View>: View {
     let model: AppModel
     /// The visible tabs in order, without the queue (a sheet on iPhone).
     let tabs: [AppTab]
-    let glowSuppressed: Bool
     /// A tab's bare screen: no navigation stack around it (the library brings its own).
     @ViewBuilder let screen: (AppTab) -> Screen
 
@@ -33,10 +32,9 @@ struct PhoneTabs<Screen: View>: View {
     @State private var selection: Slot
     @State private var path: [AppTab]
 
-    init(model: AppModel, tabs: [AppTab], glowSuppressed: Bool, @ViewBuilder screen: @escaping (AppTab) -> Screen) {
+    init(model: AppModel, tabs: [AppTab], @ViewBuilder screen: @escaping (AppTab) -> Screen) {
         self.model = model
         self.tabs = tabs
-        self.glowSuppressed = glowSuppressed
         self.screen = screen
         let overflow = Self.split(tabs).overflow
         let tab = model.selectedTab
@@ -96,17 +94,22 @@ struct PhoneTabs<Screen: View>: View {
 
     @ViewBuilder
     private func root(_ tab: AppTab) -> some View {
-        Group {
+        SpreadPaneColumn(active: selection == .tab(tab), queue: model.queue) {
             if tab == .library {
                 screen(tab)
             } else {
                 NavigationStack { screen(tab) }
             }
         }
-        .syncGlow(model.library.syncStatus, suppressed: glowSuppressed)
     }
 
     private var moreStack: some View {
+        SpreadPaneColumn(active: selection == .more, queue: model.queue) {
+            moreNavigation
+        }
+    }
+
+    private var moreNavigation: some View {
         NavigationStack(path: $path) {
             List(overflow, id: \.self) { tab in
                 NavigationLink(value: tab) {
@@ -124,7 +127,6 @@ struct PhoneTabs<Screen: View>: View {
                 screen(tab)
             }
         }
-        .syncGlow(model.library.syncStatus, suppressed: glowSuppressed)
     }
 }
 #endif

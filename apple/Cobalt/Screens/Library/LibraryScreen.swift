@@ -17,6 +17,11 @@ struct LibraryScreen: View {
     let tier: Tier
 
     @State private var controller: LibraryController
+    #if os(iOS)
+    /// The library's own width: in a spread it is one column, and the shell's tier for it did not always come back
+    /// to the window's when the pane closed (a half-width bar, no "…", at full width).
+    @State private var ownWidth: CGFloat = 0
+    #endif
 
     init(model: AppModel, tier: Tier) {
         self.model = model
@@ -24,13 +29,24 @@ struct LibraryScreen: View {
         _controller = State(initialValue: LibraryController(model: model))
     }
 
+    #if os(iOS)
+    private var measuredTier: Tier? { ownWidth > 0 ? Tier(width: ownWidth) : nil }
+    private var shownTier: Tier { measuredTier ?? tier }
+    #endif
+
     var body: some View {
         Group {
             #if os(iOS)
             // Always its own stack (the shell adds none), so the tier never changes this screen's identity.
-            NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
+            NavigationStack { LibraryContent(model: model, tier: shownTier, controller: controller) }
                 // rebuilt when the zoom back from a video leaves the grid out of the stack (LibraryController.checkStackSoon)
                 .id(controller.stackID)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { ownWidth = $0 }
+                // UIKit keeps the bar it built for the old width (a half-width bar with no "…" after the pane closed or
+                // the phone unfolded): a new width class bounces the inspector once (LibraryController.tierChanged)
+                .onChange(of: measuredTier) { was, now in
+                    if let was, let now, was != now { controller.tierChanged() }
+                }
             #else
             if tier == .compact {
                 NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
@@ -387,7 +403,10 @@ private struct LibraryContent: View {
                 if wholeLibraryStep == 1 { await library.loadAll() }
             }
             // the album: locked at every open, its first page once the owner is in
-            .onChange(of: library.showingHidden, initial: true) { _, open in
+            .onChange(of: library.showingHidden, initial: true) { was, open in
+                // a rebuilt stack (the zoom-back fix) runs this again with the album still closed: nothing changed, so
+                // the selection and the sheets stay (it cleared the inspector after the pane closed)
+                if !open, !was { return }
                 if open, !model.capabilities.hidden { library.showingHidden = false; return }
                 controller.hiddenAlbumChanged(open: open)
                 #if DEBUG
