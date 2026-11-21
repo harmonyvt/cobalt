@@ -936,7 +936,7 @@ public struct PreviewClient: CobaltClient {
         let fm = FileManager.default
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
-        try PreviewMedia.placeholderBytes.write(to: destination)
+        try PreviewMedia.placeholder(for: destination).write(to: destination)
         return destination
     }
 }
