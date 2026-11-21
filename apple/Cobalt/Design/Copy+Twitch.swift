@@ -47,6 +47,32 @@ extension Copy {
         static let jumpToLive = "jump to live"
         static let catchingUp = "catching up…"
 
+        // MARK: on a tv (70.5)
+
+        static let watchOnTV = "watch on the tv"
+        static let tvTitle = "watch on the tv"
+        static let close = "close"
+        static let tvModeTitle = "tv mode"
+        static let tvModeBadge = "best for chat"
+        static let tvModeBody = "the stream fills the tv, chat stays here. about as far behind live as on the phone, so chat lines up. keep capystore open: locking the phone ends screen mirroring."
+        static let tvModeSteps = ["swipe down from the top right", "tap screen mirroring", "pick your tv"]
+        static let tvModeWaiting = "waiting for a tv… capystore switches by itself"
+        static let tvModeUse = "put the stream on the tv"
+        static let videoOnlyTitle = "video only"
+        static let videoOnlyBody = "the tv plays the stream by itself, so you can lock the phone or use other apps. it runs several seconds behind, so chat waits to match."
+        static let chatDelayTitle = "chat waits"
+        static func chatDelay(_ s: Int) -> String { s == 0 ? "chat on time" : "chat waits \(s) s" }
+        static func chatDelayChoice(_ s: Int) -> String { s == 0 ? "don't wait" : "\(s) s" }
+        static let pickTV = "pick a tv"
+        static let onTV = "on the tv"
+        static let dim = "dim"
+        static let undim = "undim"
+        static let chatOnTV = "chat on tv"
+        static let mirrorInstead = "mirror"
+        static let tvBrand = "capystore"
+        static let tvIdle = "pick a channel on the phone"
+        static let toLive = "to live"
+
         // MARK: chat
 
         static let chat = "chat"
