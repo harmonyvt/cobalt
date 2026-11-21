@@ -28,7 +28,7 @@ struct PlanetType: Equatable {
     /// name; and only when none of them has a real type, from what the entry is (an original video is
     /// an mp4 the server saved, a webp is a webp).
     init(_ video: StoredVideo) {
-        let candidates: [URL?] = [video.fileURL, video.remoteURL, URL(fileURLWithPath: video.name)]
+        let candidates: [URL?] = [video.fileURL, video.remoteURL, URL(fileURLWithPath: video.name, isDirectory: false)]
         for url in candidates {
             if let ext = Self.knownExtension(of: url) {
                 self.init(label: ext)

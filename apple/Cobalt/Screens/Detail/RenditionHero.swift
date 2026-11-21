@@ -138,7 +138,7 @@ enum HeroSource {
     static func resolve(_ url: URL) -> URL {
         #if DEBUG
         if let dir = UserDefaults.standard.string(forKey: "previewMediaDir"), !dir.isEmpty {
-            return URL(fileURLWithPath: dir).appendingPathComponent(url.lastPathComponent)
+            return URL(fileURLWithPath: dir, isDirectory: true).appendingPathComponent(url.lastPathComponent, isDirectory: false)
         }
         #endif
         return url
