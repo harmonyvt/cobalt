@@ -178,6 +178,9 @@ extension CobaltAppDelegate: UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // The one lifecycle listener (apple/ARCHITECTURE.md, "Who owns what"): here, before any window, so a background
+        // wake (a finished download, an intent) is heard too. The model's services registered in `AppModel.live()`.
+        MainActor.assumeIsolated { AppLifecycle.shared.start() }
         UNUserNotificationCenter.current().delegate = self
         return true
     }
@@ -204,6 +207,8 @@ extension CobaltAppDelegate: NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Before the first window: a tap that launches the app is delivered right after this.
         UNUserNotificationCenter.current().delegate = self
+        // The one lifecycle listener (apple/ARCHITECTURE.md, "Who owns what"), before any window.
+        MainActor.assumeIsolated { AppLifecycle.shared.start() }
     }
 
     /// The right-click service ("save to capystore"). Here, not later: a service that launched the app is delivered
