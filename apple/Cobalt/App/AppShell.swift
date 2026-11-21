@@ -127,18 +127,7 @@ struct AppShell: View {
             .environment(\.photoImport, photoImport)
             .environment(\.spreadPane, spreadPane)
             .environment(\.isSpread, isSpread)
-            .overlay(alignment: .trailing) {
-                if isSpread {
-                    SpreadPaneView(host: spreadPane, queue: model.queue)
-                        .frame(width: width / 2)
-                        .environment(\.shell, actions)
-                        .environment(\.photoImport, photoImport)
-                        .environment(\.spreadPane, spreadPane)
-                        .environment(\.isSpread, isSpread)
-                        .cobaltRoot(model: model)
-                }
-            }
-            .animation(Motion.card, value: spreadPane.pane?.id)
+            // the pane itself is a column inside the selected tab (`SpreadPaneColumn`), not an overlay
             .onChange(of: isSpread) { _, spread in if !spread { spreadPane.close() } }
             #if os(iOS)
             // a second tab on the other screen; picking the same tab on the main screen closes it there
@@ -401,7 +390,7 @@ struct AppShell: View {
         Group {
             if UIDevice.current.userInterfaceIdiom == .phone {
                 // iPhone: four tabs and our own "more" (one stack), never the system More (see `PhoneTabs`)
-                PhoneTabs(model: model, tabs: model.visibleTabs.filter { $0 != .queue }, glowSuppressed: tabGlowSuppressed) { tab in
+                PhoneTabs(model: model, tabs: model.visibleTabs.filter { $0 != .queue }) { tab in
                     tabScreen(tab)
                 }
             } else {
@@ -410,8 +399,9 @@ struct AppShell: View {
                     // save, library, links and chat (apple/CONTRACT.md 12; `AppModel.showQueue()`)
                     ForEach(model.visibleTabs.filter { $0 != .queue }, id: \.self) { tab in
                         Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
-                            tabRoot(tab)
-                                .syncGlow(model.library.syncStatus, suppressed: tabGlowSuppressed)
+                            SpreadPaneColumn(active: tab == model.selectedTab, queue: model.queue) {
+                                tabRoot(tab)
+                            }
                         }
                         .badge(tab == .swarms ? model.swarms.waitingCount : 0)
                     }
@@ -451,8 +441,6 @@ struct AppShell: View {
                 case .settings: SettingsScreen(model: model)
                 }
             }
-            // Bottom of the detail column, under the window's content and clear of the sidebar.
-            .syncGlow(model.library.syncStatus)
         }
         #endif
     }
@@ -488,13 +476,6 @@ struct AppShell: View {
         }
     }
 
-    /// A tab's band steps aside while the queue sheet or the editor cover draws one of its own, so two
-    /// Metal views are never drawing in this window at once.
-    private var tabGlowSuppressed: Bool {
-        !SyncGlowPlacement.tabShowsBand(
-            queueSheet: model.queueShown,
-            editorCover: model.editor.session != nil || EditorLauncher.shared.isBusy)
-    }
     #endif
 
     #if os(iOS)
@@ -505,7 +486,6 @@ struct AppShell: View {
                 .sheetCorner()
                 .sheetClose { model.queueShown = false }
         }
-        .syncGlow(model.library.syncStatus)
         .presentationDetents([.large])
         .cobaltRoot(model: model)
         .environment(\.shell, actions)

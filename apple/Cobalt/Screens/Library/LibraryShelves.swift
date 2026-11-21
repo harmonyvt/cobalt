@@ -103,6 +103,7 @@ struct LibraryShelves: View {
             Spacer(minLength: 8)
             if !placeholder, current != .edits, !folded {
                 Button(Copy.Library2.seeAllLinks) { model.selectedTab = .links }
+                    .lineLimit(1)
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(CobaltColor.linkBlue)
                     .buttonStyle(.plain)
@@ -137,6 +138,9 @@ struct LibraryShelves: View {
                     .monospacedDigit()
             }
         }
+        // one line always: a narrow column broke "collections" in two
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
         .contentShape(Rectangle())
         .frame(minHeight: 32)
         .accessibilityElement(children: .combine)

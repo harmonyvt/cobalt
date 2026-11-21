@@ -2,11 +2,11 @@ import CobaltKit
 import SwiftUI
 
 // The other screen (Duo building blocks, /mnt/project-files/iphone-duo/building-blocks.html). On a spread the shell keeps
-// one pane over the right half of the window: a sheet, a picker, a confirm or a second tab opens there instead of
+// one pane as the right half of the selected tab (`SpreadPaneColumn`; the screen on the left reflows into the other half): a sheet, a picker, a confirm or a second tab opens there instead of
 // covering the screen it came from, which stays live and touchable. Folded, on an iPhone and on the Mac the same calls
 // are ordinary sheets.
 
-/// The pane the shell draws over the right half of a spread.
+/// The pane the shell draws as the right half of a spread.
 @MainActor @Observable
 final class SpreadPaneHost {
     struct Pane {
@@ -161,7 +161,52 @@ private struct SpreadSheetFlag<Pane: View>: ViewModifier {
     }
 }
 
-/// The pane itself: the right half of the window, over whatever is there, with the hinge on its left edge.
+/// Two equal columns: the tab's screen and, while the other screen shows something, the pane. Both are laid out at their
+/// real width, so the screen on the left reflows into its half instead of running on under the pane (owner, 8.26: "it just
+/// overlays"). With one child the screen takes the whole width.
+struct SpreadColumns: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count > 1 else {
+            subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+            return
+        }
+        let left = (bounds.width / 2).rounded()
+        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(width: left, height: bounds.height))
+        subviews[1].place(
+            at: CGPoint(x: bounds.minX + left, y: bounds.minY),
+            proposal: ProposedViewSize(width: bounds.width - left, height: bounds.height))
+    }
+}
+
+/// A tab's screen with the other screen beside it on a spread. Only the selected tab draws the pane (a tab view keeps the
+/// others alive, and one pane's content must exist once). It sits inside the tab, so the tab bar or rail stays the
+/// window's and is never covered.
+struct SpreadPaneColumn<Content: View>: View {
+    let active: Bool
+    let queue: JobQueue
+    @ViewBuilder let content: Content
+
+    @Environment(\.spreadPane) private var host
+    @Environment(\.isSpread) private var spread
+
+    private var shows: Bool { active && spread && host?.pane != nil }
+
+    var body: some View {
+        SpreadColumns {
+            content
+            if shows, let host {
+                SpreadPaneView(host: host, queue: queue)
+            }
+        }
+        .animation(Motion.card, value: shows ? host?.pane?.id : nil)
+    }
+}
+
+/// The pane itself: the right column of a spread, with the hinge on its left edge.
 struct SpreadPaneView: View {
     let host: SpreadPaneHost
     let queue: JobQueue
