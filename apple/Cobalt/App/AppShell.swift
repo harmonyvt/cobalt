@@ -87,6 +87,15 @@ struct AppShell: View {
         #endif
     }
 
+    /// The tier of one column: half the window while the other screen holds a pane (a screen laid out for the whole width
+    /// in half of it opened the library's inspector over its own grid), else the window's.
+    private var columnTier: Tier {
+        #if os(iOS)
+        if isSpread, spreadPane.pane != nil { return Tier(width: width / 2) }
+        #endif
+        return tier
+    }
+
     /// Two screens' width on iPhone and iPad (`Spread.minWidth`): the pane and the hinge notices are on. The Mac keeps
     /// its sheets.
     private var isSpread: Bool {
@@ -134,7 +143,7 @@ struct AppShell: View {
             .onChange(of: spreadPane.tabRequest) { _, tab in
                 guard let tab else { return }
                 spreadPane.tabRequest = nil
-                spreadPane.show(id: "tab-\(tab)", content: AnyView(tabRoot(tab)), closable: true) {}
+                spreadPane.show(id: "tab-\(tab)", content: AnyView(tabRoot(tab, tier: Tier(width: width / 2))), closable: true) {}
             }
             .onChange(of: model.selectedTab) { _, tab in spreadPane.close(id: "tab-\(tab)") }
             #endif
@@ -455,7 +464,8 @@ struct AppShell: View {
     #if os(iOS)
     /// A tab's screen with no navigation stack around it.
     @ViewBuilder
-    private func tabScreen(_ tab: AppTab) -> some View {
+    private func tabScreen(_ tab: AppTab, tier: Tier? = nil) -> some View {
+        let tier = tier ?? columnTier
         switch tab {
         case .save: HomeScreen(model: model, tier: tier)
         // the screen brings its own navigation stack, so a width change (a rotation, a split view) never replaces it and its
@@ -475,11 +485,11 @@ struct AppShell: View {
 
     /// A tab's screen in the stack of its own (the iPad's tabs).
     @ViewBuilder
-    private func tabRoot(_ tab: AppTab) -> some View {
+    private func tabRoot(_ tab: AppTab, tier: Tier? = nil) -> some View {
         if tab == .library {
-            tabScreen(tab)
+            tabScreen(tab, tier: tier)
         } else {
-            NavigationStack { tabScreen(tab) }
+            NavigationStack { tabScreen(tab, tier: tier) }
         }
     }
 
