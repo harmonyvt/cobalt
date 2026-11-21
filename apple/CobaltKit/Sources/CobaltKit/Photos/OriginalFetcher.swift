@@ -92,6 +92,10 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
     @MainActor var instantFailed: (_ link: URL?, _ status: Int?) async -> Void = { link, status in
         await Notifications.postInstantFailed(link: link, status: status)
     }
+    /// A photo or video shared from another app was refused by the server (or never reached it): its name, the status.
+    @MainActor var uploadFailed: (_ name: String, _ status: Int?) async -> Void = { name, status in
+        await Notifications.postUploadFailed(name: name, status: status)
+    }
     /// The extension's "saving to cobalt" notifications have nothing left to say once the app is in front.
     @MainActor var clearInstantNotifications: () -> Void = { Notifications.clearInstantSaving() }
     /// Where the extension left its request bodies (`Saves`): the ones a day old are deleted.

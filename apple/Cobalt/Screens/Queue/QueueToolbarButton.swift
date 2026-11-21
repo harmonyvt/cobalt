@@ -12,7 +12,6 @@ struct QueueToolbarItem: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) { QueueToolbarButton(model: model) }
-        SecondScreenToolbarItem(model: model)
     }
 }
 

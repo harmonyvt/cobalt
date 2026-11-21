@@ -8,11 +8,13 @@ import UIKit
 ///
 /// By default it shows nothing that waits: `InstantShare.start` reads the shared link and asks the server what it is
 /// (`ShareGalleryFlow`). One video or photo is queued as `POST /studio` with a URLSession upload, a quiet "saving to
-/// cobalt" notification is posted when the owner already allowed them, and the request completes at once. Only four things
+/// cobalt" notification is posted when the owner already allowed them, and the request completes at once. Photos and videos
+/// shared without a link are copied into the app group and uploaded on a background session the same way (`ShareUploads`),
+/// with an "uploading to capystore" notification. Only four things
 /// ever show a view:
 ///  - the compact gallery sheet, when the link is a post with several items (one height for its whole life);
 ///  - the one-line failure card, when the save could not even be queued;
-///  - the full sheet, for a file (its upload runs in this process), and when the owner turned on
+///  - the full sheet, for a file in a build without the app group (its upload runs in this process), and when the owner turned on
 ///    "show the full share sheet";
 ///  - nothing else. The quick card and its full-screen overlay are no longer presented (the host ignored
 ///    `.overFullScreen` on the owner's device and drew the overlay's blur as a grey sheet).
@@ -61,6 +63,8 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
         switch await InstantShare.start(inputItems: items) {
         case .flow(let flow):
             run(flow)
+        case .uploaded:
+            finish()
         case .needsSheet:
             await showFullSheet(items)
         case .failed(let failure):

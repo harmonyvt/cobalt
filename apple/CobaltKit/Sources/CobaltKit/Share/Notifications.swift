@@ -116,6 +116,23 @@ enum Notifications {
         return UNNotificationRequest(identifier: "instant-failed-\(UUID().uuidString.lowercased())", content: content, trigger: nil)
     }
 
+    /// A photo or video shared from another app did not upload (`ShareUploads`). Opens cobalt.
+    static func uploadFailedRequest(name: String, status: Int?) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.title = "capystore couldn't upload that"
+        let reason = status == 413 ? "it's over the 100 MB upload limit" : instantFailedReason(status: status)
+        content.body = name.isEmpty ? reason : "\(name) — \(reason)"
+        content.sound = .default
+        content.threadIdentifier = "cobalt-saves"
+        content.userInfo = ["url": openURL]
+        return UNNotificationRequest(identifier: "instant-failed-\(UUID().uuidString.lowercased())", content: content, trigger: nil)
+    }
+
+    static func postUploadFailed(name: String, status: Int?) async {
+        guard runsInApp else { return }
+        try? await UNUserNotificationCenter.current().add(uploadFailedRequest(name: name, status: status))
+    }
+
     static func instantFailedReason(status: Int?) -> String {
         switch status {
         case 401, 403: return "the key was not accepted"

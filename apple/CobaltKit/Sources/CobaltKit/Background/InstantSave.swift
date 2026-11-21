@@ -56,6 +56,10 @@ public enum InstantShare {
         case rejected(status: Int)
         /// No connection to the server.
         case unreachable
+        /// Photos or videos were shared, but none in a type the server takes (jpeg, png, heic, gif, webp, mp4, mov).
+        case noMedia
+        /// Every shared file was over the upload limit (100 MB).
+        case tooLarge
     }
 
     public enum Result: Sendable, Equatable {
@@ -188,6 +192,8 @@ final class SaveSink: SaveEvents, @unchecked Sendable {
 struct URLSessionSaveTransport: SaveTransport {
     enum Mode: Sendable { case background, foreground }
     var mode: Mode
+    /// How long a background request may take in all: a save's JSON is small, a shared video's upload is not.
+    var resourceTimeout: TimeInterval = 10 * 60
 
     private static let cache = Mutex<[String: any SaveSession]>([:])
 
@@ -207,7 +213,7 @@ struct URLSessionSaveTransport: SaveTransport {
             if AppGroup.location.kind == .appGroup { config.sharedContainerIdentifier = AppGroup.id }
             config.isDiscretionary = false
             config.sessionSendsLaunchEvents = true
-            config.timeoutIntervalForResource = 10 * 60
+            config.timeoutIntervalForResource = resourceTimeout
         case .foreground:
             config = URLSessionConfiguration.ephemeral
             config.waitsForConnectivity = false

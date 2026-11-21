@@ -9,14 +9,14 @@ import UniformTypeIdentifiers
 /// What was shared, as far as the instant path cares.
 enum InstantIntake: Sendable, Equatable {
     case link(URL)
-    /// A movie file and no link: its upload runs inside the extension, so only the full sheet can do it.
+    /// Photos or videos and no link: each one is uploaded on a background session (`ShareUploads`).
     case file
     case none
 }
 
 extension ShareInbox {
     /// The first link in what the host shared: a URL attachment, a URL in text, the item's own text. A link
-    /// wins over a movie file (saving the link server-side is the point). Nothing is copied or loaded
+    /// wins over a photo or a video (saving the link server-side is the point). Nothing is copied or loaded
     /// beyond the link itself.
     static func loadLinkOnly(_ items: [NSExtensionItem]) async -> InstantIntake {
         let providers = items.flatMap { $0.attachments ?? [] }
@@ -31,7 +31,7 @@ extension ShareInbox {
                 if let string, let link = LinkInfo.firstLink(in: string) { return .link(link) }
             }
         }
-        if providers.contains(where: { $0.hasItemConformingToTypeIdentifier(UTType.movie.identifier) }) { return .file }
+        if ShareUploads.hasMedia(providers) { return .file }
         return .none
     }
 }
@@ -75,25 +75,31 @@ extension InstantShare {
         /// A link: the flow asks the server what it is. One item is saved and the extension closes without showing
         /// anything; a gallery gets the compact sheet (`ShareGalleryFlow`).
         case flow(ShareGalleryFlow)
-        /// A file, or anything the instant path cannot do: the caller builds the full sheet.
+        /// Shared photos and videos are with the system's transfer daemon (`ShareUploads`): the caller completes at once.
+        case uploaded
+        /// A file this build cannot send in the background (no app group), or anything else the instant path cannot
+        /// do: the caller builds the full sheet.
         case needsSheet
         /// Nothing could be queued: the caller shows its one-line card.
         case failed(Failure)
     }
 
-    /// What `run` and `start` share: the link, the settings and a client for this process's key.
+    /// What `run` and `start` share: the link (nil: photos or videos), the settings and a client for this process's key.
     private struct Prepared {
-        var link: LinkInfo
+        var link: LinkInfo?
         var settings: Settings
         var client: HTTPCobaltClient
     }
 
     @MainActor
-    private static func prepare(inputItems: [NSExtensionItem]) async -> Either<Prepared, Result> {
+    private static func prepare(inputItems: [NSExtensionItem], files: Bool = false) async -> Either<Prepared, Result> {
         let intake = await ShareInbox.loadLinkOnly(inputItems)
-        let link: LinkInfo
+        let link: LinkInfo?
         switch intake {
-        case .file: return .right(.needsSheet)
+        case .file:
+            // the background upload needs the app group; without it the full sheet uploads one file itself
+            guard files, URLSessionSaveTransport.current.background else { return .right(.needsSheet) }
+            link = nil
         case .none:
             Telemetry.log(.info, .share, "share instant", data: ["result": "no-link"])
             return .right(.failed(.noLink))
@@ -122,14 +128,54 @@ extension InstantShare {
     /// without a link is `.needsSheet`; no key or no link is `.failed`.
     @MainActor
     public static func start(inputItems: [NSExtensionItem]) async -> Start {
-        switch await prepare(inputItems: inputItems) {
+        switch await prepare(inputItems: inputItems, files: true) {
         case .right(.needsSheet): return .needsSheet
         case .right(.failed(let failure)): return .failed(failure)
         case .right(.saved): return .needsSheet
         case .left(let prepared):
-            let flow = ShareGalleryFlow.live(link: prepared.link, client: prepared.client, settings: prepared.settings)
+            guard let link = prepared.link else {
+                return await upload(inputItems: inputItems, settings: prepared.settings, client: prepared.client)
+            }
+            let flow = ShareGalleryFlow.live(link: link, client: prepared.client, settings: prepared.settings)
             flow.begin()
             return .flow(flow)
+        }
+    }
+
+    /// Shared photos and videos (CONTRACT-SHARE-QUICK.md 9.10): copied into the app group, each handed to the background
+    /// session as an upload, a quiet "uploading to capystore" posted, done. Nothing is shown unless none could be sent.
+    @MainActor
+    private static func upload(inputItems: [NSExtensionItem], settings: Settings, client: HTTPCobaltClient) async -> Start {
+        let started = Date()
+        let saves = AppGroup.directory("Saves")
+        let loaded = await ShareUploads.load(inputItems, into: ShareUploads.directory(saves: saves))
+        var log: [String: TelemetryValue] = [
+            "files": .int(loaded.files.count), "unsupported": .int(loaded.unsupported), "tooLarge": .int(loaded.tooLarge),
+            "overLimit": .int(loaded.overLimit), "bytes": .bytes(loaded.files.reduce(0) { $0 + $1.bytes }),
+        ]
+        guard !loaded.files.isEmpty else {
+            Telemetry.log(.info, .share, "share upload", data: log.merging(["result": "nothing"]) { a, _ in a })
+            return .failed(loaded.tooLarge > 0 ? .tooLarge : .noMedia)
+        }
+        var engine = InstantShareEngine(
+            transport: URLSessionSaveTransport(mode: .background, resourceTimeout: 6 * 3600), directory: saves)
+        engine.makePublic = settings.newSavesPublic
+        let job = UUID()
+        let result = await engine.enqueue(files: loaded.files, client: client, job: job)
+        log["result"] = .string(name(of: result))
+        log["ms"] = .int(Int(Date().timeIntervalSince(started) * 1000))
+        Telemetry.log(.info, .share, "share upload", data: log)
+        switch result {
+        case .saved:
+            await Notifications.postInstantSaving(
+                job: job, title: "uploading to capystore", body: ShareUploads.summary(loaded.files))
+            return .uploaded
+        case .needsSheet:
+            for file in loaded.files { try? FileManager.default.removeItem(at: file.url.deletingLastPathComponent()) }
+            return .needsSheet
+        case .failed(let failure):
+            for file in loaded.files { try? FileManager.default.removeItem(at: file.url.deletingLastPathComponent()) }
+            return .failed(failure)
         }
     }
 
@@ -147,7 +193,8 @@ extension InstantShare {
         case .right(let result): return result
         case .left(let value): prepared = value
         }
-        let link = prepared.link, settings = prepared.settings, client = prepared.client
+        guard let link = prepared.link else { return .needsSheet }
+        let settings = prepared.settings, client = prepared.client
         let transport = URLSessionSaveTransport.current
         var engine = InstantShareEngine(transport: transport, directory: AppGroup.directory("Saves"))
         engine.makePublic = settings.newSavesPublic

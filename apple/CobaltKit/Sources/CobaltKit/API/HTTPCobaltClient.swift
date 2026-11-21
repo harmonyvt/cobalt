@@ -446,6 +446,17 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         return (req, body)
     }
 
+    /// A shared photo or video (CONTRACT-SHARE-QUICK.md 9.10): `PUT /studio/upload?name=&queue=1` (`&public=1` when new
+    /// saves are public), returned without a body for a background `URLSession` upload from the file. Throws `.noAPIKey`
+    /// without a key for this server.
+    public func shareUploadRequest(name: String, contentType: String, public makePublic: Bool) throws -> URLRequest {
+        var query = [("name", name), ("queue", "1")]
+        if makePublic { query.append(("public", "1")) }
+        var req = try makeRequest("PUT", "/studio/upload", query: query, keyed: true, timeout: 120)
+        req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        return req
+    }
+
     /// `GET /studio/recent` (keyed): the sessions this key created from a share sheet in the last 24
     /// hours, newest first. A server without the route answers 404, which throws.
     public func recentShares(since: Date? = nil, limit: Int = 25) async throws -> [StudioSession] {

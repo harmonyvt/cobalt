@@ -423,3 +423,22 @@ Not verified (no device, and the simulator host was overloaded):
 
 The quick card and the overlay are dormant code (about 750 lines: `QuickCard.swift`, `QuickOverlay.swift`, `ShareCore+Quick.swift`, their tests).
 They can be deleted, or kept for a future Live Activity route (section 6). A product call, not an engineering one.
+
+### 9.10 Photos and videos (owner, 2026-11-21: "share files of videos and photos to capystore, and it just uploads them")
+
+A share with no link but photos or videos (Photos, Files, a chat app) uploads them the same instant way. Up to 20 files
+(`NSExtensionActivationSupportsImageWithMaxCount` / `...MovieWithMaxCount` 20; a link still wins over a file).
+
+- **Intake** (`Share/ShareUploads.swift`): each provider's first registered type that is a picture or a video with an upload type
+  (`MIME.uploadTypes`: jpeg, png, heic, gif, webp, mp4, mov; a Photos picture offers heic first) is copied with `loadFileRepresentation`
+  into `Saves/uploads/<uuid>/<name>` in the app group (the sender's name, the copy's extension). Over 100 MB or no upload type: left out.
+- **Send**: one background session per share (`BackgroundSessionID.save(job:)`, so the app is woken for it), one task per file:
+  `PUT /studio/upload?name=&queue=1` (`&public=1` with "make new saves public"), label `upload:<uuid>/<name>`, resource timeout 6 h.
+  The extension waits only for the system to hold the tasks (0.6 s), posts `uploading to capystore` / `<name>` or `3 photos and 2 videos`
+  when notifications are allowed, and completes. Nothing is shown.
+- **The app** (`applySaveAnswers`): an `upload:` answer deletes its copy; a non-2xx answer or a network failure posts `capystore couldn't
+  upload that` / `<name> — <reason>`. Copies older than 2 days are pruned with the save bodies.
+- **Cards**: none uploadable → `capystore can only upload photos and videos`; all too big → `that's over the 100 MB upload limit`.
+- **Without the app group** (a re-signed build), or with "show the full share sheet" on: the full sheet uploads the first photo or video
+  itself, as before (now pictures too).
+- Not verified on a device: the system finishing the uploads after the extension completes (the same path as 9.8's second bullet).

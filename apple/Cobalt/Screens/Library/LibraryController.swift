@@ -265,10 +265,6 @@ final class LibraryController {
     var croppingPicture: LibraryImageCropTarget?
     /// The post the owner chose `make an emote…` for: the emote editor is open on it (`EmoteEditor/EmoteEditorEntry.swift`).
     var makingEmote: EmoteEditorTarget?
-    #if os(iOS)
-    /// The file the owner chose `make wallpaper…` for: the wallpaper maker is open on it (`Screens/Wallpaper`).
-    var makingWallpaper: WallpaperPick?
-    #endif
     /// The sky map (`SkyMap/LibrarySkyMapHook.swift`) is open.
     var showingSkyMap = false
     /// The posts `add to link` is picking a link for (`LibraryAddToLinkHook.swift`): the link picker is up.
