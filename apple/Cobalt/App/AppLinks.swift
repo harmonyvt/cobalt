@@ -181,6 +181,20 @@ extension CobaltAppDelegate: UIApplicationDelegate {
         UNUserNotificationCenter.current().delegate = self
         return true
     }
+
+    /// A TV over screen mirroring (APP-API-CONTRACT 70.5): its scene goes to `TwitchTVSceneDelegate`, which shows the twitch
+    /// stream there while a channel is open and otherwise leaves the TV mirroring. Systems before iOS 27 offer this scene
+    /// by themselves; from iOS 27 the twitch watch view registers it (`TwitchTVAccessory`). Every other scene is SwiftUI's.
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        if connectingSceneSession.role == .windowExternalDisplayNonInteractive {
+            return TwitchTVSceneDelegate.configuration(role: connectingSceneSession.role)
+        }
+        return connectingSceneSession.configuration
+    }
 }
 #else
 extension CobaltAppDelegate: NSApplicationDelegate {

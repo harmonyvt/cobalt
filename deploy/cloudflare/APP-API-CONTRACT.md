@@ -7831,3 +7831,28 @@ can be. The app stops adding delay on top of it:
   "video" makes the TV fetch and buffer the stream itself, which is several seconds further behind and leaves chat ahead of
   the picture. The TV window is built separately on top of `TwitchPlayerHost`.
 
+### 70.5 The stream on a TV (app only, 2026-11-21)
+
+Owner: "I'm sometimes using AirPlay a lot ... so I can still see the chat and AirPlay to stream to TV". iPhone and iPad only;
+nothing here touches the Worker. Code: `apple/Cobalt/Screens/Twitch/TwitchTV.swift` (state, TV scene, TV window, AirPlay
+picker) and `TwitchTVViews.swift` (the phone card and the sheet). Design: `iphone-duo/mockup.html` scenes airplay start,
+airplay, the tv, airplay duo.
+
+- A tv button on the watch view opens "watch on the tv" with two choices.
+- **tv mode** (recommended): the owner turns on Screen Mirroring in Control Center (no app can start it; the sheet shows the
+  three steps and closes once a TV is there). While a channel is open, the mirrored screen gets capystore's own window
+  (`TwitchTVRoot`): Twitch's player edge to edge in 16:9 via `TwitchPlayer(channel:, showsDelay: false)`, so the shared web
+  view moves there without a reload. The phone shows `TwitchTVCard` instead of the player (Twitch's preview still, "on the
+  tv", the 70.4 delay badge, dim, to live, chat on tv, mirror) and gives the rest to chat. The phone stays awake while the
+  stream is on the TV (locking ends mirroring); dim lowers the phone's brightness and puts it back when tv mode ends.
+- "mirror" (`TwitchTV.wanted = false`, remembered) leaves the TV as a plain copy of the phone; the sheet puts it back.
+- Chat on the TV (off by default, remembered): the newest 14 lines in a see-through column on the right, read only.
+- Scene: iOS 27 SDK no longer offers `windowExternalDisplayNonInteractive` scenes by itself. The watch view registers
+  `UISceneAccessory.externalNonInteractive(sceneConfiguration:)` through a small view controller (`TwitchTVAccessory`), so
+  outside the twitch watch view the TV mirrors as usual. Older systems reach `CobaltAppDelegate`'s
+  `configurationForConnecting`; the scene delegate there shows its window only while a channel is open.
+- **video only**: the system AirPlay picker (`AVRoutePickerView`). The TV fetches the stream itself and runs behind the phone,
+  so while the audio route is AirPlay without a mirrored screen, chat lines wait `chatDelay` seconds (default 10; 0, 5, 10,
+  15, 20, 30; remembered). The owner's own lines show at once. Whether Twitch's embed hands its video to AirPlay is up to
+  Twitch's page; tv mode doesn't depend on it.
+

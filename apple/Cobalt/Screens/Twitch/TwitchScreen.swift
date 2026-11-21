@@ -11,6 +11,8 @@ struct TwitchScreen: View {
 
     @State private var addingToSet: SevenTvAddToSetModel?
     @Environment(\.scenePhase) private var scenePhase
+    /// The "watch on the tv" sheet (70.5).
+    @State private var choosingTV = false
 
     private var store: TwitchStore { model.twitch }
 
@@ -33,6 +35,12 @@ struct TwitchScreen: View {
                 ToolbarItem(placement: .navigation) {
                     Button(Copy.Twitch.back, systemImage: Symbol.Twitch.back) { store.close() }
                 }
+                #if os(iOS)
+                ToolbarItem(placement: .primaryAction) {
+                    Button(Copy.Twitch.watchOnTV, systemImage: Symbol.Twitch.tv) { choosingTV = true }
+                        .tint(TwitchTV.shared.onTV ? TwitchTVPalette.tv : nil)
+                }
+                #endif
             }
         }
         .task {
@@ -46,6 +54,11 @@ struct TwitchScreen: View {
         .spreadSheet(item: $addingToSet) { picker in
             SevenTvAddToSetSheet(picker: picker)
         }
+        #if os(iOS)
+        .sheet(isPresented: $choosingTV) {
+            TwitchTVSheet().presentationDetents([.medium, .large])
+        }
+        #endif
     }
 }
 
@@ -255,9 +268,7 @@ private struct TwitchWatchView: View {
                 let chatWidth = min(420, max(300, geo.size.width * 0.34))
                 HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 0) {
-                        TwitchPlayer(channel: channel)
-                            .aspectRatio(16 / 9, contentMode: .fit)
-                            .frame(maxWidth: .infinity)
+                        player(compact: false)
                         TwitchInfoBar(model: model)
                         Spacer(minLength: 0)
                     }
@@ -267,22 +278,63 @@ private struct TwitchWatchView: View {
                 }
             } else {
                 VStack(spacing: 0) {
-                    TwitchPlayer(channel: channel)
-                        .aspectRatio(16 / 9, contentMode: .fit)
-                        .frame(maxWidth: .infinity)
-                    TwitchInfoBar(model: model, compact: true)
-                    Divider()
+                    player(compact: true)
+                    if !onTV {
+                        TwitchInfoBar(model: model, compact: true)
+                        Divider()
+                    }
                     chat
                 }
             }
         }
+        #if os(iOS)
+        // The TV (70.5): while this view is up, a mirrored screen shows capystore's own window with the stream.
+        .background(TwitchTVAccessory(enabled: TwitchTV.shared.wanted).frame(width: 0, height: 0))
+        .onAppear { TwitchTV.shared.watchStarted(model) }
+        .onDisappear { TwitchTV.shared.watchEnded() }
+        .onChange(of: channel) { TwitchTV.shared.refresh() }
+        #endif
+    }
+
+    private var onTV: Bool {
+        #if os(iOS)
+        TwitchTV.shared.onTV
+        #else
+        false
+        #endif
+    }
+
+    /// The player, or while it plays on the TV, the card standing in for it.
+    @ViewBuilder private func player(compact: Bool) -> some View {
+        #if os(iOS)
+        if onTV {
+            TwitchTVCard(model: model, compact: compact)
+        } else {
+            TwitchPlayer(channel: channel)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+        }
+        #else
+        TwitchPlayer(channel: channel)
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+        #endif
     }
 
     private var chat: some View {
-        TwitchChatPane(model: model) { emote in
+        TwitchChatPane(model: model, delay: chatDelay) { emote in
             guard let hit = emote.asHit else { return }
             addingToSet = model.sevenTv.addToSetPicker(emote: hit)
         }
+    }
+
+    /// Video-only AirPlay runs the TV behind the phone: chat waits to match (70.5).
+    private var chatDelay: TimeInterval {
+        #if os(iOS)
+        TwitchTV.shared.activeChatDelay
+        #else
+        0
+        #endif
     }
 }
 
