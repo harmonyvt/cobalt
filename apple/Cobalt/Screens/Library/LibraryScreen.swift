@@ -532,6 +532,23 @@ private struct LibraryContent: View {
 
     // MARK: toolbar
 
+    private var sortMenu: some View {
+        LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
+            .accessibilityIdentifier("library.sort")
+    }
+
+    /// An iPad bar below `wide` (portrait, a spread column) puts the sort menu with the view buttons. iPadOS folds the
+    /// whole trailing group into its "More" overflow there (the floating tab bar shares the row in portrait, and the
+    /// bar keeps the overflow after the select panel halves it); the leading group is never folded. The iPhone, the
+    /// wide iPad and the Mac keep it on the trailing side.
+    private var sortLeads: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .pad && tier != .wide
+        #else
+        false
+        #endif
+    }
+
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         #if os(iOS)
@@ -541,6 +558,7 @@ private struct LibraryContent: View {
             ForEach(LibraryViewMode.allCases, id: \.self) { mode in
                 LibraryViewButton(library: library, mode: mode)
             }
+            if sortLeads { sortMenu }
             // the sky map is a third way to look at the library (only where the search has embedded the posts)
             if model.capabilities.search, !controller.selecting { LibrarySkyMapButton(controller: controller) }
         }
@@ -556,8 +574,7 @@ private struct LibraryContent: View {
         #endif
         ToolbarItemGroup(placement: .primaryAction) {
             // select lives in the pill at the bottom (`LibrarySelectPill`), not here
-            LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
-                .accessibilityIdentifier("library.sort")
+            if !sortLeads { sortMenu }
             #if os(macOS)
             Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
                 .labelStyle(.iconOnly)
