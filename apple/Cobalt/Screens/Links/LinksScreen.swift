@@ -82,22 +82,18 @@ struct LinksScreen: View {
     }
 
     /// A spread (two screens, a landscape iPad, the Mac): the links on the left, the one being edited on the right, so
-    /// its preview changes beside the list. Collections still open on top.
+    /// its preview changes beside the list. Collections still open on top. With no link open the list has the whole
+    /// width: an empty right side ("pick a link") is not drawn at all.
     private var split: some View {
-        HStack(spacing: 0) {
-            content.frame(width: Spread.listWidth + 40)
-            HingeSeam(queue: model.queue)
-            Group {
-                if let route = openedLink, store.sets.contains(where: { $0.id == route.id }) {
-                    NavigationStack { LinkScreen(model: model, setID: route.id) }
-                        .id(route)
-                } else {
-                    Text(Copy.Duo.pickLink)
-                        .font(CobaltType.body).foregroundStyle(CobaltColor.caption)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+        let shown = openedLink.flatMap { route in store.sets.contains(where: { $0.id == route.id }) ? route : nil }
+        return HStack(spacing: 0) {
+            content.frame(maxWidth: shown == nil ? .infinity : Spread.listWidth + 40)
+            if let route = shown {
+                HingeSeam(queue: model.queue)
+                NavigationStack { LinkScreen(model: model, setID: route.id) }
+                    .id(route)
+                    .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
         }
     }
 

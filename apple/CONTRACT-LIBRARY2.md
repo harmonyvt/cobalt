@@ -236,8 +236,9 @@ route, one additive response field, one capability flag.** Marked **(owner)** wh
     pt, resizable). Selecting a tile or row shows it there (the inspector opens if closed); a toolbar
     `sidebar.trailing` button toggles it (`⌥⌘I` on Mac). Its open/closed state is remembered per device
     (`library.inspector`); the first default is open, on the newest post, when the content is at
-    least 1100 pt wide (iPad landscape, a normal Mac window), else closed until something is selected. Empty inspector: `pick something to
-    see it here.` Return/double-click do nothing more (the detail is already beside it).
+    least 1100 pt wide (iPad landscape, a normal Mac window), else closed until something is selected. With nothing selected the inspector
+    is not drawn at all (2026-11-21, owner): the content keeps the whole width and the column comes back with the next
+    pick; the toggle is disabled until then (`pick something to see it here.` remains only as a fallback). Return/double-click do nothing more (the detail is already beside it).
 16. **(lane) Paging, refresh, states.** First page 20 (today), the next page when the last 6 tiles
     or the last row appear; a footer spinner, and on failure a footer `couldn't load more.` +
     `try again`. Pull to refresh (iOS); `⌘R` `refresh library` (Mac, view menu). First load: the

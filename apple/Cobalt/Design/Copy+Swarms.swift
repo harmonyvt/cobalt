@@ -19,7 +19,6 @@ extension Copy {
         static let emptyBody = "when claude code or the chat asks to run one, it waits for you here"
         static let tryAgain = "try again"
         static let refresh = "refresh"
-        static let pickOne = "pick a swarm"
         static func score(_ score: Double) -> String { "score \(SwarmWords.score(score))" }
 
         // MARK: the swarm screen
