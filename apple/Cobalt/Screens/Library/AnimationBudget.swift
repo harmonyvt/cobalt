@@ -34,7 +34,7 @@ private final class SystemSignals: @unchecked Sendable {
 }
 
 @MainActor @Observable
-final class AnimationBudget {
+final class AnimationBudget: Purgeable {
     /// A visible webp tile: where its centre is in the scroll content, and whether its bytes come from the network.
     struct Candidate: Equatable {
         var y: Double
@@ -57,7 +57,17 @@ final class AnimationBudget {
     @ObservationIgnored private var settleTask: Task<Void, Never>?
     @ObservationIgnored private var signals: SystemSignals?
 
-    init(limit: Int) { self.limit = limit }
+    init(limit: Int) {
+        self.limit = limit
+        // held weakly there: a mosaic that goes away takes its budget with it
+        AppLifecycle.shared.register(purgeable: self)
+    }
+
+    /// A memory warning (or the app leaving the screen) stops every moving tile: their decoded frames go with their
+    /// layers. They move again at the next choice (a scroll settling, a tile coming into view).
+    func purge(_ level: PurgeLevel) {
+        if !playing.isEmpty { playing = [] }
+    }
 
     /// Starts listening to Low Power Mode and the network path. Safe to call twice.
     func start() {
@@ -154,18 +164,18 @@ private final class LibraryAnimator {
     static let maxPixel = 512
 
     var image: ImageBox?
-    @ObservationIgnored private var animation: MediaAnimation?
+    /// A slot, so a tile torn down without `onDisappear` stops its animation when this animator is freed.
+    private let slot = MediaAnimationSlot()
 
     func play(data: Data) {
         halt()
-        animation = MediaAnimation.play(data: data, maxPixel: Self.maxPixel) { [weak self] frame in
+        slot.set(MediaAnimation.play(data: data, maxPixel: Self.maxPixel) { [weak self] frame in
             self?.image = frame
-        }
+        })
     }
 
     func halt() {
-        animation?.stop()
-        animation = nil
+        slot.stop()
     }
 }
 

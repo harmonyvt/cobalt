@@ -795,7 +795,7 @@ struct FocusLayer: View {
             request = .webp(source: source, aspect: aspect, name: title)
         } else if let url = originalURL {
             let start = player.player?.currentTime() ?? .zero
-            player.player?.pause()
+            player.setPlaying(false)
             request = .video(url: url, name: title, start: start.isValid ? start : .zero)
         } else { return }
         var transaction = Transaction()
@@ -810,7 +810,7 @@ struct FocusLayer: View {
         queue.isMuted = true
         Task {
             if let time, time.isValid { await queue.seek(to: time) }
-            if videoPlays { queue.play() }
+            if videoPlays { PlayerPool.shared.play(queue, as: .focus) }
         }
     }
 
@@ -1730,11 +1730,13 @@ final class FocusPlayerHolder {
         looper = AVPlayerLooper(player: queue, templateItem: AVPlayerItem(url: url))
         self.url = url
         player = queue
-        if playing { queue.play() }
+        // known to the app's player pool from the start (cap, background pause), playing or not
+        if playing { PlayerPool.shared.play(queue, as: .focus) } else { PlayerPool.shared.track(queue, as: .focus) }
     }
 
     func setPlaying(_ playing: Bool) {
-        if playing { player?.play() } else { player?.pause() }
+        guard let player else { return }
+        if playing { PlayerPool.shared.play(player, as: .focus) } else { PlayerPool.shared.pause(player) }
     }
 
     /// Gives the player away, still playing, to whoever draws the planet next.
@@ -1747,7 +1749,10 @@ final class FocusPlayerHolder {
     }
 
     func stop() {
-        player?.pause()
+        if let player {
+            player.pause()
+            PlayerPool.shared.forget(player)
+        }
         looper?.disableLooping()
         looper = nil
         player = nil

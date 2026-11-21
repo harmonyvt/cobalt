@@ -12,7 +12,15 @@ import Foundation
 ///   calls it with every 7TV set page and emote search answer it reads, and `SevenTvStore` pages through a channel's
 ///   sets once a launch, so the emotes in the owner's sets are on the device before they are looked at.
 public actor EmoteCache {
-    public static let shared = EmoteCache()
+    /// The app's cache. Its memory copies go when the app leaves the screen and on a memory warning (`purgeMemory`, through
+    /// a `PurgeHook`: AppLifecycle's purgeables are main-actor objects, this is an actor); the files on disk stay.
+    public static let shared: EmoteCache = {
+        let cache = EmoteCache()
+        Task { @MainActor in
+            PurgeHook.register { [weak cache] _ in cache?.purgeMemory() }
+        }
+        return cache
+    }()
     /// 200 MB: a 2x 7TV preview is 5 to 100 KB, so several thousand emotes.
     public static let defaultLimit = 200 * 1024 * 1024
     /// Prefetch keeps at most this many URLs waiting; more are dropped (the next look fetches them).
@@ -71,6 +79,12 @@ public actor EmoteCache {
 
     nonisolated public func memoryData(for url: URL) -> Data? {
         memory.object(forKey: url as NSURL) as Data?
+    }
+
+    /// Lets go of the copies held in memory; the files on disk stay, and the next look reads them back. Synchronous (the
+    /// NSCache is thread safe), so a purge never waits on the actor behind a fetch.
+    nonisolated public func purgeMemory() {
+        memory.removeAllObjects()
     }
 
     /// The picture's bytes: memory, disk, else one network fetch shared by every caller. `nil` when it cannot be had.

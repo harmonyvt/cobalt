@@ -63,6 +63,13 @@ final class KeyboardViewController: UIInputViewController {
         coordinator.animate(alongsideTransition: { _ in self.updateHeight() })
     }
 
+    /// Extensions get no UIApplication notifications; this is the keyboard's only memory warning. Tiles
+    /// redraw their pictures when they scroll back in.
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        KeyboardThumbLoader.purge()
+    }
+
     override func textDidChange(_ textInput: UITextInput?) {
         applyKeyboardAppearance()
         refreshTyping()
@@ -158,7 +165,7 @@ final class KeyboardViewController: UIInputViewController {
                 return
             }
             let source: URL
-            if let local = model.prepareLocal(rendition) {
+            if let local = await model.prepareLocal(rendition) {
                 model.transfer = KeyboardTransfer(title: title, detail: KeyboardWords.savedHere)
                 source = local
             } else {

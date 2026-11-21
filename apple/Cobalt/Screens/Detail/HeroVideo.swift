@@ -11,7 +11,9 @@ import SwiftUI
 //   streamed asset was the "sometimes it never starts" case), muted until the owner asks for sound;
 // - a clip that fails, or shows no frame within `HeroVideo.giveUpAfter`, says so with a retry, instead of a poster that
 //   never leaves;
-// - leaving pauses and empties the player before the audio session is let go (off the main thread, `AudioPolicy`).
+// - leaving pauses and empties the player before the audio session is let go (off the main thread, `AudioPolicy`);
+// - the app's player pool (`PlayerPool`) pauses it when the app leaves the screen and plays it again on return; the hero
+//   itself gives the sound back and holds its give-up timer while the app is away.
 
 /// One hero's player and what it knows: loading, playing, failed, the picture's shape.
 @MainActor @Observable
@@ -61,7 +63,7 @@ final class HeroVideo {
             await next.seek(to: start, toleranceBefore: .zero, toleranceAfter: CMTime(seconds: 0.2, preferredTimescale: 600))
         }
         guard player === next else { return }
-        next.play()
+        PlayerPool.shared.play(next, as: .hero)
         armWatchdog(for: next)
     }
 
@@ -71,6 +73,8 @@ final class HeroVideo {
         borrowed = true
         phase = .loading
         player = lent
+        // the owner is watching it now: never paused to make room for another player
+        PlayerPool.shared.track(lent, as: .hero)
         if let item = lent.currentItem { watch(lent, item: item, loops: false) }
     }
 
@@ -96,8 +100,10 @@ final class HeroVideo {
         if let player {
             if borrowed {
                 player.isMuted = true
+                PlayerPool.shared.track(player, as: .orbit)
             } else {
                 player.pause()
+                PlayerPool.shared.forget(player)
                 player.replaceCurrentItem(with: nil)
             }
         }
@@ -169,8 +175,25 @@ final class HeroVideo {
 
     private func fail() {
         watchdog?.cancel()
-        player?.pause()
+        if let player { PlayerPool.shared.pause(player) }
         phase = .failed
+    }
+
+    // MARK: the app away
+
+    /// The app left the screen: the pool has paused the player (and will play it again); this only stops the give-up
+    /// timer, so a clip that had no frame yet is not called failed for the time the app was away.
+    func appLeft() {
+        watchdog?.cancel()
+        watchdog = nil
+        // the pool paused it already; a direct pause (not `PlayerPool.pause`) keeps it on the pool's list to resume
+        player?.pause()
+    }
+
+    /// Back on screen: a clip still waiting for its first frame gets its full time again.
+    func appBack() {
+        guard let player, phase == .loading, !hasFrames, !borrowed else { return }
+        armWatchdog(for: player)
     }
 }
 
@@ -205,6 +228,7 @@ struct HeroVideoBox: View {
     /// The clip was running when the full-screen player took over.
     @State private var wasPlaying = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.lifecycle) private var lifecycle
 
     /// The measured shape, else what this launch measured before, else the record's, else a landscape frame.
     private var shape: CGFloat {
@@ -255,6 +279,9 @@ struct HeroVideoBox: View {
             if phase == .ready || phase == .failed { Breadcrumbs.add("video.\(phase)") }
         }
         .onDisappear { leave() }
+        .onChange(of: lifecycle.isForeground) { _, onScreen in
+            if onScreen { video.appBack() } else { appLeft() }
+        }
         .heroFullScreen(item: $fullScreen) { closedFullScreen(at: $0) }
         #if DEBUG
         .task(id: url) {
@@ -349,6 +376,15 @@ struct HeroVideoBox: View {
         bridge = nil
     }
 
+    /// The app left the screen: the clip pauses and gives the sound back (it comes back muted, as a hero starts).
+    private func appLeft() {
+        if !muted {
+            muted = true
+            video.setMuted(true)
+        }
+        video.appLeft()
+    }
+
     /// The same clip again, from the start: after a failure or a stall.
     private func retry() {
         Task {
@@ -372,7 +408,7 @@ struct HeroVideoBox: View {
             muted = true
             video.setMuted(true)
         }
-        video.player?.pause()
+        if let player = video.player { PlayerPool.shared.pause(player) }
         var transaction = Transaction()
         transaction.disablesAnimations = reduceMotion
         withTransaction(transaction) { fullScreen = .video(url: url, name: name, start: start) }
@@ -386,7 +422,7 @@ struct HeroVideoBox: View {
         let resumes = wasPlaying
         Task {
             if let time, time.isValid { await player.seek(to: time) }
-            if resumes { player.play() }
+            if resumes { PlayerPool.shared.play(player, as: .hero) }
         }
     }
 

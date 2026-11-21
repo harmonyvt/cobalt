@@ -36,10 +36,11 @@ final class ImageLoader: Sendable {
 }
 
 /// The flipbook frames of the orbit's two inner bands, decoded off the main thread at thumbnail size through
-/// `MediaPipeline` into a cache of its own, bounded by decoded bytes (about 12 MB: roughly 200 frames of 160 px).
+/// `MediaPipeline` into a cache of its own, bounded by decoded bytes (about 12 MB: roughly 200 frames of 160 px), emptied
+/// when the app leaves the screen and on a memory warning (the frames decode again from their files).
 actor FlipbookLoader {
     static let shared = FlipbookLoader()
-    private let cache = MediaMemoryCache(costLimit: 12 * 1024 * 1024, countLimit: 400)
+    private let cache = MediaMemoryCache(costLimit: 12 * 1024 * 1024, countLimit: 400).purgedWithApp()
 
     func frame(for url: URL, maxPixel: Int = 160) -> ImageBox? {
         let key = MediaPipeline.key("b", url, maxPixel: maxPixel)
@@ -145,7 +146,9 @@ struct StillImage: View {
 private final class AnimatedImageModel {
     var image: ImageBox?
     var failed = false
-    @ObservationIgnored private var animation: MediaAnimation?
+    /// The playing animation. A slot, not a plain property: freeing the model (a view torn down without `onDisappear`)
+    /// frees the slot, which stops the animation, so nothing goes on decoding for a view that is gone.
+    private let slot = MediaAnimationSlot()
 
     /// Set once a frame has been drawn. A still underneath can then leave: an emote's frames are
     /// transparent, so a poster left under them reads as a second, frozen copy.
@@ -155,14 +158,16 @@ private final class AnimatedImageModel {
     /// assigns them. 8.16 handed every frame over at full size.
     func play(file url: URL, maxPixel: Int) {
         stop()
-        animation = MediaAnimation.play(file: url, maxPixel: maxPixel) { [weak self] frame in self?.show(frame) }
-        failed = animation == nil
+        let next = MediaAnimation.play(file: url, maxPixel: maxPixel) { [weak self] frame in self?.show(frame) }
+        slot.set(next)
+        failed = next == nil
     }
 
     func play(data: Data, maxPixel: Int) {
         stop()
-        animation = MediaAnimation.play(data: data, maxPixel: maxPixel) { [weak self] frame in self?.show(frame) }
-        failed = animation == nil
+        let next = MediaAnimation.play(data: data, maxPixel: maxPixel) { [weak self] frame in self?.show(frame) }
+        slot.set(next)
+        failed = next == nil
     }
 
     private func show(_ frame: ImageBox) {
@@ -171,8 +176,7 @@ private final class AnimatedImageModel {
     }
 
     func stop() {
-        animation?.stop()
-        animation = nil
+        slot.stop()
     }
 }
 
@@ -344,7 +348,15 @@ final class OrbitPlayerPool {
             loopers[id] = AVPlayerLooper(player: player, templateItem: item, timeRange: range)
             if PlaybackWindow.orbitLoopsWholeClip(duration: source.duration) { wholeClip.insert(id) }
             players[id] = player
-            player.play()
+            PlayerPool.shared.play(player, as: .orbit, release: idleRelease(id))
+        }
+    }
+
+    /// A memory warning drops a paused orbit player (one the cap paused): the planet shows its still until the next sync.
+    private func idleRelease(_ id: String) -> @MainActor () -> Void {
+        { [weak self] in
+            guard let self, id != self.lent else { return }
+            self.remove(id)
         }
     }
 
@@ -356,7 +368,7 @@ final class OrbitPlayerPool {
         loopers[id] = looper
         players[id] = player
         wholeClip.insert(id)    // the focus layer loops the whole clip
-        player.play()
+        PlayerPool.shared.play(player, as: .orbit, release: idleRelease(id))
     }
 
     func stopAll() {
@@ -364,7 +376,10 @@ final class OrbitPlayerPool {
     }
 
     private func remove(_ id: String) {
-        players[id]?.pause()
+        if let player = players[id] {
+            player.pause()
+            PlayerPool.shared.forget(player)
+        }
         loopers[id]?.disableLooping()
         loopers[id] = nil
         players[id] = nil
@@ -422,11 +437,14 @@ private final class LoopHolder {
             duration: CMTime(seconds: max(0.5, upper - lower), preferredTimescale: 600))
         looper = AVPlayerLooper(player: queue, templateItem: item, timeRange: range)
         player = queue
-        queue.play()
+        PlayerPool.shared.play(queue, as: .loop, release: { [weak self] in self?.stop() })
     }
 
     func stop() {
-        player?.pause()
+        if let player {
+            player.pause()
+            PlayerPool.shared.forget(player)
+        }
         looper?.disableLooping()
         looper = nil
         player = nil

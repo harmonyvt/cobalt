@@ -69,9 +69,14 @@ final class TrimPreview {
         apply(selection)
     }
 
+    /// Pauses and empties the player: its decoder and the file's buffers go now, not whenever the player is freed.
     func stop() {
         generation += 1
-        player?.pause()
+        if let player {
+            player.pause()
+            PlayerPool.shared.forget(player)
+            player.replaceCurrentItem(with: nil)
+        }
         subscriptions.removeAll()
         player = nil
         url = nil
@@ -101,8 +106,8 @@ final class TrimPreview {
             Task { @MainActor in
                 guard let self else { return }
                 self.isReady = true
-                guard self.generation == token, !self.isScrubbing else { return }
-                self.player?.play()
+                guard self.generation == token, !self.isScrubbing, let player = self.player else { return }
+                PlayerPool.shared.play(player, as: .trim)
             }
         }
     }
@@ -120,7 +125,7 @@ final class TrimPreview {
         generation += 1
         seekInFlight = false
         wanted = nil
-        player.pause()
+        PlayerPool.shared.pause(player)
         // a drag may go past the old out point: the end time must not clamp the seeks
         player.currentItem?.forwardPlaybackEndTime = .invalid
         scrubSeconds = min(max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : selection.start), duration)
