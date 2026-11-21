@@ -227,18 +227,47 @@ extension AppModel {
             defer { if temporary { try? fm.removeItem(at: file) } }
             // the bytes decide, not the name: a picture stored without an extension sits on disk as `<id>.mp4`, and
             // Photos refuses a picture handed over as a video
-            let isImage = FileSniff.kind(of: file)?.isImage ?? (rendition.isWebp || MediaExtension.isImage(file.pathExtension))
+            let sniffed = FileSniff.kind(of: file)
+            let isImage = sniffed?.isImage ?? (rendition.isWebp || MediaExtension.isImage(file.pathExtension))
+            // Photos reads the type from the name: a file with no extension (a library file named without one) is
+            // refused. Hand it over as a named twin (a hard link, else a copy) and drop the twin after.
+            let named = Self.photosReadyURL(file, ext: sniffed?.ext ?? (rendition.isWebp ? "webp" : nil))
+            defer { if named != file { try? fm.removeItem(at: named.deletingLastPathComponent()) } }
             do {
-                try await ctx.savePhoto(fileURL: file, isImage: isImage, key: key)
+                try await ctx.savePhoto(fileURL: named, isImage: isImage, key: key)
             } catch {
                 Telemetry.log(.error, .photos, "save to photos failed", data: Telemetry.errorData(error).merging([
                     "ext": .string(file.pathExtension.lowercased()), "image": .bool(isImage),
+                    "sent_ext": .string(named.pathExtension.lowercased()),
+                    "photos_code": .int(Self.photosCode(error)),
                 ]) { a, _ in a })
                 throw error
             }
         } catch {
             if let mapped = pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits) { throw mapped }
             throw error
+        }
+    }
+
+    /// The code PhotoKit answered with, inside `PhotosError.failed` (0 when there is none).
+    nonisolated static func photosCode(_ error: any Error) -> Int {
+        if case PhotosError.failed(let code)? = error as? PhotosError { return code }
+        return 0
+    }
+
+    /// `file` itself when its name has an extension, else a twin in the temporary folder named with `ext`.
+    nonisolated static func photosReadyURL(_ file: URL, ext: String?) -> URL {
+        guard file.pathExtension.isEmpty, let ext, !ext.isEmpty else { return file }
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("photos-\(UUID().uuidString)", isDirectory: true)
+        let twin = dir.appendingPathComponent(file.lastPathComponent.isEmpty ? "file" : file.lastPathComponent)
+            .appendingPathExtension(ext)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            do { try fm.linkItem(at: file, to: twin) } catch { try fm.copyItem(at: file, to: twin) }
+            return twin
+        } catch {
+            return file
         }
     }
 
