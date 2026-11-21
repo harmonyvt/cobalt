@@ -61,7 +61,19 @@ final class PipelineContext {
 
     /// "save to photos": the file goes to Photos (into the album when the app's sync has it on) and
     /// the item's key is recorded so the sync never adds it again.
-    func savePhoto(fileURL: URL, isImage: Bool, key: String?) async throws {
+    func savePhoto(fileURL original: URL, isImage hint: Bool, key: String?) async throws {
+        // Photos goes by the name: a file without an extension (or a misnamed one) gets one that matches its bytes.
+        let ready = try await FileSniff.photosReady(original, isImage: hint)
+        do {
+            try await save(ready.url, isImage: ready.isImage, key: key)
+        } catch {
+            await FileSniff.discardPhotosCopy(ready)
+            throw error
+        }
+        await FileSniff.discardPhotosCopy(ready)
+    }
+
+    private func save(_ fileURL: URL, isImage: Bool, key: String?) async throws {
         if let sync = photosSync, sync.hasEngine {
             try await sync.manualSave(fileURL: fileURL, isImage: isImage, key: key, saver: photos)
             return
