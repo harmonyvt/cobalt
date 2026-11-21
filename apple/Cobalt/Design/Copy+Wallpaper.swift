@@ -15,6 +15,7 @@ extension Copy {
         static let target = "make it for"
         static let lockScreen = "this iphone"
         static let lockScreenNote = "lock screen · live photo"
+        static let lockScreenStillNote = "lock screen · still"
         static let duoPair = "both screens"
         static let duoPairNote = "one picture across the hinge"
         static let depth = "depth"

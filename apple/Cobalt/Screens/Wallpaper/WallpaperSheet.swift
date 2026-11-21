@@ -71,10 +71,17 @@ struct WallpaperSheet: View {
         .haptic(.success, trigger: madeTick)
         .haptic(.error, trigger: failTick)
         .task { await open() }
-        .task(id: keyTime) { await loadFrame() }
+        // `maker != nil` in the id: a picture's key time is 0 before and after opening, so the time alone never
+        // changes and the first frame would never load (8.32: stuck on "opening").
+        .task(id: FrameKey(time: keyTime, ready: maker != nil)) { await loadFrame() }
         .task(id: PreviewKey(look: look, frame: frame.map { ObjectIdentifier($0.image) }, drawing: drawing)) {
             await refreshPreview()
         }
+    }
+
+    private struct FrameKey: Equatable {
+        var time: Double
+        var ready: Bool
     }
 
     private struct PreviewKey: Equatable {
@@ -242,7 +249,7 @@ struct WallpaperSheet: View {
             }
             .pickerStyle(.segmented)
             .disabled(progress != nil)
-            note(target == .duoPair ? Copy.Wallpaper.duoPairNote : Copy.Wallpaper.lockScreenNote)
+            note(target == .duoPair ? Copy.Wallpaper.duoPairNote : (isPicture ? Copy.Wallpaper.lockScreenStillNote : Copy.Wallpaper.lockScreenNote))
         }
     }
 
