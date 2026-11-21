@@ -7809,3 +7809,25 @@ when `can_chat`, otherwise an anonymous `justinfan<digits>` read-only connection
 official embed player. The Worker proxies nothing of the stream or the chat, and nothing of chat is stored here (no
 D1, R2 or log). `client_id` is for the app's own Helix calls (follows, emotes, clips) with the same token.
 
+### 70.4 Delay to live (app only, 2026-11-21)
+
+Owner: "how to get the quickest latency from Twitch while doing AirPlay and streaming on the app". Nothing here touches the
+Worker. Twitch's embed has no low-latency option; the streamer's own low-latency setting decides how close to live a stream
+can be. The app stops adding delay on top of it:
+
+- The player is Twitch's interactive embed (`Twitch.Player` from `https://player.twitch.tv/js/embed/v1.js`) instead of a bare
+  iframe, so the page can read `getPlaybackStats().hlsLatencyBroadcaster` (Twitch's latency to the broadcaster) every second
+  and post it to the app (`window.webkit.messageHandlers.twitch`).
+- One player for the app, `TwitchPlayerHost.shared` (`apple/Cobalt/Screens/Twitch/TwitchPlayer.swift`): every
+  `TwitchPlayer(channel:)` adopts its one web view, the newest view to appear holds it and the one before takes it back when
+  it goes, so a layout change or a move to the TV window reparents the stream without a reload. With no view left it stops
+  after 1.5 s. Other views show "playing on the other screen".
+- `delay` (seconds), `bestDelay` (lowest seen on this channel), `behind`, `isBehind` (2.5 s or more over the best) and
+  `jumpToLive()`. A jump pauses and plays (live has no seek, a resume lands on the live edge); if the stream is still behind
+  6 s later the player is rebuilt, and if even that does not help, the current delay becomes the new best.
+- Auto catch-up (`autoCatchUp`, on): 8 s in a row behind, at most once per 45 s.
+- The badge on the player shows the delay ("2.1 s", "4.8 s behind" with a jump icon); tapping it jumps to live.
+- TV: screen mirroring with the app's own TV window is the low-delay route (the phone plays, the TV only shows it). AirPlay
+  "video" makes the TV fetch and buffer the stream itself, which is several seconds further behind and leaves chat ahead of
+  the picture. The TV window is built separately on top of `TwitchPlayerHost`.
+

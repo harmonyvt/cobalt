@@ -38,6 +38,15 @@ extension Copy {
         static let clipSaved = "clip saving to your library"
         static let clipFailed = "twitch didn't make the clip"
         static let openOnTwitch = "open on twitch"
+        static let playingElsewhere = "playing on the other screen"
+
+        // MARK: delay (70.4)
+
+        static func seconds(_ s: Double) -> String { String(format: "%.1f s", s) }
+        static func delay(_ s: Double) -> String { seconds(s) }
+        static func behind(_ s: Double) -> String { "\(seconds(s)) behind" }
+        static let jumpToLive = "jump to live"
+        static let catchingUp = "catching up…"
 
         // MARK: chat
 
