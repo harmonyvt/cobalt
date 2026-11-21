@@ -211,22 +211,37 @@ struct SpreadPaneView: View {
     let host: SpreadPaneHost
     let queue: JobQueue
 
+    /// The iPad's tab bar floats in the top row of the window, over both columns, and is no safe-area inset: the pane's
+    /// own bar, title and close button sat under it (seen in the 8.26 shots as ghost glyphs and a clipped circle). The pane
+    /// starts below that row instead. An iPhone's tab bar is at the bottom or the side, so nothing is needed there.
+    private var topRow: CGFloat {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .pad ? 56 : 0
+        #else
+        return 0
+        #endif
+    }
+
     var body: some View {
         if let pane = host.pane {
             HStack(spacing: 0) {
                 HingeSeam(queue: queue)
-                pane.content
-                    .environment(\.paneClose, SheetCloseAction { host.close(id: pane.id) })
-                    .sheetClose { host.close(id: pane.id) }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(CobaltColor.bg)
-                    .id(host.generation)
-                    .overlay(alignment: .topLeading) {
-                        if pane.closable {
-                            CloseButton(cancels: true) { host.close(id: pane.id) }
-                                .padding(12)
-                        }
+                    .ignoresSafeArea()
+                ZStack(alignment: .topLeading) {
+                    pane.content
+                        .environment(\.paneClose, SheetCloseAction { host.close(id: pane.id) })
+                        .sheetClose { host.close(id: pane.id) }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(CobaltColor.bg)
+                        .id(host.generation)
+                    if pane.closable {
+                        CloseButton(cancels: true) { host.close(id: pane.id) }
+                            .padding(12)
                     }
+                }
+                // a little room from the hinge, so a large title or a row never touches the line
+                .safeAreaPadding(.leading, 8)
+                .safeAreaPadding(.top, topRow)
             }
             .background(CobaltColor.bg.ignoresSafeArea())
             .transition(.move(edge: .trailing).combined(with: .opacity))
