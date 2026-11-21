@@ -159,6 +159,13 @@ final class LibraryController {
         unstick("tap")
     }
 
+    /// The pane beside the library closed: UIKit keeps the bar a row down (where it sat below the iPad's tab bar while
+    /// the pane showed) until the stack is rebuilt, so rebuild it once.
+    func paneClosed() {
+        Breadcrumbs.add("library.paneClosed")
+        stackID += 1
+    }
+
     private func unstick(_ how: String) {
         Breadcrumbs.add("library.unstuck", ["how": .string(how)])
         stackID += 1

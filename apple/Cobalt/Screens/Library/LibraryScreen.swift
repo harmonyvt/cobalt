@@ -17,6 +17,9 @@ struct LibraryScreen: View {
     let tier: Tier
 
     @State private var controller: LibraryController
+    #if os(iOS)
+    @Environment(\.hingeEdge) private var hingeEdge
+    #endif
 
     init(model: AppModel, tier: Tier) {
         self.model = model
@@ -31,6 +34,7 @@ struct LibraryScreen: View {
             NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
                 // rebuilt when the zoom back from a video leaves the grid out of the stack (LibraryController.checkStackSoon)
                 .id(controller.stackID)
+                .onChange(of: hingeEdge) { was, now in if was == .trailing, now == nil { controller.paneClosed() } }
             #else
             if tier == .compact {
                 NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
