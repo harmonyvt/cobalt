@@ -190,6 +190,7 @@ struct DetailActions: View {
         IconRow {
             ForEach(items, id: \.self) { secondary($0) }
             SevenTvUploadIcon(model: model, file: rendition.file, title: item.titleText)  // 7TV upload (57.9)
+            EmoteEditorIcon(model: model, rendition: rendition, title: item.titleText)  // emote editor (71)
         }
     }
 

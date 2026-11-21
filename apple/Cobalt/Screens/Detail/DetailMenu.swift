@@ -20,6 +20,8 @@ struct DetailMenu: View {
     @State private var tool: ToolSheet?
     /// `crop a copy…` (apple/CONTRACT-EDITOR.md 13): the picture crop sheet that is up.
     @State private var cropping: LibraryImageCropTarget?
+    /// `make an emote…` (APP-API-CONTRACT 71): the emote editor that is up.
+    @State private var emoting: EmoteEditorTarget?
 
     private var model: AppModel { controller.model }
 
@@ -138,6 +140,10 @@ struct DetailMenu: View {
                 }
                 .disabled(deleting)
             }
+            if let made = model.emoteTarget(rendition: liveRendition ?? rendition, title: item.titleText) {
+                Button(Copy.EmoteEditor.makeAnEmote, systemImage: Symbol.EmoteEditor.make) { emoting = made }
+                    .disabled(deleting)
+            }
             ShowInFinderButton(model: model, item: item)
             ShowInFilesButton(model: model, item: item)
             if showsKeepEverything {
@@ -174,6 +180,7 @@ struct DetailMenu: View {
         // a crop that became a tab selects itself (`MediaDetail`); a picture sent to Photos says so under the actions
         .toolSheet($tool, model: model, item: item) { line in if let line { controller.say(line) } }
         .modifier(LibraryImageCropPresenter(model: model, target: $cropping, done: { line in controller.say(line) }))
+        .modifier(EmoteEditorPresenter(model: model, target: $emoting))
         #if DEBUG
         .task {
             ToolsDebug.seedPhotos(of: item)

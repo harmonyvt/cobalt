@@ -333,6 +333,7 @@ private struct LibraryContent: View {
             .modifier(LibraryAddToLinkPresenter(model: model, controller: controller))
             .modifier(LibraryImageCropPresenter(
                 model: model, target: $controller.croppingPicture, done: { line in controller.showStatus(line) }))
+            .modifier(EmoteEditorPresenter(model: model, target: $controller.makingEmote))
             .confirmationDialog(
                 Copy.Media.deleteEverythingTitle, isPresented: deletingPresented, titleVisibility: .visible,
                 presenting: controller.deleting

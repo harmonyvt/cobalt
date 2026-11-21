@@ -1150,3 +1150,37 @@ several items) opens the window through `MenuBarHandoff`.
   It needs ⌘, ⌃ or ⌥ (a function key can stand alone) and only works while capystore is running.
 
 Tests: `CobaltKitTests/GlobalShortcutTests.swift`.
+
+## 16. Emote editor (added 2026-11-21; server contract APP-API-CONTRACT 71)
+
+"make an emote" from a picture, gif, webp or video of the library: crop, squash, format, compress and (video or animated
+source) frames, with the made file shown and remade on every change. Mockup scenes "emote …" of the Duo redesign
+(`iphone-duo/17-emote-editor.png` to `20-emote-closed.png`). Needs `features.stage` (the `/7tv` routes) and a client that is a
+`SevenTvClient`; `AppModel.canMakeEmotes`.
+
+- **CobaltKit.** `Models/EmoteEditor.swift`: `EmoteFormat`, `EmoteStretch`, `EmoteMakeRequest`, `EmoteDraft`,
+  `EmoteDraftSaved`, `EmoteSource` (a library file and what kind it is), `EmoteLimits` (7 MiB, 1000 px, 1000 frames, 1:32..3:1).
+  `SevenTvClient` gains `makeEmoteDraft`, `emoteDraftData`, `deleteEmoteDraft`, `saveEmoteDraft`; `SevenTvUploadDraft.draftID`
+  makes `POST /7tv/emotes` send `draft` instead of `file` (`SevenTvStore.uploader(draft:source:)`, the upload model's file id is
+  then `draft:<id>`). `SevenTvError` has `draftNotFound` and `bad`. `Store/EmoteEditorModel.swift`: `EmoteSettings`,
+  `EmoteEditorModel` (`@MainActor @Observable`: settings, linked squash, presets, undo/redo, live `checks`, the remake loop) and
+  `AppModel.emoteEditor(for:)`. `PreviewClient` answers drafts offline (`Preview/PreviewEmoteEditor.swift`).
+- **Remake loop.** Every change applies at once (the picture moves on the device); `delay` (0.4 s) after the last one `make` is
+  called with `replace` = the draft before; a newer change cancels a running one; the last good draft stays shown and a refusal
+  is a line under the controls (`error`). A draft is used (upload, save, share) only while it was made with the settings on
+  screen and is under 7 MiB (`canUseDraft`). A stretched crop outside 1:32..3:1 is never sent (`blocker`). Closing the editor
+  deletes the draft.
+- **Screen.** `Screens/EmoteEditor/`: `EmoteEditorScreen` (layout and actions), `EmoteEditorStage` (the crop box on the picture
+  via `ImageCropModel`/`ImageCropStage`; the compare line on format and compress; the made emote large on squash and frames),
+  `EmoteEditorTabs` (tab bar and controls), `EmoteEditorPreview` (faces, sizes 1x/2x/4x = 28/56/112 pt, chat lines, meter, ticks,
+  `EmoteSeam`), `EmoteEditorSource` (the picture and a video's frames; one `EmotePlayback` for every picture), `EmoteEditorEntry`.
+  Copy `Copy+EmoteEditor.swift`, symbols `Symbol.EmoteEditor`. Every picture wears `.mediaMask()`.
+- **Layout.** From `Spread.minWidth` (700 pt) of the editor's own width: the result, compare line, sizes, two chat lines and
+  the meter on one pane; tabs, controls, ticks and actions on the other; `EmoteSeam` between them glows while a remake runs
+  (`HingeSeam` is tied to `JobQueue`, so the seam is its own view). Narrower: preview on top, tab bar and one tab's controls
+  under it, actions at the bottom. The Mac uses the wide layout in a sheet of 820 to 1400 pt.
+- **Entry points.** "make an emote": the icon of a post's page (`EmoteEditorIcon` in `DetailActions`), the page's `more` menu
+  (`DetailMenu`), the library's context menu (`LibraryMenus`, `LibraryController.makingEmote`), and a button on the 7tv upload
+  page (it lights the grid for one tap). Presented by `EmoteEditorPresenter`: full screen on iPhone and iPad, a sheet on the Mac.
+- **Actions.** upload to 7tv (`SevenTvUploadSheet` on `SevenTvStore.uploader(draft:source:)`: name, private, zero width, set),
+  save to library (`POST /7tv/drafts/<id>/save`), share the file (`ShareLink` on a temp file).

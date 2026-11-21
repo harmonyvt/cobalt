@@ -771,6 +771,21 @@ enum Endpoints {
         APIEndpoint(op: "seventv_http.upload", method: "POST", path: "/7tv/emotes", auth: .key)
     }
 
+    /// `POST /7tv/emotes/make` (op `seventv_http.make`, auth key): Make a draft emote from a library picture or video: crop, squash, format (webp, gif, png), quality, frame rate, video moment, bounce. The draft lives 24 h (POST /7tv/emotes/make).
+    static func seventvHttpMake() -> APIEndpoint<SevenTvEmoteDraft> {
+        APIEndpoint(op: "seventv_http.make", method: "POST", path: "/7tv/emotes/make", auth: .key)
+    }
+
+    /// `DELETE /7tv/drafts/:id` (op `seventv_http.draft_delete`, auth key): Delete an emote draft (DELETE /7tv/drafts/<id>).
+    static func seventvHttpDraftDelete(id: String) -> APIEndpoint<SeventvHttpDraftDeleteResponse> {
+        APIEndpoint(op: "seventv_http.draft_delete", method: "DELETE", path: "/7tv/drafts/\(HTTPCobaltClient.encode(id))", auth: .key)
+    }
+
+    /// `POST /7tv/drafts/:id/save` (op `seventv_http.draft_save`, auth key): Save an emote draft as a private library item; the draft is kept (POST /7tv/drafts/<id>/save).
+    static func seventvHttpDraftSave(id: String) -> APIEndpoint<SevenTvDraftSaved> {
+        APIEndpoint(op: "seventv_http.draft_save", method: "POST", path: "/7tv/drafts/\(HTTPCobaltClient.encode(id))/save", auth: .key)
+    }
+
     /// `GET /7tv/emotes/:id` (op `seventv_http.emote`, auth key): One 7TV emote: its name, owner, and whether 7TV is still processing it (GET /7tv/emotes/<id>).
     static func seventvHttpEmote(id: String) -> APIEndpoint<SeventvHttpEmoteResponse> {
         APIEndpoint(op: "seventv_http.emote", method: "GET", path: "/7tv/emotes/\(HTTPCobaltClient.encode(id))", auth: .key)
@@ -784,6 +799,11 @@ enum Endpoints {
     /// `GET /7tv/owned` (op `seventv_http.owned`, auth key): Every emote the linked 7TV account owns (uploaded anywhere), newest first, at most 500 (GET /7tv/owned).
     static func seventvHttpOwned() -> APIEndpoint<SeventvHttpOwnedResponse> {
         APIEndpoint(op: "seventv_http.owned", method: "GET", path: "/7tv/owned", auth: .key)
+    }
+
+    /// `GET /7tv/drafts/:id` (op `seventv_http.draft`, auth key): An emote draft's file (GET /7tv/drafts/<id>), private to the key that made it.
+    static func seventvHttpDraft(id: String) -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "seventv_http.draft", method: "GET", path: "/7tv/drafts/\(HTTPCobaltClient.encode(id))", auth: .key)
     }
 
     /// `PUT /live/start-token` (op `live.start_token.put`, auth key): A device's push-to-start token.
@@ -1988,6 +2008,39 @@ struct SevenTvUpload: Decodable, Sendable {
     var fitted: SevenTvUploadFitted?
     var added: SevenTvUploadAdded?
     var addError: SevenTvUploadAddError?
+}
+
+struct SevenTvEmoteDraft: Decodable, Sendable {
+    var status: String
+    /// 22 url-safe characters; the draft lives 24 h
+    var draftId: String
+    var format: String
+    var contentType: String
+    var width: Int
+    var height: Int
+    var frames: Int
+    /// one loop, bounce included
+    var durationMs: Int
+    var bytes: Int
+    /// the quality used (a gif: its palette as a share of 256 colours; a png: 100)
+    var quality: Int
+    /// a fixed quality came out over 7 MiB less 64 KiB: the file is made, the app shows it amber
+    var overCap: Bool
+    /// /7tv/drafts/<draft_id> on this host
+    var url: String
+    /// ms
+    var expiresAt: Int
+}
+
+struct SeventvHttpDraftDeleteResponse: Decodable, Sendable {
+    var status: String
+    var deleted: Bool
+}
+
+struct SevenTvDraftSaved: Decodable, Sendable {
+    var status: String
+    var itemId: String
+    var fileId: String
 }
 
 struct SeventvHttpEmoteResponse: Decodable, Sendable {

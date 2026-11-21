@@ -11,10 +11,14 @@
 //      `size` (default 512, never larger than the source);
 //   4. img2webp packs the frames at falling quality, then at a smaller scale, until the file is under `max_bytes`.
 //
-// The output is always an animated-or-still lossy WebP with alpha. Plain Node ESM, no dependencies.
+// The output is an animated-or-still lossy WebP with alpha unless the caller asks otherwise. Section 71.3 adds, all
+// optional: `stretch` (squash after the crop), `format` webp|gif|png, a fixed `quality` (one encode, over_cap reported
+// instead of failing), `fps` (frames thinned, the loop keeps its length), a video source (`video`, `start`, `end`
+// sampled at `fps`), `bounce` (forward then back) and `frame` (the still for png). Without them: exactly as before.
+// Plain Node ESM, no dependencies.
 
 import { spawn } from "node:child_process";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 import { JobError } from "./lib.js";
@@ -46,7 +50,9 @@ export const FIT_STEPS = [
 /**
  * Where to cut and how big the result is. Throws error.seventv.fit_shape (400) when the box, or the whole picture,
  * is outside 7TV's ratio.
- * @param {{width: number, height: number, crop?: {x: number, y: number, w: number, h: number} | null, size?: number | null}} o
+ * `stretch` (each way 0.25 to 4) squashes or stretches the crop; the ratio check and `size` then see the stretched shape.
+ * @param {{width: number, height: number, crop?: {x: number, y: number, w: number, h: number} | null, size?: number | null,
+ *   stretch?: {w: number, h: number} | null}} o
  * @returns {{crop: {x: number, y: number, w: number, h: number}, width: number, height: number}}
  */
 export function planFit(o) {
@@ -62,16 +68,18 @@ export function planFit(o) {
         if (!(w >= 1 && h >= 1)) throw new JobError("error.seventv.fit_shape", "the crop box is outside the picture");
         crop = { x, y, w, h };
     }
-    const ratio = crop.w / crop.h;
+    const cw = crop.w * (o.stretch?.w ?? 1);
+    const ch = crop.h * (o.stretch?.h ?? 1);
+    const ratio = cw / ch;
     if (ratio < EMOTE_MIN_RATIO || ratio > EMOTE_MAX_RATIO) {
         throw new JobError(
             "error.seventv.fit_shape",
-            `${crop.w}x${crop.h} is ${ratio > 1 ? "wider" : "taller"} than 7TV allows (width/height between 1/32 and 3): pick a crop box`,
+            `${Math.round(cw)}x${Math.round(ch)} is ${ratio > 1 ? "wider" : "taller"} than 7TV allows (width/height between 1/32 and 3): pick a crop box`,
         );
     }
     const target = Math.min(EMOTE_MAX_SIDE, Math.max(EMOTE_MIN_SIDE, Math.round(o.size ?? EMOTE_DEFAULT_SIDE)));
-    const scale = Math.min(1, target / Math.max(crop.w, crop.h));
-    return { crop, width: Math.max(1, Math.round(crop.w * scale)), height: Math.max(1, Math.round(crop.h * scale)) };
+    const scale = Math.min(1, target / Math.max(cw, ch));
+    return { crop, width: Math.max(1, Math.round(cw * scale)), height: Math.max(1, Math.round(ch * scale)) };
 }
 
 /**
@@ -88,6 +96,28 @@ export function thinFrames(durations, max = EMOTE_MAX_FRAMES) {
         if (out.length === slot) out.push({ index: i, duration: durations[i] });
         else out[out.length - 1].duration += durations[i];
     }
+    return out;
+}
+
+/**
+ * Frames thinned to at most `fps` a second: a frame is kept when it starts in a new 1000/fps ms slot, and takes the time
+ * of the frames dropped after it, so the loop keeps its length. A source slower than `fps` keeps every frame.
+ * @param {number[]} durations @param {number} fps @returns {{index: number, duration: number}[]}
+ */
+export function thinToRate(durations, fps) {
+    const slot = 1000 / fps;
+    /** @type {{index: number, duration: number}[]} */
+    const out = [];
+    let t = 0;
+    let last = -1;
+    durations.forEach((d, index) => {
+        const s = Math.floor((t + 0.5) / slot);
+        if (out.length === 0 || s !== last) {
+            out.push({ index, duration: d });
+            last = s;
+        } else out[out.length - 1].duration += d;
+        t += d;
+    });
     return out;
 }
 
@@ -273,24 +303,139 @@ async function sourceFrames(o) {
     return { width, height, durations: keep.map((k) => k.duration) };
 }
 
+/** A video's frames are decoded at most this many px a side (a 4K clip would fill the disk with RGBA PNGs). */
+const VIDEO_MAX_SIDE = 2048;
+export const VIDEO_MIN_SECONDS = 0.2;
+export const VIDEO_MAX_SECONDS = 10;
+export const VIDEO_DEFAULT_FPS = 20;
+
 /**
- * The whole fit. Returns the WebP bytes and what they hold. Throws a JobError: error.seventv.fit_shape (400, the
+ * A moment of a video as RGBA PNG frames f00001.png... sampled at `fps`, each lasting 1000/fps ms (rounded so the sum is
+ * exact). @param {{ffmpeg: string, input: string, framesDir: string, deadline: number, onChild?: any, start: number,
+ *   seconds: number, fps: number, one?: boolean}} o
+ * @returns {Promise<{width: number, height: number, durations: number[]}>}
+ */
+async function videoFrames(o) {
+    const vf = `fps=${o.fps},scale=w='min(${VIDEO_MAX_SIDE},iw)':h='min(${VIDEO_MAX_SIDE},ih)':force_original_aspect_ratio=decrease:flags=lanczos`;
+    await run(
+        o.ffmpeg,
+        ["-nostdin", "-v", "error", "-ss", String(o.start), "-i", path.resolve(o.input), "-t", String(o.seconds), "-an", "-sn",
+         "-vf", vf, "-frames:v", String(o.one ? 1 : EMOTE_MAX_FRAMES), "-pix_fmt", "rgba", "-fps_mode", "passthrough", "-f", "image2", "f%05d.png"],
+        { cwd: o.framesDir, timeoutMs: o.deadline - Date.now(), label: "ffmpeg", onChild: o.onChild },
+    );
+    const files = (await readdir(o.framesDir)).filter((f) => PNG_RE.test(f)).sort();
+    if (files.length === 0) throw new JobError("error.seventv.fit_failed", "no picture at that moment of the video");
+    const head = await readFile(path.join(o.framesDir, files[0]));
+    const durations = files.map((_, i) => Math.round(((i + 1) * 1000) / o.fps) - Math.round((i * 1000) / o.fps));
+    return { width: head.readUInt32BE(16), height: head.readUInt32BE(20), durations };
+}
+
+/** Keeps only `keep`'s frames of f00001... in `dir`, renumbered from f00001 (indices ascending). @param {string} dir @param {number} count @param {{index: number}[]} keep */
+async function keepOnly(dir, count, keep) {
+    const kept = new Set(keep.map((k) => k.index));
+    for (let i = 0; i < count; i++) if (!kept.has(i)) await rm(path.join(dir, name(i)));
+    for (let n = 0; n < keep.length; n++) {
+        const from = path.join(dir, name(keep[n].index));
+        const to = path.join(dir, name(n));
+        if (from !== to) await rename(from, to);
+    }
+}
+
+/** GIF palette sizes, then smaller pictures, for the automatic fit. */
+export const GIF_STEPS = [
+    { scale: 1, colors: 256 },
+    { scale: 1, colors: 128 },
+    { scale: 1, colors: 64 },
+    { scale: 0.75, colors: 64 },
+    { scale: 0.5, colors: 64 },
+];
+const PNG_STEPS = [{ scale: 1 }, { scale: 0.75 }, { scale: 0.5 }];
+
+/**
+ * The whole fit. Returns the file's bytes and what they hold. Throws a JobError: error.seventv.fit_shape (400, the
  * ratio), error.seventv.fit_failed (422, will not decode or ran out of time), error.seventv.fit_too_big (422, over
- * `maxBytes` even at the last step).
+ * `maxBytes` even at the last step; with a fixed `quality` there is one encode and `overCap` is set instead).
  * @param {{ffmpeg: string, img2webp: string, input: string, dir: string, crop?: {x: number, y: number, w: number, h: number} | null,
- *   size?: number | null, maxBytes: number, timeoutMs?: number, onChild?: any}} o
- * @returns {Promise<{bytes: Buffer, width: number, height: number, frames: number, quality: number}>}
+ *   size?: number | null, maxBytes: number, timeoutMs?: number, onChild?: any,
+ *   stretch?: {w: number, h: number} | null, format?: "webp" | "gif" | "png", quality?: number | null, fps?: number | null,
+ *   video?: boolean, start?: number | null, end?: number | null, bounce?: boolean, frame?: number | null}} o
+ * @returns {Promise<{bytes: Buffer, width: number, height: number, frames: number, quality: number, format: "webp" | "gif" | "png",
+ *   durationMs: number, overCap: boolean}>}
  */
 export async function fitEmote(o) {
     const deadline = Date.now() + (o.timeoutMs ?? EMOTE_FIT_TIMEOUT_MS);
+    const format = o.format ?? "webp";
+    const fixed = typeof o.quality === "number" ? o.quality : null;
     const src = path.join(o.dir, "src");
     await rm(src, { recursive: true, force: true });
     await mkdir(src, { recursive: true });
-    const { width, height, durations } = await sourceFrames({ ffmpeg: o.ffmpeg, input: o.input, framesDir: src, deadline, onChild: o.onChild });
-    const plan = planFit({ width, height, crop: o.crop, size: o.size });
+    /** @type {{width: number, height: number, durations: number[]}} */
+    let source;
+    if (o.video) {
+        const start = o.start ?? 0;
+        const end = o.end ?? start + 3;
+        const fps = o.fps ?? VIDEO_DEFAULT_FPS;
+        source =
+            format === "png"
+                ? await videoFrames({ ffmpeg: o.ffmpeg, input: o.input, framesDir: src, deadline, onChild: o.onChild, start: o.frame ?? start, seconds: 1 / fps, fps, one: true })
+                : await videoFrames({ ffmpeg: o.ffmpeg, input: o.input, framesDir: src, deadline, onChild: o.onChild, start, seconds: end - start, fps });
+    } else {
+        source = await sourceFrames({ ffmpeg: o.ffmpeg, input: o.input, framesDir: src, deadline, onChild: o.onChild });
+    }
+    const { width, height } = source;
+    let durations = source.durations;
+    const plan = planFit({ width, height, crop: o.crop, size: o.size, stretch: o.stretch });
+
+    /** the order the frames play in: indices into f00001.png... of the scaled directory */
+    let seq;
+    if (format === "png") {
+        let idx = 0;
+        if (!o.video && o.frame != null) {
+            const t = o.frame * 1000;
+            let end = 0;
+            idx = durations.length - 1;
+            for (let i = 0; i < durations.length; i++) {
+                end += durations[i];
+                if (end > t) {
+                    idx = i;
+                    break;
+                }
+            }
+        }
+        seq = [{ index: idx, duration: durations[idx] ?? 100 }];
+    } else {
+        if (o.fps && !o.video && durations.length > 1) {
+            const keep = thinToRate(durations, o.fps);
+            if (keep.length < durations.length) {
+                await keepOnly(src, durations.length, keep);
+                durations = keep.map((k) => k.duration);
+            }
+        }
+        if (o.bounce && durations.length > 2) {
+            const room = Math.floor((EMOTE_MAX_FRAMES + 2) / 2);
+            if (durations.length > room) {
+                const keep = thinFrames(durations, room);
+                await keepOnly(src, durations.length, keep);
+                durations = keep.map((k) => k.duration);
+            }
+        }
+        seq = durations.map((duration, index) => ({ index, duration }));
+        if (o.bounce) for (let i = durations.length - 2; i >= 1; i--) seq.push({ index: i, duration: durations[i] });
+    }
+    const durationMs = seq.reduce((t, f) => t + f.duration, 0);
+
+    /** @type {{scale: number, q: number, colors?: number}[]} */
+    let steps;
+    if (format === "webp") steps = fixed !== null ? [{ scale: 1, q: fixed }] : FIT_STEPS;
+    else if (format === "gif") {
+        const colors = (/** @type {number} */ c) => ({ colors: c, q: Math.round(c / 2.56) });
+        steps = fixed !== null ? [{ scale: 1, ...colors(Math.max(4, Math.min(256, Math.round((256 * fixed) / 100)))) }] : GIF_STEPS.map((g) => ({ scale: g.scale, ...colors(g.colors) }));
+    } else steps = fixed !== null ? [{ scale: 1, q: fixed }] : PNG_STEPS.map((p) => ({ ...p, q: 100 }));
+
     /** @type {Map<number, {dir: string, width: number, height: number}>} */
     const scaled = new Map();
-    for (const step of FIT_STEPS) {
+    const ext = format;
+    for (const step of steps) {
         let s = scaled.get(step.scale);
         if (!s) {
             const w = Math.max(1, Math.round(plan.width * step.scale));
@@ -298,24 +443,48 @@ export async function fitEmote(o) {
             const dir = path.join(o.dir, `s${step.scale}`);
             await mkdir(dir, { recursive: true });
             const c = plan.crop;
-            await run(
-                o.ffmpeg,
-                ["-nostdin", "-v", "error", "-framerate", "25", "-i", path.join(src, "f%05d.png"),
-                 "-vf", `crop=${c.w}:${c.h}:${c.x}:${c.y},scale=${w}:${h}:flags=lanczos`,
-                 "-fps_mode", "passthrough", "-pix_fmt", "rgba", "-f", "image2", "f%05d.png"],
-                { cwd: dir, timeoutMs: deadline - Date.now(), label: "ffmpeg scale", onChild: o.onChild },
-            );
+            const vf = `crop=${c.w}:${c.h}:${c.x}:${c.y},scale=${w}:${h}:flags=lanczos`;
+            const args =
+                format === "png"
+                    ? ["-nostdin", "-v", "error", "-i", path.join(src, name(seq[0].index)), "-vf", vf, "-frames:v", "1", "-pix_fmt", "rgba", "-f", "image2", "f00001.png"]
+                    : ["-nostdin", "-v", "error", "-framerate", "25", "-i", path.join(src, "f%05d.png"), "-vf", vf, "-fps_mode", "passthrough", "-pix_fmt", "rgba", "-f", "image2", "f%05d.png"];
+            await run(o.ffmpeg, args, { cwd: dir, timeoutMs: deadline - Date.now(), label: "ffmpeg scale", onChild: o.onChild });
             s = { dir, width: w, height: h };
             scaled.set(step.scale, s);
         }
-        const out = path.join(o.dir, "out.webp");
-        const args = ["-loop", "0", "-lossy", "-q", String(step.q), "-m", "4"];
-        durations.forEach((d, i) => args.push("-d", String(d), name(i)));
-        args.push("-o", out);
-        await run(o.img2webp, args, { cwd: s.dir, timeoutMs: deadline - Date.now(), label: "img2webp", onChild: o.onChild });
+        const out = path.join(o.dir, `out.${ext}`);
+        if (format === "webp") {
+            const args = ["-loop", "0", "-lossy", "-q", String(step.q), "-m", "4"];
+            seq.forEach((f) => args.push("-d", String(f.duration), name(f.index)));
+            args.push("-o", out);
+            await run(o.img2webp, args, { cwd: s.dir, timeoutMs: deadline - Date.now(), label: "img2webp", onChild: o.onChild });
+        } else if (format === "gif") {
+            const list = path.join(s.dir, "gif.txt");
+            // image2 inside concat counts in 1/25 s unless told a finer rate; the muxer takes the last delay from final_delay
+            const lines = ["ffconcat version 1.0", ...seq.map((f) => `file '${name(f.index)}'\noption framerate 1000\nduration ${(f.duration / 1000).toFixed(3)}`)];
+            await writeFile(list, lines.join("\n") + "\n");
+            await run(
+                o.ffmpeg,
+                ["-nostdin", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", list,
+                 "-filter_complex", `[0:v]split[a][b];[a]palettegen=max_colors=${step.colors}:reserve_transparent=1[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:alpha_threshold=128`,
+                 "-fps_mode", "vfr", "-final_delay", String(Math.max(1, Math.round(seq[seq.length - 1].duration / 10))), "-loop", "0", "-f", "gif", out],
+                { timeoutMs: deadline - Date.now(), label: "ffmpeg gif", onChild: o.onChild },
+            );
+        } else {
+            await copyFile(path.join(s.dir, "f00001.png"), out);
+        }
         const size = (await stat(out)).size;
-        if (size <= o.maxBytes) {
-            return { bytes: await readFile(out), width: s.width, height: s.height, frames: durations.length, quality: step.q };
+        if (size <= o.maxBytes || fixed !== null) {
+            return {
+                bytes: await readFile(out),
+                width: s.width,
+                height: s.height,
+                frames: format === "png" ? 1 : seq.length,
+                quality: step.q,
+                format,
+                durationMs,
+                overCap: size > o.maxBytes,
+            };
         }
     }
     throw new JobError("error.seventv.fit_too_big", `still over ${Math.floor(o.maxBytes / 1024)} KiB at half size: pick a smaller size or a shorter crop`);

@@ -600,6 +600,10 @@ public enum SevenTvError: Error, Sendable, Equatable {
     case fitFailed(String?)
     /// `429 error.seventv.busy` (57.10): the server is fitting another picture.
     case busy
+    /// `404 error.seventv.draft_not_found` (71.2): the emote editor's draft is gone (it lives 24 hours) or is not this key's.
+    case draftNotFound
+    /// `400 error.seventv.bad` (71.1): a field of the make request is wrong; the server's words.
+    case bad(String?)
     /// The server has no `/7tv` routes (an older server, or a client without them).
     case off
     /// The server could not be reached.
@@ -627,6 +631,8 @@ public enum SevenTvError: Error, Sendable, Equatable {
         case "error.seventv.too_large": self = .tooLarge
         case "error.seventv.fit_failed": self = .fitFailed(message)
         case "error.seventv.busy": self = .busy
+        case "error.seventv.draft_not_found": self = .draftNotFound
+        case "error.seventv.bad": self = .bad(message)
         default: return nil
         }
     }
@@ -659,7 +665,7 @@ public enum SevenTvError: Error, Sendable, Equatable {
     /// 7TV's own words, for `forbidden` and `rejected`; the fit's reason for `fitFailed`.
     public var message: String? {
         switch self {
-        case .forbidden(let m), .rejected(let m), .fitFailed(let m): return m
+        case .forbidden(let m), .rejected(let m), .fitFailed(let m), .bad(let m): return m
         default: return nil
         }
     }
