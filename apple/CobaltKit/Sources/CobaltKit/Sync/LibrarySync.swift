@@ -90,7 +90,8 @@ final class LibrarySync {
         }
     }
 
-    /// The real client. `client` is read on each request, so a server change is picked up.
+    /// The real client. `client` is read on each request, so a server change is picked up. Cheap: the database is opened
+    /// by `start()`, on the store's actor, not here (this runs at launch, before the first frame).
     convenience init(databaseURL: URL, client: @escaping @MainActor () -> HTTPCobaltClient?) throws {
         let store = try SyncStore(fileURL: databaseURL)
         let http = HTTPSyncClient(client: client)
@@ -99,6 +100,16 @@ final class LibrarySync {
 
     /// Launch. A copy from last time is shown before the pull, and the pull is the launch trigger.
     func start() async {
+        // A database that cannot be opened is a server with no `/sync` for this launch: today's library loading takes over
+        // (it used to fail the initializer, which left the library on today's loading the same way).
+        do {
+            try await store.open()
+        } catch {
+            Telemetry.log(.error, .sync, "sync store failed", data: ["error": .string(String(describing: error))])
+            markFellBack()
+            await loadLegacyIfOwed()
+            return
+        }
         await connect()
         if await store.hasReadyMarker(), let snapshot = try? await store.snapshot(), !snapshot.visible.isEmpty || !snapshot.hidden.isEmpty {
             deliver(snapshot, source: "cache")

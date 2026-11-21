@@ -206,8 +206,13 @@ public final class AppModel {
     /// Keeps a run going after the app leaves the screen (iOS 26 continued processing); nil on the
     /// Mac, in previews and in tests unless one is injected.
     @ObservationIgnored var continuedProcessing: ContinuedProcessing?
-    @ObservationIgnored var lifecycleObservers: [any NSObjectProtocol] = []
-    @ObservationIgnored private var foregrounding: Task<Void, Never>?
+    /// The launch's or an activation's `foreground()` run, while it lasts (`foreground()`, `activated()`).
+    @ObservationIgnored var foregrounding: Task<Void, Never>?
+    /// The app left the front since the last `foreground()` run began: the next activation runs it again
+    /// (`AppModel+Lifecycle.swift`). True until the first run, so an activation before the launch task runs one.
+    @ObservationIgnored var activationNeedsForeground = true
+    /// The app's listener for activations (`observeLifecycle`); nil in previews and tests unless one is wired.
+    @ObservationIgnored var lifecycleHook: AppModelLifecycle?
 
     @ObservationIgnored let ctx: PipelineContext
     @ObservationIgnored let makeClient: @MainActor (Settings) -> any CobaltClient
@@ -292,9 +297,13 @@ public final class AppModel {
             #endif
         }
         let store = OfflineStore.shared()
-        Telemetry.log(.info, .store, "store opened", data: [
-            "media": .int(store.media.count), "videos": .int(store.videos.count), "root": .string(AppGroup.location.kind.rawValue),
-        ])
+        // The first load runs off the main thread (two-step launch): log once it lands.
+        Task {
+            await store.boot()
+            Telemetry.log(.info, .store, "store opened", data: [
+                "media": .int(store.media.count), "videos": .int(store.videos.count), "root": .string(AppGroup.location.kind.rawValue),
+            ])
+        }
         let ctx = PipelineContext(
             client: factory(settings), capabilities: settings.knownCapabilities ?? .unknown, settings: settings, store: store,
             jobs: .shared(), tools: SystemMediaTools(), clock: SystemClock(), photos: SystemPhotosSaver(),
@@ -319,7 +328,7 @@ public final class AppModel {
         // The Mac's folder is the store's visible root; this object reports it and chooses another (unavailable on iOS).
         let folder = MacFolder(store: store, ledger: FolderLedger.shared())
         #if os(macOS)
-        folder.observeActivation()
+        folder.observeActivation()               // through AppLifecycle (`.work`)
         #endif
         let offline = OfflineDownloads(
             store: store, queue: OfflineQueue(directory: AppGroup.directory("Sync")), transport: URLSessionOfflineTransport(),
@@ -332,6 +341,9 @@ public final class AppModel {
             context: ctx, library: LibraryModel(context: ctx), photosSync: sync, macFolder: folder,
             savePull: pull, offlineDownloads: offline, ledger: JobLedger.shared(), makeClient: factory)
         model.telemetry = TelemetryService.live(settings: settings, capabilities: { [unowned model] in model.capabilities })
+        // leaving and coming back, through the app's one listener (the app delegate starts it): the line's summary
+        // opt-in, the queue tab's polling, the polling stores, then the server check and pickup on every activation
+        model.observeLifecycle()
         // any route that answers `401 error.api.auth.key.invalid` (an ended session): re-read the server (APP-API-CONTRACT 42.6)
         AuthSignal.install { [model] in                 // the live model lives as long as the process
             Task { @MainActor in model.serverRefusedKey() }
@@ -354,7 +366,9 @@ public final class AppModel {
                 }
                 // A delete queued by an earlier launch: the device's copy of that post goes now.
                 librarySync.onDeleteConfirmed = { [weak model] post in
-                    guard let model, let media = model.store.media(joining: post) else { return }
+                    guard let model else { return }
+                    await model.store.boot()
+                    guard let media = model.store.media(joining: post) else { return }
                     await model.store.removeMedia(media.id)
                 }
                 Task { await librarySync.start() }
@@ -397,7 +411,7 @@ public final class AppModel {
         continued.register()
         ctx.continued = continued
         model.continuedProcessing = continued
-        model.lifecycleObservers = continued.observeLifecycle()
+        continued.observeLifecycle()             // resign and become-active, through AppLifecycle (`.work`)
         #endif
         return model
     }
@@ -583,10 +597,13 @@ public final class AppModel {
     }
 
     /// Launch and every activation: the server check, then whatever the share extension left. Calls that overlap
-    /// (the launch task and the first `.active`) share one run instead of checking and reloading twice at once.
+    /// (the launch task and the first activation) share one run instead of checking and reloading twice at once; an
+    /// activation right after a run began starts none (`activated()`).
     public func foreground() async {
         if let running = foregrounding { return await running.value }
+        activationNeedsForeground = false
         let run = Task { @MainActor in
+            await settings.boot()
             await refreshServer()
             await pickUpSharedJobs()
         }
@@ -595,7 +612,7 @@ public final class AppModel {
         foregrounding = nil
     }
 
-    /// On scenePhase `.active`: take over whatever the share extension left.
+    /// On every activation (`foreground()`): take over whatever the share extension left.
     public func pickUpSharedJobs() async {
         defer { liveManager?.foreground() }       // start token, push-started activities, orphans (after a handoff took its run)
         if let editLive { Task { await editLive.foreground() } }   // render activities whose end no push brought

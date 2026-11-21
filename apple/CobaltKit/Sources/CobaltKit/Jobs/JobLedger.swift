@@ -4,10 +4,14 @@ import Foundation
 /// an upload still copying or sending, and every waiting job when the server has no line. A JSON file in Application
 /// Support (not the app group: only this process writes it). An entry is written on add, removed when the job gets its
 /// session or ends; on launch what is left goes back in. Entries older than 24 hours are dropped.
+///
+/// The file is read off the main thread, not in the initializer: `shared()` starts the read at launch (`boot()`), so the
+/// first frame never waits for it. A call that needs the entries before that read lands (a job added in the first moments)
+/// reads the file itself, once, so a write never replaces entries it has not seen.
 @MainActor
 final class JobLedger {
-    struct Entry: Codable, Equatable, Identifiable {
-        enum Input: Codable, Equatable {
+    struct Entry: Codable, Equatable, Identifiable, Sendable {
+        enum Input: Codable, Equatable, Sendable {
             case link(URL)
             /// The copy in the app's inbox (never the picked file: its access ended with the last launch).
             case file(path: String, name: String, bytes: Int64, contentType: String, photosAssetID: String?)
@@ -24,19 +28,55 @@ final class JobLedger {
 
     private let fileURL: URL
     private let now: () -> Date
-    private var entries: [Entry]
+    /// The entries once read (nil until then).
+    private var loaded: [Entry]?
+    /// The read `boot()` started, while it runs.
+    private var loading: Task<Void, Never>?
 
+    /// What the ledger holds. Asked before the background read landed: read here, on the calling thread, once.
+    private var entries: [Entry] {
+        get {
+            if let loaded { return loaded }
+            let url = fileURL
+            let read = EngineClock.measure("launch.jobLedger.sync") { Self.read(url) }
+            loaded = read
+            return read
+        }
+        set { loaded = newValue }
+    }
+
+    /// Whether the file has been read (tests).
+    var isLoaded: Bool { loaded != nil }
+
+    /// Cheap: nothing is read until `boot()` or the first call that needs the entries.
     init(fileURL: URL, now: @escaping () -> Date = { Date() }) {
         self.fileURL = fileURL
         self.now = now
-        self.entries = Self.read(fileURL)
+    }
+
+    /// Reads the file off the main thread (`launch.jobLedger`). Returns at once when it is read already; a read that lands
+    /// after a call already read the file for itself is dropped (the entries in memory are newer).
+    func boot() async {
+        if loaded != nil { return }
+        if let loading { return await loading.value }
+        let url = fileURL
+        let task = Task { @MainActor [weak self] in
+            let read = await Task.detached(priority: .userInitiated) { JobLedger.timedRead(url) }.value
+            guard let self else { return }
+            if self.loaded == nil { self.loaded = read }
+            self.loading = nil
+        }
+        loading = task
+        await task.value
     }
 
     /// Application Support/cobalt/job-ledger.json.
     static func shared() -> JobLedger {
         let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
             ?? FileManager.default.temporaryDirectory
-        return JobLedger(fileURL: base.appendingPathComponent("cobalt", isDirectory: true).appendingPathComponent("job-ledger.json"))
+        let ledger = JobLedger(fileURL: base.appendingPathComponent("cobalt", isDirectory: true).appendingPathComponent("job-ledger.json"))
+        Task { await ledger.boot() }               // off the first frame; `restoreLedger` finds it read
+        return ledger
     }
 
     var all: [Entry] { entries }
@@ -83,7 +123,12 @@ final class JobLedger {
 
     // MARK: -
 
-    private static func read(_ url: URL) -> [Entry] {
+    /// `read`, timed as `launch.jobLedger` (the background read at launch).
+    nonisolated private static func timedRead(_ url: URL) -> [Entry] {
+        EngineClock.measure("launch.jobLedger") { read(url) }
+    }
+
+    nonisolated private static func read(_ url: URL) -> [Entry] {
         guard let data = try? Data(contentsOf: url) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970

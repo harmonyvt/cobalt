@@ -275,7 +275,8 @@ public final class OfflineStore {
         root: URL, tools: any MediaTools, defaults: UserDefaults = AppGroup.defaults(),
         now: @escaping @Sendable () -> Date = { Date() }, visibleRoot: URL? = nil,
         ops: (any OfflineFileOps)? = nil, syncDirectory: URL? = nil, sharedWithApp: Bool = true,
-        rootMode: VisibleRootMode = .documents, rootProvider: MacRootProvider? = nil, folderLedger: FolderLedger? = nil
+        rootMode: VisibleRootMode = .documents, rootProvider: MacRootProvider? = nil, folderLedger: FolderLedger? = nil,
+        loadsLater: Bool = false
     ) {
         self.root = root
         self.rootMode = rootMode
@@ -303,10 +304,41 @@ public final class OfflineStore {
         self.now = now
         self.engine = OfflineIndexEngine(root: root)
         publishRoot()
-        // Still on the main thread: an initializer cannot wait. It runs once per process; `reload()`, which the app runs on
-        // every foreground, reconciles on the engine.
-        adopt(Self.reconciled(root: root))
-        Self.purgeInbox(root: root, olderThan: Self.inboxLifetime)
+        if loadsLater {
+            // The app (`shared()`): the first frame does not wait for the index. The reconcile (thousands of stats for a
+            // ~900-entry index) and the inbox purge run first in the engine's line, and the store reads as empty, with
+            // `isLoaded` false, until they land. Everything here that decides from the records it holds waits for that
+            // (`boot()`), so an index that only looks empty never removes, replaces or skips anything.
+            bootTask = Task { [weak self] in await self?.runBoot() }
+        } else {
+            // Tests, previews and the extensions: loaded before the initializer returns, on the calling thread, as before
+            // (a test reads `videos` on the next line; the share sheet's run asks for duplicates at once).
+            adopt(Self.reconciled(root: root))
+            Self.purgeInbox(root: root, olderThan: Self.inboxLifetime)
+            isLoaded = true
+        }
+    }
+
+    /// The first load has landed: `records`, `videos` and `media` are the index on disk, reconciled. False only in the app
+    /// between launch and the first load (a screen shows its loading state rather than "nothing kept").
+    public internal(set) var isLoaded = false
+    /// The first load, while it runs (nil when the initializer loaded, and once it is done nobody needs it again).
+    @ObservationIgnored private var bootTask: Task<Void, Never>?
+
+    /// Waits for the first load of the index (returns at once when it has landed). Every call that reads the records this
+    /// store holds before it writes or deletes awaits this first; a caller outside that needs the index right after
+    /// launch (a count, a lookup that decides to skip or remove something) awaits it too.
+    public func boot() async {
+        guard let bootTask else { return }
+        await bootTask.value
+    }
+
+    private func runBoot() async {
+        let generation = directAdoptions
+        await land(await engine.boot(), queuedAt: generation)
+        isLoaded = true
+        bootTask = nil
+        logRoot()
     }
 
     private static var sharedInstance: OfflineStore?
@@ -315,17 +347,21 @@ public final class OfflineStore {
     public static func shared() -> OfflineStore {
         if let s = sharedInstance { return s }
         let s: OfflineStore
+        // The app loads the index after its first frame; an extension (the share sheet starts its run at once and asks
+        // the store for duplicates) loads it here, as before.
+        let loadsLater = Bundle.main.bundleURL.pathExtension != "appex"
         #if os(macOS)
         // The Mac's visible root is the Finder folder the ledger names (13.1)
         let ledger = FolderLedger.shared()
         s = OfflineStore(
             root: AppGroup.directory("Videos"), tools: SystemMediaTools(), visibleRoot: nil,
             syncDirectory: AppGroup.directory("Sync"), sharedWithApp: false, rootMode: .macFolder,
-            rootProvider: MacRootProvider(ledger: ledger), folderLedger: ledger)
+            rootProvider: MacRootProvider(ledger: ledger), folderLedger: ledger, loadsLater: loadsLater)
         #else
         s = OfflineStore(
             root: AppGroup.directory("Videos"), tools: SystemMediaTools(), visibleRoot: OfflineFolder.defaultVisibleRoot(),
-            syncDirectory: AppGroup.directory("Sync"), sharedWithApp: OfflineFolder.storeIsSharedWithApp())
+            syncDirectory: AppGroup.directory("Sync"), sharedWithApp: OfflineFolder.storeIsSharedWithApp(),
+            loadsLater: loadsLater)
         #endif
         s.sessionIsHeld = { session in
             if PendingOriginals.shared().isLive(session: session) { return true }
@@ -338,7 +374,7 @@ public final class OfflineStore {
             }
         }
         sharedInstance = s
-        s.logRoot()
+        if s.isLoaded { s.logRoot() }        // the app logs it when the first load lands (`runBoot`)
         return s
     }
 
@@ -408,6 +444,7 @@ public final class OfflineStore {
     /// the kept files in the visible folder included. The server keeps its copies. The cache's own
     /// "clear cache" is `clearCache()`.
     public func clearAll() async {
+        await boot()                                           // decides from the records it holds
         let keep = pinnedIDs
         let refused = await purgeVisible(of: records.filter { !keep.contains($0.id) })      // a file not provably its own stays
         let stay = keep.union(refused)
@@ -538,6 +575,7 @@ public final class OfflineStore {
         role: GalleryRole? = nil, itemIndex: Int? = nil, madeFrom: [Int]? = nil, madeSpec: Data? = nil, libraryID: String? = nil,
         postItems: Int? = nil
     ) async throws -> StoredVideo {
+        await boot()                                           // decides from the records it holds
         let keep = keep && canKeep
         let fm = FileManager.default
         let id = UUID().uuidString.lowercased()
@@ -713,6 +751,7 @@ public final class OfflineStore {
     public func attach(
         file: URL, to id: String, move: Bool, keep: Bool, origin: AddOrigin = .save
     ) async throws -> StoredVideo {
+        await boot()                                           // "already kept" is read from `videos`
         let keep = keep && canKeep
         let fm = FileManager.default
         guard let existing = Self.readRecords(root: root).first(where: { $0.id == id }) else {
@@ -870,6 +909,7 @@ public final class OfflineStore {
     }
 
     public func remove(_ id: String) async {
+        await boot()                                           // decides from the records it holds
         guard await purgeVisible(of: records.filter { $0.id == id }).isEmpty else { return }   // a file not provably its own stays
         // `try?` flattens: nil when the write failed and when there was no such record
         guard let removed = try? await write({ records -> Record? in
@@ -888,6 +928,7 @@ public final class OfflineStore {
     /// process, and for an unknown id.
     @discardableResult
     public func removeMedia(_ id: String) async -> Bool {
+        await boot()                                           // decides from the records it holds
         let pinned = pinnedIDs
         let current = records.filter { $0.media == id }
         if !current.contains(where: { pinned.contains($0.id) }), !(await purgeVisible(of: current)).isEmpty { return false }
@@ -1001,6 +1042,7 @@ public final class OfflineStore {
     /// wish to keep it is cleared all the same) and an entry in use.
     @discardableResult
     public func removeOfflineCopy(_ id: String) async -> Bool {
+        await boot()                                           // decides from the records it holds
         guard !isInUse(id), records.contains(where: { $0.id == id }) else { return false }
         // Both tiers run inside the gate (a promotion's move and its index write are one step to this), and the
         // visible file goes by identity, not by the path remembered (review fixes B1, S5).
@@ -1057,6 +1099,7 @@ public final class OfflineStore {
     /// With a visible root it also runs, in this order: the scan of the visible folder (decision 7), the
     /// migration (section 2) and the promotion of kept files that wait in `files/`.
     public func reload() async {
+        await boot()                                           // the launch's first load first, then this one
         // Off the main thread: the reconcile checks every file, poster and flipbook frame on disk (thousands of stats
         // for a ~900-entry index), which held the main thread 330-430 ms on each foreground and tab switch (8.16
         // hang_stack, OfflineStore.reconciled). The purges list folders the same way.
@@ -1179,6 +1222,7 @@ public final class OfflineStore {
     /// the index, `videos` is replaced, so an observing view sees `previewFrameURLs` fill.
     public func ensurePreviewFrames(for video: StoredVideo) async {
         let id = video.id
+        await boot()
         if let job = previewJobs[id] { await job.value; return }
         guard let record = records.first(where: { $0.id == id }), record.previewNames?.isEmpty != false,
               let file = record.video(root: root, visibleRoot: visibleRoot).fileURL, !previewFailures.contains(id)
@@ -1203,6 +1247,7 @@ public final class OfflineStore {
     /// Only the faces of the newest `backfillLimit` media (the orbit never shows more) and then their
     /// originals, and it stops between entries when its task is cancelled.
     public func backfillPreviewFrames() async {
+        await boot()                                           // an index still loading has nothing to backfill
         let newest = media.prefix(Self.backfillLimit)
         let faces = newest.map(\.face)
         let originals = newest.compactMap { m in m.original.flatMap { $0.id == m.face.id ? nil : $0 } }

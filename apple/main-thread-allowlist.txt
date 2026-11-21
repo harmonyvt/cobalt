@@ -57,10 +57,8 @@ Cobalt/Screens/Tools/ToolsExport.swift: try? FileManager.default.removeItem(at: 
 CobaltKit/Sources/CobaltKit/Editor/EditorStore.swift: ? FileManager.default.temporaryDirectory.appendingPathComponent("capystore-editor-preview", isDirectory: true) # 8.17 baseline, move off main
 CobaltKit/Sources/CobaltKit/Folder/MacFolder.swift: do { try FileManager.default.createDirectory(at: defaultFolder, withIntermediateDirectories: true) } catch { return .failed } # 8.17 baseline, move off main
 CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: ?? FileManager.default.temporaryDirectory # 8.17 baseline, move off main
-CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: guard let data = try? Data(contentsOf: url) else { return [] } # 8.17 baseline, move off main
 CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: if case .file(let path, let name, _, _, _) = e.input, !FileManager.default.fileExists(atPath: path) { # 8.17 baseline, move off main
 CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) # 8.17 baseline, move off main
-CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: let decoder = JSONDecoder() # 8.17 baseline, move off main
 CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: let encoder = JSONEncoder() # 8.17 baseline, move off main
 CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true) # 8.17 baseline, move off main
 CobaltKit/Sources/CobaltKit/Jobs/JobLedger.swift: try encoder.encode(entries).write(to: fileURL, options: .atomic) # 8.17 baseline, move off main
