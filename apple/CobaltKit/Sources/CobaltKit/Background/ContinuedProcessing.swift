@@ -584,23 +584,24 @@ final class ConcreteRegistrationScheduler: ContinuedTaskScheduler {
 
 // MARK: - Lifecycle and the system scheduler (iOS)
 
-#if os(iOS)
-extension ContinuedProcessing {
-    /// The app's resign/become-active notifications, by name (CobaltKit builds into extensions,
-    /// where UIKit's application does not exist).
-    func observeLifecycle() -> [any NSObjectProtocol] {
-        let center = NotificationCenter.default
-        return [
-            center.addObserver(forName: Notification.Name("UIApplicationWillResignActiveNotification"), object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.appResigned() }
-            },
-            center.addObserver(forName: Notification.Name("UIApplicationDidBecomeActiveNotification"), object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.appBecameActive() }
-            },
-        ]
+// Not gated to iOS, so the Mac test run covers it; only the iOS app makes a `ContinuedProcessing`.
+extension ContinuedProcessing: LifecycleAware {
+    /// Resign and become-active, through the app's one listener (`AppLifecycle`, `.work`). Resign, not background: the
+    /// system only takes a continued-processing request while the scene is still in front.
+    func observeLifecycle(_ lifecycle: AppLifecycle = .shared) {
+        lifecycle.register(self, order: .work)
+    }
+
+    func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        switch event {
+        case .willResignActive: appResigned()
+        case .becameActive: appBecameActive()
+        default: break
+        }
     }
 }
 
+#if os(iOS)
 /// `BGTask` is not `Sendable`; the launch handler hands it to the main actor exactly once.
 private final class TaskBox: @unchecked Sendable {
     let task: BGContinuedProcessingTask

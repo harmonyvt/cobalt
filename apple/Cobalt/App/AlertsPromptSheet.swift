@@ -13,7 +13,7 @@ struct AlertsPromptPresenter: ViewModifier {
     /// Another sheet is over the shell (the paste review, the title sheet): this one waits for the next foreground.
     var blocked = false
 
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.lifecycle) private var lifecycle
     @State private var shown = false
     @State private var notifications: AlertsPrompt.Notifications = .on
     @State private var liveActivities = true
@@ -32,7 +32,7 @@ struct AlertsPromptPresenter: ViewModifier {
                     await refresh(rise: false)
                 }
             }
-            .onChange(of: scenePhase) { _, phase in
+            .onChange(of: lifecycle.phase) { _, phase in
                 guard phase == .active else { return }
                 Task { await refresh(rise: true) }              // back from Settings: closes when both are on
             }

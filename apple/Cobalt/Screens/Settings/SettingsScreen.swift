@@ -11,7 +11,7 @@ struct SettingsScreen: View {
     @State private var serverError: String?
     @State private var featuresOpen = false
     @State private var account = AccountSettingsState()
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.lifecycle) private var lifecycle
 
     private var settings: CobaltKit.Settings { model.settings }
     private var summary: ServerSummary { model.serverSummary }
@@ -67,7 +67,7 @@ struct SettingsScreen: View {
         .task { await model.photosSync.refresh() }
         // a key pasted since the library last refused it: opening Settings lifts the pull's auth pause and asks once more (13.8)
         .task { await model.savePull.resume() }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: lifecycle.phase) { _, phase in
             if phase == .active { Task { await model.photosSync.refresh() } }
         }
     }

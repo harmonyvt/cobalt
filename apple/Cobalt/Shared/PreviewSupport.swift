@@ -112,6 +112,7 @@ struct PreviewHost<Content: View>: View {
 
     var body: some View {
         content(model)
+            .environment(\.lifecycle, LifecycleSnapshot(phase: .active))
             .task { await runPreviewScript(script, scenario: scenario, pipeline: model.pipeline) }
     }
 }

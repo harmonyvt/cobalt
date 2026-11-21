@@ -159,10 +159,11 @@ final class LiveActivityManager: JobLiveSink {
     private var adopted: [String: Adopted] = [:]
     private var adoptedOld: [String: AdoptedOld] = [:]
     private var tasks: [Task<Void, Never>] = []
-    private var observers: [any NSObjectProtocol] = []
     private var latestStartToken: String?
     private var sentStartSignature: String?
     private var inBackground = false
+    /// `foreground()` calls (tests: one per resume).
+    private(set) var foregrounds = 0
 
     private static let log = Logger(subsystem: "com.capybaraharmony.cobalt", category: "live")
 
@@ -181,7 +182,7 @@ final class LiveActivityManager: JobLiveSink {
     /// First thing at launch: the push-to-start token observer starts before anything else (a known
     /// iOS bug loses the token when the observer starts late; starting any local activity makes the
     /// system issue it again), then the activities the server started.
-    func start(observeLifecycle: Bool = true) {
+    func start(observeLifecycle: Bool = true, lifecycle: AppLifecycle = .shared) {
         tasks.append(Task { [weak self] in
             guard let stream = self?.adapter.startTokens() else { return }
             for await token in stream {
@@ -204,21 +205,18 @@ final class LiveActivityManager: JobLiveSink {
                 self.adoptOld(old)
             }
         })
-        if observeLifecycle {
-            let center = NotificationCenter.default
-            observers.append(center.addObserver(
-                forName: Notification.Name("UIApplicationDidEnterBackgroundNotification"), object: nil, queue: .main
-            ) { [weak self] _ in MainActor.assumeIsolated { self?.didEnterBackground() } })
-            observers.append(center.addObserver(
-                forName: Notification.Name("UIApplicationWillEnterForegroundNotification"), object: nil, queue: .main
-            ) { [weak self] _ in MainActor.assumeIsolated { self?.foreground() } })
-        }
+        // Leaving the screen comes through the app's one listener (`AppLifecycle`, after the work it summarises). Coming
+        // back does not: `foreground()` has exactly one caller, `AppModel.pickUpSharedJobs`, which runs on every
+        // activation after the server check (so the start token is registered against the capabilities just read) and
+        // after the store reload. It used to run a second time from WillEnterForeground, moments earlier, on every resume.
+        if observeLifecycle { lifecycle.register(self, order: .liveActivities) }
         reconcile()
     }
 
-    /// On every foreground: the start token as the system has it now, activities the server started,
-    /// activities nobody follows.
+    /// On every foreground (called by `AppModel.pickUpSharedJobs` only): the start token as the system has it now,
+    /// activities the server started, activities nobody follows.
     func foreground() {
+        foregrounds += 1
         inBackground = false
         grace.end()
         if let t = adapter.currentStartToken { startTokenArrived(t) } else { flushStartToken() }
@@ -1216,5 +1214,11 @@ final class SystemBackgroundGrace: BackgroundGrace {
             return slot
         }
         semaphore?.signal()
+    }
+}
+
+extension LiveActivityManager: LifecycleAware {
+    func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        if event == .didEnterBackground { didEnterBackground() }
     }
 }

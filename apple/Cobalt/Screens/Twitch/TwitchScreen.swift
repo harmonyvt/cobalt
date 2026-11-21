@@ -10,7 +10,7 @@ struct TwitchScreen: View {
     let tier: Tier
 
     @State private var addingToSet: SevenTvAddToSetModel?
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.lifecycle) private var lifecycle
     /// The "watch on the tv" sheet (70.5).
     @State private var choosingTV = false
 
@@ -51,7 +51,7 @@ struct TwitchScreen: View {
             if model.sevenTv.status == nil { await model.sevenTv.load() }
         }
         // back from studio (a reconnect) or from the background: a session that could not chat is asked again
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: lifecycle.phase) { _, phase in
             if phase == .active { Task { await store.load() } }
         }
         .spreadSheet(item: $addingToSet) { picker in

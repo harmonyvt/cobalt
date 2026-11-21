@@ -60,7 +60,7 @@ struct LibraryMosaic: View {
     @State private var layoutCache = MosaicLayoutCache()
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.lifecycle) private var lifecycle
     @Environment(\.displayScale) private var displayScale
 
     private static let gap: Double = 6
@@ -160,8 +160,8 @@ struct LibraryMosaic: View {
         }
         .onScrollPhaseChange { _, phase in budget.setScrolling(phase != .idle) }
         .libraryBarFold(controller.fold)
-        .onChange(of: reduceMotion, initial: true) { budget.setEnvironment(reduceMotion: reduceMotion, sceneActive: scenePhase == .active) }
-        .onChange(of: scenePhase) { budget.setEnvironment(reduceMotion: reduceMotion, sceneActive: scenePhase == .active) }
+        .onChange(of: reduceMotion, initial: true) { budget.setEnvironment(reduceMotion: reduceMotion, sceneActive: lifecycle.isForeground) }
+        .onChange(of: lifecycle.phase) { budget.setEnvironment(reduceMotion: reduceMotion, sceneActive: lifecycle.isForeground) }
         .onChange(of: controller.reveal, initial: true) { _, request in
             // a moment for the first layout (a tab just opened by "open in library" has no width yet)
             guard let request else { return }

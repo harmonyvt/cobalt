@@ -69,7 +69,7 @@ struct AppShell: View {
     /// `-previewDetail N`: opens the Nth stored media's detail over the shell (simulator evidence).
     @State private var debugDetail: MediaItem?
     #endif
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.lifecycle) private var lifecycle
     #if os(macOS)
     @Environment(\.openSettings) private var openSettings
     #else
@@ -265,24 +265,17 @@ struct AppShell: View {
                 // the "swarms" badge: what waits for the owner is known before the tab is opened
                 if model.visibleTabs.contains(.swarms) { await model.swarms.loadList() }
             }
-            .onChange(of: scenePhase) { _, phase in
+            // Only this window's own UI here. What the whole app does on leaving and coming back (the line's summary
+            // opt-in, the queue tab's polling, the server check and pickup, the swarms badge, preview frames) is done by
+            // the process objects themselves, through `AppLifecycle` (`AppModel.observeLifecycle`).
+            .onChange(of: lifecycle.phase) { _, phase in
                 #if DEBUG
-                DebugHooks.log("scenePhase \(String(describing: phase))")
+                DebugHooks.log("lifecycle \(phase.rawValue)")
                 #endif
-                // leaving with work on the server: one summary opt-in for all of it (CONTRACT-PARALLEL 6; idempotent)
-                if phase == .background { model.queue.appLeft() }
-                // the queue tab polls the server only while the app is in front (apple/CONTRACT.md 12)
-                model.unifiedQueue.setForeground(phase == .active)
-                guard phase == .active else { return }
                 #if os(iOS)
                 // where taps really land (the library freeze hunt, owner 2026-11-14)
-                TouchProbe.install()
+                if phase == .active { TouchProbe.install() }
                 #endif
-                Task { if model.visibleTabs.contains(.swarms) { await model.swarms.loadList() } }
-                Task {
-                    await model.foreground()                 // shares the launch task's run when they overlap
-                    await model.store.backfillPreviewFrames()
-                }
             }
     }
 
