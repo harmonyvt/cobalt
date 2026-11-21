@@ -205,6 +205,13 @@ struct AppShell: View {
             #if DEBUG
             .onAppear {
                 if let kind = UserDefaults.standard.string(forKey: "previewTitleSheet") { debugTitleSheet(kind) }
+                // `-previewOtherTab sevenTv` (simulator evidence): that tab opens on the other screen of a spread
+                if let raw = UserDefaults.standard.string(forKey: "previewOtherTab"), let tab = AppTab(rawValue: raw) {
+                    Task {
+                        try? await Task.sleep(for: .seconds(1))
+                        spreadPane.tabRequest = tab
+                    }
+                }
                 if let n = UserDefaults.standard.string(forKey: "previewDetail").flatMap(Int.init), model.store.media.indices.contains(n) {
                     debugDetail = model.mediaItem(for: model.store.media[n])
                 }
