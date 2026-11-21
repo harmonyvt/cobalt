@@ -31,3 +31,11 @@ struct FileSniffTests {
         #expect(FileSniff.storedExtension(for: unknown, fallback: "mp4") == "gif")
     }
 }
+
+struct MediaExtensionTests {
+    @Test func theAppsExtensionsAreAnsweredFromTheTable() {
+        #expect(MediaExtension.isImage("JPG") && MediaExtension.isImage("webp") && MediaExtension.isImage("heic"))
+        #expect(MediaExtension.isMovie("mp4") && MediaExtension.isMovie("MOV") && !MediaExtension.isMovie("png"))
+        #expect(MediaExtension.isMedia("m4a") && !MediaExtension.isMedia("") && !MediaExtension.isMedia("txt"))
+    }
+}

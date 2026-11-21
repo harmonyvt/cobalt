@@ -227,8 +227,7 @@ extension AppModel {
             defer { if temporary { try? fm.removeItem(at: file) } }
             // the bytes decide, not the name: a picture stored without an extension sits on disk as `<id>.mp4`, and
             // Photos refuses a picture handed over as a video
-            let type = UTType(filenameExtension: file.pathExtension.lowercased())
-            let isImage = FileSniff.kind(of: file)?.isImage ?? (rendition.isWebp || (type?.conforms(to: .image) ?? false))
+            let isImage = FileSniff.kind(of: file)?.isImage ?? (rendition.isWebp || MediaExtension.isImage(file.pathExtension))
             do {
                 try await ctx.savePhoto(fileURL: file, isImage: isImage, key: key)
             } catch {

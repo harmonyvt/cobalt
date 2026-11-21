@@ -126,7 +126,7 @@ struct HeroRemote: Equatable {
         let type = file.contentType?.lowercased() ?? ""
         let ext = (file.name as NSString).pathExtension.lowercased()
         let isVideo = type.hasPrefix("video/")
-            || (type.isEmpty && UTType(filenameExtension: ext)?.conforms(to: .movie) == true)
+            || (type.isEmpty && MediaExtension.isMovie(ext))
         guard isVideo else { return nil }
         return KeyedStream.url(itemID: file.id, ext: ext.isEmpty ? "mp4" : ext)
     }
@@ -302,8 +302,8 @@ struct DetailPlayer: View {
     private var pictureShape: CGFloat { recorded ?? 9.0 / 16.0 }
 
     private var isStill: Bool {
-        guard let ext = video.fileURL?.pathExtension.lowercased(), !ext.isEmpty, let type = UTType(filenameExtension: ext) else { return false }
-        return type.conforms(to: .image) && ext != "webp" && ext != "gif"
+        guard let ext = video.fileURL?.pathExtension.lowercased(), !ext.isEmpty else { return false }
+        return MediaExtension.isImage(ext) && ext != "webp" && ext != "gif"
     }
 
     /// A gif is an animated picture: it plays like a webp (a plain `AVPlayer` cannot open it).

@@ -1241,7 +1241,7 @@ public final class OfflineStore {
     }
 
     nonisolated static func looksLikeImage(_ fileName: String) -> Bool {
-        UTType(filenameExtension: (fileName as NSString).pathExtension)?.conforms(to: .image) == true
+        MediaExtension.isImage((fileName as NSString).pathExtension)
     }
 
     /// The files of a finished flipbook (names relative to `root/previews`) and their total size.

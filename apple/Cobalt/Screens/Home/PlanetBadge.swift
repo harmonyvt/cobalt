@@ -47,13 +47,13 @@ struct PlanetType: Equatable {
         guard var ext = url?.pathExtension.lowercased(), !ext.isEmpty, ext.count <= 5 else { return nil }
         if ext == "jpeg" { ext = "jpg" }
         if ext == "qt" { ext = "mov" }
-        guard let type = UTType(filenameExtension: ext), type.conforms(to: .audiovisualContent) || type.conforms(to: .image) else { return nil }
+        guard MediaExtension.isMedia(ext) else { return nil }
         return ext
     }
 
     static func symbol(for ext: String) -> String {
         if ext == "webp" { return "sparkles" }
-        if let type = UTType(filenameExtension: ext), type.conforms(to: .movie) { return "film" }
+        if MediaExtension.isMovie(ext) { return "film" }
         return "photo"
     }
 }
