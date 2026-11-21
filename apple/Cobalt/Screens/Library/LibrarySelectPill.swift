@@ -109,6 +109,7 @@ struct LibrarySelectPill: View {
         .buttonStyle(.cobaltIcon(prominent: true))
         .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
         .disabled(!rows.contains(where: \.shareable))
+        .accessibilityIdentifier("library.select")
         #if os(macOS)
         .keyboardShortcut("s", modifiers: [.command, .shift])
         #endif
@@ -287,10 +288,13 @@ struct LibrarySelectPill: View {
             #if os(macOS)
             .keyboardShortcut(.cancelAction)
             #endif
+            .accessibilityIdentifier("library.select.stop")
             Text(Copy.Library2.pickedCount(count))
                 .font(CobaltType.bodySemibold)
                 .foregroundStyle(CobaltColor.text)
                 .contentTransition(.numericText())
+                // the layout checks (apple/CobaltUITests) read the count here: "2 picked"
+                .accessibilityIdentifier("library.select.count")
             Spacer(minLength: 8)
             Button {
                 withAnimation(Motion.rows) { controller.toggleAll(rows) }

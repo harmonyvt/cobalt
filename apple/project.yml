@@ -366,3 +366,22 @@ targets:
         # The project turns script sandboxing on. This script has to create the appex Resources
         # directory, which that sandbox rejects (mkdir: Operation not permitted). This target only.
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+  # The layout checks (deploy/apple/layout-checks.sh): what the owner chose in the library survives a rotation, the
+  # background and the iPad's spread pane. Runs the Debug app over the preview data (its launch arguments are DEBUG-only).
+  # iOS only; not embedded anywhere, so the archives and TestFlight builds never include it.
+  CobaltUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: CobaltUITests
+    dependencies:
+      - target: Cobalt
+    settings:
+      base:
+        PRODUCT_NAME: CobaltUITests
+        PRODUCT_BUNDLE_IDENTIFIER: com.capybaraharmony.cobalt.uitests
+        TARGETED_DEVICE_FAMILY: "1,2"
+        TEST_TARGET_NAME: Cobalt
+        GENERATE_INFOPLIST_FILE: YES

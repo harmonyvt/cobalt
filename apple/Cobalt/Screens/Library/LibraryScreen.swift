@@ -93,7 +93,8 @@ private struct LibraryContent: View {
     /// A hold shows the post on the other screen of a spread instead of over the grid.
     private var peeksInPane: Bool { isSpread && spreadPane != nil }
     @Environment(\.hapticsEnabled) private var haptics
-    @Environment(\.scenePhase) private var scenePhase
+    /// The app's phase (`AppLifecycle`), not this window's scenePhase: the album relocks when the app goes away.
+    @Environment(\.lifecycle) private var lifecycle
     @Namespace private var zoomSpace
     /// File URLs for the system share sheet. Assigned only once they are ready; the sheet clears this when it finishes.
     @State private var filesToShare: [URL] = []
@@ -405,19 +406,18 @@ private struct LibraryContent: View {
             .task(id: wholeLibraryStep) {
                 if wholeLibraryStep == 1 { await library.loadAll() }
             }
-            // the album: locked at every open, its first page once the owner is in
-            .onChange(of: library.showingHidden, initial: true) { was, open in
-                // a rebuilt stack (the zoom-back fix) runs this again with the album still closed: nothing changed, so
-                // the selection and the sheets stay (it cleared the inspector after the pane closed)
-                if !open, !was { return }
+            // the album: locked at every open, its first page once the owner is in. `initial` only reads: a rebuilt view
+            // (the zoom-back fix's new stack, a fold, a rotation, a pane) sees the value the controller already acted on,
+            // and `albumSeen` compares with that, so only a real open or close drops the selection and the sheets
+            .onChange(of: library.showingHidden, initial: true) { _, open in
                 if open, !model.capabilities.hidden { library.showingHidden = false; return }
-                controller.hiddenAlbumChanged(open: open)
+                guard controller.albumSeen(open: open) else { return }
                 #if DEBUG
                 if open, previewUnlocked { controller.hiddenUnlocked = true }
                 #endif
             }
             .task(id: controller.albumOpen) { await controller.loadAlbum() }
-            .onChange(of: scenePhase) { _, phase in
+            .onChange(of: lifecycle.phase) { _, phase in
                 if phase == .background { controller.relockHidden() } else if phase == .active { controller.promptIfNeeded() }
             }
             .onChange(of: model.selectedTab) { _, tab in
@@ -557,6 +557,7 @@ private struct LibraryContent: View {
         ToolbarItemGroup(placement: .primaryAction) {
             // select lives in the pill at the bottom (`LibrarySelectPill`), not here
             LibrarySortMenu(library: library, offersOffline: model.store.canKeep, offersKinds: model.capabilities.gallery)
+                .accessibilityIdentifier("library.sort")
             #if os(macOS)
             Button(Copy.Library2.refresh, systemImage: Symbol.Library.refresh) { Task { await controller.refresh() } }
                 .labelStyle(.iconOnly)
@@ -803,6 +804,7 @@ private struct LibraryInspector: ViewModifier {
                     .id(controller.selection)
                 } else {
                     Text(Copy.Library2.pickSomething)
+                        .accessibilityIdentifier("library.inspector.empty")
                         .font(CobaltType.body)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -1135,6 +1137,8 @@ private struct LibraryAddMenu: View {
         }
         .menuIndicator(.hidden)
         .accessibilityLabel(Copy.Media.more)
+        // the layout checks (apple/CobaltUITests): the "…" a stale half-width bar drops
+        .accessibilityIdentifier("library.more")
     }
 }
 #endif
