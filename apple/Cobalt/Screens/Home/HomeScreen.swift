@@ -598,6 +598,8 @@ struct HomeScreen: View {
             onFrame: { orbitFrame = $0 })
             .ignoresSafeArea()
             .modifier(ExtendUnderSidebar(enabled: tier != .compact))
+            // planets near the rim stay in this screen: in a spread they crossed the hinge into the other one
+            .clipped()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Copy.orbitA11y)
             .accessibilityValue(orbitSummary)
