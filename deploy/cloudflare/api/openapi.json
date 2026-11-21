@@ -2111,6 +2111,538 @@
         }
       }
     },
+    "/booru/autocomplete": {
+      "get": {
+        "operationId": "booru.autocomplete",
+        "summary": "Danbooru tag suggestions (GET /booru/autocomplete).",
+        "tags": [
+          "booru"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "tags": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "general",
+                              "artist",
+                              "copyright",
+                              "character",
+                              "meta"
+                            ]
+                          },
+                          "count": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "kind",
+                          "count"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "tags"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/booru/posts": {
+      "get": {
+        "operationId": "booru.posts",
+        "summary": "Danbooru posts under this key's level and filters (GET /booru/posts).",
+        "tags": [
+          "booru"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "level": {
+                      "type": "string",
+                      "enum": [
+                        "g",
+                        "s",
+                        "q"
+                      ],
+                      "description": "g general, s sensitive, q questionable; there is no explicit"
+                    },
+                    "posts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BooruPost"
+                      }
+                    },
+                    "hidden": {
+                      "type": "object",
+                      "properties": {
+                        "level": {
+                          "type": "integer"
+                        },
+                        "theme": {
+                          "type": "integer"
+                        },
+                        "blacklist": {
+                          "type": "integer"
+                        },
+                        "refine": {
+                          "type": "integer"
+                        },
+                        "blocked": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "level",
+                        "theme",
+                        "blacklist",
+                        "refine",
+                        "blocked"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "next_page": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "dropped": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "extras Danbooru's 2-tag limit did not take (order, rating); filtered here anyway"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "level",
+                    "posts",
+                    "hidden",
+                    "next_page",
+                    "dropped"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/booru/settings": {
+      "get": {
+        "operationId": "booru.settings",
+        "summary": "This key's booru level, themes and blacklist (GET /booru/settings).",
+        "tags": [
+          "booru"
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "level": {
+                      "type": "string",
+                      "enum": [
+                        "g",
+                        "s",
+                        "q"
+                      ],
+                      "description": "g general, s sensitive, q questionable; there is no explicit"
+                    },
+                    "levels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "g",
+                          "s",
+                          "q"
+                        ],
+                        "description": "g general, s sensitive, q questionable; there is no explicit"
+                      }
+                    },
+                    "themes": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "type": "string",
+                        "enum": [
+                          "show",
+                          "blur",
+                          "hide"
+                        ]
+                      }
+                    },
+                    "theme_list": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "default": {
+                            "type": "string",
+                            "enum": [
+                              "show",
+                              "blur",
+                              "hide"
+                            ]
+                          },
+                          "min_level": {
+                            "type": "string",
+                            "enum": [
+                              "g",
+                              "s",
+                              "q"
+                            ],
+                            "description": "g general, s sensitive, q questionable; there is no explicit"
+                          },
+                          "tags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "detail",
+                          "default",
+                          "min_level",
+                          "tags"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "blacklist": {
+                      "type": "string"
+                    },
+                    "updated_at": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "level",
+                    "levels",
+                    "themes",
+                    "theme_list",
+                    "blacklist",
+                    "updated_at"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "put": {
+        "operationId": "booru.settings_update",
+        "summary": "Change this key's booru level, themes or blacklist (PUT /booru/settings).",
+        "tags": [
+          "booru"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "level": {
+                    "type": "string",
+                    "enum": [
+                      "g",
+                      "s",
+                      "q"
+                    ],
+                    "description": "g general, s sensitive, q questionable; there is no explicit"
+                  },
+                  "themes": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "enum": [
+                        "revealing",
+                        "suggestive",
+                        "partial",
+                        "nudity",
+                        "violence",
+                        "horror"
+                      ]
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "enum": [
+                        "show",
+                        "blur",
+                        "hide"
+                      ]
+                    },
+                    "required": [
+                      "revealing",
+                      "suggestive",
+                      "partial",
+                      "nudity",
+                      "violence",
+                      "horror"
+                    ]
+                  },
+                  "blacklist": {
+                    "type": "string",
+                    "maxLength": 8000
+                  }
+                },
+                "additionalProperties": false,
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "level": {
+                      "type": "string",
+                      "enum": [
+                        "g",
+                        "s",
+                        "q"
+                      ],
+                      "description": "g general, s sensitive, q questionable; there is no explicit"
+                    },
+                    "levels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "g",
+                          "s",
+                          "q"
+                        ],
+                        "description": "g general, s sensitive, q questionable; there is no explicit"
+                      }
+                    },
+                    "themes": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "type": "string",
+                        "enum": [
+                          "show",
+                          "blur",
+                          "hide"
+                        ]
+                      }
+                    },
+                    "theme_list": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "default": {
+                            "type": "string",
+                            "enum": [
+                              "show",
+                              "blur",
+                              "hide"
+                            ]
+                          },
+                          "min_level": {
+                            "type": "string",
+                            "enum": [
+                              "g",
+                              "s",
+                              "q"
+                            ],
+                            "description": "g general, s sensitive, q questionable; there is no explicit"
+                          },
+                          "tags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "detail",
+                          "default",
+                          "min_level",
+                          "tags"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "blacklist": {
+                      "type": "string"
+                    },
+                    "updated_at": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "level",
+                    "levels",
+                    "themes",
+                    "theme_list",
+                    "blacklist",
+                    "updated_at"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/capabilities": {
       "get": {
         "operationId": "capabilities",
@@ -11583,6 +12115,140 @@
           "fields",
           "media",
           "links"
+        ],
+        "additionalProperties": false
+      },
+      "BooruPost": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "rating": {
+            "type": "string",
+            "enum": [
+              "g",
+              "s",
+              "q"
+            ],
+            "description": "g general, s sensitive, q questionable; there is no explicit"
+          },
+          "blur": {
+            "type": "boolean",
+            "description": "a theme set to blur matched: show a cover until tapped"
+          },
+          "media": {
+            "type": "string",
+            "enum": [
+              "image",
+              "animated",
+              "video"
+            ]
+          },
+          "ext": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "score": {
+            "type": "integer"
+          },
+          "favs": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page_url": {
+            "type": "string"
+          },
+          "thumb_url": {
+            "type": "string"
+          },
+          "sample_url": {
+            "type": "string"
+          },
+          "file_url": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "object",
+            "properties": {
+              "artist": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "character": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "copyright": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "general": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "meta": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "artist",
+              "character",
+              "copyright",
+              "general",
+              "meta"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "rating",
+          "blur",
+          "media",
+          "ext",
+          "width",
+          "height",
+          "size",
+          "score",
+          "favs",
+          "created_at",
+          "source",
+          "page_url",
+          "thumb_url",
+          "sample_url",
+          "file_url",
+          "tags"
         ],
         "additionalProperties": false
       },

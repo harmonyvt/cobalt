@@ -208,6 +208,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.ytdlp` (APP-API-CONTRACT 49): the server has the yt-dlp box: `engine` on `POST /studio`. False when absent:
     /// no "save links with yt-dlp" setting.
     public var ytdlp: Bool = false
+    /// `features.booru` (APP-API-CONTRACT 72): `/booru/*`, Danbooru search under this key's own level (general, sensitive or
+    /// questionable; never explicit), themes and blacklist. False when absent: no booru tab.
+    public var booru: Bool = false
     /// `features.post_frame` (APP-API-CONTRACT 52.2): `/library/items/<id>/post-details` and `…/post-frame` exist: a saved video
     /// can be framed in the post it came from (a render of kind `post` in the editor's containers). False when absent: no
     /// "post frame" button, no "post" tool, no switch on save.

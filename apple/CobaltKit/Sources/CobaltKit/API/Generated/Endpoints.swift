@@ -786,6 +786,26 @@ enum Endpoints {
         APIEndpoint(op: "seventv_http.owned", method: "GET", path: "/7tv/owned", auth: .key)
     }
 
+    /// `GET /booru/posts` (op `booru.posts`, auth key): Danbooru posts under this key's level and filters (GET /booru/posts).
+    static func booruPosts() -> APIEndpoint<BooruPostsResponse> {
+        APIEndpoint(op: "booru.posts", method: "GET", path: "/booru/posts", auth: .key)
+    }
+
+    /// `GET /booru/autocomplete` (op `booru.autocomplete`, auth key): Danbooru tag suggestions (GET /booru/autocomplete).
+    static func booruAutocomplete() -> APIEndpoint<BooruAutocompleteResponse> {
+        APIEndpoint(op: "booru.autocomplete", method: "GET", path: "/booru/autocomplete", auth: .key)
+    }
+
+    /// `GET /booru/settings` (op `booru.settings`, auth key): This key's booru level, themes and blacklist (GET /booru/settings).
+    static func booruSettings() -> APIEndpoint<BooruSettingsResponse> {
+        APIEndpoint(op: "booru.settings", method: "GET", path: "/booru/settings", auth: .key)
+    }
+
+    /// `PUT /booru/settings` (op `booru.settings_update`, auth key): Change this key's booru level, themes or blacklist (PUT /booru/settings).
+    static func booruSettingsUpdate() -> APIEndpoint<BooruSettingsUpdateResponse> {
+        APIEndpoint(op: "booru.settings_update", method: "PUT", path: "/booru/settings", auth: .key)
+    }
+
     /// `PUT /live/start-token` (op `live.start_token.put`, auth key): A device's push-to-start token.
     static func liveStartTokenPut() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "live.start_token.put", method: "PUT", path: "/live/start-token", auth: .key)
@@ -2040,6 +2060,106 @@ struct SeventvHttpOwnedResponse: Decodable, Sendable {
     var total: Double
     var emotes: [SeventvHttpOwnedResponseEmotesItem]
     var status: String
+}
+
+struct BooruPostTags: Decodable, Sendable {
+    var artist: [String]
+    var character: [String]
+    var copyright: [String]
+    var general: [String]
+    var meta: [String]
+}
+
+struct BooruPost: Decodable, Sendable {
+    var id: Int
+    /// g general, s sensitive, q questionable; there is no explicit
+    var rating: String
+    /// a theme set to blur matched: show a cover until tapped
+    var blur: Bool
+    var media: String
+    var ext: String
+    var width: Int
+    var height: Int
+    var size: Int
+    var score: Int
+    var favs: Int
+    var createdAt: String?
+    var source: String?
+    var pageUrl: String
+    var thumbUrl: String
+    var sampleUrl: String
+    var fileUrl: String
+    var tags: BooruPostTags
+}
+
+struct BooruPostsResponseHidden: Decodable, Sendable {
+    var level: Int
+    var theme: Int
+    var blacklist: Int
+    var refine: Int
+    var blocked: Int
+}
+
+struct BooruPostsResponse: Decodable, Sendable {
+    var status: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var level: String
+    var posts: [BooruPost]
+    var hidden: BooruPostsResponseHidden
+    var nextPage: Int?
+    /// extras Danbooru's 2-tag limit did not take (order, rating); filtered here anyway
+    var dropped: [String]
+}
+
+struct BooruAutocompleteResponseTagsItem: Decodable, Sendable {
+    var name: String
+    var kind: String
+    var count: Int
+}
+
+struct BooruAutocompleteResponse: Decodable, Sendable {
+    var status: String
+    var tags: [BooruAutocompleteResponseTagsItem]
+}
+
+struct BooruSettingsResponseThemeListItem: Decodable, Sendable {
+    var id: String
+    var label: String
+    var detail: String
+    var `default`: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var minLevel: String
+    var tags: [String]
+}
+
+struct BooruSettingsResponse: Decodable, Sendable {
+    var status: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var level: String
+    var levels: [String]
+    var themeList: [BooruSettingsResponseThemeListItem]
+    var blacklist: String
+    var updatedAt: Int?
+}
+
+struct BooruSettingsUpdateResponseThemeListItem: Decodable, Sendable {
+    var id: String
+    var label: String
+    var detail: String
+    var `default`: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var minLevel: String
+    var tags: [String]
+}
+
+struct BooruSettingsUpdateResponse: Decodable, Sendable {
+    var status: String
+    /// g general, s sensitive, q questionable; there is no explicit
+    var level: String
+    var levels: [String]
+    var themeList: [BooruSettingsUpdateResponseThemeListItem]
+    var blacklist: String
+    var updatedAt: Int?
 }
 
 struct McpSettingsResponseLink: Decodable, Sendable {
