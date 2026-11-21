@@ -32,7 +32,7 @@ public enum TwitchIRC {
     /// Parses one line (without the CRLF). Nil for an empty or broken line.
     public static func parse(_ raw: String) -> IRCMessage? {
         var rest = Substring(raw)
-        while rest.last == "\r" || rest.last == "\n" { rest = rest.dropLast() }
+        while rest.last?.isNewline == true { rest = rest.dropLast() }  // "\r\n" is one Character
         guard !rest.isEmpty else { return nil }
 
         var tags: [String: String] = [:]

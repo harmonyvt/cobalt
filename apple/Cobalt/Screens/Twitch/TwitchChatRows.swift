@@ -21,7 +21,7 @@ struct TwitchChatRow: View, Equatable {
     var onReply: ((TwitchChatLine) -> Void)?
     var onAddEmote: ((ChatEmote) -> Void)?
 
-    static func == (a: TwitchChatRow, b: TwitchChatRow) -> Bool {
+    nonisolated static func == (a: TwitchChatRow, b: TwitchChatRow) -> Bool {
         a.line == b.line && a.paint == b.paint && a.sevenTvBadge == b.sevenTvBadge && a.canAddEmotes == b.canAddEmotes
     }
 
