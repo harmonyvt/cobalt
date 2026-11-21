@@ -54,6 +54,42 @@ enum FileSniff {
         return nil
     }
 
+    /// The file to hand Photos. PhotoKit reads the type from the name, so it refuses a file with no extension (a
+    /// library download whose server gave no usable content type sat in the inbox as a bare `<name>`: "couldn't save
+    /// to photos", owner 2026-11-21) or one whose name disagrees with its bytes. Returns `file` when its name already
+    /// fits, else a link (or copy) of it under the right extension in a temporary folder `discardPhotosCopy` removes.
+    /// Off main: it reads the file's first bytes and may copy it.
+    @concurrent
+    nonisolated static func photosReady(_ file: URL, isImage: Bool) async throws -> (url: URL, isImage: Bool, temporary: Bool) {
+        guard FileManager.default.isReadableFile(atPath: file.path) else { throw PhotosError.unreadable }
+        let sniffed = kind(of: file)
+        let image = sniffed?.isImage ?? isImage
+        let ext = storedExtension(for: file, fallback: image ? "jpg" : "mp4")
+        if ext == file.pathExtension.lowercased() { return (file, image, false) }
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent("photos-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        var base = file.deletingPathExtension().lastPathComponent
+        if base.isEmpty { base = "cobalt" }
+        let named = folder.appendingPathComponent(base, isDirectory: false).appendingPathExtension(ext)
+        do {
+            try fm.linkItem(at: file, to: named)
+        } catch {
+            do { try fm.copyItem(at: file, to: named) } catch {
+                try? fm.removeItem(at: folder)
+                throw error
+            }
+        }
+        return (named, image, true)
+    }
+
+    /// Removes what `photosReady` made, if it made anything.
+    @concurrent
+    nonisolated static func discardPhotosCopy(_ ready: (url: URL, isImage: Bool, temporary: Bool)) async {
+        guard ready.temporary else { return }
+        try? FileManager.default.removeItem(at: ready.url.deletingLastPathComponent())
+    }
+
     /// The extension to store `file` under: its own when it agrees with its bytes, else the bytes', else `fallback`.
     static func storedExtension(for file: URL, fallback: String) -> String {
         let own = file.pathExtension.lowercased()
