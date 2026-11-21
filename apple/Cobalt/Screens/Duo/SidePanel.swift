@@ -4,7 +4,7 @@ import SwiftUI
 // One rule for every right-hand panel of a wide layout (owner, 8.34: "whenever you're using split screen there always has
 // to be a back button ... it always needs to be able to hide"). The panels are:
 //
-//   - the spread pane (`SpreadPaneView`): sheets, pickers, booru posts and filters, a second tab, the select panel
+//   - the spread pane (`SpreadPaneView`): sheets, pickers, booru posts and filters, the select panel
 //   - the list-and-detail splits (`DetailSplit`): chat, links, swarms
 //   - the library's detail column (`LibraryInspector`)
 //
