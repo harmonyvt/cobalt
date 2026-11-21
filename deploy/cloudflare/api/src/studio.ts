@@ -969,13 +969,7 @@ export class StudioService {
     // as a normal miss instead of freezing the save.
     private callHelper(path: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
         const ms = timeoutMs ?? this.d.helperTimeoutMs ?? 20_000;
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error(`helper ${path} timed out after ${ms} ms`)), ms);
-        });
-        return Promise.race([this.d.helper(path, init).then((res) => this.noteHelper(res)), timeout]).finally(() => {
-            if (timer !== undefined) clearTimeout(timer);
-        });
+        return raceCeiling(this.d.helper(path, init), ms, `helper ${path}`, () => new Error(`helper ${path} timed out after ${ms} ms`)).then((res) => this.noteHelper(res));
     }
 
     // A /fetch call to the engine of this save (section 49): the yt-dlp box is raced against the same ceiling, but its
@@ -984,13 +978,7 @@ export class StudioService {
         const box = this.d.ytdlp;
         if (engine !== "ytdlp" || !box) return this.callHelper(path, init, timeoutMs);
         const ms = timeoutMs ?? this.d.helperTimeoutMs ?? 20_000;
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error(`ytdlp ${path} timed out after ${ms} ms`)), ms);
-        });
-        return Promise.race([box.helper(path, init), timeout]).finally(() => {
-            if (timer !== undefined) clearTimeout(timer);
-        });
+        return raceCeiling(box.helper(path, init), ms, `ytdlp ${path}`, () => new Error(`ytdlp ${path} timed out after ${ms} ms`));
     }
 
     // the engine of a save in flight, from its record (read from storage when the caller has none)

@@ -1,4 +1,5 @@
 import { Container, getContainer } from "@cloudflare/containers";
+import { capStaleInflight } from "./stale-inflight";
 import { backfillPostDetails, postDetailsConfigFrom } from "./post-details";
 import { lookupDepsFrom } from "./registry/ops/post-frame";
 import { PORT_HEADER, stripInternalHeaders, KEY_ID_HEADER, SERVICE_HEADER } from "./headers";
@@ -100,6 +101,10 @@ function ytdlpDeps(ns: DurableObjectNamespace): YtDlpDeps {
         },
     };
 }
+
+// Container sleep backstop (src/stale-inflight.ts): an in-flight count with no real activity for 10 minutes no longer
+// keeps any of our containers (cobalt, editor, workbench, yt-dlp: one shared library class) awake.
+capStaleInflight(Container);
 
 // cobalt's API port and the webp helper's port (helper/supervisor.js).
 const COBALT_PORT = 9000;
