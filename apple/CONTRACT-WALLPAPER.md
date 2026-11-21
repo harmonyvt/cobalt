@@ -17,7 +17,8 @@ App only: no server route, no D1 migration, no APP-API-CONTRACT section. Mockup:
 ## 2. Entry points
 
 `make wallpaper…` in the library's context menu (the post's face file) and in the viewer's `more` menu (the file in
-view). Any file the device has or can fetch: videos, animated webps and gifs, pictures. Opens full screen.
+view), and a `make wallpaper` icon in the detail's button row (`WallpaperIcon`, beside the 7TV and emote icons) for
+videos and pictures alike, one tap from the detail panel on iPad and the Duo. Any file the device has or can fetch: videos, animated webps and gifs, pictures. Opens full screen.
 
 ## 3. The sheet (`Cobalt/Screens/Wallpaper/WallpaperSheet.swift`)
 
