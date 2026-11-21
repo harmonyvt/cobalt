@@ -20,5 +20,6 @@ extension Symbol {
         static let open = "arrow.up.forward.square"
         static let pin = "pin"
         static let recent = "clock"
+        static let jumpToLive = "forward.end.fill"
     }
 }
