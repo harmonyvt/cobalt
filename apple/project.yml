@@ -173,8 +173,7 @@ targets:
           NSExtensionAttributes:
             NSExtensionActivationRule:
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
-              NSExtensionActivationSupportsImageWithMaxCount: 20
-              NSExtensionActivationSupportsMovieWithMaxCount: 20
+              NSExtensionActivationSupportsMovieWithMaxCount: 1
               NSExtensionActivationSupportsText: true
     settings:
       base:

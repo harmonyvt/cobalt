@@ -356,7 +356,7 @@ final class ShareCore {
 
 // MARK: - Intake
 
-/// What the extension was handed, in the order of preference: a video or a photo, a web URL, text with a link.
+/// What the extension was handed, in the order of preference: a movie, a web URL, text with a link.
 enum ShareInput: Sendable, Equatable {
     case link(URL)
     case file(URL)       // already copied into the store's inbox
@@ -376,13 +376,13 @@ enum ShareInput: Sendable, Equatable {
 enum ShareInbox {
     static func load(_ items: [NSExtensionItem], store: OfflineStore) async -> ShareInput {
         let providers = items.flatMap { $0.attachments ?? [] }
+        let movie = UTType.movie.identifier
         let url = UTType.url.identifier
         let text = UTType.plainText.identifier
 
-        for provider in providers where ShareUploads.hasMedia([provider]) {
-            guard let type = ShareUploads.uploadType(provider.registeredTypeIdentifiers) else { continue }
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(movie) {
             let dir = store.inboxURL(for: "shared").deletingLastPathComponent()
-            if let copied = await copyFile(provider, type: type, into: dir) { return .file(copied) }
+            if let copied = await copyMovie(provider, into: dir) { return .file(copied) }
         }
         for provider in providers where provider.hasItemConformingToTypeIdentifier(url) {
             if let link = await loadURL(provider), LinkInfo(link) != nil { return .link(link) }
@@ -401,12 +401,12 @@ enum ShareInbox {
 
     /// Copies with `FileManager` inside the handler (the system deletes its temp file right after);
     /// never through `Data`, the extension has ~120 MB.
-    private static func copyFile(_ provider: NSItemProvider, type: UTType, into dir: URL) async -> URL? {
+    private static func copyMovie(_ provider: NSItemProvider, into dir: URL) async -> URL? {
         let suggested = provider.suggestedName
         return await withCheckedContinuation { (continuation: CheckedContinuation<URL?, Never>) in
-            _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { source, _ in
+            _ = provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { source, _ in
                 guard let source else { continuation.resume(returning: nil); return }
-                let destination = dir.appendingPathComponent(ShareUploads.name(for: source, suggested: suggested, type: type))
+                let destination = dir.appendingPathComponent(fileName(for: source, suggested: suggested))
                 do {
                     try? FileManager.default.removeItem(at: destination)
                     try FileManager.default.copyItem(at: source, to: destination)

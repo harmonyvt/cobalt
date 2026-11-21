@@ -53,16 +53,6 @@ extension OriginalFetcher {
     @MainActor
     func applySaveAnswers() async {
         for answer in saveAnswers.drain() {
-            // a shared photo or video (`ShareUploads`): the copy has done its job either way
-            if answer.label.hasPrefix(ShareUploads.labelPrefix) {
-                if let folder = ShareUploads.folder(forLabel: answer.label, saves: savesDirectory()) {
-                    try? FileManager.default.removeItem(at: folder)
-                }
-                if answer.code == NSURLErrorCancelled { continue }
-                if let status = answer.status, (200..<300).contains(status) { continue }
-                await uploadFailed(String(answer.label.split(separator: "/").last ?? ""), answer.status)
-                continue
-            }
             let link = URL(string: answer.label)
             if answer.code == NSURLErrorCancelled { continue }
             if let status = answer.status, (200..<300).contains(status), let sid = Self.sessionID(in: answer.body) {
@@ -153,14 +143,6 @@ extension OriginalFetcher {
             let url = dir.appendingPathComponent(name)
             let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             if let modified, modified < cutoff { try? FileManager.default.removeItem(at: url) }
-        }
-        // shared photos and videos whose answer never came (a wake that was missed): two days is past any upload
-        let uploads = ShareUploads.directory(saves: dir)
-        let oldest = Date().addingTimeInterval(-2 * 24 * 60 * 60)
-        for folder in (try? FileManager.default.contentsOfDirectory(atPath: uploads.path)) ?? [] {
-            let url = uploads.appendingPathComponent(folder, isDirectory: true)
-            let made = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate
-            if let made, made < oldest { try? FileManager.default.removeItem(at: url) }
         }
     }
 
