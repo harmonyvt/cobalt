@@ -405,8 +405,13 @@ async function getJson(fetchFn: FetchFn, url: string): Promise<{ status: number;
         } catch {
             body = null;
         }
+        if (res.status >= 400 || body === null) {
+            console.error("[booru] danbooru answered", res.status, res.headers.get("cf-mitigated"), res.headers.get("server"), url.split("?")[0]);
+        }
         return { status: res.status, body };
-    } catch {
+    } catch (e) {
+        if (e instanceof BooruError) throw e;
+        console.error("[booru] danbooru fetch failed", String(e), url.split("?")[0]);
         throw new BooruError(502, "error.booru.upstream");
     } finally {
         clearTimeout(timer);
@@ -415,6 +420,35 @@ async function getJson(fetchFn: FetchFn, url: string): Promise<{ status: number;
 
 const tagLimitRefusal = (status: number, body: unknown) =>
     status === 422 && /tag/i.test(JSON.stringify(body ?? "")) && /limit|more than|cannot search/i.test(JSON.stringify(body ?? ""));
+
+// Every filter over one page of Danbooru posts: the level, the hard block, the themes, the blacklist and refine.
+export function filterPosts(raw: DanbooruPost[], level: BooruLevel, themes: Record<string, ThemeMode>, rules: Rule[], refine: Refine) {
+    const hidden = { level: 0, theme: 0, blacklist: 0, refine: 0, blocked: 0 };
+    const posts: BooruPost[] = [];
+    for (const p of raw) {
+        if (!p || typeof p !== "object") continue;
+        const v = judge(p, level, themes, rules, refine);
+        if (v.keep) posts.push(toPost(p, v.blur));
+        else if (v.why === "level") hidden.level++;
+        else if (v.why === "hard") hidden.blocked++;
+        else if (v.why === "theme") hidden.theme++;
+        else if (v.why === "blacklist") hidden.blacklist++;
+        else if (v.why === "refine") hidden.refine++;
+    }
+    return { posts, hidden };
+}
+
+// POST /booru/filter (72.7): Danbooru answers the apps' own requests but refuses the Worker's (live, 2026-11-21), so the
+// apps fetch a page of posts.json themselves and hand it here; this key's settings decide what comes back, exactly as on
+// GET /booru/posts.
+export type FilterInput = { posts: unknown[]; level?: BooruLevel } & Refine;
+
+export function filterRaw(settings: BooruSettings, input: FilterInput) {
+    const level = input.level ? lowerLevel(input.level, settings.level) : settings.level;
+    const raw = input.posts.filter((p): p is DanbooruPost => !!p && typeof p === "object" && !Array.isArray(p));
+    const { posts, hidden } = filterPosts(raw, level, settings.themes, parseBlacklist(settings.blacklist), input);
+    return { status: "success" as const, level, posts, hidden };
+}
 
 export async function searchPosts(fetchFn: FetchFn, settings: BooruSettings, input: SearchInput): Promise<SearchResult> {
     const level = input.level ? lowerLevel(input.level, settings.level) : settings.level;
@@ -440,17 +474,7 @@ export async function searchPosts(fetchFn: FetchFn, settings: BooruSettings, inp
     if (answer.status === 429) throw new BooruError(429, "error.booru.busy");
     if (answer.status >= 400 || !Array.isArray(answer.body)) throw new BooruError(502, "error.booru.upstream");
     const raw = answer.body as DanbooruPost[];
-    const hidden = { level: 0, theme: 0, blacklist: 0, refine: 0, blocked: 0 };
-    const posts: BooruPost[] = [];
-    for (const p of raw) {
-        const v = judge(p, level, settings.themes, rules, input);
-        if (v.keep) posts.push(toPost(p, v.blur));
-        else if (v.why === "level") hidden.level++;
-        else if (v.why === "hard") hidden.blocked++;
-        else if (v.why === "theme") hidden.theme++;
-        else if (v.why === "blacklist") hidden.blacklist++;
-        else if (v.why === "refine") hidden.refine++;
-    }
+    const { posts, hidden } = filterPosts(raw, level, settings.themes, rules, input);
     return {
         status: "success",
         level,

@@ -6,6 +6,7 @@ import {
     autocomplete,
     cleanTags,
     defaultThemes,
+    filterRaw,
     judge,
     parseBlacklist,
     ruleMatches,
@@ -175,5 +176,16 @@ describe("settings", () => {
         await expect(
             db.prepare("INSERT INTO booru_settings (key_id, level, updated_at) VALUES ('k3', 'e', 1)").run(),
         ).rejects.toThrow();
+    });
+});
+
+describe("filterRaw (POST /booru/filter)", () => {
+    it("applies the key's level, the hard block and the themes to a page the app fetched, and never goes higher", () => {
+        const raw = [post({ id: 1 }), post({ id: 2, rating: "e" }), post({ id: 3, rating: "q" }), post({ id: 4, tag_string: "loli" }), "junk", null, [1]];
+        const r = filterRaw(settings({ level: "s" }), { posts: raw, level: "q" });
+        expect(r.level).toBe("s");
+        expect(r.posts.map((p) => p.id)).toEqual([1]);
+        expect(r.hidden).toMatchObject({ level: 2, blocked: 1 });
+        expect(filterRaw(settings({ level: "q" }), { posts: raw, level: "g" }).posts.map((p) => p.id)).toEqual([1]);
     });
 });

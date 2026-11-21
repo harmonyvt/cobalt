@@ -7,6 +7,7 @@
 import * as z from "zod";
 import {
     autocomplete,
+    filterRaw,
     BLACKLIST_MAX_CHARS,
     BooruError,
     LEVELS,
@@ -127,6 +128,27 @@ export const BOORU_OPS = [
                 const settings = await readSettings(ctx.db, ctx.keyId!);
                 return ok(await searchPosts(fetchFn, settings, input));
             }),
+    }),
+    defineOp({
+        ...base,
+        name: "booru.filter",
+        route: { method: "POST", path: "/booru/filter" },
+        input: z.object({
+            posts: z.array(z.unknown()).max(200).describe("one page of Danbooru's posts.json, as the app fetched it"),
+            level: Level.optional().describe("lower than the key's own level for this request only (safe mode); never higher"),
+            min_score: z.number().int().min(-100).max(100000).optional(),
+            media: z.enum(["image", "animated", "video"]).optional(),
+            shape: z.enum(["tall", "square", "wide"]).optional(),
+        }),
+        output: z.object({
+            status: Status,
+            level: Level,
+            posts: z.array(PostShape),
+            hidden: z.object({ level: z.number().int(), theme: z.number().int(), blacklist: z.number().int(), refine: z.number().int(), blocked: z.number().int() }),
+        }),
+        ai: { tier: "hidden", summary: "Filter a page of Danbooru posts the app fetched under this key's level and filters (POST /booru/filter)." },
+        handler: (ctx, input) =>
+            guard(async () => ok(filterRaw(await readSettings(ctx.db, ctx.keyId!), input))),
     }),
     defineOp({
         ...base,
