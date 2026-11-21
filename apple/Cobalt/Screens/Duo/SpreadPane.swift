@@ -206,6 +206,14 @@ struct SpreadPaneColumn<Content: View>: View {
             }
         }
         .background(CobaltColor.bg.ignoresSafeArea())
+        // the pane's close sits on the hinge at the bottom, so neither column gives up a row for it and their tops line up
+        .overlay(alignment: .bottom) {
+            if shows, let host, let pane = host.pane, pane.closable {
+                CloseButton(cancels: true) { host.close(id: pane.id) }
+                    .padding(.bottom, 14)
+                    .transition(.opacity)
+            }
+        }
         .animation(Motion.card, value: shows ? host?.pane?.id : nil)
     }
 }
@@ -216,7 +224,7 @@ struct SpreadPaneColumn<Content: View>: View {
 enum SpreadTopRow {
     static var height: CGFloat {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .pad ? 80 : 0
+        return UIDevice.current.userInterfaceIdiom == .pad ? 58 : 0
         #else
         return 0
         #endif
@@ -233,23 +241,12 @@ struct SpreadPaneView: View {
             HStack(spacing: 0) {
                 HingeSeam(queue: queue)
                     .ignoresSafeArea()
-                VStack(spacing: 0) {
-                    // the close button has a row of its own, above the content's own bar, so it never covers a title or a row
-                    if pane.closable {
-                        HStack {
-                            CloseButton(cancels: true) { host.close(id: pane.id) }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                    }
-                    pane.content
-                        .environment(\.paneClose, SheetCloseAction { host.close(id: pane.id) })
-                        .sheetClose { host.close(id: pane.id) }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(CobaltColor.bg)
-                        .id(host.generation)
-                }
+                pane.content
+                    .environment(\.paneClose, SheetCloseAction { host.close(id: pane.id) })
+                    .sheetClose { host.close(id: pane.id) }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(CobaltColor.bg)
+                    .id(host.generation)
                 // a little room from the hinge, so a large title or a row never touches the line
                 .padding(.leading, 8)
                 .padding(.top, SpreadTopRow.height)
