@@ -2,7 +2,7 @@
 // work is in src/booru.ts.
 //  - A client key or a device session (auth "key"), CORS for the web app, no-store. Settings are per key: each device
 //    session has its own level, themes and blacklist.
-//  - Explicit does not exist here: the level is general, sensitive or questionable only.
+//  - Explicit does not exist here: the level is general or sensitive only (no questionable either).
 //  - Never the chat AI's or the MCP's (tier hidden).
 import * as z from "zod";
 import {
@@ -22,7 +22,7 @@ import {
 import { defineOp, ok, type OpContext, type OpReply } from "../op";
 
 const Status = z.literal("success");
-const Level = z.enum(LEVELS as unknown as ["g", "s", "q"]).describe("g general, s sensitive, q questionable; there is no explicit");
+const Level = z.enum(LEVELS as unknown as ["g", "s"]).describe("g general, s sensitive; there is no questionable or explicit");
 const Mode = z.enum(THEME_MODES as unknown as ["show", "blur", "hide"]);
 const ThemeIds = THEMES.map((t) => t.id) as [string, ...string[]];
 

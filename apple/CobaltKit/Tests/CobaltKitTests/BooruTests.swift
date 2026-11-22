@@ -5,9 +5,9 @@ import Testing
 // The booru tab (APP-API-CONTRACT 72): the wire shapes, the tag count and the store against the preview client.
 @Suite struct BooruTests {
     @Test func levelsHaveNoExplicit() {
-        #expect(BooruLevel.allCases.map(\.rawValue) == ["g", "s", "q"])
+        #expect(BooruLevel.allCases.map(\.rawValue) == ["g", "s"])
         #expect(BooruLevel(rawValue: "e") == nil)
-        #expect(BooruLevel.general < .sensitive && .sensitive < .questionable)
+        #expect(BooruLevel.general < .sensitive)
     }
 
     @Test func countsOnlyRealTags() {
@@ -42,9 +42,10 @@ import Testing
         "blacklist":"rain","updated_at":5}
         """
         let s = try CobaltJSON.decoder().decode(BooruSettings.self, from: Data(json.utf8))
-        #expect(s.level == .questionable && s.blacklist == "rain" && s.updatedAt == 5)
+        // an old server's "q" reads as sensitive, the highest level now
+        #expect(s.level == .sensitive && s.blacklist == "rain" && s.updatedAt == 5)
         #expect(s.themes["partial"] == .blur)
-        #expect(s.themeList.first?.minLevel == .questionable)
+        #expect(s.themeList.first?.minLevel == .sensitive)
         #expect(BooruSettingsPatch(level: .general, themes: ["partial": .hide]).json["level"] as? String == "g")
     }
 

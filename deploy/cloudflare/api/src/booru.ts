@@ -1,8 +1,9 @@
 // The booru tab (APP-API-CONTRACT.md section 72): Danbooru search through the Worker, with the content level and the
 // filters applied here, so a device can never see more than its own setting allows.
 //
-//  - Content levels are Danbooru's ratings g (general), s (sensitive) and q (questionable). Explicit (e) does not exist
-//    in capystore: it is not a level, never sent, and an explicit post is dropped even if Danbooru returns one.
+//  - Content levels are Danbooru's ratings g (general) and s (sensitive). Questionable (q) and explicit (e) do not exist
+//    in capystore (owner, 2026-11-22: "remove the questionable rating"): they are not levels, never asked for, and a post
+//    rated q or e is dropped even if Danbooru returns one. Nudity tags are always hidden too (ALWAYS_HIDDEN).
 //  - A hard block is always on, at every level, for every key: sexualised child-like characters (HARD_BLOCK). Not a setting.
 //  - Each key (each device session, each key for tools) has its own row in D1 `booru_settings` (migration 0046): its level,
 //    the theme modes (show, blur, hide) and its blacklist. No row: level general, the default themes, no blacklist.
@@ -10,8 +11,8 @@
 //    extras, dropped (and reported in `dropped`) when Danbooru refuses the tag count. Every filter is applied here again
 //    on the posts that come back, so dropping an extra only makes pages thinner, never less safe.
 
-export type BooruLevel = "g" | "s" | "q";
-export const LEVELS: readonly BooruLevel[] = ["g", "s", "q"];
+export type BooruLevel = "g" | "s";
+export const LEVELS: readonly BooruLevel[] = ["g", "s"];
 export type ThemeMode = "show" | "blur" | "hide";
 export const THEME_MODES: readonly ThemeMode[] = ["show", "blur", "hide"];
 
@@ -24,6 +25,8 @@ const TIMEOUT_MS = 12_000;
 
 // Always hidden, at every level, whatever the settings say.
 export const HARD_BLOCK: readonly string[] = ["loli", "shota", "toddlercon", "lolicon", "shotacon", "child_on_child"];
+// Nudity, hidden at every level (there is no questionable level any more), in case a post rated s carries one.
+export const ALWAYS_HIDDEN: readonly string[] = ["nude", "completely_nude", "nipples", "pussy", "penis", "areolae"];
 
 export type BooruTheme = { id: string; label: string; detail: string; tags: string[]; default: ThemeMode; min_level: BooruLevel };
 
@@ -51,16 +54,8 @@ export const THEMES: readonly BooruTheme[] = [
         label: "partial nudity",
         detail: "topless, covered nudity",
         tags: ["topless", "bottomless", "convenient_censoring", "naked_towel", "nude_cover", "naked_shirt", "censored"],
-        default: "blur",
-        min_level: "q",
-    },
-    {
-        id: "nudity",
-        label: "nudity",
-        detail: "only at questionable",
-        tags: ["nude", "completely_nude", "nipples", "pussy", "penis", "areolae"],
         default: "hide",
-        min_level: "q",
+        min_level: "s",
     },
     {
         id: "violence",
@@ -112,7 +107,8 @@ export async function readSettings(db: D1Database, keyId: string): Promise<Booru
         }
     }
     return {
-        level: row && isLevel(row.level) ? row.level : "g",
+        // a row saved at the old questionable level reads as sensitive, the highest there is now
+        level: row && isLevel(row.level) ? row.level : row?.level === "q" ? "s" : "g",
         themes,
         blacklist: row?.blacklist ?? "",
         updated_at: row?.updated_at ?? null,
@@ -285,6 +281,7 @@ export function judge(p: DanbooruPost, level: BooruLevel, themes: Record<string,
     if (!isLevel(p.rating) || levelRank(p.rating) > levelRank(level)) return { keep: false, why: "level" };
     const tags = new Set(split(p.tag_string));
     if (HARD_BLOCK.some((t) => tags.has(t))) return { keep: false, why: "hard" };
+    if (ALWAYS_HIDDEN.some((t) => tags.has(t))) return { keep: false, why: "level" };
     if (p.is_deleted || p.is_banned) return { keep: false, why: "unusable" };
     const file = safeUrl(p.file_url);
     if (!p.id || !file || ext(p) === "zip" || ext(p) === "swf") return { keep: false, why: "unusable" };

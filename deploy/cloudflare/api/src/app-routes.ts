@@ -379,7 +379,7 @@ export async function capabilities(
                 // /7tv*: a linked 7TV account's emote sets (APP-API-CONTRACT.md section 57); the card says when it is not
                 // linked, and the routes answer 503 until migration 0040 is applied
                 seventv: true,
-                // /booru/*: Danbooru search with this key's level (general, sensitive, questionable; never explicit), themes and
+                // /booru/*: Danbooru search with this key's level (general or sensitive; never questionable or explicit), themes and
                 // blacklist (APP-API-CONTRACT.md section 72); settings writes answer 503 until migration 0046 is applied
                 booru: true,
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)

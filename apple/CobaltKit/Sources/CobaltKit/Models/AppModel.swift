@@ -22,7 +22,7 @@ public enum AppTab: String, Sendable, CaseIterable {
         // twitch: the session comes from the studio's Twitch connection (APP-API-CONTRACT 70)
         case .stage, .sevenTv, .twitch: return caps.stage
         case .names: return caps.names
-        // booru: Danbooru through the server, at most questionable (APP-API-CONTRACT 72)
+        // booru: Danbooru through the server, at most sensitive (APP-API-CONTRACT 72)
         case .booru: return caps.booru
         case .save, .queue, .settings: return true
         }

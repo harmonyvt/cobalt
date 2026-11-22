@@ -37,14 +37,12 @@ extension Copy {
             switch l {
             case .general: return "general"
             case .sensitive: return "sensitive"
-            case .questionable: return "questionable"
             }
         }
         static func levelDetail(_ l: BooruLevel) -> String {
             switch l {
             case .general: return "safe for anyone"
             case .sensitive: return "swimsuits, mild"
-            case .questionable: return "nudity, nothing more"
             }
         }
         static func upTo(_ l: BooruLevel) -> String { l == .general ? "general" : "up to \(level(l))" }
@@ -61,8 +59,6 @@ extension Copy {
         static let presetSafeDetail = "general only, gore hidden"
         static let presetCozy = "cozy"
         static let presetCozyDetail = "up to sensitive"
-        static let presetSpicy = "spicy"
-        static let presetSpicyDetail = "up to questionable, nudity hidden"
         static let themes = "themes"
         static let themesHint = "what to do with posts a theme matches, inside your level."
         static func mode(_ m: BooruThemeMode) -> String { m.rawValue }

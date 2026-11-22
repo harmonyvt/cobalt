@@ -1,7 +1,7 @@
 import CobaltKit
 import SwiftUI
 
-// The booru filters (APP-API-CONTRACT 72): this device's content level (general, sensitive, questionable; raising it asks
+// The booru filters (APP-API-CONTRACT 72): this device's content level (general or sensitive; raising it asks
 // for Face ID), presets, the theme modes, sort and refine, the blacklist, and the one block that is never a setting.
 
 struct BooruFilterSheet: View {
@@ -108,8 +108,6 @@ struct BooruFilterSheet: View {
         let list: [(String, String, BooruLevel, [String: BooruThemeMode])] = [
             (Copy.Booru.presetSafe, Copy.Booru.presetSafeDetail, .general, ["violence": .hide, "horror": .hide]),
             (Copy.Booru.presetCozy, Copy.Booru.presetCozyDetail, .sensitive, ["revealing": .show, "suggestive": .show, "violence": .hide, "horror": .hide]),
-            (Copy.Booru.presetSpicy, Copy.Booru.presetSpicyDetail, .questionable,
-             ["revealing": .show, "suggestive": .show, "partial": .blur, "nudity": .hide, "violence": .hide, "horror": .hide]),
         ]
         return LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 6)], spacing: 6) {
             ForEach(list, id: \.0) { p in

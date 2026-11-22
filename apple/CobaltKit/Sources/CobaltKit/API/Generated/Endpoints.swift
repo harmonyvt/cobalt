@@ -2130,7 +2130,7 @@ struct WireBooruPostTags: Decodable, Sendable {
 
 struct WireBooruPost: Decodable, Sendable {
     var id: Int
-    /// g general, s sensitive, q questionable; there is no explicit
+    /// g general, s sensitive; there is no questionable or explicit
     var rating: String
     /// a theme set to blur matched: show a cover until tapped
     var blur: Bool
@@ -2160,7 +2160,7 @@ struct WireBooruPostsResponseHidden: Decodable, Sendable {
 
 struct WireBooruPostsResponse: Decodable, Sendable {
     var status: String
-    /// g general, s sensitive, q questionable; there is no explicit
+    /// g general, s sensitive; there is no questionable or explicit
     var level: String
     var posts: [WireBooruPost]
     var hidden: WireBooruPostsResponseHidden
@@ -2179,7 +2179,7 @@ struct WireBooruFilterResponseHidden: Decodable, Sendable {
 
 struct WireBooruFilterResponse: Decodable, Sendable {
     var status: String
-    /// g general, s sensitive, q questionable; there is no explicit
+    /// g general, s sensitive; there is no questionable or explicit
     var level: String
     var posts: [WireBooruPost]
     var hidden: WireBooruFilterResponseHidden
@@ -2201,14 +2201,14 @@ struct WireBooruSettingsResponseThemeListItem: Decodable, Sendable {
     var label: String
     var detail: String
     var `default`: String
-    /// g general, s sensitive, q questionable; there is no explicit
+    /// g general, s sensitive; there is no questionable or explicit
     var minLevel: String
     var tags: [String]
 }
 
 struct WireBooruSettingsResponse: Decodable, Sendable {
     var status: String
-    /// g general, s sensitive, q questionable; there is no explicit
+    /// g general, s sensitive; there is no questionable or explicit
     var level: String
     var levels: [String]
     var themeList: [WireBooruSettingsResponseThemeListItem]
@@ -2221,14 +2221,14 @@ struct WireBooruSettingsUpdateResponseThemeListItem: Decodable, Sendable {
     var label: String
     var detail: String
     var `default`: String
-    /// g general, s sensitive, q questionable; there is no explicit
+    /// g general, s sensitive; there is no questionable or explicit
     var minLevel: String
     var tags: [String]
 }
 
 struct WireBooruSettingsUpdateResponse: Decodable, Sendable {
     var status: String
-    /// g general, s sensitive, q questionable; there is no explicit
+    /// g general, s sensitive; there is no questionable or explicit
     var level: String
     var levels: [String]
     var themeList: [WireBooruSettingsUpdateResponseThemeListItem]

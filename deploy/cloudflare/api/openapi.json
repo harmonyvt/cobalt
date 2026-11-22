@@ -2614,8 +2614,7 @@
                     "type": "string",
                     "enum": [
                       "g",
-                      "s",
-                      "q"
+                      "s"
                     ]
                   },
                   "min_score": {
@@ -2664,10 +2663,9 @@
                       "type": "string",
                       "enum": [
                         "g",
-                        "s",
-                        "q"
+                        "s"
                       ],
-                      "description": "g general, s sensitive, q questionable; there is no explicit"
+                      "description": "g general, s sensitive; there is no questionable or explicit"
                     },
                     "posts": {
                       "type": "array",
@@ -2753,10 +2751,9 @@
                       "type": "string",
                       "enum": [
                         "g",
-                        "s",
-                        "q"
+                        "s"
                       ],
-                      "description": "g general, s sensitive, q questionable; there is no explicit"
+                      "description": "g general, s sensitive; there is no questionable or explicit"
                     },
                     "posts": {
                       "type": "array",
@@ -2862,10 +2859,9 @@
                       "type": "string",
                       "enum": [
                         "g",
-                        "s",
-                        "q"
+                        "s"
                       ],
-                      "description": "g general, s sensitive, q questionable; there is no explicit"
+                      "description": "g general, s sensitive; there is no questionable or explicit"
                     },
                     "levels": {
                       "type": "array",
@@ -2873,10 +2869,9 @@
                         "type": "string",
                         "enum": [
                           "g",
-                          "s",
-                          "q"
+                          "s"
                         ],
-                        "description": "g general, s sensitive, q questionable; there is no explicit"
+                        "description": "g general, s sensitive; there is no questionable or explicit"
                       }
                     },
                     "themes": {
@@ -2919,10 +2914,9 @@
                             "type": "string",
                             "enum": [
                               "g",
-                              "s",
-                              "q"
+                              "s"
                             ],
-                            "description": "g general, s sensitive, q questionable; there is no explicit"
+                            "description": "g general, s sensitive; there is no questionable or explicit"
                           },
                           "tags": {
                             "type": "array",
@@ -3002,10 +2996,9 @@
                     "type": "string",
                     "enum": [
                       "g",
-                      "s",
-                      "q"
+                      "s"
                     ],
-                    "description": "g general, s sensitive, q questionable; there is no explicit"
+                    "description": "g general, s sensitive; there is no questionable or explicit"
                   },
                   "themes": {
                     "type": "object",
@@ -3015,7 +3008,6 @@
                         "revealing",
                         "suggestive",
                         "partial",
-                        "nudity",
                         "violence",
                         "horror"
                       ]
@@ -3056,10 +3048,9 @@
                       "type": "string",
                       "enum": [
                         "g",
-                        "s",
-                        "q"
+                        "s"
                       ],
-                      "description": "g general, s sensitive, q questionable; there is no explicit"
+                      "description": "g general, s sensitive; there is no questionable or explicit"
                     },
                     "levels": {
                       "type": "array",
@@ -3067,10 +3058,9 @@
                         "type": "string",
                         "enum": [
                           "g",
-                          "s",
-                          "q"
+                          "s"
                         ],
-                        "description": "g general, s sensitive, q questionable; there is no explicit"
+                        "description": "g general, s sensitive; there is no questionable or explicit"
                       }
                     },
                     "themes": {
@@ -3113,10 +3103,9 @@
                             "type": "string",
                             "enum": [
                               "g",
-                              "s",
-                              "q"
+                              "s"
                             ],
-                            "description": "g general, s sensitive, q questionable; there is no explicit"
+                            "description": "g general, s sensitive; there is no questionable or explicit"
                           },
                           "tags": {
                             "type": "array",
@@ -12664,10 +12653,9 @@
             "type": "string",
             "enum": [
               "g",
-              "s",
-              "q"
+              "s"
             ],
-            "description": "g general, s sensitive, q questionable; there is no explicit"
+            "description": "g general, s sensitive; there is no questionable or explicit"
           },
           "blur": {
             "type": "boolean",

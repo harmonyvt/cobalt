@@ -5,7 +5,7 @@ import UIKit
 #endif
 
 // The booru tab (APP-API-CONTRACT 72): Danbooru search under this device's own content level (general, sensitive or
-// questionable; explicit is not part of capystore) and filters, all applied by the server. A grid of posts; a post opens
+// never questionable or explicit) and filters, all applied by the server. A grid of posts; a post opens
 // in a sheet with its tags and "save". While the screen is mirrored, recorded or on a TV, only general shows (safe mode).
 
 struct BooruScreen: View {
@@ -272,7 +272,6 @@ enum BooruLevelColor {
         switch l {
         case .general: return CobaltColor.success
         case .sensitive: return CobaltColor.focus
-        case .questionable: return CobaltColor.collectionOnTile
         }
     }
 }
