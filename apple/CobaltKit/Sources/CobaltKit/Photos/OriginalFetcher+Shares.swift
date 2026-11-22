@@ -52,7 +52,20 @@ extension OriginalFetcher {
     /// did not save (and no Hark message will come for a session that was never made).
     @MainActor
     func applySaveAnswers() async {
+        var uploaded: [UUID: [String]] = [:]
         for answer in saveAnswers.drain() {
+            // a photo or video the share sheet uploaded (CONTRACT-SHARE-QUICK.md section 10): its copy goes, its original is
+            // the owner's own file (nothing to keep), and the owner hears how it went
+            if let upload = UploadLabel.parse(answer.label) {
+                try? FileManager.default.removeItem(at: savesDirectory().appendingPathComponent(upload.stored))
+                if answer.code == NSURLErrorCancelled { continue }
+                if let status = answer.status, (200..<300).contains(status) {
+                    if let job = BackgroundSessionID.saveJob(answer.identifier) { uploaded[job, default: []].append(upload.name) }
+                } else {
+                    await uploadFailed(upload.name, answer.status)
+                }
+                continue
+            }
             let link = URL(string: answer.label)
             if answer.code == NSURLErrorCancelled { continue }
             if let status = answer.status, (200..<300).contains(status), let sid = Self.sessionID(in: answer.body) {
@@ -61,6 +74,8 @@ extension OriginalFetcher {
                 await instantFailed(link, answer.status)
             }
         }
+        for (job, names) in uploaded { await uploadsLanded(job, names) }
+        if !uploaded.isEmpty { await uploadsChanged?() }
     }
 
     /// `{"status":"success","id":"<22 base62>","url":…}`.
@@ -139,7 +154,8 @@ extension OriginalFetcher {
         let dir = savesDirectory()
         let cutoff = Date().addingTimeInterval(-24 * 60 * 60)         // file times are real time, not the pipeline's clock
         let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        for name in names where name.hasSuffix(".json") {
+        // the save bodies, and the share sheet's upload copies (a finished upload deletes its own on the wake)
+        for name in names where name.hasSuffix(".json") || name.hasPrefix(UploadLabel.storedPrefix) {
             let url = dir.appendingPathComponent(name)
             let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             if let modified, modified < cutoff { try? FileManager.default.removeItem(at: url) }

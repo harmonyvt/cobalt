@@ -7,7 +7,8 @@ import SwiftUI
 struct BooruFilterSheet: View {
     let model: AppModel
 
-    @Environment(\.dismiss) private var dismiss
+    /// "done" works in a sheet and in the spread pane alike (a plain `dismiss` did nothing in the pane, 8.34).
+    var dismiss = SheetOrPaneDismiss()
     @State private var blacklist = ""
     @State private var blacklistState: SaveState = .idle
     @State private var busy = false
@@ -57,6 +58,7 @@ struct BooruFilterSheet: View {
             if !store.settingsLoaded { await store.loadSettings() }
             blacklist = store.settings?.blacklist ?? ""
         }
+        .panelDrawsOwnClose()
     }
 
     // MARK: level

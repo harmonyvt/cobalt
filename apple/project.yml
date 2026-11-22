@@ -173,7 +173,9 @@ targets:
           NSExtensionAttributes:
             NSExtensionActivationRule:
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
-              NSExtensionActivationSupportsMovieWithMaxCount: 1
+              # photos and videos upload straight into the library (CONTRACT-SHARE-QUICK.md section 10)
+              NSExtensionActivationSupportsMovieWithMaxCount: 20
+              NSExtensionActivationSupportsImageWithMaxCount: 20
               NSExtensionActivationSupportsText: true
     settings:
       base:

@@ -99,16 +99,12 @@ struct SwarmsScreen: View {
     }
 
     /// The Mac and a wide iPad: the list on the left, the same screen on the right. With no swarm open the list has the
-    /// whole width: an empty right side is not drawn at all.
+    /// whole width: an empty right side is not drawn at all. The swarm side always has a close (`DetailSplit`).
     private var split: some View {
-        HStack(spacing: 0) {
-            list.frame(maxWidth: open == nil ? .infinity : Spread.listWidth)
-            if let dest = open {
-                HingeSeam(queue: model.queue)
-                NavigationStack { SwarmScreen(model: model, dest: dest) }
-                    .id(dest)
-                    .frame(maxWidth: .infinity)
-            }
+        DetailSplit(queue: model.queue, open: open, close: { open = nil }) {
+            list
+        } detail: { dest in
+            SwarmScreen(model: model, dest: dest)
         }
     }
 

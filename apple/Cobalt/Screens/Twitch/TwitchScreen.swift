@@ -55,7 +55,7 @@ struct TwitchScreen: View {
             if phase == .active { Task { await store.load() } }
         }
         .spreadSheet(item: $addingToSet) { picker in
-            SevenTvAddToSetSheet(picker: picker)
+            SevenTvAddToSetSheet(picker: picker).panelDrawsOwnClose()
         }
         #if os(iOS)
         .sheet(isPresented: $choosingTV) {

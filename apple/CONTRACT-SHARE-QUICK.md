@@ -423,3 +423,40 @@ Not verified (no device, and the simulator host was overloaded):
 
 The quick card and the overlay are dormant code (about 750 lines: `QuickCard.swift`, `QuickOverlay.swift`, `ShareCore+Quick.swift`, their tests).
 They can be deleted, or kept for a future Live Activity route (section 6). A product call, not an engineering one.
+
+## 10. Photos and videos upload from the share sheet (owner, 2026-11-21: "share files of videos and photos to capystore, and it just uploads them via the share sheet")
+
+### 10.1 What the owner sees
+
+Share up to 20 photos and videos (Photos, Files, a screenshot) to capystore: the sheet closes at once, a quiet
+"uploading to capystore" notification says `IMG_0412.heic` (or `3 files`, plus `· 1 skipped` when some could not go),
+and when the uploads land the app replaces it with "uploaded to capystore". A file the server refuses gets its own
+"capystore couldn't upload IMG_0412.heic" with the reason (over the upload limit, a kind of file it doesn't take, the
+key, the server). The files show in the library like any upload (`source 'upload'`, public when "make new saves public"
+is on; a video becomes a studio session through the server's line, `queue=1`).
+
+### 10.2 The extension (`CobaltKit/Share/InstantUpload.swift`)
+
+- Activation: `NSExtensionActivationSupportsImageWithMaxCount` and `...MovieWithMaxCount` 20 (were: one movie).
+- A link still wins over files (`ShareInbox.loadLinkOnly` answers `.media` only when there is no link).
+- Each attachment is asked for the first registered type the server takes as it is (HEIC, JPEG, PNG, GIF, WebP, MP4,
+  MOV), copied with `FileManager` into the app group's `Saves` as `upload-<job>-<n>.<ext>` (never through `Data`), and
+  typed by name, then first bytes (`MIME.identify`). Any other picture (TIFF, RAW) is made a JPEG of at most 4096 px.
+  Anything else is skipped. A file over `limits.max_upload_bytes` (the last known capabilities, else 100 MB) is skipped.
+- One background session per share, `com.capybaraharmony.cobalt.bg.save.upload.<job>` (a save session, so the same
+  app wake reads it; resource timeout 6 h instead of a link save's 10 min), one `PUT /studio/upload?name=&public=1&queue=1`
+  task per file, labelled `upload:<stored copy>/<name>`.
+- "show the full share sheet" keeps the full sheet only for a link or one video; photos and several files always upload.
+- A build with no app group has no background session: one video goes to the full sheet as before, anything else
+  answers the full sheet's "no link" line.
+- Nothing could be queued: the one-line card (`tooLarge`: "that's over the 100 MB upload limit", `unsupportedFile`:
+  "capystore can't upload that kind of file").
+
+### 10.3 The app (`Photos/OriginalFetcher+Shares.swift`)
+
+`applySaveAnswers` reads an `upload:` label apart from a link: it deletes the stored copy, keeps no original (the owner's
+own file is the original), posts "uploaded" per share or "couldn't upload" per file, and refreshes the library.
+`pruneSaveFiles` also removes `upload-*` copies a day old (a wake that never came).
+
+No server change: `PUT /studio/upload` already takes these types (APP-API-CONTRACT section 3). The Mac has no share
+extension; its right-click "save to capystore" service (CONTRACT.md section 15) already uploads files.
