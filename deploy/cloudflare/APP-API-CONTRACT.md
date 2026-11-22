@@ -7840,6 +7840,15 @@ can be. The app stops adding delay on top of it:
   "video" makes the TV fetch and buffer the stream itself, which is several seconds further behind and leaves chat ahead of
   the picture. The TV window is built separately on top of `TwitchPlayerHost`.
 
+### 70.4.1 Signed in on the player (app only, 2026-11-22)
+
+Owner: signing in through the player's "Log in" looped (signed in, the player reloaded, asked to log in again). WebKit blocks
+every third-party cookie, and the page was loaded as the web app's domain, so the embed (player.twitch.tv, another site's
+frame) never saw the sign-in's twitch.tv cookies. The page is now loaded as `https://www.twitch.tv/` with `parent:
+["www.twitch.tv"]`, where the embed is same-site and reads the sign-in. The page posts `{ e: "ready" }` on the embed's
+READY; if that (or PLAYING) has not come 15 s after a load, the app loads the page on `cobalt.capybaraharmony.com` again for
+the rest of the run (plays, signed out). Nothing here touches the Worker.
+
 ### 70.5 The stream on a TV (app only, 2026-11-21)
 
 Owner: "I'm sometimes using AirPlay a lot ... so I can still see the chat and AirPlay to stream to TV". iPhone and iPad only;

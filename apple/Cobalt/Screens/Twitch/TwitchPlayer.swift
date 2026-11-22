@@ -13,22 +13,34 @@ import WebKit
 // web view made from the configuration WebKit hands over, so it shares the player's cookies. When the sign-in closes it
 // (or the owner does), the player reloads signed in, and subscriptions apply.
 //
+// Signed in needs the page to be first party to Twitch. WebKit blocks every third-party cookie, so on the web app's domain
+// the embed (player.twitch.tv, a frame of another site) never sees the sign-in's twitch.tv cookies: it asks to log in again
+// after every reload (the sign-in loop of 2026-11-22). The page is therefore loaded as www.twitch.tv (`parent` too), where
+// the embed is same-site and reads the sign-in. If the embed is not ready on that page within `firstPartyWait` (15 s), the app falls
+// back to the web app's domain for the rest of the run: the stream plays, only signed out.
+//
 // The app leaving the screen (iOS background, Mac hidden) stops the stream, page and stats timer included, unless capystore's
 // TV window is showing it; it starts again on return if a view still wants it. Five minutes stopped with no view wanting
 // it, or a memory warning, lets the web view itself go (a new one is built on the next claim). The Twitch sign-in is in the
 // default website data store, not the view, so it survives that.
 
 enum TwitchEmbed {
-    static let parent = "cobalt.capybaraharmony.com"
-    static let base = URL(string: "https://\(parent)/")!
+    /// Where the page is loaded as: first party to Twitch, so the embed sees the sign-in's cookies.
+    static let firstParty = URL(string: "https://www.twitch.tv/")!
+    /// The fallback: the web app's domain. Plays, but the embed can never be signed in there (third-party cookies).
+    static let fallback = URL(string: "https://cobalt.capybaraharmony.com/")!
     static let handler = "twitch"
+    /// How long the embed may take to say it is ready on the first-party page before the app falls back.
+    static let firstPartyWait: Duration = .seconds(15)
 
     static func safe(_ channel: String) -> String {
         channel.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "_" }
     }
 
-    static func html(channel: String) -> String {
+    /// The player page for `channel`, to load with `baseURL: base` (`parent` must be the page's own domain).
+    static func html(channel: String, base: URL) -> String {
         let c = safe(channel)
+        let parent = base.host() ?? "localhost"
         return """
         <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
         <style>html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}
@@ -44,6 +56,7 @@ enum TwitchEmbed {
             player = new Twitch.Player("p", { channel: ch, parent: ["\(parent)"], width: "100%", height: "100%",
                                               autoplay: true, muted: false });
             var E = Twitch.Player;
+            player.addEventListener(E.READY, function () { post({ e: "ready" }); });
             player.addEventListener(E.PLAYING, function () { post({ e: "playing" }); });
             player.addEventListener(E.PAUSE, function () { post({ e: "paused" }); });
             player.addEventListener(E.OFFLINE, function () { post({ e: "offline" }); });
@@ -141,6 +154,11 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     @ObservationIgnored private var jumpCheck: Task<Void, Never>?
     @ObservationIgnored private var stopTask: Task<Void, Never>?
     @ObservationIgnored private var pageLoaded = false
+    /// The page is loaded as Twitch's own site (signed-in embed) until that once fails to come up in this run.
+    @ObservationIgnored private var firstParty = true
+    /// The embed said it is ready since the page last loaded.
+    @ObservationIgnored private var embedReady = false
+    @ObservationIgnored private var readyCheck: Task<Void, Never>?
 
     private init() {
         let proxy = TwitchMessageProxy()
@@ -212,7 +230,24 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             webView.evaluateJavaScript("window.cobaltSetChannel && window.cobaltSetChannel(\"\(c)\")")
         } else {
             pageLoaded = true
-            webView.loadHTMLString(TwitchEmbed.html(channel: c), baseURL: TwitchEmbed.base)
+            load(c)
+        }
+    }
+
+    /// Loads the player page for `channel`: as www.twitch.tv while that works, else on the web app's domain.
+    private func load(_ channel: String) {
+        let base = firstParty ? TwitchEmbed.firstParty : TwitchEmbed.fallback
+        embedReady = false
+        readyCheck?.cancel()
+        readyCheck = nil
+        webView.loadHTMLString(TwitchEmbed.html(channel: channel, base: base), baseURL: base)
+        guard firstParty else { return }
+        readyCheck = Task { [weak self] in
+            try? await Task.sleep(for: TwitchEmbed.firstPartyWait)
+            guard let self, !Task.isCancelled, !self.embedReady, self.firstParty, self.channel == channel,
+                  !self.suspended else { return }
+            self.firstParty = false
+            self.load(channel)
         }
     }
 
@@ -220,6 +255,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     func stop() {
         channel = nil
         pageLoaded = false
+        readyCheck?.cancel()
+        readyCheck = nil
         reset()
         made?.loadHTMLString("<html><body style=\"background:#000\"></body></html>", baseURL: nil)
         scheduleRelease()
@@ -251,7 +288,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     func reload() {
         guard let channel else { return }
         reset()
-        webView.loadHTMLString(TwitchEmbed.html(channel: channel), baseURL: TwitchEmbed.base)
+        load(channel)
     }
 
     // MARK: the app's state
@@ -348,7 +385,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     fileprivate func receive(_ body: Any) {
         guard let m = body as? [String: Any], let e = m["e"] as? String else { return }
         switch e {
-        case "playing": isPlaying = true; isOffline = false
+        case "ready": embedReady = true
+        case "playing": isPlaying = true; isOffline = false; embedReady = true
         case "paused": isPlaying = false
         case "offline": isOffline = true; isPlaying = false; delay = nil
         case "online": isOffline = false
