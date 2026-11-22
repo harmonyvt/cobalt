@@ -56,6 +56,12 @@ public actor TwitchChatEngine {
     private var globalEmotes: [String: ChatEmote] = [:]
     private var channelEmotes: [String: ChatEmote] = [:]
     private var userEmotes: [String: ChatEmote] = [:]
+    /// The same, with Twitch's type and owner (for the picker's sections), in Twitch's order.
+    private var userEmoteRows: [TwitchUserEmote] = []
+    /// Every Twitch emote the channel has (`chat/emotes`), sendable or not: the picker shows the rest locked.
+    private var channelTwitchEmotes: [ChatEmote] = []
+    /// `userEmoteRows` came from the pass asked for this channel (it holds the follower emotes too).
+    private var userEmotesHaveChannel = false
     private var named: [String: ChatEmote] = [:]
     private var emoteList = TwitchEmoteList()
     /// The text and Twitch emote ranges of each line still shown, so lines can be split again when 7TV's emotes arrive.
@@ -375,14 +381,17 @@ public actor TwitchChatEngine {
     private func loadGlobals() async {
         async let seven: Void = loadSevenTvGlobal()
         async let badges: Void = loadTwitchBadges(path: "chat/badges/global", channel: false)
-        async let mine: Void = loadUserEmotes()
+        async let mine: Void = loadUserEmotes(broadcasterID: nil)
         _ = await (seven, badges, mine)
     }
 
     private func loadChannel(_ id: String) async {
         async let seven: Void = loadSevenTvChannel(id)
         async let badges: Void = loadTwitchBadges(path: "chat/badges", query: [("broadcaster_id", id)], channel: true)
-        _ = await (seven, badges)
+        // again with the channel, so its follower emotes come too (Helix lists those only when asked for a broadcaster)
+        async let mine: Void = loadUserEmotes(broadcasterID: id)
+        async let theirs: Void = loadChannelTwitchEmotes(id)
+        _ = await (seven, badges, mine, theirs)
         connectEvents()
     }
 
@@ -422,19 +431,41 @@ public actor TwitchChatEngine {
         markDirty()
     }
 
-    private func loadUserEmotes() async {
+    private func loadUserEmotes(broadcasterID: String?) async {
         guard let credentials else { return }
         var map: [String: ChatEmote] = [:]
+        var rows: [TwitchUserEmote] = []
         var cursor: String?
-        for _ in 0..<5 {
+        var complete = false
+        for _ in 0..<8 {
             var query = [("user_id", credentials.userID)]
+            if let broadcasterID { query.append(("broadcaster_id", broadcasterID)) }
             if let cursor { query.append(("after", cursor)) }
             guard let page: HelixWire.CursorPage<HelixWire.UserEmote> = await helix("chat/emotes/user", query: query) else { break }
-            for e in page.data ?? [] { map[e.name] = .twitch(id: e.id, name: e.name) }
+            for e in page.data ?? [] {
+                let emote = ChatEmote.twitch(id: e.id, name: e.name, animated: e.format.map { $0.contains("animated") })
+                map[e.name] = emote
+                rows.append(TwitchUserEmote(emote: emote, type: e.emoteType, ownerID: e.ownerId))
+            }
             cursor = page.pagination?.cursor
-            if cursor == nil || cursor == "" { break }
+            if cursor == nil || cursor == "" { complete = true; break }
         }
+        // a failed channel pass never wipes what the first pass found
+        guard !map.isEmpty || complete else { return }
+        // the first pass (no channel) may finish after the channel's: it never replaces that fuller list
+        if broadcasterID == nil, userEmotesHaveChannel { return }
+        if broadcasterID != nil { userEmotesHaveChannel = true }
         userEmotes = map
+        userEmoteRows = rows
+        rebuildEmotes()
+    }
+
+    private func loadChannelTwitchEmotes(_ id: String) async {
+        guard let page: HelixWire.Page<HelixWire.ChannelEmote> = await helix("chat/emotes", query: [("broadcaster_id", id)])
+        else { return }
+        channelTwitchEmotes = (page.data ?? []).map {
+            ChatEmote.twitch(id: $0.id, name: $0.name, animated: $0.format.map { $0.contains("animated") })
+        }
         rebuildEmotes()
     }
 
@@ -446,7 +477,10 @@ public actor TwitchChatEngine {
         named = all
         let sorted: ([ChatEmote]) -> [ChatEmote] = { $0.sorted { $0.name.lowercased() < $1.name.lowercased() } }
         emoteList = TwitchEmoteList(
-            emotes: sorted(Array(channelEmotes.values)) + sorted(Array(userEmotes.values)) + sorted(Array(globalEmotes.values)))
+            emotes: sorted(Array(channelEmotes.values)) + sorted(Array(userEmotes.values)) + sorted(Array(globalEmotes.values)),
+            sections: TwitchEmoteList.pickerSections(
+                sevenTvChannel: Array(channelEmotes.values), channelTwitch: channelTwitchEmotes, user: userEmoteRows,
+                roomID: roomID, sevenTvGlobal: Array(globalEmotes.values)))
         snapshot.emotesVersion += 1
         // split the lines on screen again, so 7TV words become emotes
         for i in snapshot.lines.indices {

@@ -233,6 +233,17 @@ enum HelixWire {
         var id: String
         var name: String
         var format: [String]?
+        var emoteType: String?
+        var ownerId: String?
+    }
+
+    /// `chat/emotes?broadcaster_id=`: every emote the channel has, whether or not the user can send it.
+    struct ChannelEmote: Decodable {
+        var id: String
+        var name: String
+        var format: [String]?
+        var emoteType: String?
+        var tier: String?
     }
 
     struct Clip: Decodable {

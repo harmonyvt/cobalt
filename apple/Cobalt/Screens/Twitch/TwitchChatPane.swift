@@ -2,7 +2,7 @@ import CobaltKit
 import SwiftUI
 
 // The live chat beside or under the player (APP-API-CONTRACT 70): the room's modes, the lines (kept at the newest unless
-// the owner scrolls up, then "paused · N new"), and the composer with emote completion and replies.
+// the owner scrolls up, then "paused · N new"), and the composer with emote completion, the emote picker (70.6) and replies.
 
 struct TwitchChatPane: View {
     let model: AppModel
@@ -22,7 +22,7 @@ struct TwitchChatPane: View {
             } else {
                 lines(cutoff: nil)
             }
-            TwitchComposer(store: store)
+            TwitchComposer(store: store, canAddToSet: model.sevenTv.isLinked, onAddEmote: onAddEmote)
         }
         .background(CobaltColor.bg)
     }
@@ -188,9 +188,12 @@ private struct TwitchChatLines: View {
 
 private struct TwitchComposer: View {
     let store: TwitchStore
+    let canAddToSet: Bool
+    let onAddEmote: (ChatEmote) -> Void
 
     @State private var text = ""
     @State private var sending = false
+    @State private var picking = false
     @FocusState private var focused: Bool
 
     /// The word being typed (after the last space).
@@ -210,6 +213,7 @@ private struct TwitchComposer: View {
             if !completions.isEmpty { completionRow }
             if let reply = store.replyTo { replyBanner(reply) }
             HStack(spacing: 8) {
+                pickerButton
                 TextField(store.canSend ? Copy.Twitch.composerPrompt : Copy.Twitch.composerReadOnly, text: $text)
                     .textFieldStyle(.plain)
                     .font(Font.cobalt(14.5))
@@ -242,6 +246,51 @@ private struct TwitchComposer: View {
     }
 
     private var canSend: Bool { store.canSend && !trimmed.isEmpty && !sending }
+
+    /// Opens the emote picker: browsing works read-only too, putting an emote in the message needs chat.
+    private var pickerButton: some View {
+        Button(Copy.Twitch.emotes, systemImage: picking ? Symbol.Twitch.emotesOpen : Symbol.Twitch.emotes) { picking.toggle() }
+            .labelStyle(.iconOnly)
+            .font(.system(size: 18, weight: .regular))
+            .foregroundStyle(picking ? TwitchChatPalette.twitch : CobaltColor.caption)
+            .frame(width: 34, height: 38)
+            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help(Copy.Twitch.emotes)
+            .popover(isPresented: $picking, arrowEdge: .top) {
+                TwitchEmotePicker(
+                    store: store,
+                    draft: $text,
+                    canSend: store.canSend,
+                    canAddToSet: canAddToSet,
+                    onPick: insert,
+                    onSend: send,
+                    onAddEmote: { emote in
+                        // the picker leaves first: the "add to a set" sheet can't open over it
+                        picking = false
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(450))
+                            onAddEmote(emote)
+                        }
+                    },
+                    onDone: { picking = false })
+                .frame(minWidth: 320, idealWidth: 380, minHeight: 360, idealHeight: 480)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationCompactAdaptation(.sheet)
+            }
+    }
+
+    /// Puts `emote` at the end of the message, a space either side.
+    private func insert(_ emote: ChatEmote) {
+        guard store.canSend else { return }
+        var next = text
+        if !next.isEmpty, !next.hasSuffix(" ") { next += " " }
+        next += emote.name + " "
+        guard next.count <= 500 else { return }
+        text = next
+        store.noteEmotePicked(emote)
+    }
 
     private var completionRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -298,7 +347,8 @@ private struct TwitchComposer: View {
         Task {
             if await store.send(message) { text = "" }
             sending = false
-            focused = true
+            // with the picker open the message is written there: the keyboard stays down behind it
+            if !picking { focused = true }
         }
     }
 }

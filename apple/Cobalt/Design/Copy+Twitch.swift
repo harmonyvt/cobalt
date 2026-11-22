@@ -98,5 +98,21 @@ extension Copy {
         static let followersOnly = "followers only"
         static let addToSet = "add to a 7tv set…"
         static let emotes = "emotes"
+
+        // MARK: emote picker (70.6)
+
+        static let emoteSearch = "search emotes"
+        static let emotesLoading = "loading emotes…"
+        static let emotesNone = "no emotes here yet"
+        static func emotesMiss(_ q: String) -> String { "no emote called \u{201C}\(q)\u{201D}" }
+        static let recentEmotes = "recent"
+        static let copyName = "copy name"
+        static let locked = "subscribe to use"
+        static let done = "done"
+        static func channelSevenTv(_ channel: String) -> String { "\(channel) · 7tv" }
+        static func channelTwitch(_ channel: String) -> String { "\(channel) · twitch" }
+        static let yourTwitch = "your twitch emotes"
+        static let twitchGlobal = "twitch global"
+        static let sevenTvGlobal = "7tv global"
     }
 }

@@ -31,9 +31,9 @@ public struct ChatEmote: Sendable, Hashable, Identifiable {
 
     /// Twitch's CDN, the dark theme at 2x. `emotesv2_` ids are the newer emotes, which may be animated (the `default` format
     /// answers the GIF when there is one).
-    public static func twitch(id: String, name: String) -> ChatEmote {
+    public static func twitch(id: String, name: String, animated: Bool? = nil) -> ChatEmote {
         let url = URL(string: "https://static-cdn.jtvnw.net/emoticons/v2/\(id)/default/dark/2.0")!
-        return ChatEmote(id: id, name: name, url: url, animated: id.hasPrefix("emotesv2_"), source: .twitch)
+        return ChatEmote(id: id, name: name, url: url, animated: animated ?? id.hasPrefix("emotesv2_"), source: .twitch)
     }
 }
 
@@ -182,10 +182,70 @@ public struct TwitchChatSnapshot: Sendable, Equatable {
     }
 }
 
-/// The emotes the composer offers, best first: the channel's 7TV, the user's Twitch emotes, then 7TV global.
+/// The emotes the composer offers, best first: the channel's 7TV, the user's Twitch emotes, then 7TV global. `sections`
+/// is the same set grouped for the emote picker (70.6), plus the channel's Twitch emotes the user can't send yet.
 public struct TwitchEmoteList: Sendable, Equatable {
     public var emotes: [ChatEmote]
-    public init(emotes: [ChatEmote] = []) { self.emotes = emotes }
+    public var sections: [TwitchEmoteSection]
+    public init(emotes: [ChatEmote] = [], sections: [TwitchEmoteSection] = []) {
+        self.emotes = emotes
+        self.sections = sections
+    }
+
+    /// The picker's sections with only the emotes whose name contains `query` (case-insensitive; names starting with it
+    /// first), empty sections dropped. A blank query answers every section as it is.
+    public func sections(matching query: String) -> [TwitchEmoteSection] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return sections.filter { !$0.emotes.isEmpty } }
+        return sections.compactMap { section in
+            var starts: [ChatEmote] = []
+            var contains: [ChatEmote] = []
+            for e in section.emotes {
+                let n = e.name.lowercased()
+                if n.hasPrefix(q) { starts.append(e) } else if n.contains(q) { contains.append(e) }
+            }
+            guard !starts.isEmpty || !contains.isEmpty else { return nil }
+            var out = section
+            out.emotes = starts + contains
+            return out
+        }
+    }
+
+    /// Groups the emotes for the picker: this channel's 7TV set, this channel's Twitch emotes (locked when the user can't
+    /// send them), the user's other Twitch emotes, Twitch global, 7TV global (minus names the channel's set took).
+    public static func pickerSections(
+        sevenTvChannel: [ChatEmote], channelTwitch: [ChatEmote], user: [TwitchUserEmote], roomID: String?,
+        sevenTvGlobal: [ChatEmote]
+    ) -> [TwitchEmoteSection] {
+        let byName: ([ChatEmote]) -> [ChatEmote] = { $0.sorted { $0.name.lowercased() < $1.name.lowercased() } }
+        let usable = Set(user.map(\.emote.id))
+
+        var channel: [ChatEmote] = []
+        var channelIDs = Set<String>()
+        for e in channelTwitch where channelIDs.insert(e.id).inserted { channel.append(e) }
+        if let roomID {
+            for u in user where u.ownerID == roomID && channelIDs.insert(u.emote.id).inserted { channel.append(u.emote) }
+        }
+        // the ones the user can send come first, Twitch's own order (by tier) kept inside each half
+        channel = channel.filter { usable.contains($0.id) } + channel.filter { !usable.contains($0.id) }
+        let locked = Set(channel.map(\.id).filter { !usable.contains($0) })
+
+        var global: [ChatEmote] = []
+        var mine: [ChatEmote] = []
+        var seen = channelIDs
+        for u in user where seen.insert(u.emote.id).inserted {
+            if u.isGlobal { global.append(u.emote) } else { mine.append(u.emote) }
+        }
+
+        let channelNames = Set(sevenTvChannel.map(\.name))
+        return [
+            TwitchEmoteSection(kind: .channelSevenTv, emotes: byName(sevenTvChannel)),
+            TwitchEmoteSection(kind: .channelTwitch, emotes: channel, locked: locked),
+            TwitchEmoteSection(kind: .yourTwitch, emotes: byName(mine)),
+            TwitchEmoteSection(kind: .twitchGlobal, emotes: global),
+            TwitchEmoteSection(kind: .sevenTvGlobal, emotes: byName(sevenTvGlobal.filter { !channelNames.contains($0.name) })),
+        ]
+    }
 
     /// Up to `limit` emotes whose name starts with `prefix` (case-insensitive), exact matches first.
     public func completions(for prefix: String, limit: Int = 8) -> [ChatEmote] {
@@ -201,6 +261,51 @@ public struct TwitchEmoteList: Sendable, Equatable {
             if exact.count + starts.count >= limit * 3 { break }
         }
         return Array((exact + starts).prefix(limit))
+    }
+}
+
+/// One group in the emote picker (70.6).
+public struct TwitchEmoteSection: Sendable, Equatable, Identifiable {
+    public enum Kind: String, Sendable, Hashable, CaseIterable {
+        /// The channel's 7TV set.
+        case channelSevenTv
+        /// The channel's own Twitch emotes (subscriber, follower, bits).
+        case channelTwitch
+        /// Twitch emotes from the user's other subscriptions.
+        case yourTwitch
+        case twitchGlobal
+        case sevenTvGlobal
+    }
+
+    public var kind: Kind
+    public var emotes: [ChatEmote]
+    /// Ids the user can't send here (the channel's sub emotes without the sub): drawn dimmed with a lock.
+    public var locked: Set<String>
+    public var id: String { kind.rawValue }
+
+    public init(kind: Kind, emotes: [ChatEmote], locked: Set<String> = []) {
+        self.kind = kind
+        self.emotes = emotes
+        self.locked = locked
+    }
+}
+
+/// A Twitch emote the signed-in user can send (Helix `chat/emotes/user`), with what Twitch says about it.
+public struct TwitchUserEmote: Sendable, Hashable {
+    public var emote: ChatEmote
+    /// `globals`, `smilies`, `subscriptions`, `follower`, `bitstier`, …
+    public var type: String?
+    /// The broadcaster the emote belongs to ("0" or empty for Twitch's own).
+    public var ownerID: String?
+
+    public init(emote: ChatEmote, type: String?, ownerID: String?) {
+        self.emote = emote
+        self.type = type
+        self.ownerID = ownerID
+    }
+
+    var isGlobal: Bool {
+        type == "globals" || type == "smilies" || ownerID == "0" || ownerID == "twitch" || (ownerID ?? "").isEmpty
     }
 }
 

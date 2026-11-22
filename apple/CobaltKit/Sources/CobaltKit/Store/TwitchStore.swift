@@ -27,6 +27,9 @@ public final class TwitchStore {
     public private(set) var stream: TwitchStreamInfo?
     public private(set) var chat: TwitchChatSnapshot?
     public private(set) var emotes = TwitchEmoteList()
+    /// Emotes picked in the emote picker (70.6), newest first. Memory only, like the rest of chat.
+    public private(set) var recentEmotes: [ChatEmote] = []
+    static let recentEmotesMax = 24
     /// The message the composer answers (a long press › reply).
     public var replyTo: TwitchChatLine?
     public private(set) var clipState: ClipState = .idle
@@ -164,6 +167,24 @@ public final class TwitchStore {
         emotesVersion = -1
         replyTo = nil
         clipState = .idle
+    }
+
+    /// The picker put `emote` in the composer: it moves to the front of `recentEmotes`.
+    public func noteEmotePicked(_ emote: ChatEmote) {
+        var list = recentEmotes.filter { $0.id != emote.id }
+        list.insert(emote, at: 0)
+        if list.count > Self.recentEmotesMax { list.removeLast(list.count - Self.recentEmotesMax) }
+        recentEmotes = list
+    }
+
+    /// `recentEmotes` that this channel still offers and the user can send here.
+    public var recentEmotesHere: [ChatEmote] {
+        guard !recentEmotes.isEmpty else { return [] }
+        var usable = Set<String>()
+        for section in emotes.sections {
+            for e in section.emotes where !section.locked.contains(e.id) { usable.insert(e.id) }
+        }
+        return recentEmotes.filter { usable.contains($0.id) }
     }
 
     /// Sends a message (answering `replyTo` when set). False when chat is read-only or the send failed.
