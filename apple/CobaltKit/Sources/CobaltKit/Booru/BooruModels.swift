@@ -1,17 +1,22 @@
 import Foundation
 
 // The booru tab (APP-API-CONTRACT 72): Danbooru search through the server, under this device's own content level and
-// filters. Explicit does not exist in capystore: the levels are general, sensitive and questionable only, and the server
-// drops anything else before it reaches the app.
+// filters. Questionable and explicit do not exist in capystore (owner, 2026-11-22): the levels are general and sensitive
+// only, and the server drops anything else before it reaches the app.
 
-/// A content level: Danbooru's rating, without explicit.
+/// A content level: Danbooru's rating, general or sensitive only.
 public enum BooruLevel: String, Sendable, Codable, CaseIterable, Comparable {
     case general = "g"
     case sensitive = "s"
-    case questionable = "q"
 
     var rank: Int { Self.allCases.firstIndex(of: self) ?? 0 }
     public static func < (a: Self, b: Self) -> Bool { a.rank < b.rank }
+
+    /// An older server can still answer "q" (the removed questionable level): read it as sensitive, the highest there is.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = raw == "g" ? .general : .sensitive
+    }
 }
 
 /// What happens to the posts a theme matches.
@@ -48,7 +53,7 @@ public struct BooruTheme: Sendable, Equatable, Decodable, Identifiable {
     public var label: String
     public var detail: String
     public var `default`: BooruThemeMode
-    /// The lowest level at which it can match anything (a nudity theme only matters at questionable).
+    /// The lowest level at which it can match anything (a theme for content above general matters from sensitive up).
     public var minLevel: BooruLevel
     public var tags: [String]
 
@@ -310,7 +315,7 @@ extension HTTPCobaltClient: BooruClient {
     public func booruPosts(_ query: BooruQuery, page: Int, level: BooruLevel?) async throws -> BooruPage {
         // the owner's tags first; the order and the rating clause are extras, given up in that order when Danbooru refuses
         // the tag count (anonymous searches take 2 tags). The server filters the page again either way.
-        let clause = level ?? .questionable
+        let clause = level ?? .sensitive
         let ratings = BooruLevel.allCases.filter { $0 <= clause }.map(\.rawValue).joined(separator: ",")
         var extras: [(String, String)] = []
         if let order = query.order.danbooruTag { extras.append(("order", order)) }

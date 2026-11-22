@@ -44,7 +44,7 @@ const settings = (over: Partial<BooruSettings> = {}): BooruSettings => ({
 
 describe("judge", () => {
     it("never keeps explicit, at any level", () => {
-        for (const level of ["g", "s", "q"] as const) {
+        for (const level of ["g", "s"] as const) {
             expect(judge(post({ rating: "e" }), level, defaultThemes(), [], {})).toEqual({ keep: false, why: "level" });
         }
     });
@@ -52,31 +52,39 @@ describe("judge", () => {
         expect(judge(post({ rating: "q" }), "s", defaultThemes(), [], {}).keep).toBe(false);
         expect(judge(post({ rating: "s" }), "s", defaultThemes(), [], {}).keep).toBe(true);
         expect(judge(post({ rating: "s" }), "g", defaultThemes(), [], {}).keep).toBe(false);
-        expect(judge(post({ rating: undefined }), "q", defaultThemes(), [], {}).keep).toBe(false);
+        expect(judge(post({ rating: undefined }), "s", defaultThemes(), [], {}).keep).toBe(false);
+    });
+    it("has no questionable level: a q post is dropped, nudity is hidden, an old q row reads as sensitive", async () => {
+        expect(judge(post({ rating: "q" }), "s", defaultThemes(), [], {})).toEqual({ keep: false, why: "level" });
+        expect(judge(post({ rating: "s", tag_string: "nude" }), "s", Object.fromEntries(Object.keys(defaultThemes()).map((k) => [k, "show" as const])), [], {})).toEqual({ keep: false, why: "level" });
+        expect(defaultThemes().nudity).toBeUndefined();
+        const db = createFakeD1();
+        await expect(db.prepare("INSERT INTO booru_settings (key_id, level, updated_at) VALUES ('old', 'q', 1)").run()).resolves.toBeTruthy();
+        expect((await readSettings(db, "old")).level).toBe("s");
     });
     it("always blocks the hard-block tags, even at general with every theme shown", () => {
         const all = Object.fromEntries(Object.keys(defaultThemes()).map((k) => [k, "show" as const]));
-        expect(judge(post({ tag_string: "loli smile" }), "q", all, [], {})).toEqual({ keep: false, why: "hard" });
+        expect(judge(post({ tag_string: "loli smile" }), "s", all, [], {})).toEqual({ keep: false, why: "hard" });
         expect(judge(post({ rating: "g", tag_string: "shota" }), "g", all, [], {})).toEqual({ keep: false, why: "hard" });
     });
     it("applies theme modes", () => {
         const t = defaultThemes();
-        expect(judge(post({ rating: "q", tag_string: "topless" }), "q", t, [], {})).toEqual({ keep: true, blur: true });
-        expect(judge(post({ rating: "q", tag_string: "nude" }), "q", t, [], {})).toEqual({ keep: false, why: "theme" });
-        expect(judge(post({ tag_string: "blood" }), "q", t, [], {})).toEqual({ keep: false, why: "theme" });
-        expect(judge(post({ tag_string: "blood" }), "q", { ...t, violence: "show" }, [], {})).toEqual({ keep: true, blur: false });
+        expect(judge(post({ rating: "s", tag_string: "topless" }), "s", t, [], {})).toEqual({ keep: false, why: "theme" });
+        expect(judge(post({ rating: "s", tag_string: "topless" }), "s", { ...t, partial: "blur" }, [], {})).toEqual({ keep: true, blur: true });
+        expect(judge(post({ tag_string: "blood" }), "s", t, [], {})).toEqual({ keep: false, why: "theme" });
+        expect(judge(post({ tag_string: "blood" }), "s", { ...t, violence: "show" }, [], {})).toEqual({ keep: true, blur: false });
     });
     it("drops posts without a usable file", () => {
-        expect(judge(post({ file_url: undefined }), "q", defaultThemes(), [], {}).keep).toBe(false);
-        expect(judge(post({ file_url: "https://evil.example/x.png" }), "q", defaultThemes(), [], {}).keep).toBe(false);
-        expect(judge(post({ file_ext: "zip" }), "q", defaultThemes(), [], {}).keep).toBe(false);
-        expect(judge(post({ is_deleted: true }), "q", defaultThemes(), [], {}).keep).toBe(false);
+        expect(judge(post({ file_url: undefined }), "s", defaultThemes(), [], {}).keep).toBe(false);
+        expect(judge(post({ file_url: "https://evil.example/x.png" }), "s", defaultThemes(), [], {}).keep).toBe(false);
+        expect(judge(post({ file_ext: "zip" }), "s", defaultThemes(), [], {}).keep).toBe(false);
+        expect(judge(post({ is_deleted: true }), "s", defaultThemes(), [], {}).keep).toBe(false);
     });
     it("refines by score, media and shape", () => {
-        expect(judge(post({ score: 3 }), "q", defaultThemes(), [], { min_score: 5 }).keep).toBe(false);
-        expect(judge(post({ file_ext: "mp4" }), "q", defaultThemes(), [], { media: "image" }).keep).toBe(false);
-        expect(judge(post(), "q", defaultThemes(), [], { shape: "tall" }).keep).toBe(true);
-        expect(judge(post(), "q", defaultThemes(), [], { shape: "wide" }).keep).toBe(false);
+        expect(judge(post({ score: 3 }), "s", defaultThemes(), [], { min_score: 5 }).keep).toBe(false);
+        expect(judge(post({ file_ext: "mp4" }), "s", defaultThemes(), [], { media: "image" }).keep).toBe(false);
+        expect(judge(post(), "s", defaultThemes(), [], { shape: "tall" }).keep).toBe(true);
+        expect(judge(post(), "s", defaultThemes(), [], { shape: "wide" }).keep).toBe(false);
     });
 });
 
@@ -97,7 +105,7 @@ describe("blacklist", () => {
     });
     it("hides matching posts in judge", () => {
         const rules = parseBlacklist("umbrella");
-        expect(judge(post(), "q", defaultThemes(), rules, {})).toEqual({ keep: false, why: "blacklist" });
+        expect(judge(post(), "s", defaultThemes(), rules, {})).toEqual({ keep: false, why: "blacklist" });
     });
 });
 
@@ -127,7 +135,7 @@ describe("searchPosts", () => {
     it("never goes above the key's level, even when asked", async () => {
         const urls: string[] = [];
         const fetchFn = async (url: string) => (urls.push(url), Response.json([post({ rating: "q" })]));
-        const r = await searchPosts(fetchFn, settings({ level: "g" }), { tags: "", page: 1, order: "new", level: "q" });
+        const r = await searchPosts(fetchFn, settings({ level: "g" }), { tags: "", page: 1, order: "new", level: "s" });
         expect(r.level).toBe("g");
         expect(r.posts).toHaveLength(0);
         expect(decodeURIComponent(urls[0])).toContain("rating:g");
@@ -167,11 +175,11 @@ describe("settings", () => {
     it("defaults to general, saves per key, and refuses explicit at the table", async () => {
         const db = createFakeD1();
         expect((await readSettings(db, "k1")).level).toBe("g");
-        await writeSettings(db, "k1", { level: "q", themes: { violence: "blur" }, blacklist: "rain" }, 5);
+        await writeSettings(db, "k1", { level: "s", themes: { violence: "blur" }, blacklist: "rain" }, 5);
         const s = await readSettings(db, "k1");
-        expect(s).toMatchObject({ level: "q", blacklist: "rain", updated_at: 5 });
+        expect(s).toMatchObject({ level: "s", blacklist: "rain", updated_at: 5 });
         expect(s.themes.violence).toBe("blur");
-        expect(s.themes.nudity).toBe("hide");
+        expect(s.themes.partial).toBe("hide");
         expect((await readSettings(db, "k2")).level).toBe("g");
         await expect(
             db.prepare("INSERT INTO booru_settings (key_id, level, updated_at) VALUES ('k3', 'e', 1)").run(),
@@ -182,11 +190,11 @@ describe("settings", () => {
 describe("filterRaw (POST /booru/filter)", () => {
     it("applies the key's level, the hard block and the themes to a page the app fetched, and never goes higher", () => {
         const raw = [post({ id: 1 }), post({ id: 2, rating: "e" }), post({ id: 3, rating: "q" }), post({ id: 4, tag_string: "loli" }), "junk", null, [1]];
-        const r = filterRaw(settings({ level: "s" }), { posts: raw, level: "q" });
+        const r = filterRaw(settings({ level: "s" }), { posts: raw, level: "s" });
         expect(r.level).toBe("s");
         expect(r.posts.map((p) => p.id)).toEqual([1]);
         expect(r.hidden).toMatchObject({ level: 2, blocked: 1 });
-        expect(filterRaw(settings({ level: "q" }), { posts: raw, level: "g" }).posts.map((p) => p.id)).toEqual([1]);
+        expect(filterRaw(settings({ level: "s" }), { posts: raw, level: "g" }).posts.map((p) => p.id)).toEqual([1]);
     });
 });
 
@@ -198,5 +206,7 @@ describe("PUT /booru/settings input", () => {
         expect(SettingsPatch.safeParse({ themes: { nope: "blur" } }).success).toBe(false);
         expect(SettingsPatch.safeParse({ themes: { violence: "maybe" } }).success).toBe(false);
         expect(SettingsPatch.safeParse({ level: "e" }).success).toBe(false);
+        expect(SettingsPatch.safeParse({ level: "q" }).success).toBe(false);
+        expect(SettingsPatch.safeParse({ themes: { nudity: "show" } }).success).toBe(false);
     });
 });

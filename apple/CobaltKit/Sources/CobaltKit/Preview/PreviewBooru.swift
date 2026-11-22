@@ -23,15 +23,14 @@ enum PreviewBooru {
     static let themes: [BooruTheme] = [
         BooruTheme(id: "revealing", label: "revealing outfits", detail: "swimsuits, underwear, lingerie", default: .show, minLevel: .sensitive, tags: ["swimsuit"]),
         BooruTheme(id: "suggestive", label: "suggestive", detail: "poses and focus shots", default: .show, minLevel: .sensitive, tags: ["cleavage"]),
-        BooruTheme(id: "partial", label: "partial nudity", detail: "topless, covered nudity", default: .blur, minLevel: .questionable, tags: ["topless"]),
-        BooruTheme(id: "nudity", label: "nudity", detail: "only at questionable", default: .hide, minLevel: .questionable, tags: ["nude"]),
+        BooruTheme(id: "partial", label: "partial nudity", detail: "topless, covered nudity", default: .hide, minLevel: .sensitive, tags: ["topless"]),
         BooruTheme(id: "violence", label: "violence and gore", detail: "blood, injury, guro", default: .hide, minLevel: .general, tags: ["blood"]),
         BooruTheme(id: "horror", label: "body horror", detail: "gross-out", default: .hide, minLevel: .general, tags: ["body_horror"]),
     ]
 
     static func post(_ i: Int, level: BooruLevel) -> BooruPost {
         let base = URL(string: "https://preview.invalid/booru/\(i)")!
-        let ratings: [BooruLevel] = [.general, .general, .sensitive, .general, .sensitive, .questionable]
+        let ratings: [BooruLevel] = [.general, .general, .sensitive, .general, .sensitive, .general]
         let rating = min(ratings[i % ratings.count], level)
         return BooruPost(
             id: 1000 + i, rating: rating, blur: i % 7 == 5, media: i % 9 == 4 ? .animated : .image, ext: i % 9 == 4 ? "gif" : "png",
