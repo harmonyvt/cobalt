@@ -120,7 +120,7 @@ struct AppShell: View {
                 .photosPickerStyle(.inline)
                 .photosPickerDisabledCapabilities([.selectionActions])
                 .ignoresSafeArea(edges: .bottom)
-            spreadPane.show(id: Self.photosPaneID, content: AnyView(picker), closable: true) {}
+            spreadPane.show(id: Self.photosPaneID, content: AnyView(picker)) {}
             return
         }
         #endif
@@ -143,7 +143,7 @@ struct AppShell: View {
             .onChange(of: spreadPane.tabRequest) { _, tab in
                 guard let tab else { return }
                 spreadPane.tabRequest = nil
-                spreadPane.show(id: "tab-\(tab)", content: AnyView(tabRoot(tab, tier: Tier(width: width / 2))), closable: true) {}
+                spreadPane.show(id: "tab-\(tab)", content: AnyView(tabRoot(tab, tier: Tier(width: width / 2)))) {}
             }
             .onChange(of: model.selectedTab) { _, tab in spreadPane.close(id: "tab-\(tab)") }
             #endif

@@ -82,16 +82,13 @@ struct ChatScreen: View {
     }
 
     /// A spread (two screens, a landscape iPad, the Mac): the list on the left, the open thread on the right. With no
-    /// thread open the list has the whole width: an empty right side ("pick a chat") is not drawn at all.
+    /// thread open the list has the whole width: an empty right side ("pick a chat") is not drawn at all. The thread
+    /// side always has a close (`DetailSplit`).
     private var split: some View {
-        HStack(spacing: 0) {
-            content.frame(maxWidth: store.openThreadID == nil ? .infinity : Spread.listWidth)
-            if let id = store.openThreadID {
-                HingeSeam(queue: model.queue)
-                NavigationStack { ChatThreadScreen(model: model, threadID: id, tier: tier) }
-                    .id(id)
-                    .frame(maxWidth: .infinity)
-            }
+        DetailSplit(queue: model.queue, open: store.openThreadID, close: { store.openThreadID = nil }) {
+            content
+        } detail: { id in
+            ChatThreadScreen(model: model, threadID: id, tier: tier)
         }
     }
 
