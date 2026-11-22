@@ -43,9 +43,7 @@ struct LinksScreen: View {
     }
 
     var body: some View {
-        Group {
-            if spread { split } else { pushed }
-        }
+        layout
             .background(CobaltColor.bg)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .navigationTitle(Copy.Links.title)
@@ -73,24 +71,23 @@ struct LinksScreen: View {
             .linkPresentations(controller)
     }
 
-    /// iPhone and a narrow window: the list, and a link pushed on it.
-    private var pushed: some View {
-        content
-            .navigationDestination(item: $openedLink) { route in
-                LinkScreen(model: model, setID: route.id)
-            }
-    }
-
-    /// A spread (two screens, a landscape iPad, the Mac): the links on the left, the one being edited on the right, so
-    /// its preview changes beside the list. Collections still open on top. With no link open the list has the whole
-    /// width: an empty right side ("pick a link") is not drawn at all. The link side always has a close (`DetailSplit`).
-    private var split: some View {
-        let shown = openedLink.flatMap { route in store.sets.contains(where: { $0.id == route.id }) ? route : nil }
-        return DetailSplit(queue: model.queue, listWidth: Spread.listWidth + 40, open: shown, close: { openedLink = nil }) {
+    /// iPhone and a narrow window: the list, and a link pushed on it. A spread (two screens, a landscape iPad, the Mac):
+    /// the links on the left, the one being edited on the right, so its preview changes beside the list. Collections still
+    /// open on top. With no link open the list has the whole width: an empty right side ("pick a link") is not drawn at
+    /// all. The link side always has a close (`DetailSplit`).
+    private var layout: some View {
+        DetailSplit(queue: model.queue, listWidth: Spread.listWidth + 40, spread: spread, open: shownLink) {
             content
         } detail: { route in
             LinkScreen(model: model, setID: route.id)
         }
+    }
+
+    /// The open link while it still exists (a deleted one closes).
+    private var shownLink: Binding<LinkRoute?> {
+        Binding(
+            get: { openedLink.flatMap { route in store.sets.contains(where: { $0.id == route.id }) ? route : nil } },
+            set: { openedLink = $0 })
     }
 
     @ViewBuilder

@@ -40,9 +40,7 @@ struct ChatScreen: View {
     }
 
     var body: some View {
-        Group {
-            if spread { split } else { pushed }
-        }
+        layout
             .background(CobaltColor.bg)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .navigationTitle(Copy.Chat.title)
@@ -73,22 +71,14 @@ struct ChatScreen: View {
             .chatPresentations(controller)
     }
 
-    /// iPhone and a narrow window: the list, and a thread pushed on it.
-    private var pushed: some View {
-        content
-            .navigationDestination(item: openedThread) { route in
-                ChatThreadScreen(model: model, threadID: route.id, tier: tier)
-            }
-    }
-
-    /// A spread (two screens, a landscape iPad, the Mac): the list on the left, the open thread on the right. With no
-    /// thread open the list has the whole width: an empty right side ("pick a chat") is not drawn at all. The thread
-    /// side always has a close (`DetailSplit`).
-    private var split: some View {
-        DetailSplit(queue: model.queue, open: store.openThreadID, close: { store.openThreadID = nil }) {
+    /// iPhone and a narrow window: the list, and a thread pushed on it. A spread (two screens, a landscape iPad, the Mac):
+    /// the list on the left, the open thread on the right. With no thread open the list has the whole width: an empty
+    /// right side ("pick a chat") is not drawn at all. The thread side always has a close (`DetailSplit`).
+    private var layout: some View {
+        DetailSplit(queue: model.queue, spread: spread, open: openedThread) {
             content
-        } detail: { id in
-            ChatThreadScreen(model: model, threadID: id, tier: tier)
+        } detail: { route in
+            ChatThreadScreen(model: model, threadID: route.id, tier: tier)
         }
     }
 

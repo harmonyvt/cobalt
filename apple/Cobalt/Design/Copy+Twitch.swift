@@ -98,5 +98,13 @@ extension Copy {
         static let followersOnly = "followers only"
         static let addToSet = "add to a 7tv set…"
         static let emotes = "emotes"
+        static let emoteFilter = "find an emote"
+        static let emotesLoading = "loading this channel's emotes…"
+        static let emotesNone = "no emote by that name"
+        static let showEmotes = "emotes"
+        static let hideEmotes = "hide emotes"
+        static let emotesChannel = "this channel · 7tv"
+        static let emotesYours = "your twitch emotes"
+        static let emotesGlobal = "7tv global"
     }
 }
