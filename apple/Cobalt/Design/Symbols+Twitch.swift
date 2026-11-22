@@ -10,6 +10,7 @@ extension Symbol {
         static let clip = "scissors"
         static let send = "arrow.up"
         static let emotes = "face.smiling"
+        static let keyboard = "keyboard"
         static let reply = "arrowshape.turn.up.left"
         static let copy = "doc.on.doc"
         static let close = "xmark"

@@ -191,6 +191,8 @@ private struct TwitchComposer: View {
 
     @State private var text = ""
     @State private var sending = false
+    /// The emote picker is open under the field (the keyboard is down meanwhile).
+    @State private var picking = false
     @FocusState private var focused: Bool
 
     /// The word being typed (after the last space).
@@ -210,6 +212,16 @@ private struct TwitchComposer: View {
             if !completions.isEmpty { completionRow }
             if let reply = store.replyTo { replyBanner(reply) }
             HStack(spacing: 8) {
+                Button(picking ? Copy.Twitch.hideEmotes : Copy.Twitch.showEmotes, systemImage: picking ? Symbol.Twitch.keyboard : Symbol.Twitch.emotes) {
+                    togglePicker()
+                }
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(picking ? TwitchChatPalette.twitch : CobaltColor.caption)
+                    .frame(width: 34, height: 38)
+                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("twitch.emotes")
                 TextField(store.canSend ? Copy.Twitch.composerPrompt : Copy.Twitch.composerReadOnly, text: $text)
                     .textFieldStyle(.plain)
                     .font(Font.cobalt(14.5))
@@ -234,11 +246,40 @@ private struct TwitchComposer: View {
                     .buttonStyle(.plain)
                     .disabled(!canSend)
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, 4)
+            .padding(.trailing, 10)
             .padding(.vertical, 8)
+            if picking {
+                TwitchEmotePicker(list: store.emotes) { pick($0) }
+                    .frame(height: 260)
+                    .overlay(alignment: .top) { Divider() }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .background(CobaltColor.bg)
         .overlay(alignment: .top) { Divider() }
+        .animation(.snappy(duration: 0.25), value: picking)
+        // the keyboard and the picker take turns under the field
+        .onChange(of: focused) { _, now in if now { picking = false } }
+    }
+
+    private func togglePicker() {
+        if picking {
+            picking = false
+            if store.canSend { focused = true }
+        } else {
+            focused = false
+            picking = true
+        }
+    }
+
+    /// Puts the emote's name in the message, with a space either side, where the text ends.
+    private func pick(_ emote: ChatEmote) {
+        var next = text
+        if !next.isEmpty, !next.hasSuffix(" ") { next += " " }
+        next += emote.name + " "
+        guard next.count <= 500 else { return }
+        text = next
     }
 
     private var canSend: Bool { store.canSend && !trimmed.isEmpty && !sending }
@@ -298,7 +339,7 @@ private struct TwitchComposer: View {
         Task {
             if await store.send(message) { text = "" }
             sending = false
-            focused = true
+            if !picking { focused = true }
         }
     }
 }

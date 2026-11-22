@@ -23,9 +23,7 @@ struct SwarmsScreen: View {
     }
 
     var body: some View {
-        Group {
-            if wide { split } else { listScreen }
-        }
+        layout
         .background(CobaltColor.bg)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .navigationTitle(Copy.Swarms.title)
@@ -90,21 +88,14 @@ struct SwarmsScreen: View {
 
     // MARK: layouts
 
-    /// iPhone and a narrow window: the list, and the swarm pushed on it.
-    private var listScreen: some View {
-        list
-            .navigationDestination(item: $open) { dest in
-                SwarmScreen(model: model, dest: dest).id(dest)
-            }
-    }
-
-    /// The Mac and a wide iPad: the list on the left, the same screen on the right. With no swarm open the list has the
-    /// whole width: an empty right side is not drawn at all. The swarm side always has a close (`DetailSplit`).
-    private var split: some View {
-        DetailSplit(queue: model.queue, open: open, close: { open = nil }) {
+    /// iPhone and a narrow window: the list, and the swarm pushed on it. The Mac, a wide iPad and an unfolded phone: the
+    /// list on the left, the same screen on the right. With no swarm open the list has the whole width: an empty right side
+    /// is not drawn at all. The swarm side always has a close (`DetailSplit`).
+    private var layout: some View {
+        DetailSplit(queue: model.queue, spread: wide, open: $open) {
             list
         } detail: { dest in
-            SwarmScreen(model: model, dest: dest)
+            SwarmScreen(model: model, dest: dest).id(dest)
         }
     }
 
