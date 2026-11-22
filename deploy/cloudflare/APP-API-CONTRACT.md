@@ -7875,6 +7875,24 @@ airplay, the tv, airplay duo.
   Twitch's page; tv mode doesn't depend on it.
 
 
+### 70.6 Emote picker (app only, 2026-11-22)
+
+Owner: "I want a way to be able to see all the like an emote picker on the Twitch page for that channel". Nothing here
+touches the Worker. A smiley button at the left of the chat composer opens the picker under the field, where the
+keyboard goes (they take turns). Code: `apple/Cobalt/Screens/Twitch/TwitchEmotePicker.swift`, sections built in
+`TwitchEmoteList.pickerSections` (`TwitchChatModels.swift`).
+
+- Sections, in order: the channel's 7TV set; the channel's Twitch emotes (Helix `chat/emotes?broadcaster_id=`, plus the
+  user's follower emotes for it), the ones the user can send first and the rest dimmed with a lock ("subscribe to use");
+  the user's other Twitch emotes; Twitch global (`globals`/`smilies`); 7TV global without names the channel's set took.
+  Above them, "recent": emotes picked this run (memory only, at most 24, only those the channel still offers).
+- `chat/emotes/user` is asked once without and once with `broadcaster_id` (the channel's room id), since Helix lists
+  follower emotes only for a named broadcaster. Both calls use the token from 70.1; `user:read:emotes` is already asked (70.2).
+- Search filters every section by name (contains, case-insensitive, names starting with it first). A row of section
+  buttons (each the section's first emote) scrolls to it.
+- Tapping an emote adds its name to the message with a space either side; the picker stays open for more.
+  Long press (right click): copy name, and "add to a 7tv set…" for 7TV emotes when 7TV is linked.
+
 ## 71. Emote editor: make an emote from a picture, webp or video (addendum, 2026-11-21; owner: "squash horizontally and vertically, and when I'm editing images to make into emote, it shows up like a mini editor for WebP and images and videos even ... crop, squash, format, compress, have all that control. And it had iPhone Duo first support in this UI"; mockup scenes "emote …" in the project files `iphone-duo/`, PNGs 17-20. No migration.)
 
 The app's emote editor makes a file on the server, shows it, and remakes it on every change; the made file is a
