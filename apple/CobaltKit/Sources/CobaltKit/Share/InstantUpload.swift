@@ -194,7 +194,7 @@ extension InstantShare {
     /// section 10). `.needsSheet` on a build with no app group (no background session: the full sheet uploads one video
     /// in-process); `.failed` when nothing could be queued.
     @MainActor
-    static func upload(_ providers: [NSItemProvider], settings: Settings, client: HTTPCobaltClient) async -> Start {
+    static func upload(_ providers: sending [NSItemProvider], settings: Settings, client: HTTPCobaltClient) async -> Start {
         let started = Date()
         let transport = URLSessionSaveTransport.current
         guard transport.background else { return .needsSheet }
