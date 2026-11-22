@@ -435,6 +435,18 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         return (req, body)
     }
 
+    /// The share sheet's upload of one photo or video (CONTRACT-SHARE-QUICK.md section 10): `PUT /studio/upload?name=&public=1&queue=1`
+    /// with the file's type, for a background `URLSession` upload from the file (which sets `Content-Length`). Throws
+    /// `.noAPIKey` without a key for this server.
+    public func shareUploadRequest(name: String, contentType: String, public makePublic: Bool) throws -> URLRequest {
+        var query = [("name", name)]
+        if makePublic { query.append(("public", "1")) }
+        query.append(("queue", "1"))
+        var req = try makeRequest("PUT", "/studio/upload", query: query, keyed: true, timeout: 120)
+        req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        return req
+    }
+
     /// The share sheet's request for a gallery (APP-API-CONTRACT 18.12): `POST /studio` with whatever `options` carry
     /// (`items: "all"`, `item_count`, `origin: "share"`, the Hark opt-in, and the chained `slideshow` or `gallery_image`),
     /// returned apart from the request for a background `URLSession` like `shareSaveRequest(link:label:public:)`. Throws

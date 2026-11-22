@@ -63,6 +63,8 @@ enum ShareCopy {
         case .rejected(let status) where status >= 500: return "the server isn't available right now"
         case .rejected: return "the server said no"
         case .unreachable: return "couldn't reach the server"
+        case .tooLarge(let limit): return "that's over the \(ByteCountFormatter.string(fromByteCount: limit, countStyle: .file)) upload limit"
+        case .unsupportedFile: return "capystore can't upload that kind of file"
         }
     }
 

@@ -7,13 +7,14 @@ import UIKit
 /// The share extension's principal class (CONTRACT-SHARE-QUICK.md section 9, CONTRACT-GALLERY.md 1.12).
 ///
 /// By default it shows nothing that waits: `InstantShare.start` reads the shared link and asks the server what it is
-/// (`ShareGalleryFlow`). One video or photo is queued as `POST /studio` with a URLSession upload, a quiet "saving to
+/// (`ShareGalleryFlow`). Photos and videos shared without a link are each queued as `PUT /studio/upload` on the same
+/// background session and the request completes (`InstantUpload.swift`, CONTRACT-SHARE-QUICK.md section 10). One video or photo is queued as `POST /studio` with a URLSession upload, a quiet "saving to
 /// cobalt" notification is posted when the owner already allowed them, and the request completes at once. Only four things
 /// ever show a view:
 ///  - the compact gallery sheet, when the link is a post with several items (one height for its whole life);
 ///  - the one-line failure card, when the save could not even be queued;
-///  - the full sheet, for a file (its upload runs in this process), and when the owner turned on
-///    "show the full share sheet";
+///  - the full sheet, for one video on a build with no app group (its upload runs in this process), and for a link or
+///    one video when the owner turned on "show the full share sheet";
 ///  - nothing else. The quick card and its full-screen overlay are no longer presented (the host ignored
 ///    `.overFullScreen` on the owner's device and drew the overlay's blur as a grey sheet).
 ///
@@ -57,10 +58,14 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
         #if DEBUG
         if await startDebugScenario(items) { return }
         #endif
-        guard !Settings.shared().shareFullSheet else { await showFullSheet(items); return }
+        // "show the full share sheet" keeps its sheet for a link or one video; photos and several files always upload
+        if Settings.shared().shareFullSheet, !InstantShare.uploadsEvenWithFullSheet(items) { await showFullSheet(items); return }
         switch await InstantShare.start(inputItems: items) {
         case .flow(let flow):
             run(flow)
+        case .uploaded:
+            // the uploads are with the system: nothing to show (the app says how they went)
+            finish()
         case .needsSheet:
             await showFullSheet(items)
         case .failed(let failure):

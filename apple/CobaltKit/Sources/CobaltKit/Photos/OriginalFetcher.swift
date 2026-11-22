@@ -92,6 +92,16 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
     @MainActor var instantFailed: (_ link: URL?, _ status: Int?) async -> Void = { link, status in
         await Notifications.postInstantFailed(link: link, status: status)
     }
+    /// A share-sheet upload was refused or never answered (CONTRACT-SHARE-QUICK.md section 10): its file's name and the status.
+    @MainActor var uploadFailed: (_ name: String, _ status: Int?) async -> Void = { name, status in
+        await Notifications.postUploadFailed(name: name, status: status)
+    }
+    /// A share's uploads landed: the files' names, under the share's job (its "uploading" notification is replaced).
+    @MainActor var uploadsLanded: (_ job: UUID, _ names: [String]) async -> Void = { job, names in
+        await Notifications.postUploaded(job: job, names: names)
+    }
+    /// New files are in the library: `AppModel` refreshes it. Nil: nothing to refresh (tests, a cold wake before the model).
+    @MainActor var uploadsChanged: (() async -> Void)?
     /// The extension's "saving to cobalt" notifications have nothing left to say once the app is in front.
     @MainActor var clearInstantNotifications: () -> Void = { Notifications.clearInstantSaving() }
     /// Where the extension left its request bodies (`Saves`): the ones a day old are deleted.
