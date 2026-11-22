@@ -106,5 +106,13 @@ extension Copy {
         static let emotesChannel = "this channel · 7tv"
         static let emotesYours = "your twitch emotes"
         static let emotesGlobal = "7tv global"
+        // the picker's sections and tiles (70.6)
+        static func emotesChannelSevenTv(_ channel: String) -> String { "\(channel) · 7tv" }
+        static func emotesChannelTwitch(_ channel: String) -> String { "\(channel) · twitch" }
+        static let emotesTwitchGlobal = "twitch global"
+        static let emotesRecent = "recent"
+        static let emotesEmpty = "no emotes here yet"
+        static let copyName = "copy name"
+        static let locked = "subscribe to use"
     }
 }

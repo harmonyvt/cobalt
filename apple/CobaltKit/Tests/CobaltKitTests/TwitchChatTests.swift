@@ -201,3 +201,59 @@ struct TwitchStoreSessionRecheckTests {
         #expect(await script.calls == 3)
     }
 }
+
+// The emote picker's sections (APP-API-CONTRACT 70.6).
+struct TwitchEmotePickerTests {
+    private func seven(_ name: String, global: Bool = false) -> ChatEmote {
+        ChatEmote(id: "7-\(name)", name: name, url: URL(string: "https://cdn.7tv.app/emote/\(name)/2x.webp")!, animated: false,
+                  source: global ? .sevenTvGlobal : .sevenTv)
+    }
+
+    private func user(_ id: String, _ name: String, type: String, owner: String) -> TwitchUserEmote {
+        TwitchUserEmote(emote: .twitch(id: id, name: name), type: type, ownerID: owner)
+    }
+
+    private var sections: [TwitchEmoteSection] {
+        TwitchEmoteList.pickerSections(
+            sevenTvChannel: [seven("liaBox"), seven("Clap")],
+            channelTwitch: [.twitch(id: "c1", name: "capyHi"), .twitch(id: "c2", name: "capyLove")],
+            user: [
+                user("25", "Kappa", type: "globals", owner: "0"),
+                user("c2", "capyLove", type: "subscriptions", owner: "room"),
+                user("f1", "capyWave", type: "follower", owner: "room"),
+                user("o1", "otherHype", type: "subscriptions", owner: "someone"),
+            ],
+            roomID: "room",
+            sevenTvGlobal: [seven("Clap", global: true), seven("EZ", global: true)])
+    }
+
+    @Test func groupsBySource() {
+        let s = sections
+        #expect(s.map(\.kind) == [.channelSevenTv, .channelTwitch, .yourTwitch, .twitchGlobal, .sevenTvGlobal])
+        #expect(s[0].emotes.map(\.name) == ["Clap", "liaBox"])
+        // sendable first (c2, then the follower emote), the sub emote without the sub last and locked
+        #expect(s[1].emotes.map(\.name) == ["capyLove", "capyWave", "capyHi"])
+        #expect(s[1].locked == ["c1"])
+        #expect(s[2].emotes.map(\.name) == ["otherHype"])
+        #expect(s[3].emotes.map(\.name) == ["Kappa"])
+        // the channel's 7TV "Clap" wins: the global one is not offered twice
+        #expect(s[4].emotes.map(\.name) == ["EZ"])
+    }
+
+    @Test func searchKeepsSectionsAndPutsPrefixFirst() {
+        let list = TwitchEmoteList(sections: sections)
+        let hits = list.sections(matching: "  CAP ")
+        #expect(hits.map(\.kind) == [.channelTwitch])
+        #expect(hits[0].emotes.map(\.name) == ["capyLove", "capyWave", "capyHi"])
+        #expect(list.sections(matching: "box").map { $0.emotes.map(\.name) } == [["liaBox"]])
+        #expect(list.sections(matching: "zzz").isEmpty)
+        #expect(list.sections(matching: "").count == 5)
+    }
+
+    @Test func helixUserEmotesDecodeTypeAndOwner() throws {
+        let json = #"{"data":[{"id":"25","name":"Kappa","format":["static"],"emote_type":"globals","owner_id":"0"}],"pagination":{}}"#
+        let page = try HelixWire.decoder().decode(HelixWire.CursorPage<HelixWire.UserEmote>.self, from: Data(json.utf8))
+        #expect(page.data?.first?.emoteType == "globals")
+        #expect(page.data?.first?.ownerId == "0")
+    }
+}

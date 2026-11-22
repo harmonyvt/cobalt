@@ -22,7 +22,7 @@ struct TwitchChatPane: View {
             } else {
                 lines(cutoff: nil)
             }
-            TwitchComposer(store: store)
+            TwitchComposer(store: store, canAddToSet: model.sevenTv.isLinked, onAddEmote: onAddEmote)
         }
         .background(CobaltColor.bg)
     }
@@ -188,6 +188,8 @@ private struct TwitchChatLines: View {
 
 private struct TwitchComposer: View {
     let store: TwitchStore
+    let canAddToSet: Bool
+    let onAddEmote: (ChatEmote) -> Void
 
     @State private var text = ""
     @State private var sending = false
@@ -250,7 +252,7 @@ private struct TwitchComposer: View {
             .padding(.trailing, 10)
             .padding(.vertical, 8)
             if picking {
-                TwitchEmotePicker(list: store.emotes) { pick($0) }
+                TwitchEmotePicker(store: store, canAddToSet: canAddToSet, onAddEmote: onAddEmote) { pick($0) }
                     .frame(height: 260)
                     .overlay(alignment: .top) { Divider() }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -280,6 +282,7 @@ private struct TwitchComposer: View {
         next += emote.name + " "
         guard next.count <= 500 else { return }
         text = next
+        store.noteEmotePicked(emote)
     }
 
     private var canSend: Bool { store.canSend && !trimmed.isEmpty && !sending }
