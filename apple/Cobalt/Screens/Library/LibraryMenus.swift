@@ -86,13 +86,6 @@ struct LibraryMenuItems: View {
         if let made = controller.model.emoteTarget(item: item) {
             Button(Copy.EmoteEditor.makeAnEmote, systemImage: Symbol.EmoteEditor.make) { controller.makingEmote = made }
         }
-        #if os(iOS)
-        if WallpaperPick.canMake(item.face) {
-            Button(Copy.Wallpaper.menu, systemImage: Symbol.Wallpaper.menu) {
-                controller.makingWallpaper = WallpaperPick(rendition: item.face)
-            }
-        }
-        #endif
         OfflineMenuItems(item: item, controller: controller, askRemove: askRemove)
         ShowInFilesButton(model: controller.model, item: item)
         ShowInFinderButton(model: controller.model, item: item)

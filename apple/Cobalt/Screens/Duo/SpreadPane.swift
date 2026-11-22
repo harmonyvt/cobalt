@@ -2,7 +2,7 @@ import CobaltKit
 import SwiftUI
 
 // The other screen (Duo building blocks, /mnt/project-files/iphone-duo/building-blocks.html). On a spread the shell keeps
-// one pane as the right half of the selected tab (`SpreadPaneColumn`; the screen on the left reflows into the other half): a sheet, a picker, a confirm or a second tab opens there instead of
+// one pane as the right half of the selected tab (`SpreadPaneColumn`; the screen on the left reflows into the other half): a sheet, a picker or a confirm opens there instead of
 // covering the screen it came from, which stays live and touchable. Folded, on an iPhone and on the Mac the same calls
 // are ordinary sheets.
 
@@ -16,8 +16,6 @@ final class SpreadPaneHost {
     }
 
     private(set) var pane: Pane?
-    /// A tab asked for on the other screen ("two tabs at once"); the shell, which can draw any tab, takes it.
-    var tabRequest: AppTab?
     /// Bumped on every show, so the pane's view (and its state) is new for new content.
     private(set) var generation = 0
 
@@ -286,28 +284,3 @@ private struct SpreadPaneContent: View {
             }
     }
 }
-
-#if os(iOS)
-/// "open on the other screen": a menu of the other tabs, in the toolbar of a spread (Duo building blocks, two tabs).
-struct SecondScreenToolbarItem: ToolbarContent {
-    let model: AppModel
-
-    @Environment(\.spreadPane) private var host
-    @Environment(\.isSpread) private var spread
-
-    var body: some ToolbarContent {
-        if spread, let host {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    ForEach(model.visibleTabs.filter { $0 != model.selectedTab && $0 != .settings }, id: \.self) { tab in
-                        Button(Copy.tab(tab), systemImage: icon(for: tab)) { host.tabRequest = tab }
-                    }
-                } label: {
-                    Label(Copy.Duo.otherScreen, systemImage: Symbol.Duo.otherScreen)
-                }
-                .labelStyle(.iconOnly)
-            }
-        }
-    }
-}
-#endif

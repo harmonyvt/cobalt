@@ -57,7 +57,7 @@ struct AppShell: View {
     /// Two or more links pasted or dropped: the review sheet (CONTRACT-PARALLEL 4.5).
     @State private var review: PasteReviewRequest?
     @State private var width: CGFloat = 0
-    /// The other screen of a spread (Duo building blocks): sheets, pickers, confirms and a second tab open there.
+    /// The other screen of a spread (Duo building blocks): sheets, pickers and confirms open there.
     @State private var spreadPane = SpreadPaneHost()
     /// What a screen that has just popped left to say ("deleted."), drawn over the shell for a moment.
     @State private var status: String?
@@ -138,15 +138,6 @@ struct AppShell: View {
             .environment(\.isSpread, isSpread)
             // the pane itself is a column inside the selected tab (`SpreadPaneColumn`), not an overlay
             .onChange(of: isSpread) { _, spread in if !spread { spreadPane.close() } }
-            #if os(iOS)
-            // a second tab on the other screen; picking the same tab on the main screen closes it there
-            .onChange(of: spreadPane.tabRequest) { _, tab in
-                guard let tab else { return }
-                spreadPane.tabRequest = nil
-                spreadPane.show(id: "tab-\(tab)", content: AnyView(tabRoot(tab, tier: Tier(width: width / 2)))) {}
-            }
-            .onChange(of: model.selectedTab) { _, tab in spreadPane.close(id: "tab-\(tab)") }
-            #endif
             .overlay { if dropTargeted { dropHighlight } }
             #if os(iOS)
             .background { KeyboardShelfPublisher(store: model.store) }
@@ -214,13 +205,6 @@ struct AppShell: View {
             #if DEBUG
             .onAppear {
                 if let kind = UserDefaults.standard.string(forKey: "previewTitleSheet") { debugTitleSheet(kind) }
-                // `-previewOtherTab sevenTv` (simulator evidence): that tab opens on the other screen of a spread
-                if let raw = UserDefaults.standard.string(forKey: "previewOtherTab"), let tab = AppTab(rawValue: raw) {
-                    Task {
-                        try? await Task.sleep(for: .seconds(1))
-                        spreadPane.tabRequest = tab
-                    }
-                }
                 if let n = UserDefaults.standard.string(forKey: "previewDetail").flatMap(Int.init), model.store.media.indices.contains(n) {
                     debugDetail = model.mediaItem(for: model.store.media[n])
                 }

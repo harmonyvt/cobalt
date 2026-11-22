@@ -22,10 +22,6 @@ struct DetailMenu: View {
     @State private var cropping: LibraryImageCropTarget?
     /// `make an emote…` (APP-API-CONTRACT 71): the emote editor that is up.
     @State private var emoting: EmoteEditorTarget?
-    #if os(iOS)
-    /// `make wallpaper…` (apple/CONTRACT-WALLPAPER.md): the file the wallpaper maker is open on.
-    @State private var wallpaper: WallpaperPick?
-    #endif
 
     private var model: AppModel { controller.model }
 
@@ -148,14 +144,6 @@ struct DetailMenu: View {
                 Button(Copy.EmoteEditor.makeAnEmote, systemImage: Symbol.EmoteEditor.make) { emoting = made }
                     .disabled(deleting)
             }
-            #if os(iOS)
-            if WallpaperPick.canMake(liveRendition ?? rendition) {
-                Button(Copy.Wallpaper.menu, systemImage: Symbol.Wallpaper.menu) {
-                    wallpaper = WallpaperPick(rendition: liveRendition ?? rendition)
-                }
-                .disabled(deleting)
-            }
-            #endif
             ShowInFinderButton(model: model, item: item)
             ShowInFilesButton(model: model, item: item)
             if showsKeepEverything {
@@ -193,9 +181,6 @@ struct DetailMenu: View {
         .toolSheet($tool, model: model, item: item) { line in if let line { controller.say(line) } }
         .modifier(LibraryImageCropPresenter(model: model, target: $cropping, done: { line in controller.say(line) }))
         .modifier(EmoteEditorPresenter(model: model, target: $emoting))
-        #if os(iOS)
-        .modifier(WallpaperPresenter(model: model, target: $wallpaper))
-        #endif
         #if DEBUG
         .task {
             ToolsDebug.seedPhotos(of: item)
