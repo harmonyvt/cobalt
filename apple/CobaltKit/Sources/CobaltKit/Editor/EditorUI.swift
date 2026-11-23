@@ -33,6 +33,9 @@ public final class EditorUI {
     public var timelineHeight: Double?
     /// 1 = the picture fits its slot.
     public var pictureZoom: Double = 1
+    /// The selection was made by tapping the picture (15.3): the tool row shows the picture tools (fit, turn 90°, bring
+    /// up, send down, opacity, reset, delete) instead of the clip tools. Cleared when the selection changes elsewhere.
+    public var pickedOnPicture = false
     /// The render card is up.
     public var renderShown = false
     /// The regime last laid out (nil before the first layout).
