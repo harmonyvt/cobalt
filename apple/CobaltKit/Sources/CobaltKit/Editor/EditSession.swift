@@ -118,6 +118,7 @@ public final class EditSession {
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var seekInFlight = false
     @ObservationIgnored private var pendingSeekFrame: Int?
+    @ObservationIgnored private var pendingSeekExact = true
     @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
     /// The newest build threw and the previous item is still in the player. Its `.readyToPlay` must not clear `previewFailed`.
@@ -188,22 +189,26 @@ public final class EditSession {
         if isPlaying { pause() } else { play() }
     }
 
-    public func seek(frame k: Int) {
+    /// `exact: false` is a scrub's seek while the finger is down (CONTRACT-EDITOR 15.5): any frame near the target will do,
+    /// so the picture keeps up; the release sends an exact one.
+    public func seek(frame k: Int, exact: Bool = true) {
         let clamped = min(max(0, k), max(0, timing.frames - 1))
         playhead = clamped
         guard player.currentItem != nil else { return }
-        chaseSeek(to: clamped)
+        chaseSeek(to: clamped, exact: exact)
     }
 
-    /// One exact seek in flight; a scrub's newer targets wait, and only the latest is sent when it lands.
-    private func chaseSeek(to frame: Int) {
+    /// One seek in flight; a scrub's newer targets wait, and only the latest is sent when it lands.
+    private func chaseSeek(to frame: Int, exact: Bool = true) {
         if seekInFlight {
             pendingSeekFrame = frame
+            pendingSeekExact = exact
             return
         }
         seekInFlight = true
         let time = CMTime(value: Int64(frame), timescale: Int32(timing.fps))
-        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+        let tolerance: CMTime = exact ? .zero : CMTime(value: 1, timescale: 10)
+        player.seek(to: time, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
             Task { @MainActor [weak self] in self?.seekLanded() }
         }
     }
@@ -213,7 +218,7 @@ public final class EditSession {
         guard let next = pendingSeekFrame else { return }
         pendingSeekFrame = nil
         guard !isClosed, player.currentItem != nil else { return }
-        chaseSeek(to: min(next, max(0, timing.frames - 1)))
+        chaseSeek(to: min(next, max(0, timing.frames - 1)), exact: pendingSeekExact)
     }
 
     public func step(frames: Int) { seek(frame: playhead + frames) }

@@ -25,6 +25,14 @@ struct EditorTimelinePane: View {
     @State private var mainTargeted = false
     @State private var overlayTargeted: Int?
     @State private var layerScroll = ScrollPosition(idType: Int.self)
+    @State private var rulerScrub: TimelineRulerScrub
+
+    init(session: EditSession, scale: Binding<TimelineScale>, height: CGFloat) {
+        self.session = session
+        self._scale = scale
+        self.height = height
+        self._rulerScrub = State(initialValue: TimelineRulerScrub(session: session))
+    }
 
     private static let headerWidth: CGFloat = 92
     private static let rulerHeight: CGFloat = 28
@@ -78,6 +86,7 @@ struct EditorTimelinePane: View {
             TimelinePlayheadFollower(session: session) { followPlayhead() }
         }
         .haptic(.selection, trigger: session.selection)
+        .haptic(.impact(weight: .light), trigger: rulerScrub.tick)
     }
 
     // MARK: headers and zoom
@@ -207,13 +216,13 @@ struct EditorTimelinePane: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        if !scrubbing {
-                            scrubbing = true
-                            if session.isPlaying { session.pause() }
-                        }
-                        session.seek(frame: session.timing.frame(at: scale.seconds(at: value.location.x)))
+                        scrubbing = true
+                        rulerScrub.move(to: scale.seconds(at: value.location.x))
                     }
-                    .onEnded { _ in scrubbing = false })
+                    .onEnded { value in
+                        scrubbing = false
+                        rulerScrub.end(at: scale.seconds(at: value.location.x))
+                    })
     }
 
     // MARK: lanes

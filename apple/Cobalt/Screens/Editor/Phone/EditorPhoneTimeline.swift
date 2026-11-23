@@ -2,13 +2,13 @@
 import CobaltKit
 import SwiftUI
 
-/// The iPhone timeline (apple/CONTRACT-EDITOR.md 4.4, 12): 150 pt tall with one overlay layer, a fixed white playhead at the
-/// centre and the tracks sliding under it. Dragging scrubs (a light tick on every clip edge, a little momentum on release); a
-/// pinch zooms; a tap selects a clip and a tap on nothing deselects; a long press lifts a clip to reorder it. The overlay
-/// layers sit above the main lane, L1 nearest it; three show at most, and `+N more` opens the rest. A long press then a drag
-/// up or down moves an overlay to another layer. `+` at the right adds a clip.
+/// The iPhone and iPad timeline (apple/CONTRACT-EDITOR.md 4.4, 12, 15.5), in every layout regime: a fixed white playhead at the
+/// centre and the tracks sliding under it. One finger scrubs (seeks coalesced, a fling after the release, a light tick on
+/// every clip edge, all in `TimelineScrubber`); a pinch zooms about the playhead. A version 2 project is
+/// `EditorPhoneEqualLanes`; this file keeps the version 1 layout (a main lane under up to three overlay layers, `+N more`
+/// opens the rest) and the clip views it shares.
 ///
-/// Nothing here scrolls: every block is placed at `centre + scale.x(its time - the playhead's time)`, so playing, scrubbing and
+/// Nothing here scrolls: every block is placed at `centre + scale.x(its time - the scrubber's time)`, so playing, scrubbing and
 /// seeking all move the same way and only the blocks on screen are built.
 struct EditorPhoneTimeline: View {
     let session: EditSession
@@ -16,14 +16,17 @@ struct EditorPhoneTimeline: View {
     let openAdd: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("editor.pinchHintSeen") private var pinchSeen = false
-    @State private var scrubBase: Double?
-    @State private var inertia: Task<Void, Never>?
+    @State private var scrubber: TimelineScrubber
     @State private var pinchBase: CGFloat?
     @State private var reorder: ReorderDrag?
-    @State private var edgeTick = 0
-    @State private var lastClipID: String?
     @State private var showAllLayers = false
+
+    init(session: EditSession, scale: Binding<TimelineScale>, openAdd: @escaping () -> Void) {
+        self.session = session
+        self._scale = scale
+        self.openAdd = openAdd
+        self._scrubber = State(initialValue: TimelineScrubber(session: session))
+    }
 
     static let topY: CGFloat = 16
     static let overlayHeight: CGFloat = 28
@@ -47,11 +50,17 @@ struct EditorPhoneTimeline: View {
     private var height: CGFloat { mainY + Self.mainHeight + Self.bottomSpace }
 
     var body: some View {
-        if session.timeline.isV2 {
-            EditorPhoneEqualLanes(session: session, scale: $scale, openAdd: openAdd)
-        } else {
-            legacyBody
+        Group {
+            if session.timeline.isV2 {
+                EditorPhoneEqualLanes(session: session, scale: $scale, scrubber: scrubber, openAdd: openAdd)
+            } else {
+                legacyBody
+            }
         }
+        .onChange(of: session.playhead) { _, _ in scrubber.followSession() }
+        .onChange(of: session.isPlaying, initial: true) { _, _ in scrubber.playbackChanged() }
+        .onAppear { scrubber.followSession() }
+        .onDisappear { scrubber.stop() }
     }
 
     /// Version 1: the main lane under the overlay lanes, a long press reorders the main clips.
@@ -65,8 +74,7 @@ struct EditorPhoneTimeline: View {
         .overlay(alignment: .top) { Rectangle().fill(EditorColor.line).frame(height: 1) }
         .overlay(alignment: .bottom) { Rectangle().fill(EditorColor.line).frame(height: 1) }
         .clipped()
-        .modifier(EditorPhoneTimelineHaptics(edgeTick: edgeTick))
-        .onDisappear { inertia?.cancel() }
+        .modifier(EditorPhoneTimelineHaptics(edgeTick: scrubber.tick))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Editor.timelineA11y)
     }
@@ -86,6 +94,7 @@ struct EditorPhoneTimeline: View {
         .frame(width: width, height: height, alignment: .topLeading)
         .contentShape(Rectangle())
         .gesture(scrub)
+        .simultaneousGesture(touchDown)
         .simultaneousGesture(pinch)
         .motion(Motion.rows, value: reorder?.target)
     }
@@ -94,7 +103,7 @@ struct EditorPhoneTimeline: View {
 
     /// The screen x of a time on the timeline.
     private func x(_ seconds: Double, width: CGFloat) -> CGFloat {
-        width / 2 + scale.x(seconds - session.playheadSeconds)
+        width / 2 + scale.x(seconds - scrubber.seconds)
     }
 
     private func onScreen(start: CGFloat, length: CGFloat, width: CGFloat) -> Bool {
@@ -162,12 +171,7 @@ struct EditorPhoneTimeline: View {
         let spans = session.overlaySpans
         return ZStack(alignment: .topLeading) {
             if session.timeline.overlay.isEmpty {
-                Text(Copy.Editor.trackOverlay)
-                    .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
-                    .foregroundStyle(CobaltColor.caption)
-                    .padding(.leading, 14)
-                    .padding(.top, 7)
-                    .accessibilityHidden(true)
+                Color.clear
             } else if session.overlayTrackLimit > 1 {
                 ForEach(0..<laneCount, id: \.self) { track in
                     Text(Copy.Editor.layerN(track))
@@ -268,51 +272,22 @@ struct EditorPhoneTimeline: View {
         }
     }
 
-    // MARK: scrubbing and momentum
+    // MARK: scrubbing
 
     private var scrub: some Gesture {
         DragGesture(minimumDistance: 6)
             .onChanged { value in
                 guard reorder == nil else { return }
-                if scrubBase == nil {
-                    scrubBase = session.playheadSeconds
-                    lastClipID = session.clipUnderPlayhead?.clip.id
-                    inertia?.cancel()
-                    if session.isPlaying { session.pause() }
-                }
-                moveTo((scrubBase ?? 0) - scale.seconds(at: value.translation.width))
+                if !scrubber.dragging { scrubber.beginDrag() }
+                scrubber.drag(translation: value.translation.width, pointsPerSecond: scale.pointsPerSecond)
             }
             .onEnded { value in
-                scrubBase = nil
-                glide(velocity: value.velocity.width)
+                scrubber.endDrag(velocity: value.velocity.width, pointsPerSecond: scale.pointsPerSecond, fling: !reduceMotion)
             }
     }
 
-    private func moveTo(_ seconds: Double) {
-        session.seek(frame: session.timing.frame(at: max(0, seconds)))
-        let id = session.clipUnderPlayhead?.clip.id
-        if id != lastClipID {
-            lastClipID = id
-            edgeTick += 1
-        }
-    }
-
-    /// A little momentum after the finger lifts: the speed halves about every 0.2 s.
-    private func glide(velocity: CGFloat) {
-        guard !reduceMotion, abs(velocity) > 120 else { return }
-        let initial = velocity
-        let pointsPerSecond = scale.pointsPerSecond
-        inertia?.cancel()
-        inertia = Task { @MainActor in
-            var v = initial
-            var seconds = session.playheadSeconds
-            while !Task.isCancelled, !session.isPlaying, abs(v) > 24 {
-                try? await Task.sleep(for: .milliseconds(16))
-                seconds -= Double(v / pointsPerSecond) * 0.016
-                v *= 0.94
-                moveTo(seconds)
-            }
-        }
+    private var touchDown: some Gesture {
+        DragGesture(minimumDistance: 0).onChanged { _ in scrubber.touchDown() }
     }
 
     // MARK: zoom
@@ -323,7 +298,6 @@ struct EditorPhoneTimeline: View {
                 let base = pinchBase ?? scale.pointsPerSecond
                 pinchBase = base
                 scale = TimelineScale(pointsPerSecond: base * value.magnification)
-                if !pinchSeen { pinchSeen = true }
             }
             .onEnded { _ in pinchBase = nil }
     }
