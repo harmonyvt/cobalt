@@ -4,7 +4,8 @@ import SwiftUI
 // The queue tab (apple/CONTRACT.md section 12): everything cobalt is doing, in one calm list. A header that counts
 // what runs and waits, then the sections in a fixed order: now, waiting, library indexing, downloads, photos, recently
 // finished, failed. This device's jobs are the tray's own cards (`JobCard`), so a job reads the same here as over the
-// home screen; everything else is a `QueueRow` in the same style. Every action goes through `AppModel.perform`, which
+// home screen; a tap on one opens it in the screen pane (`QueueJobPage`), which keeps it in the bar while it runs.
+// Everything else is a `QueueRow` in the same style. Every action goes through `AppModel.perform`, which
 // routes it to the store that owns the work. The screen tells the model when it is on screen: `GET /queue` is only
 // polled then.
 
@@ -12,6 +13,7 @@ struct QueueScreen: View {
     let model: AppModel
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(Pane.self) private var pane: Pane?
     /// +1 per cancel, retry, dismiss or open the owner asks for (a light tap).
     @State private var actionTicks = 0
     @State private var confirmingCancel: QueueItem?
@@ -143,7 +145,7 @@ struct QueueScreen: View {
         case .job(let job):
             JobCard(
                 job: job, lineMax: model.capabilities.limits.lineMax, lineMode: model.queue.lineMode,
-                onOpen: { model.open(item) },
+                onOpen: { open(item) },
                 onExit: { run(job.isPicker ? .dismiss : .cancel, item) },
                 onRetry: { run(.retry, item) },
                 onDismiss: { run(.dismiss, item) })
@@ -161,7 +163,30 @@ struct QueueScreen: View {
         }
     }
 
+    /// A job opens in the pane; every other row goes where its work lives (`AppModel.open`).
+    private func open(_ item: QueueItem) {
+        guard case .job(let job) = item.kind, let pane else {
+            model.open(item)
+            return
+        }
+        let id = job.id.uuidString
+        // the queue sheet (iPhone, iPad) gives way first, then the pane (a sheet of its own on a narrow screen) comes up
+        if model.queueShown {
+            model.queueShown = false
+            Task {
+                try? await Task.sleep(for: .milliseconds(450))
+                pane.open(.job(id))
+            }
+        } else {
+            pane.open(.job(id))
+        }
+    }
+
     private func run(_ action: QueueAction, _ item: QueueItem) {
+        if action == .open {
+            open(item)
+            return
+        }
         if action == .cancel, case .edit = item.kind {
             confirmingCancel = item
             return
@@ -465,6 +490,7 @@ private struct QueuePreview: View {
     var body: some View {
         NavigationStack { QueueScreen(model: model) }
             .cobaltRoot(model: model)
+            .environment(Pane())
     }
 }
 
@@ -482,7 +508,7 @@ private struct QueuePreview: View {
     QueuePreview(.quiet)
 }
 #Preview("queue · plain scenario") {
-    PreviewHost(.happy, tab: .queue) { model in NavigationStack { QueueScreen(model: model) } }
+    PreviewHost(.happy, tab: .queue) { model in NavigationStack { QueueScreen(model: model) }.environment(Pane()) }
 }
 #Preview("queue · mac width", traits: .fixedLayout(width: 900, height: 700)) {
     QueuePreview(.busy)

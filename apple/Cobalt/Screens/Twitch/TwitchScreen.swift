@@ -1,67 +1,34 @@
 import CobaltKit
 import SwiftUI
 
-// The twitch tab (APP-API-CONTRACT 70): a list of channels (search, your channel, who you follow that is live, recent),
-// then one channel: Twitch's own player and its live chat. On a wide screen (an unfolded Duo, an iPad in landscape, the
-// Mac) the player and chat sit side by side; on a phone the chat is under the player.
+// The twitch tab (APP-API-CONTRACT 70): a list of channels (search, your channel, who you follow that is live, recent).
+// A channel opens in the screen pane (`TwitchStreamPage`: the player in the hero, chat on the shelf), which keeps
+// playing in the bar when it is closed and while you switch tabs, so this list is always the tab's main view.
 
 struct TwitchScreen: View {
     let model: AppModel
     let tier: Tier
 
-    @State private var addingToSet: SevenTvAddToSetModel?
     @Environment(\.lifecycle) private var lifecycle
-    /// The "watch on the tv" sheet (70.5).
-    @State private var choosingTV = false
 
     private var store: TwitchStore { model.twitch }
 
     var body: some View {
-        Group {
-            if let channel = store.channel {
-                TwitchWatchView(model: model, channel: channel, addingToSet: $addingToSet)
-            } else {
-                TwitchChannelList(model: model)
+        TwitchChannelList(model: model)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(CobaltColor.bg)
+            .navigationTitle(Copy.Twitch.title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .task {
+                await store.load()
+                if model.sevenTv.status == nil { await model.sevenTv.load() }
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(CobaltColor.bg)
-        .navigationTitle(store.channel.map { store.channelInfo?.displayName ?? $0 } ?? Copy.Twitch.title)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        // watching is a state, not a push: our "back" closes the channel, so the stack's own back button (to "more")
-        // would be a second one beside it
-        .navigationBarBackButtonHidden(store.channel != nil)
-        #endif
-        .toolbar {
-            if store.channel != nil {
-                ToolbarItem(placement: .navigation) {
-                    Button(Copy.Twitch.back, systemImage: Symbol.Twitch.back) { store.close() }
-                }
-                #if os(iOS)
-                ToolbarItem(placement: .primaryAction) {
-                    Button(Copy.Twitch.watchOnTV, systemImage: Symbol.Twitch.tv) { choosingTV = true }
-                        .tint(TwitchTV.shared.onTV ? TwitchTVPalette.tv : nil)
-                }
-                #endif
+            // back from studio (a reconnect) or from the background: a session that could not chat is asked again
+            .onChange(of: lifecycle.phase) { _, phase in
+                if phase == .active { Task { await store.load() } }
             }
-        }
-        .task {
-            await store.load()
-            if model.sevenTv.status == nil { await model.sevenTv.load() }
-        }
-        // back from studio (a reconnect) or from the background: a session that could not chat is asked again
-        .onChange(of: lifecycle.phase) { _, phase in
-            if phase == .active { Task { await store.load() } }
-        }
-        .spreadSheet(item: $addingToSet) { picker in
-            SevenTvAddToSetSheet(picker: picker).panelDrawsOwnClose()
-        }
-        #if os(iOS)
-        .sheet(isPresented: $choosingTV) {
-            TwitchTVSheet().presentationDetents([.medium, .large])
-        }
-        #endif
     }
 }
 
@@ -70,6 +37,7 @@ struct TwitchScreen: View {
 private struct TwitchChannelList: View {
     let model: AppModel
 
+    @Environment(Pane.self) private var pane
     @State private var query = ""
 
     private var store: TwitchStore { model.twitch }
@@ -81,7 +49,7 @@ private struct TwitchChannelList: View {
                 banner
                 if let me = store.session?.credentials?.login {
                     section(Copy.Twitch.yourChannel) {
-                        TwitchRecentChip(login: me, icon: Symbol.Twitch.pin) { store.open(me) }
+                        TwitchRecentChip(login: me, icon: Symbol.Twitch.pin) { watch(me) }
                     }
                 }
                 live
@@ -89,7 +57,7 @@ private struct TwitchChannelList: View {
                     section(Copy.Twitch.recent) {
                         TwitchFlow(spacing: 8, lineSpacing: 8) {
                             ForEach(store.recents, id: \.self) { login in
-                                TwitchRecentChip(login: login, icon: Symbol.Twitch.recent) { store.open(login) }
+                                TwitchRecentChip(login: login, icon: Symbol.Twitch.recent) { watch(login) }
                             }
                         }
                     }
@@ -127,8 +95,14 @@ private struct TwitchChannelList: View {
 
     private func openQuery() {
         guard TwitchStore.login(from: query) != nil else { return }
-        store.open(query)
+        watch(query)
         query = ""
+    }
+
+    /// A channel opens in the pane (its page opens the chat and starts the player).
+    private func watch(_ name: String) {
+        guard let login = TwitchStore.login(from: name) else { return }
+        pane.open(.stream(login))
     }
 
     @ViewBuilder private var banner: some View {
@@ -151,7 +125,7 @@ private struct TwitchChannelList: View {
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 14)], alignment: .leading, spacing: 18) {
                         ForEach(store.following) { s in
-                            Button { store.open(s.login) } label: { TwitchStreamCard(stream: s) }
+                            Button { watch(s.login) } label: { TwitchStreamCard(stream: s) }
                                 .buttonStyle(.plain)
                         }
                     }
@@ -252,170 +226,5 @@ private struct TwitchStreamCard: View {
             }
         }
         .contentShape(Rectangle())
-    }
-}
-
-// MARK: - watching
-
-private struct TwitchWatchView: View {
-    let model: AppModel
-    let channel: String
-    @Binding var addingToSet: SevenTvAddToSetModel?
-
-    private var store: TwitchStore { model.twitch }
-
-    var body: some View {
-        GeometryReader { geo in
-            // side by side when there is room for a real chat column beside a 16:9 player
-            if geo.size.width >= Spread.minWidth, geo.size.width > geo.size.height * 1.05 {
-                let chatWidth = min(420, max(300, geo.size.width * 0.34))
-                HStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        player(compact: false)
-                        TwitchInfoBar(model: model)
-                        Spacer(minLength: 0)
-                    }
-                    .frame(maxWidth: .infinity)
-                    HingeSeam(queue: model.queue)
-                    chat.frame(width: chatWidth)
-                }
-            } else {
-                VStack(spacing: 0) {
-                    player(compact: true)
-                    if !onTV {
-                        TwitchInfoBar(model: model, compact: true)
-                        Divider()
-                    }
-                    chat
-                }
-            }
-        }
-        #if os(iOS)
-        // The TV (70.5): while this view is up, a mirrored screen shows capystore's own window with the stream.
-        .background(TwitchTVAccessory(enabled: TwitchTV.shared.wanted).frame(width: 0, height: 0))
-        .onAppear { TwitchTV.shared.watchStarted(model) }
-        .onDisappear { TwitchTV.shared.watchEnded() }
-        .onChange(of: channel) { TwitchTV.shared.refresh() }
-        #endif
-    }
-
-    private var onTV: Bool {
-        #if os(iOS)
-        TwitchTV.shared.onTV
-        #else
-        false
-        #endif
-    }
-
-    /// The player, or while it plays on the TV, the card standing in for it.
-    @ViewBuilder private func player(compact: Bool) -> some View {
-        #if os(iOS)
-        if onTV {
-            TwitchTVCard(model: model, compact: compact)
-        } else {
-            TwitchPlayer(channel: channel)
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .frame(maxWidth: .infinity)
-        }
-        #else
-        TwitchPlayer(channel: channel)
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .frame(maxWidth: .infinity)
-        #endif
-    }
-
-    private var chat: some View {
-        TwitchChatPane(model: model, delay: chatDelay) { emote in
-            guard let hit = emote.asHit else { return }
-            addingToSet = model.sevenTv.addToSetPicker(emote: hit)
-        }
-    }
-
-    /// Video-only AirPlay runs the TV behind the phone: chat waits to match (70.5).
-    private var chatDelay: TimeInterval {
-        #if os(iOS)
-        TwitchTV.shared.activeChatDelay
-        #else
-        0
-        #endif
-    }
-}
-
-private struct TwitchInfoBar: View {
-    let model: AppModel
-    var compact = false
-
-    private var store: TwitchStore { model.twitch }
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            if let avatar = store.channelInfo?.avatar {
-                StillImage(url: avatar)
-                    .frame(width: compact ? 30 : 40, height: compact ? 30 : 40)
-                    .clipShape(Circle())
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(store.channelInfo?.displayName ?? store.channel ?? "")
-                        .font(Font.cobalt(compact ? 14 : 16, .semibold))
-                        .foregroundStyle(CobaltColor.text)
-                    if let s = store.stream {
-                        Label(Copy.Twitch.viewers(s.viewers), systemImage: Symbol.Twitch.viewers)
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(Color.red)
-                    } else if store.channelInfo != nil {
-                        Text(Copy.Twitch.offline)
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(CobaltColor.caption)
-                    }
-                }
-                if let s = store.stream {
-                    Text(compact ? s.title : [s.title, s.game].filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(Font.cobalt(12.5))
-                        .foregroundStyle(CobaltColor.caption)
-                        .lineLimit(compact ? 1 : 2)
-                }
-                if let note = clipNote {
-                    Text(note)
-                        .font(Font.cobalt(12, .medium))
-                        .foregroundStyle(store.clipState == .failed ? CobaltColor.errorText : CobaltColor.success)
-                }
-            }
-            Spacer(minLength: 0)
-            if store.canClip {
-                Button(Copy.Twitch.clip, systemImage: Symbol.Twitch.clip) {
-                    Task { await store.clip { url in _ = model.queue.add([.link(url)], via: .paste) } }
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                .disabled(store.clipState == .making)
-                .help(Copy.Twitch.clip)
-            }
-            if let channel = store.channel, let url = URL(string: "https://www.twitch.tv/\(channel)") {
-                Link(destination: url) {
-                    Image(systemName: Symbol.Twitch.open)
-                        .frame(width: Metrics.hit, height: Metrics.hit)
-                }
-                .foregroundStyle(CobaltColor.caption)
-                .help(Copy.Twitch.openOnTwitch)
-                .accessibilityLabel(Copy.Twitch.openOnTwitch)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, compact ? 6 : 10)
-        .task(id: store.clipState) {
-            guard store.clipState == .saved || store.clipState == .failed else { return }
-            try? await Task.sleep(for: .seconds(4))
-            store.acknowledgeClip()
-        }
-    }
-
-    private var clipNote: String? {
-        switch store.clipState {
-        case .idle: return nil
-        case .making: return Copy.Twitch.clipping
-        case .saved: return Copy.Twitch.clipSaved
-        case .failed: return Copy.Twitch.clipFailed
-        }
     }
 }

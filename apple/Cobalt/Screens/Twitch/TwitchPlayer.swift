@@ -76,6 +76,8 @@ enum TwitchEmbed {
             player.pause();
             setTimeout(function () { player.play(); }, 150);
           };
+          window.cobaltPause = function () { if (player) player.pause(); };
+          window.cobaltPlay = function () { if (player) player.play(); };
           window.cobaltRebuild = build;
           window.cobaltSetChannel = function (c) { ch = c; if (player) { player.setChannel(c); } else { build(); } };
           if (window.Twitch && Twitch.Player) { build(); } else { post({ e: "noembed" }); }
@@ -86,7 +88,7 @@ enum TwitchEmbed {
     }
 
     /// The persistent `.default()` data store keeps the Twitch sign-in's cookies when the web view is let go and rebuilt.
-    static func configuration(handler proxy: WKScriptMessageHandler) -> WKWebViewConfiguration {
+    @MainActor static func configuration(handler proxy: WKScriptMessageHandler) -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
         #if os(iOS)
@@ -262,6 +264,12 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         scheduleRelease()
     }
 
+    /// The pane's one play / pause button (the embed has its own controls too).
+    func setPaused(_ paused: Bool) {
+        guard channel != nil else { return }
+        made?.evaluateJavaScript(paused ? "window.cobaltPause && window.cobaltPause()" : "window.cobaltPlay && window.cobaltPlay()")
+    }
+
     /// Back to the live edge: pause and play, and if the stream is still behind a few seconds later, reload the player.
     func jumpToLive() {
         guard channel != nil else { return }
@@ -274,7 +282,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             try? await Task.sleep(for: .seconds(6))
             guard let self, !Task.isCancelled else { return }
             if self.isBehind {
-                self.made?.evaluateJavaScript("window.cobaltRebuild && window.cobaltRebuild()", completionHandler: nil)
+                _ = try? await self.made?.evaluateJavaScript("window.cobaltRebuild && window.cobaltRebuild()")
                 try? await Task.sleep(for: .seconds(6))
                 guard !Task.isCancelled else { return }
                 // still behind after a reload: this is as close as the stream gets now, so it becomes the new best

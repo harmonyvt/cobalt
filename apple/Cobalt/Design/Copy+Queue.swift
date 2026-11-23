@@ -121,6 +121,8 @@ extension Copy {
         static let open = "open"
         static let refresh = "refresh"
         static let openLibrary = "open library"
+        /// A job's page in the pane, after the job left the queue.
+        static let jobGone = "that job has finished or gone."
         static let openSettings = "open settings"
         /// The JobTray's header, as a button: "open the queue".
         static let openQueueA11y = "open the queue"
