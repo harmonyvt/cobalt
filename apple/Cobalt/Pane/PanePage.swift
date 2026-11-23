@@ -337,9 +337,14 @@ struct PaneIconButton: View {
 
     var body: some View {
         let off = action.off(offline: offline)
-        Button(role: action.role) { action.perform() } label: {
-            Image(systemName: action.systemImage)
-                .font(.system(size: 15, weight: .semibold))
+        Group {
+            if action.choices.isEmpty {
+                Button(role: action.role) { action.perform() } label: { icon }
+            } else {
+                Menu { PaneChoiceItems(choices: action.choices) } label: { icon }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+            }
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
@@ -351,6 +356,11 @@ struct PaneIconButton: View {
         .help(action.title)
         .accessibilityLabel(action.title)
         .accessibilityIdentifier("pane.action.\(action.id)")
+    }
+
+    private var icon: some View {
+        Image(systemName: action.systemImage)
+            .font(.system(size: 15, weight: .semibold))
     }
 }
 

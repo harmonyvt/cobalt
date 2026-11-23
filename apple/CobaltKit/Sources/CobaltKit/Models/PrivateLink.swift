@@ -158,6 +158,14 @@ extension Rendition {
     /// The live private link of this rendition's file (the original's for a video), nil when it has none.
     public var privateURL: URL? { file?.privateURL ?? hosted?.privateURL }
 
+    /// The bytes under the live private link (`<private link>/1.<ext>`, APP-API-CONTRACT 36.3), nil when the server did
+    /// not send one for the current link (an older server, or a link turned on or rotated here since the last list).
+    public var privateFileURL: URL? {
+        guard let owner = file?.privateURL != nil ? file : hosted, let page = owner.privateURL,
+              let direct = owner.privateFileURL, direct.absoluteString.hasPrefix(page.absoluteString + "/") else { return nil }
+        return direct
+    }
+
     /// The rendition's link: private, public or off.
     public var fileLink: FileLink {
         if privateURL != nil { return .private }

@@ -198,10 +198,12 @@ struct DetailActions: View {
     private func secondary(_ choice: Choice) -> some View {
         switch choice {
         case .share:
-            if let url = shareURL {
-                ShareLink(item: url) {
-                    Label(Copy.Media.share, systemImage: Symbol.Media.share)
-                }
+            if shareURL != nil {
+                // the file (when it is on this device), its share link or its direct link
+                ShareChoiceMenuItems(
+                    targets: model.capabilities.shareTargets(for: rendition, file: rendition.isOnDevice),
+                    fileURL: rendition.isOnDevice ? rendition.local?.fileURL : nil
+                )
                 .buttonStyle(.cobaltIcon())
             }
         case .savePhotos:

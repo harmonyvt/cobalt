@@ -1,9 +1,14 @@
 import SwiftUI
 
+/// What the sheet takes: files, and web links (a `share link` or `direct link` choice, `ShareChoice.swift`).
+private func sharable(_ url: URL) -> Bool {
+    url.isFileURL || url.scheme == "https" || url.scheme == "http"
+}
+
 #if os(iOS)
 import UIKit
 
-/// Presents the system share sheet for file URLs only. Anchored in the background of the gallery actions.
+/// Presents the system share sheet for file URLs (and web links). Anchored in the background of the gallery actions.
 /// One sheet per list: a second update while one is up does not present another. Finishing (share or cancel) clears the list.
 struct GalleryFileShare: UIViewControllerRepresentable {
     @Binding var fileURLs: [URL]
@@ -34,7 +39,7 @@ struct GalleryFileShare: UIViewControllerRepresentable {
         var presenting = false
 
         fileprivate func present(from host: AnchorController) {
-            let urls = fileURLs.wrappedValue.filter(\.isFileURL)
+            let urls = fileURLs.wrappedValue.filter(sharable)
             guard !urls.isEmpty else {
                 if host.presentedViewController == nil { presenting = false }
                 return
@@ -95,7 +100,7 @@ private final class AnchorView: UIView {
 #else
 import AppKit
 
-/// Presents the system share picker for file URLs only. `updateNSView` shows it once per list, not on every pass.
+/// Presents the system share picker for file URLs (and web links). `updateNSView` shows it once per list, not on every pass.
 struct GalleryFileShare: NSViewRepresentable {
     @Binding var fileURLs: [URL]
 
@@ -124,7 +129,7 @@ struct GalleryFileShare: NSViewRepresentable {
         var picker: NSSharingServicePicker?
 
         fileprivate func present(from host: AnchorView) {
-            let urls = fileURLs.wrappedValue.filter(\.isFileURL)
+            let urls = fileURLs.wrappedValue.filter(sharable)
             guard !urls.isEmpty else {
                 shown = []
                 return
@@ -137,7 +142,7 @@ struct GalleryFileShare: NSViewRepresentable {
             // The picker is kept after a service is chosen; releasing it there cancels the send.
             Task { @MainActor [weak self, weak host] in
                 guard let self, let host, host.window != nil,
-                      self.fileURLs.wrappedValue.filter(\.isFileURL) == urlsToShare else {
+                      self.fileURLs.wrappedValue.filter(sharable) == urlsToShare else {
                     if self?.shown == urlsToShare { self?.shown = [] }
                     return
                 }

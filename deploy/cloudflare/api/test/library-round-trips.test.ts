@@ -271,6 +271,9 @@ describe("GET /library", () => {
         // the private link of the one file that has one
         expect(post(U2).files).toHaveLength(1);
         expect(post(U2).files[0].private_url).toBe(`${SHARE}p/${LINK_KEY}`);
+        // and its bytes under that link, with the file's own extension (36.3, the apps' "direct link")
+        expect(post(U2).files[0].private_file_url).toBe(`${SHARE}p/${LINK_KEY}/1.png`);
+        expect(v3.posts.flatMap((p: any) => p.files).filter((f: any) => "private_file_url" in f)).toHaveLength(1);
         expect(v3.posts.flatMap((p: any) => p.files).filter((f: any) => f.private_url !== null)).toHaveLength(1);
         // the hidden rows
         const hidden = (await libraryList(w.d, q("v=3&hidden=1"))).body as any;

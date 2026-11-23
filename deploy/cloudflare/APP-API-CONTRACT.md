@@ -4760,7 +4760,10 @@ gets 404). They are tier `hidden` ops: the chat and MCP reach private links only
   in a private set's `items`, `url` and `poster_url` are the file's and its poster's addresses under `/p/<key>/` (36.4),
   whatever the file's own state (`url` null for a deleted file, `poster_url` null without a poster);
   `url` is the link that works now (the private one while private), so every older client copies the right link.
-- Library file shape (`itemShape`) gains `"private_url": string|null` (the live private link of that file).
+- Library file shape (`itemShape`) gains `"private_url": string|null` (the live private link of that file). In
+  `GET /library` (and the sync engine's posts) a file that has one also carries `"private_file_url"`, its bytes under
+  it (`<private_url>/1.<ext>`, the file's own extension); absent otherwise. The apps' `share` menu offers it as the
+  private file's "direct link" (2026-11-23).
 - `GET /capabilities`: `features.private_links` true exactly with `features.share_sets`.
 - Rerolling a collection (26) keeps a private gallery link private: the old key is revoked with the old link and the
   new link gets a new key.

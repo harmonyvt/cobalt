@@ -605,12 +605,34 @@ final class LibraryController {
     /// The video's live link: its private link, else the hosted video's.
     func videoLink(_ item: MediaItem) -> URL? { item.video?.privateURL ?? item.video?.hosted?.url ?? item.video?.publicURL }
 
-    /// The face's live link (its private link, else its public share link), else its file on this device.
-    func shareURL(_ item: MediaItem) -> URL? {
+    /// What the face can be shared as (`share`: the file, its share link, its direct link); nil when none.
+    func shareTargets(_ item: MediaItem) -> ShareTargets? {
         let face = item.face
-        if let url = model.capabilities.liveLink(for: face) { return url }
-        if let url = face.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url }
-        return nil
+        let targets = model.capabilities.shareTargets(for: face, file: face.isOnDevice || face.file != nil)
+        return targets.forms.isEmpty ? nil : targets
+    }
+
+    /// `share` → `file`: the face's file, fetched onto this device first when it is not here, in the system sheet.
+    /// A second call while one is fetching does nothing.
+    func shareFile(_ item: MediaItem) async {
+        guard !preparingShare else { return }
+        let face = item.face
+        if face.isOnDevice, let url = face.local?.fileURL {
+            filesToShare = [url]
+            return
+        }
+        guard let file = face.file else {
+            showStatus(Copy.actionFailed)
+            return
+        }
+        preparingShare = true
+        defer { preparingShare = false }
+        guard let copied = try? await model.library.localCopy(file), copied.isFileURL else {
+            showStatus(Copy.actionFailed)
+            failTick += 1
+            return
+        }
+        filesToShare = [copied]
     }
 
     /// `save to photos` of one file: a video, a webp, or a single photo. A gallery has `save all to photos` instead.

@@ -101,6 +101,28 @@ struct PrivateLinkWireTests {
         #expect(off.privateURL == nil && off.linkState == .off)
     }
 
+    @Test func aPrivateFileCarriesItsDirectLinkOnlyWhileItIsTheLinksOwn() throws {
+        let page = "https://share.capybaraharmony.com/p/AbCdEfGhIjKlMnOpQrStUv"
+        let json = """
+        {"id":"f1","kind":"private","source":"studio","name":"clip.mp4","url":null,"created_at":1,"deletable":true,
+         "visibility":"private","visibility_toggle":true,"private_url":"\(page)","private_file_url":"\(page)/1.mp4"}
+        """
+        var file = try CobaltJSON.decoder().decode(LibraryFile.self, from: Data(json.utf8))
+        #expect(file.privateFileURL?.absoluteString == "\(page)/1.mp4")
+        let again = try CobaltJSON.decoder().decode(LibraryFile.self, from: CobaltJSON.encoder().encode(file))
+        #expect(again.privateFileURL == file.privateFileURL)
+        var r = Rendition(id: "video", kind: .video, file: file, createdAt: .now, visibility: .private)
+        #expect(r.privateFileURL?.absoluteString == "\(page)/1.mp4")
+        // rotated here (a new key): the old direct link is not offered until the list says the new one
+        file.privateURL = URL(string: "https://share.capybaraharmony.com/p/ZzZzZzZzZzZzZzZzZzZzZz")
+        r.file = file
+        #expect(r.privateFileURL == nil)
+        // revoked: none
+        file.privateURL = nil
+        r.file = file
+        #expect(r.privateFileURL == nil)
+    }
+
     @Test func theLiveLinkPrefersThePrivateOne() {
         var caps = Capabilities.unknown
         caps.mediaBaseURL = URL(string: "https://media.capybaraharmony.com/")

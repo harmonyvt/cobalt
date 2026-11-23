@@ -1295,7 +1295,14 @@ export function shapeLibraryPosts(
             ...(v3 ? postGalleryFields(fs, ss, original) : {}),
         };
     });
-    for (const p of posts) for (const f of p.files as { id: string; private_url?: string | null }[]) f.private_url = rows.priv.get(f.id) ?? null;
+    // a file with its own private link also carries its bytes' address under it (36.3), for the apps' "direct link"
+    const keyOf = new Map(rows.files.map((f) => [f.id, f.r2_key]));
+    for (const p of posts)
+        for (const f of p.files as { id: string; private_url?: string | null; private_file_url?: string }[]) {
+            f.private_url = rows.priv.get(f.id) ?? null;
+            const key = keyOf.get(f.id);
+            if (f.private_url && key) f.private_file_url = `${f.private_url}/1.${extOf(key)}`;
+        }
     for (const p of posts as Record<string, unknown>[]) {
         const h = rows.hiddenOf.get(p.id as string);
         const on = h?.state === "hidden";

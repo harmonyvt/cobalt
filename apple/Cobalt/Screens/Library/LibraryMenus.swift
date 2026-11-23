@@ -52,10 +52,12 @@ struct LibraryMenuItems: View {
                 single: Copy.Library2.copyVideoLink
             ) { controller.copy($0, form: $1) }
         }
-        if let url = controller.shareURL(item) {
-            ShareLink(item: url) {
-                Label(Copy.Library2.share, systemImage: Symbol.Library.share)
-            }
+        // the file, its share link or its direct link (a submenu when there is more than one)
+        if let targets = controller.shareTargets(item) {
+            ShareChoiceMenuItems(
+                targets: targets, title: Copy.Library2.share, symbol: Symbol.Library.share,
+                file: { Task { await controller.shareFile(item) } }
+            )
         }
         if controller.canAddToLink(row) {
             Button(Copy.LinkEdit.addToLinkMenu, systemImage: Symbol.LinkEdit.addToLink) {
@@ -281,7 +283,16 @@ struct LibraryTileActions: ViewModifier {
         if item.kind != .photo, let url = controller.videoLink(item) {
             copies(url, name: Copy.LinkPair.videoLink, single: Copy.Library2.copyVideoLink)
         }
-        if let url = controller.shareURL(item) { add(Copy.Library2.share) { controller.filesToShare = [url] } }
+        if let targets = controller.shareTargets(item) {
+            for form in targets.forms {
+                let title = targets.isChoice ? form.standaloneTitle : Copy.Library2.share
+                if form == .file {
+                    add(title) { Task { await controller.shareFile(item) } }
+                } else if let url = targets.url(form) {
+                    add(title) { controller.filesToShare = [url] }
+                }
+            }
+        }
         if controller.canAddToLink(row) { add(Copy.LinkEdit.addToLinkMenu) { controller.addToLink(row, also: []) } }
         if controller.canAskAbout(item) { add(Copy.Chat.askAbout) { controller.askAbout(item) } }
         if controller.canSave(item) { add(Copy.Library2.saveToPhotos) { controller.save(item) } }
