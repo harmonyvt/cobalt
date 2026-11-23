@@ -725,8 +725,9 @@ struct LibraryActivityBar: View {
 
 /// Where the library's detail goes (apple/CONTRACT-PANE.md section 5; owner, 2026-11-23: pane everywhere). A post is the
 /// pane's `.post` page in every placement: beside the tab where the window has room, the sheet (the cover, spanned) on one
-/// narrow screen. The hold's peek and the select actions are beside-the-tab pages only: on one narrow screen the pane
-/// would cover the grid they work on, so there the hold shows the overlay peek and select mode keeps its pill.
+/// narrow screen. The hold's peek and the select actions open beside the tab by themselves. On one narrow screen a hold
+/// shows the overlay peek and lifting the finger opens the post (`PeekOnHold.opensOnRelease`), and select mode keeps its
+/// pill, which expands into the select actions' sheet on a swipe up or a tap on its count (`LibrarySelectPill`).
 /// `selection` is the post the pane shows: set by a tap, a click or "open in library", cleared when the pane shows
 /// something else (or is hidden).
 private struct LibraryPaneBridge: ViewModifier {
@@ -778,8 +779,10 @@ private struct LibraryPaneBridge: ViewModifier {
                 if controller.selection != shown { controller.selection = shown }
             }
             .onChange(of: controller.selecting) { _, selecting in
-                guard let pane, beside else { return }
-                if selecting { openActions(pane) } else { pane.close(ifShowing: .selection) }
+                guard let pane else { return }
+                // beside the tab the page opens with select mode; on one narrow screen it is the pill's to expand. Either
+                // way, leaving select mode takes it away
+                if !selecting { pane.close(ifShowing: .selection) } else if beside { openActions(pane) }
             }
             .onChange(of: controller.peek?.id) { _, id in
                 guard let pane, beside else { return }

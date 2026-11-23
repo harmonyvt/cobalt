@@ -6,6 +6,13 @@ import SwiftUI
 // (hold one to see it), four big buttons (make link, collection, share, edit), and the rest (add to link, status, trash)
 // in the header's menu. The picks are the library's own (`LibraryController`, handed over with `pane.provide`); the
 // pane's xmark only hides this page, `done selecting` is what leaves select mode.
+//
+// On one narrow screen (the iPhone) the page is the select pill expanded: a `.medium` / `.large` sheet over a grid that
+// stays tappable at `.medium` (`PaneItem.compactSheet`), titled `N posts` with what they are under it (`2 videos · 1
+// picture`), the grid share / add to link / hide / delete, and make link, collection, edit and the status choices in
+// `more`. Swiping it down or its xmark goes back to the pill and keeps select mode and the ticks. What the library itself
+// presents (the share sheet and its progress card, the link picker, the confirm of hiding) waits for the sheet to go down
+// first (`afterCollapse`): a sheet cannot be presented from under another.
 
 /// `.selection`: reads the library's controller from the pane. A window with no library behind it (the tab was never
 /// built) says so and offers the close.
@@ -42,6 +49,8 @@ struct PaneSelectionContent: View {
     private var inAlbum: Bool { model.library.showingHidden }
     private var offersStatus: Bool { model.capabilities.hidden }
     private var busy: Bool { controller.changingStatus || model.library.statusInFlight }
+    /// The pane is the sheet of one narrow screen: the pill's expanded form.
+    private var compact: Bool { pane.placement == .compact }
 
     var body: some View {
         let rows = controller.shownRows
@@ -79,7 +88,7 @@ struct PaneSelectionContent: View {
 
     private func page(rows: [LibraryRow], picks: [LibraryRow], verdict: ShareSetVerdict, ready: Bool) -> some View {
         PanePage(
-            title: Copy.Library2.pickedCount(picks.count),
+            title: compact ? Copy.SelectPane.posts(picks.count) : Copy.Library2.pickedCount(picks.count),
             subtitle: subtitle(picks, verdict: verdict),
             actions: headerActions(rows, picks: picks),
             more: moreActions(rows, picks: picks)
@@ -87,7 +96,8 @@ struct PaneSelectionContent: View {
             thumbs(picks)
         } controls: {
             VStack(alignment: .leading, spacing: 12) {
-                if !inAlbum, makesLinks, model.capabilities.privateLinks { privacyChoice }
+                // (the iPhone's sheet leaves the choice out: make link is in `more` there, and follows settings › sharing)
+                if !inAlbum, !compact, makesLinks, model.capabilities.privateLinks { privacyChoice }
                 PaneActionGrid(gridActions(rows, picks: picks, ready: ready))
                 if let editNote, !picks.isEmpty, !inAlbum {
                     Text(editNote)
@@ -101,6 +111,7 @@ struct PaneSelectionContent: View {
 
     private func subtitle(_ picks: [LibraryRow], verdict: ShareSetVerdict) -> String {
         if picks.isEmpty { return Copy.SelectPane.nothingPicked }
+        if compact { return Copy.SelectPane.kinds(picks) }
         guard !inAlbum, makesLinks else { return "" }
         return Copy.PrivateLinks.line(for: verdict, count: picks.count, isPrivate: controller.makesPrivateLink)
     }
@@ -117,12 +128,13 @@ struct PaneSelectionContent: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(Array(picks.enumerated()), id: \.element.id) { index, row in
-                            SelectionThumb(row: row, number: index + 1, controller: controller, peeking: $peeking)
+                            SelectionThumb(row: row, number: index + 1, controller: controller, peeking: $peeking,
+                                           side: compact ? 48 : 64)
                                 .id(row.id)
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, compact ? 6 : 8)
                 }
                 .padding(.top, headerHeight)
                 .onChange(of: picks.last?.id) { _, last in
@@ -166,65 +178,122 @@ struct PaneSelectionContent: View {
                 controller.chooseStatus(.off, posts: controller.pickedPosts(rows))
             }]
         }
+        if compact, !inAlbum { return compactActions(rows, picks: picks, ready: ready).grid }
         var out: [PaneAction] = []
-        if makesLinks {
-            out.append(PaneAction(
-                controller.makingShareLink ? Copy.Links.making : Copy.Links.make, systemImage: Symbol.link,
-                needsServer: true, disabled: !ready, id: "make-link"
-            ) { Task { await controller.makeLinkAndEnd(controller.shownRows) } })
-        }
-        if files {
-            out.append(PaneAction(
-                Copy.Library2.collection, systemImage: Symbol.Library.collectionFile, needsServer: true, disabled: !ready,
-                id: "collection"
-            ) { pickingCollection = true })
-        }
-        out.append(PaneAction(
+        if let makeLink = makeLinkAction(ready: ready) { out.append(makeLink) }
+        if let collection = collectionAction(ready: ready) { out.append(collection) }
+        out.append(shareAction(picks))
+        if let edit = editAction(picks) { out.append(edit) }
+        return out
+    }
+
+    private func makeLinkAction(ready: Bool) -> PaneAction? {
+        guard makesLinks else { return nil }
+        return PaneAction(
+            controller.makingShareLink ? Copy.Links.making : Copy.Links.make, systemImage: Symbol.link,
+            needsServer: true, disabled: !ready, id: "make-link"
+        ) { Task { await controller.makeLinkAndEnd(controller.shownRows) } }
+    }
+
+    private func collectionAction(ready: Bool) -> PaneAction? {
+        guard files else { return nil }
+        return PaneAction(
+            Copy.Library2.collection, systemImage: Symbol.Library.collectionFile, needsServer: true, disabled: !ready,
+            id: "collection"
+        ) { pickingCollection = true }
+    }
+
+    private func shareAction(_ picks: [LibraryRow]) -> PaneAction {
+        PaneAction(
             Copy.Library2.share, systemImage: Symbol.Library.share, disabled: controller.preparingShare || picks.isEmpty,
             id: "share"
-        ) { Task { await controller.shareAndEnd(controller.shownRows) } })
-        if model.editor.isAvailable {
-            out.append(PaneAction(
-                creatingEdit ? Copy.Editor.creating : Copy.Editor.edit, systemImage: Symbol.Editor.edit,
-                needsServer: true, disabled: !picks.contains(where: EditPicksButton.canEdit) || creatingEdit, id: "edit"
-            ) { createEdit(picks) })
+        ) { afterCollapse { Task { await controller.shareAndEnd(controller.shownRows) } } }
+    }
+
+    private func editAction(_ picks: [LibraryRow]) -> PaneAction? {
+        guard model.editor.isAvailable else { return nil }
+        return PaneAction(
+            creatingEdit ? Copy.Editor.creating : Copy.Editor.edit, systemImage: Symbol.Editor.edit,
+            needsServer: true, disabled: !picks.contains(where: EditPicksButton.canEdit) || creatingEdit, id: "edit"
+        ) { createEdit(picks) }
+    }
+
+    private func addToLinkAction(_ picks: [LibraryRow]) -> PaneAction? {
+        guard !inAlbum, controller.addsToLinks else { return nil }
+        return PaneAction(
+            Copy.LinkEdit.addToLink, systemImage: Symbol.LinkEdit.addToLink,
+            needsServer: true, disabled: picks.isEmpty || controller.appendingToLink, id: "add-to-link"
+        ) { afterCollapse { controller.addPicksToLink(picks) } }
+    }
+
+    private func deleteAction(_ picks: [LibraryRow]) -> PaneAction? {
+        guard picks.contains(where: { controller.canDelete($0.item) }) else { return nil }
+        return PaneAction(
+            Copy.DeletePicks.delete, systemImage: Symbol.Library.deleteEverything, role: .destructive,
+            needsServer: true, disabled: picks.isEmpty || busy, id: "delete"
+        ) { deleting = true }
+    }
+
+    /// The status choices (hidden, off, public, private), each one request for every pick.
+    private func statusActions(_ rows: [LibraryRow], picks: [LibraryRow], includeHidden: Bool) -> [PaneAction] {
+        guard offersStatus else { return [] }
+        let disabled = picks.isEmpty || busy
+        let posts = controller.pickedPosts(rows)
+        var out: [PaneAction] = []
+        if includeHidden {
+            out.append(PaneAction(Copy.HiddenAlbum.statusHidden, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, disabled: disabled, id: "status-hidden") {
+                controller.chooseStatus(.hidden, posts: posts)
+            })
+        }
+        out.append(PaneAction(Copy.HiddenAlbum.statusOff, systemImage: Symbol.HiddenAlbum.off, needsServer: true, disabled: disabled, id: "status-off") {
+            controller.chooseStatus(.off, posts: posts)
+        })
+        out.append(PaneAction(Copy.HiddenAlbum.statusPublic, systemImage: Symbol.HiddenAlbum.publicLink, needsServer: true, disabled: disabled, id: "status-public") {
+            controller.chooseStatus(.public, posts: posts)
+        })
+        if model.capabilities.privateLinks {
+            out.append(PaneAction(Copy.HiddenAlbum.statusPrivate, systemImage: Symbol.HiddenAlbum.privateLink, needsServer: true, disabled: disabled, id: "status-private") {
+                controller.chooseStatus(.private, posts: posts)
+            })
         }
         return out
     }
 
+    /// The iPhone sheet's grid (share, add to link, hide, delete last) and the rest. The pill's own row is make link,
+    /// collection, add to link, edit, share, status, trash; here the ones the owner reaches for most are the grid.
+    private func compactActions(_ rows: [LibraryRow], picks: [LibraryRow], ready: Bool) -> (grid: [PaneAction], rest: [PaneAction]) {
+        let disabled = picks.isEmpty || busy
+        let posts = controller.pickedPosts(rows)
+        let hide: PaneAction? = offersStatus ? PaneAction(
+            Copy.HiddenAlbum.menuHide, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, disabled: disabled, id: "hide"
+        ) { afterCollapse { controller.chooseStatus(.hidden, posts: posts) } } : nil
+        let lead = [shareAction(picks), addToLinkAction(picks), hide].compactMap { $0 }
+            + [makeLinkAction(ready: ready), collectionAction(ready: ready), editAction(picks)].compactMap { $0 }
+        let delete = deleteAction(picks)
+        let room = delete == nil ? PaneActionGrid.limit : PaneActionGrid.limit - 1
+        return (
+            Array(lead.prefix(room)) + [delete].compactMap { $0 },
+            Array(lead.dropFirst(room)) + statusActions(rows, picks: picks, includeHidden: false))
+    }
+
+    /// On the iPhone's sheet the library presents some things itself (the share sheet, the link picker, the confirm of
+    /// hiding): the sheet goes down first and the action runs once it is gone. Select mode and the ticks stay.
+    private func afterCollapse(_ run: @escaping @MainActor () -> Void) {
+        guard compact else { run(); return }
+        pane.close(ifShowing: .selection)
+        Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            run()
+        }
+    }
+
     /// What does not fit the grid: add to a link, the status choices, the trash.
     private func moreActions(_ rows: [LibraryRow], picks: [LibraryRow]) -> [PaneAction] {
+        if compact, !inAlbum { return compactActions(rows, picks: picks, ready: controller.shareLinkVerdict(rows) == .ready && !controller.makingShareLink).rest }
         var out: [PaneAction] = []
-        if !inAlbum, controller.addsToLinks {
-            out.append(PaneAction(
-                Copy.LinkEdit.addToLink, systemImage: Symbol.LinkEdit.addToLink,
-                needsServer: true, disabled: picks.isEmpty || controller.appendingToLink, id: "add-to-link"
-            ) { controller.addPicksToLink(picks) })
-        }
-        if offersStatus {
-            let disabled = picks.isEmpty || busy
-            let posts = controller.pickedPosts(rows)
-            out.append(PaneAction(Copy.HiddenAlbum.statusHidden, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, disabled: disabled, id: "status-hidden") {
-                controller.chooseStatus(.hidden, posts: posts)
-            })
-            out.append(PaneAction(Copy.HiddenAlbum.statusOff, systemImage: Symbol.HiddenAlbum.off, needsServer: true, disabled: disabled, id: "status-off") {
-                controller.chooseStatus(.off, posts: posts)
-            })
-            out.append(PaneAction(Copy.HiddenAlbum.statusPublic, systemImage: Symbol.HiddenAlbum.publicLink, needsServer: true, disabled: disabled, id: "status-public") {
-                controller.chooseStatus(.public, posts: posts)
-            })
-            if model.capabilities.privateLinks {
-                out.append(PaneAction(Copy.HiddenAlbum.statusPrivate, systemImage: Symbol.HiddenAlbum.privateLink, needsServer: true, disabled: disabled, id: "status-private") {
-                    controller.chooseStatus(.private, posts: posts)
-                })
-            }
-        }
-        if picks.contains(where: { controller.canDelete($0.item) }) {
-            out.append(PaneAction(
-                Copy.DeletePicks.delete, systemImage: Symbol.Library.deleteEverything, role: .destructive,
-                needsServer: true, disabled: picks.isEmpty || busy, id: "delete"
-            ) { deleting = true })
-        }
+        if let add = addToLinkAction(picks) { out.append(add) }
+        out += statusActions(rows, picks: picks, includeHidden: true)
+        if let delete = deleteAction(picks) { out.append(delete) }
         return out
     }
 

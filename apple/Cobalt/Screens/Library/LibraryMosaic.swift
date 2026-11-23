@@ -209,7 +209,7 @@ struct LibraryMosaic: View {
                 row: row, index: slot.index, size: size, centerY: top + slot.y + slot.height / 2,
                 maxPixel: maxPixel, showsCaption: true, lit: controller.lit == row.id,
                 selected: !controller.compact && controller.selection == row.id,
-                selecting: controller.selecting, ticked: controller.picked.contains(row.id),
+                selecting: controller.selecting, holdOpens: controller.holdOpens, ticked: controller.picked.contains(row.id),
                 pickNumber: numbers[row.id],
                 reload: controller.reload,
                 share: shareIndex.status(for: row.item), controller: controller, budget: budget, zoom: zoom,

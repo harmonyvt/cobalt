@@ -8,8 +8,14 @@ import XCTest
 /// iPad runs in landscape (the 440 pt column), iPhone is compact (a sheet, the cover when spanned). Every step is a
 /// screenshot, attached to the result and written to `apple/.build/pane-shots/<device>/<area>-<step>.png`.
 ///
+/// The iPhone's hold and select (owner, 2026-11-23; screenshots `hold-*` and `pill-*`): a hold on a library tile previews
+/// it and lifting the finger opens the pane, sliding off first cancels, and in select mode the pill expands (a tap on its
+/// count) into the selection sheet at `.medium`, where the grid behind stays tappable and the count follows it, and a swipe
+/// down collapses it to the pill with the ticks kept.
+///
 /// Identifiers: `pane` (the container), `pane.span`, `pane.close`, `pane.bar` (Cobalt/Pane/PaneChrome.swift), and on the
-/// rows `links.row`, `booru.tile`, `swarm.row`, `twitch.search`, `library.tile`. `-paneReset YES` starts without a saved
+/// rows `links.row`, `booru.tile`, `swarm.row`, `twitch.search`, `library.tile`, `library.select`,
+/// `library.select.count`. `-paneReset YES` starts without a saved
 /// pane (PaneHost, DEBUG), so one test's pane is not the next one's.
 @MainActor
 final class PaneTests: XCTestCase {
@@ -146,6 +152,130 @@ final class PaneTests: XCTestCase {
         app.terminate()
     }
 
+
+    // MARK: hold and select (iPhone)
+
+    /// A hold previews the post, lifting the finger opens it in the pane with its grid (no context menu, no tap).
+    func testIPhoneHoldReleaseOpensThePane() throws {
+        guard !isPad else { throw XCTSkip("an iPhone gesture: the iPad keeps its context menu") }
+        let app = launch(["-previewScenario", "happy", "-previewTab", "library", "-paneReset", "YES"])
+        XCTAssertTrue(find(app, "library.tile").waitForExistence(timeout: wait), "the library never showed tiles")
+        settle()
+        let tile = try XCTUnwrap(firstHittableTile(app), "no library tile to hold")
+        shot("hold", "0-grid")
+        pressWithShot(tile, hold: 2.4, shotAt: 1.4, area: "hold", step: "1-preview")
+        let pane = find(app, "pane")
+        XCTAssertTrue(pane.waitForExistence(timeout: wait), "lifting the finger did not open the post in the pane")
+        settle()
+        shot("hold", "2-open")
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'share'")).firstMatch.waitForExistence(timeout: 5),
+            "the post page has no share button in its grid")
+        // the sheet is the pane's: closing it returns to the grid
+        find(app, "pane.close").tap()
+        XCTAssertTrue(waitGone(find(app, "pane")), "the pane did not close")
+        settle()
+        shot("hold", "3-closed")
+        app.terminate()
+    }
+
+    /// Holding and sliding off the tile before lifting cancels: the preview goes and nothing opens.
+    func testIPhoneHoldThenDragOffCancels() throws {
+        guard !isPad else { throw XCTSkip("an iPhone gesture") }
+        let app = launch(["-previewScenario", "happy", "-previewTab", "library", "-paneReset", "YES"])
+        XCTAssertTrue(find(app, "library.tile").waitForExistence(timeout: wait), "the library never showed tiles")
+        settle()
+        let tile = try XCTUnwrap(firstHittableTile(app), "no library tile to hold")
+        let window = app.windows.firstMatch
+        // down past the tab bar's edge: well off the tile
+        let away = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97))
+        tile.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.0, thenDragTo: away)
+        settle(2)
+        XCTAssertFalse(find(app, "pane").exists, "a hold dragged off the tile still opened the pane")
+        shot("hold", "4-dragged-off")
+        app.terminate()
+    }
+
+    /// In select mode a hold previews and lifting opens the post; closing the sheet returns to the grid with the same
+    /// ticks and the pill.
+    func testIPhoneHoldInSelectModeKeepsThePicks() throws {
+        guard !isPad else { throw XCTSkip("an iPhone gesture") }
+        let app = launch(["-previewScenario", "happy", "-previewTab", "library", "-paneReset", "YES"])
+        XCTAssertTrue(find(app, "library.tile").waitForExistence(timeout: wait), "the library never showed tiles")
+        settle()
+        find(app, "library.select").tap()
+        XCTAssertTrue(find(app, "library.select.count").waitForExistence(timeout: wait), "no select pill")
+        let ticked = try tick(app, upTo: 2)
+        XCTAssertEqual(ticked, "2 picked")
+        let tile = try XCTUnwrap(firstHittableTile(app), "no library tile to hold")
+        pressWithShot(tile, hold: 2.4, shotAt: 1.4, area: "hold", step: "5-select-preview")
+        XCTAssertTrue(find(app, "pane").waitForExistence(timeout: wait), "lifting the finger did not open the post")
+        settle()
+        shot("hold", "6-select-open")
+        find(app, "pane.close").tap()
+        XCTAssertTrue(waitGone(find(app, "pane")), "the pane did not close")
+        let count = find(app, "library.select.count")
+        XCTAssertTrue(count.waitForExistence(timeout: wait), "the pill did not come back")
+        XCTAssertEqual(count.label, "2 picked", "closing the post changed the picks")
+        settle()
+        shot("hold", "7-select-back")
+        app.terminate()
+    }
+
+    /// The pill expands (a tap on its count) into the selection sheet at medium; a tile behind it still ticks and the sheet
+    /// follows; a swipe down collapses it to the pill and the picks stay.
+    func testIPhoneSelectPillExpandsAndCollapses() throws {
+        guard !isPad else { throw XCTSkip("an iPhone layout: the iPad has the pane beside the tab") }
+        let app = launch(["-previewScenario", "happy", "-previewTab", "library", "-paneReset", "YES"])
+        XCTAssertTrue(find(app, "library.tile").waitForExistence(timeout: wait), "the library never showed tiles")
+        settle()
+        find(app, "library.select").tap()
+        XCTAssertTrue(find(app, "library.select.count").waitForExistence(timeout: wait), "no select pill")
+        let ticked = try tick(app, upTo: 2)
+        XCTAssertEqual(ticked, "2 picked")
+        settle()
+        shot("pill", "1-collapsed")
+
+        // expand: tap the count
+        find(app, "library.select.count").tap()
+        let pane = find(app, "pane")
+        XCTAssertTrue(pane.waitForExistence(timeout: wait), "tapping the count did not open the selection sheet")
+        settle(2)
+        shot("pill", "2-expanded")
+        let window = app.windows.firstMatch.frame
+        let top = pane.frame.minY
+        XCTAssertGreaterThan(top, window.height * 0.3, "the sheet opened taller than medium (top \(top) of \(window.height))")
+        XCTAssertLessThan(top, window.height * 0.7, "the sheet is not up (top \(top) of \(window.height))")
+        XCTAssertTrue(app.staticTexts["2 posts"].waitForExistence(timeout: 5), "the sheet does not say `2 posts`")
+        XCTAssertFalse(find(app, "library.select.count").exists, "the pill stayed under the expanded sheet")
+
+        // a tile behind the sheet still ticks, and the sheet's count follows
+        let tiles = app.descendants(matching: .any).matching(identifier: "library.tile")
+        var followed = false
+        for index in 0..<min(tiles.count, 24) {
+            let tile = tiles.element(boundBy: index)
+            guard tile.exists, tile.isHittable, tile.frame.maxY < top - 4, tile.frame.minY > 100, !tile.isSelected else { continue }
+            tile.tap()
+            // (a gallery cannot be ticked: the next tile then)
+            if app.staticTexts["3 posts"].waitForExistence(timeout: 3) { followed = true; break }
+        }
+        XCTAssertTrue(followed, "the sheet's count did not follow a tick behind it")
+        settle()
+        shot("pill", "3-ticked-behind")
+
+        // swipe down from the grabber: the pill comes back, nothing is un-picked, select mode stays
+        let grabber = pane.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01))
+        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        grabber.press(forDuration: 0.1, thenDragTo: bottom)
+        XCTAssertTrue(waitGone(find(app, "pane")), "swiping down did not collapse the sheet")
+        let count = find(app, "library.select.count")
+        XCTAssertTrue(count.waitForExistence(timeout: wait), "the pill did not come back")
+        XCTAssertEqual(count.label, "3 picked", "collapsing changed the picks")
+        settle()
+        shot("pill", "4-collapsed-again")
+        app.terminate()
+    }
+
     // MARK: the flow
 
     private func run(
@@ -210,6 +340,39 @@ final class PaneTests: XCTestCase {
 
     // MARK: helpers
 
+    /// The first library tile on screen that can be touched.
+    private func firstHittableTile(_ app: XCUIApplication) -> XCUIElement? {
+        let tiles = app.descendants(matching: .any).matching(identifier: "library.tile")
+        for index in 0..<min(tiles.count, 16) {
+            let tile = tiles.element(boundBy: index)
+            if tile.exists, tile.isHittable, tile.frame.minY > 120 { return tile }
+        }
+        return nil
+    }
+
+    /// Select mode is on: taps tiles in order until `count` are picked (a gallery cannot be ticked); returns the pill's text.
+    private func tick(_ app: XCUIApplication, upTo count: Int) throws -> String {
+        let tiles = app.descendants(matching: .any).matching(identifier: "library.tile")
+        let label = find(app, "library.select.count")
+        for index in 0..<min(tiles.count, 16) {
+            let tile = tiles.element(boundBy: index)
+            guard tile.exists, tile.isHittable, tile.frame.minY > 120 else { continue }
+            tile.tap()
+            if label.label == "\(count) picked" { return label.label }
+        }
+        throw XCTSkip("the preview library has fewer than \(count) posts that can be picked on screen (now: \(label.label))")
+    }
+
+    /// Presses the tile for `hold` seconds and takes a screenshot `shotAt` seconds into the hold (from another thread: the
+    /// press blocks this one), written like `shot`.
+    private func pressWithShot(_ tile: XCUIElement, hold: TimeInterval, shotAt: TimeInterval, area: String, step: String) {
+        let box = ShotBox()
+        DispatchQueue.global().asyncAfter(deadline: .now() + shotAt) { box.take() }
+        tile.press(forDuration: hold)
+        box.wait()
+        if let image = box.image { save(image, area: area, step: step) }
+    }
+
     private func launch(_ args: [String]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += args
@@ -261,6 +424,10 @@ final class PaneTests: XCTestCase {
                 upright.draw(at: .zero)
             }
         }
+        save(image, area: area, step: step)
+    }
+
+    private func save(_ image: UIImage, area: String, step: String) {
         let attachment = XCTAttachment(image: image)
         attachment.name = "\(device) \(area)-\(step)"
         attachment.lifetime = .keepAlways
@@ -269,4 +436,17 @@ final class PaneTests: XCTestCase {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? image.pngData()?.write(to: dir.appendingPathComponent("\(area)-\(step).png"))
     }
+}
+
+/// A screenshot taken off the test's thread while a press holds it (`XCUIScreen` hands a copy; nothing else is touched).
+private final class ShotBox: @unchecked Sendable {
+    private let done = DispatchSemaphore(value: 0)
+    private(set) var image: UIImage?
+
+    func take() {
+        image = XCUIScreen.main.screenshot().image
+        done.signal()
+    }
+
+    func wait() { _ = done.wait(timeout: .now() + 10) }
 }

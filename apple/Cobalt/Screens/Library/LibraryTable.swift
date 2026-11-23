@@ -283,9 +283,10 @@ struct LibraryList: View {
                 Section {
                     ForEach(rows) { row in
                         let selecting = controller.selecting
+                        let holdOpens = controller.holdOpens
                         Button {
-                            // the touch that ended a hold-to-peek is not a tick
-                            if selecting, controller.takeSwallowedTap() { return }
+                            // the touch that ended a hold-to-peek is not a tick (nor a second open)
+                            if controller.takeSwallowedTap() { return }
                             let click = LibraryController.Click.current(controller)
                             if click == .plain, !selecting {
                                 controller.open(row)
@@ -299,9 +300,11 @@ struct LibraryList: View {
                                 number: numbers[row.id], share: shareIndex.status(for: row.item))
                         }
                         .buttonStyle(.plain)
-                        .peekOnHold(row, controller: controller, enabled: selecting)
+                        // the iPhone's hold previews and lifting opens the pane, as on a tile (no context menu there)
+                        .peekOnHold(row, controller: controller, enabled: selecting || holdOpens, opensOnRelease: holdOpens)
                         .zoomSource(id: row.id, in: zoom)
-                        .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting, removing: $removing))
+                        .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting && !holdOpens, removing: $removing))
+                        .modifier(LibraryTileActions(row: row, controller: controller, enabled: holdOpens, selecting: selecting, removing: $removing))
                         .listRowBackground(controller.lit == row.id ? CobaltColor.focus.opacity(0.14) : nil)
                         .id(row.id)
                         .onAppear { if lastIDs.contains(row.id) { controller.loadMoreIfNeeded() } }

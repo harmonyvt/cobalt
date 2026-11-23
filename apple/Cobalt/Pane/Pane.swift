@@ -61,6 +61,9 @@ import SwiftUI
 //                                   `pane.open`). Pass the pane when the sheet is presented outside its environment.
 //
 // The pane draws its own header (span, context label, more, xmark): a page never draws a close.
+//
+// The compact sheet's size is per item (`PaneItem.compactSheet`): every item is a `.large` sheet, except the library's
+// select actions, which are a `.medium` / `.large` sheet that leaves the grid behind it tappable at medium.
 @MainActor
 @Observable
 final class Pane {
@@ -315,6 +318,21 @@ final class Pane {
             Breadcrumbs.add("pane.\(state)", ["kind": .string(kind)])
         }
     }
+}
+
+/// How an item is drawn in the pane's compact sheet (one narrow screen). A small, documented per-item option: only the
+/// selection asks for the resizable one (apple/CONTRACT-PANE.md section 3, addendum 2026-11-23).
+enum PaneSheetStyle: Equatable {
+    /// A `.large` sheet that covers the tab (every item but `.selection`).
+    case full
+    /// `.medium` and `.large`, opening at `.medium`, with the tab behind it still interactive up through `.medium`: the
+    /// library's select actions over a grid whose ticks the owner keeps changing.
+    case resizable
+}
+
+extension PaneItem {
+    /// The compact sheet's style for this item.
+    var compactSheet: PaneSheetStyle { self == .selection ? .resizable : .full }
 }
 
 private struct CloseHold {
