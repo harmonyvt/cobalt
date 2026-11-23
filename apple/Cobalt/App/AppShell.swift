@@ -59,6 +59,8 @@ struct AppShell: View {
     @State private var width: CGFloat = 0
     /// The other screen of a spread (Duo building blocks): sheets, pickers and confirms open there.
     @State private var spreadPane = SpreadPaneHost()
+    /// The window's screen pane (apple/CONTRACT-PANE.md): one per scene, drawn by `PaneHost` around the tabs.
+    @State private var pane = Pane()
     /// What a screen that has just popped left to say ("deleted."), drawn over the shell for a moment.
     @State private var status: String?
     @State private var statusToken = 0
@@ -90,6 +92,8 @@ struct AppShell: View {
     /// The tier of one column: half the window while the other screen holds a pane (a screen laid out for the whole width
     /// in half of it opened the library's inspector over its own grid), else the window's.
     private var columnTier: Tier {
+        // the screen pane beside the tab: the tab is laid out for the room it keeps
+        if width > 0, let tabWidth = pane.tabWidth(of: width) { return Tier(width: tabWidth) }
         #if os(iOS)
         if isSpread, spreadPane.pane != nil { return Tier(width: width / 2) }
         #endif
@@ -136,6 +140,7 @@ struct AppShell: View {
             .environment(\.photoImport, photoImport)
             .environment(\.spreadPane, spreadPane)
             .environment(\.isSpread, isSpread)
+            .environment(pane)
             // the pane itself is a column inside the selected tab (`SpreadPaneColumn`), not an overlay
             .onChange(of: isSpread) { _, spread in if !spread { spreadPane.close() } }
             .overlay { if dropTargeted { dropHighlight } }
@@ -380,6 +385,54 @@ struct AppShell: View {
     @ViewBuilder
     private var navigation: some View {
         #if os(iOS)
+        // the screen pane wraps the tab views, so it is one per window and switching tabs keeps it (a stream plays on)
+        PaneHost(model: model, dragging: dropTargeted) {
+            iosTabs
+        }
+        .sheet(isPresented: $model.queueShown) { queueSheet }
+        .modifier(QueueTabRedirect(model: model))
+        #else
+        NavigationSplitView {
+            List(selection: sidebarSelection) {
+                ForEach(model.visibleTabs.filter { $0 != .settings }, id: \.self) { tab in
+                    Label(Copy.tab(tab), systemImage: icon(for: tab))
+                        .font(Font.cobalt(13, .regular, relativeTo: .body))
+                        .badge(tab == .queue ? model.unifiedQueue.badgeCount : tab == .swarms ? model.swarms.waitingCount : 0)
+                        .tag(tab)
+                }
+            }
+            .tint(CobaltColor.text)
+            .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 260)
+        } detail: {
+            // the screen pane: a 400 pt column after the sidebar, the whole detail area spanned, the bar at its bottom
+            PaneHost(model: model, dragging: dropTargeted) {
+                Group {
+                    let tier = columnTier
+                    switch model.selectedTab {
+                    case .save: HomeScreen(model: model, tier: tier)
+                    case .library: LibraryScreen(model: model, tier: tier)
+                    case .links: NavigationStack { LinksScreen(model: model) }
+                    case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
+                    case .swarms: NavigationStack { SwarmsScreen(model: model, tier: tier) }
+                    case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
+                    case .sevenTv: NavigationStack { SevenTvScreen(model: model, tier: tier) }
+                    case .twitch: NavigationStack { TwitchScreen(model: model, tier: tier) }
+                    case .booru: NavigationStack { BooruScreen(model: model, tier: tier) }
+                    case .names: NavigationStack { NamesScreen(model: model) }
+                    case .queue: NavigationStack { QueueScreen(model: model) }
+                    case .settings: SettingsScreen(model: model)
+                    }
+                }
+            }
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    /// The iPhone's and the iPad's tab views (inside `PaneHost`). The bar of a running pane item is the tab view's bottom
+    /// accessory (`PaneBarAccessory`).
+    @ViewBuilder
+    private var iosTabs: some View {
         Group {
             if UIDevice.current.userInterfaceIdiom == .phone {
                 // iPhone: four tabs and our own "more" (one stack), never the system More (see `PhoneTabs`)
@@ -399,45 +452,14 @@ struct AppShell: View {
                         .badge(tab == .swarms ? model.swarms.waitingCount : 0)
                     }
                 }
+                .modifier(PaneBarAccessory(model: model))
             }
         }
         .tabViewStyle(.sidebarAdaptable)
         // always expanded: a collapsed bar hid the other two tabs after any scroll (owner's live run)
         .tabBarMinimizeBehavior(.never)
-        .sheet(isPresented: $model.queueShown) { queueSheet }
-        .modifier(QueueTabRedirect(model: model))
-        #else
-        NavigationSplitView {
-            List(selection: sidebarSelection) {
-                ForEach(model.visibleTabs.filter { $0 != .settings }, id: \.self) { tab in
-                    Label(Copy.tab(tab), systemImage: icon(for: tab))
-                        .font(Font.cobalt(13, .regular, relativeTo: .body))
-                        .badge(tab == .queue ? model.unifiedQueue.badgeCount : tab == .swarms ? model.swarms.waitingCount : 0)
-                        .tag(tab)
-                }
-            }
-            .tint(CobaltColor.text)
-            .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 260)
-        } detail: {
-            Group {
-                switch model.selectedTab {
-                case .save: HomeScreen(model: model, tier: tier)
-                case .library: LibraryScreen(model: model, tier: tier)
-                case .links: NavigationStack { LinksScreen(model: model) }
-                case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
-                case .swarms: NavigationStack { SwarmsScreen(model: model, tier: tier) }
-                case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
-                case .sevenTv: NavigationStack { SevenTvScreen(model: model, tier: tier) }
-                case .twitch: NavigationStack { TwitchScreen(model: model, tier: tier) }
-                case .booru: NavigationStack { BooruScreen(model: model, tier: tier) }
-                case .names: NavigationStack { NamesScreen(model: model) }
-                case .queue: NavigationStack { QueueScreen(model: model) }
-                case .settings: SettingsScreen(model: model)
-                }
-            }
-        }
-        #endif
     }
+    #endif
 
     #if os(iOS)
     /// A tab's screen with no navigation stack around it.

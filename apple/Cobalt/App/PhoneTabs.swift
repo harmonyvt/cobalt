@@ -67,6 +67,8 @@ struct PhoneTabs<Screen: View>: View {
                 .badge(overflow.reduce(0) { $0 + badge($1) })
             }
         }
+        // a running item in the screen pane closes to a bar over the tabs (apple/CONTRACT-PANE.md; `PaneHost` wraps this)
+        .modifier(PaneBarAccessory(model: model))
         .onChange(of: selection) { _, slot in
             switch slot {
             case .tab(let tab): model.selectedTab = tab
