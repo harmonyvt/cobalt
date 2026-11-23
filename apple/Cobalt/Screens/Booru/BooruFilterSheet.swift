@@ -22,6 +22,7 @@ struct BooruFilterSheet: View {
                 VStack(alignment: .leading, spacing: 8) {
                     section(Copy.Booru.refine) { refine }
                     section(Copy.Booru.blacklist) { blacklistEditor }
+                    section(Copy.DanbooruKey.header) { DanbooruKeyCard() }
                     section(Copy.Booru.alwaysHidden) {
                         VStack(spacing: 0) {
                             row(Copy.Booru.generalOnly, detail: Copy.Booru.generalOnlyDetail) {
@@ -173,3 +174,75 @@ private extension View {
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(CobaltColor.hairline))
     }
 }
+
+/// The owner's Danbooru login and API key (APP-API-CONTRACT 72.12), kept in this device's keychain only. Used by "find on
+/// booru" to ask Danbooru's own picture search; saving checks the key against Danbooru first.
+private struct DanbooruKeyCard: View {
+    @State private var login = ""
+    @State private var key = ""
+    @State private var saved: DanbooruAccount? = DanbooruAccount.load()
+    @State private var state: KeyState = .idle
+
+    private enum KeyState: Equatable { case idle, checking, ok(String), failed(String) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let saved {
+                HStack {
+                    Label(Copy.DanbooruKey.signedIn(saved.login), systemImage: "checkmark.seal.fill").foregroundStyle(CobaltColor.success)
+                    Spacer()
+                    Button(Copy.DanbooruKey.remove, role: .destructive) {
+                        try? DanbooruAccount.clear()
+                        self.saved = nil
+                        state = .idle
+                    }
+                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                }
+                .font(CobaltType.body)
+            } else {
+                TextField(Copy.DanbooruKey.login, text: $login)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .textContentType(.username)
+                    .padding(8)
+                    .background(CobaltColor.row, in: RoundedRectangle(cornerRadius: Metrics.radius))
+                SecureField(Copy.DanbooruKey.key, text: $key)
+                    .textContentType(.password)
+                    .padding(8)
+                    .background(CobaltColor.row, in: RoundedRectangle(cornerRadius: Metrics.radius))
+                HStack {
+                    Button(Copy.DanbooruKey.save) { Task { await save() } }
+                        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                        .disabled(login.isEmpty || key.isEmpty || state == .checking)
+                    if state == .checking { ProgressView().controlSize(.small) }
+                    if case .failed(let why) = state {
+                        Text(why).font(CobaltType.caption).foregroundStyle(CobaltColor.errorText)
+                    }
+                }
+            }
+            Text(Copy.DanbooruKey.hint).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.caption)
+        }
+        .padding(12)
+        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(CobaltColor.hairline))
+    }
+
+    private func save() async {
+        let account = DanbooruAccount(login: login, apiKey: key)
+        state = .checking
+        do {
+            let name = try await account.check()
+            try account.save()
+            saved = DanbooruAccount(login: name, apiKey: account.apiKey)
+            key = ""
+            state = .ok(name)
+        } catch CobaltError.network {
+            state = .failed(Copy.DanbooruKey.offline)
+        } catch {
+            state = .failed(Copy.DanbooruKey.refused)
+        }
+    }
+}
+

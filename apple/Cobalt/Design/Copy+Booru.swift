@@ -127,3 +127,18 @@ extension Copy {
         }
     }
 }
+
+/// Copy for the Danbooru key in the booru filters (APP-API-CONTRACT 72.12; lowercase).
+extension Copy {
+    enum DanbooruKey {
+        static let header = "danbooru account"
+        static let login = "danbooru username"
+        static let key = "api key"
+        static let save = "check and save"
+        static let remove = "remove"
+        static func signedIn(_ name: String) -> String { "using \(name)'s key" }
+        static let hint = "makes \"find on booru\" ask danbooru itself: a few seconds instead of up to a minute. make one on danbooru from your profile, under api key. kept on this device only."
+        static let refused = "danbooru didn't accept that username and key"
+        static let offline = "you're offline"
+    }
+}

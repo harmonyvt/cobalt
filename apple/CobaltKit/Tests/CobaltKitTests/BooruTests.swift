@@ -105,4 +105,21 @@ import Testing
         #expect(BooruMatch(post: p, similarity: 90).isSure)
         #expect(!BooruMatch(post: p, similarity: 89).isSure)
     }
+
+    @Test func danbooruSearchAnswerParses() {
+        let list: [[String: Any]] = [
+            ["post_id": 12, "score": 71.4, "post": ["id": 12, "rating": "g"]],
+            ["post_id": 34, "score": 96.6],
+            ["post_id": 12, "score": 50.0],
+            ["post_id": 56, "score": 40.2],
+            ["score": 99.0],
+        ]
+        let found = DanbooruAccount.parse(list)
+        #expect(found.map(\.post) == [34, 12])
+        #expect(found.map(\.similarity) == [97, 71])
+        #expect(found[1].object?["rating"] as? String == "g" && found[0].object == nil)
+        let a = DanbooruAccount(login: " mochi ", apiKey: "k3y\n")
+        #expect(a.login == "mochi" && a.authorization == "Basic " + Data("mochi:k3y".utf8).base64EncodedString())
+    }
 }
+
