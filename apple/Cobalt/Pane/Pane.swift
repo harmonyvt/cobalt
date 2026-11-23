@@ -310,10 +310,13 @@ final class Pane {
         guard machine.state != before.state || machine.item != before.item || machine.barItem != before.barItem else { return }
         let state = machine.state.rawValue
         let kind = machine.item?.kind ?? "none"
-        Analytics.event("pane.state", values: [
+        let values: [String: TelemetryValue] = [
             "state": .string(state), "kind": .string(kind), "placement": .string(placement.name),
             "from": .string(before.state.rawValue), "bar": .string(machine.barItem?.kind ?? "none"),
-        ])
+        ]
+        Analytics.event("pane.state", values: values)
+        // time the animation this change starts (a `frames` stretch tagged pane_*), finger down or not
+        FrameMonitor.paneChanged(values)
         if machine.state != before.state {
             Breadcrumbs.add("pane.\(state)", ["kind": .string(kind)])
         }

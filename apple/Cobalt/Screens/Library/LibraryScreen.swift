@@ -30,8 +30,19 @@ struct LibraryScreen: View {
     }
 
     #if os(iOS)
+    @Environment(Pane.self) private var pane: Pane?
     private var measuredTier: Tier? { ownWidth > 0 ? Tier(width: ownWidth) : nil }
-    private var shownTier: Tier { measuredTier ?? tier }
+    /// The tier the library lays out for. Beside the screen pane (a window with room for it) the library never drops to
+    /// the one-screen phone layout: opening, closing or peeking the pane halves the library's width (the Duo spread is
+    /// 951 pt, one screen ~475), and dropping to `.compact` there swapped the toolbar (paste and file into "…"), the table
+    /// for the list and the tile size on every open, close and both ends of every hold (8.40 replays: "buttons disappear,
+    /// flickering"). Read from the pane's host, which the pane does not change, so it is also right on the first frame.
+    private var shownTier: Tier {
+        let own = measuredTier ?? tier
+        guard own == .compact, let pane, pane.placement != .compact, Tier(width: pane.hostSize.width) != .compact
+        else { return own }
+        return .regular
+    }
     #endif
 
     var body: some View {
@@ -42,6 +53,9 @@ struct LibraryScreen: View {
                 // rebuilt when the zoom back from a video leaves the grid out of the stack (LibraryController.checkStackSoon)
                 .id(controller.stackID)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { ownWidth = $0 }
+                .onChange(of: shownTier) { old, new in
+                    LayoutSwap.report(screen: "library", from: old, to: new, width: ownWidth, pane: pane)
+                }
             #else
             if tier == .compact {
                 NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }

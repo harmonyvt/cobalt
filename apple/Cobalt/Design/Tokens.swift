@@ -128,6 +128,15 @@ enum Metrics {
 enum Tier: Equatable {
     case compact, regular, wide
 
+    /// For telemetry (`layout.swap`).
+    var name: String {
+        switch self {
+        case .compact: "compact"
+        case .regular: "regular"
+        case .wide: "wide"
+        }
+    }
+
     init(width: CGFloat) {
         if width < 600 { self = .compact } else if width < 1240 { self = .regular } else { self = .wide }
     }

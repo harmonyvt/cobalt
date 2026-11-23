@@ -109,6 +109,12 @@ struct AppShell: View {
     var body: some View {
         gatedNavigation
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            // a tab laid out for a new tier while on screen (the pane beside it opening or closing, a fold, a rotation):
+            // the library measures its own width and reports itself
+            .onChange(of: columnTier) { old, new in
+                guard Analytics.currentScreen != "library" else { return }
+                LayoutSwap.report(screen: Analytics.currentScreen, from: old, to: new, width: pane.tabWidth ?? width, pane: pane)
+            }
             .modifier(EditorPresenter(model: model))
             .cobaltRoot(model: model)
             .environment(\.shell, actions)
