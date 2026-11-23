@@ -8,21 +8,17 @@ import SwiftUI
 // server has `features.share_collections` (section 26) a "collections" section sits at the top of the list: a grid of
 // folder cards (a push to `CollectionScreen`) and a "new collection" card. The row menus gain "add to collection".
 // With `features.share_groups` (section 28) chips over the folders pick a set (a group of collections).
+//
+// A card's tap and a folder's tap open the link / collection in the screen pane (`pane.open(.link(id))`,
+// `.collection(id)`; apple/CONTRACT-PANE.md section 5): the list keeps its whole width, the pane sits beside it (a sheet
+// on the iPhone), and spanned it shows the link's files across both screens.
 
 struct LinksScreen: View {
     let model: AppModel
 
     @Environment(\.shell) private var shell
+    @Environment(Pane.self) private var pane: Pane?
     @State private var controller: LinksController
-    /// The collection a folder card opened (a button, not a `NavigationLink`: several links in one list row all fired
-    /// on a tap).
-    @State private var openedCollection: CollectionRoute?
-    /// The link a card opened (APP-API-CONTRACT 41.4), the same way.
-    @State private var openedLink: LinkRoute?
-    /// The tab's own width: from `Spread.minWidth` a link opens beside the list instead of on top of it.
-    @State private var width: CGFloat = 0
-
-    private var spread: Bool { width >= Spread.minWidth }
 
     init(model: AppModel) {
         self.model = model
@@ -43,9 +39,8 @@ struct LinksScreen: View {
     }
 
     var body: some View {
-        layout
+        content
             .background(CobaltColor.bg)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .navigationTitle(Copy.Links.title)
             .toolbar {
                 #if os(iOS)
@@ -62,32 +57,7 @@ struct LinksScreen: View {
                 }
             }
             .task { await store.refresh() }
-            .navigationDestination(for: CollectionRoute.self) { route in
-                CollectionScreen(model: model, collectionID: route.id)
-            }
-            .navigationDestination(item: $openedCollection) { route in
-                CollectionScreen(model: model, collectionID: route.id)
-            }
             .linkPresentations(controller)
-    }
-
-    /// iPhone and a narrow window: the list, and a link pushed on it. A spread (two screens, a landscape iPad, the Mac):
-    /// the links on the left, the one being edited on the right, so its preview changes beside the list. Collections still
-    /// open on top. With no link open the list has the whole width: an empty right side ("pick a link") is not drawn at
-    /// all. The link side always has a close (`DetailSplit`).
-    private var layout: some View {
-        DetailSplit(queue: model.queue, listWidth: Spread.listWidth + 40, spread: spread, open: shownLink) {
-            content
-        } detail: { route in
-            LinkScreen(model: model, setID: route.id)
-        }
-    }
-
-    /// The open link while it still exists (a deleted one closes).
-    private var shownLink: Binding<LinkRoute?> {
-        Binding(
-            get: { openedLink.flatMap { route in store.sets.contains(where: { $0.id == route.id }) ? route : nil } },
-            set: { openedLink = $0 })
     }
 
     @ViewBuilder
@@ -144,7 +114,7 @@ struct LinksScreen: View {
                             .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 4, trailing: 16))
                     }
                     // the collections as folders, two to a row, then "new collection"
-                    CollectionFolderGrid(store: store, controller: controller) { openedCollection = CollectionRoute(id: $0.id) }
+                    CollectionFolderGrid(store: store, controller: controller) { pane?.open(.collection($0.id)) }
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 10, trailing: 16))
@@ -175,11 +145,12 @@ struct LinksScreen: View {
 }
 
 extension LinksScreen {
-    /// What a card's tap does: open the link's screen, only while the server edits links (`features.share_set_edit`).
+    /// What a card's tap does: open the link in the pane (its files, copy, privacy, collections; editing needs
+    /// `features.share_set_edit`, which the page checks itself).
     fileprivate func opener(_ link: ShareSet) -> (() -> Void)? {
-        guard model.capabilities.shareSetEdit else { return nil }
+        guard let pane else { return nil }
         let id = link.id
-        return { openedLink = LinkRoute(id: id) }
+        return { pane.open(.link(id)) }
     }
 }
 
@@ -553,6 +524,8 @@ struct LinkThumb: View {
     let item: ShareSetItem
     let side: CGFloat
     var radius: CGFloat = 8
+    /// The picture's decode size: the 2x2 covers need little, the pane's big tiles more.
+    var maxPixel = 240
 
     /// The still to draw: the poster or the image itself; a video with no poster draws a frame of the file.
     private var poster: RemotePoster? {
@@ -573,7 +546,7 @@ struct LinkThumb: View {
                     .font(.system(size: side * 0.28))
                     .foregroundStyle(CobaltColor.caption)
             } else if let poster {
-                RemoteStill(poster: poster, maxPixel: 240)
+                RemoteStill(poster: poster, maxPixel: maxPixel)
             } else {
                 Image(systemName: isVideo ? Symbol.typeVideo : Symbol.typeImage)
                     .font(.system(size: side * 0.28))

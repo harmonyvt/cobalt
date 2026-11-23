@@ -68,4 +68,22 @@ extension Copy {
         static let keep = "keep"
         static let revoked = "link revoked"
     }
+
+    /// The link and collection pages of the screen pane (apple/CONTRACT-PANE.md section 5).
+    enum LinksPane {
+        /// The link is not in the list and the list could not be loaded.
+        static let cantLoad = "can't load this link right now."
+        /// The shelf card that puts the link in and out of collections.
+        static let collectionsCard = "collections"
+        static let collectionsHint = "tap to put it in or take it out"
+        static let noCollectionsYet = "no collections yet"
+        static let openCollection = "open"
+        /// The collection page's subtitle: "3 links".
+        static func linksLine(_ count: Int) -> String { Copy.Collections.linkCount(count) }
+        /// A link's subtitle: "3 files · public · 2 days ago".
+        static func subtitle(files: Int, privacy: String?, when: String) -> String {
+            [Copy.Links.fileCount(files), privacy, when].compactMap { $0 }.joined(separator: " · ")
+        }
+        static let addressA11y = "link address"
+    }
 }

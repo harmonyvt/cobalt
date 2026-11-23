@@ -3,8 +3,10 @@ import SwiftUI
 
 // One thread (APP-API-CONTRACT section 27.4): its messages in a list anchored to the bottom, the reply streaming into it
 // (code steps collapsed, the shown files as thumbnails that open the post), and the composer. The list follows the reply
-// while the owner is at the bottom and lets go the moment they scroll up. A shown file opens the way the library opens
-// one: on iPhone the detail is pushed here; on iPad and Mac the library tab reveals the post. A thread whose chat started
+// while the owner is at the bottom and lets go the moment they scroll up. A shown file (a video, a render, a post the AI
+// made) opens in the screen pane as `.post(id)` (`pane.open`; apple/CONTRACT-PANE.md section 5), on every device. The
+// pane is not made to run for it: a chat job has no post until it finishes, so there is nothing for `pane.setRunning` to
+// report here. A helper's own thread sits in a sheet over the pane, so there a shown file is pushed in the sheet. A thread whose chat started
 // helpers (APP-API-CONTRACT 43.6) shows them as a strip under the header; a helper's own thread opens in a sheet with this
 // same screen, read-only: its mail with the chat on top and a footer instead of the composer.
 //
@@ -25,8 +27,9 @@ struct ChatThreadScreen: View {
     @Environment(\.shell) private var shell
     @Environment(\.dismiss) private var dismiss
     @Environment(\.hapticsEnabled) private var haptics
+    @Environment(Pane.self) private var pane: Pane?
     @State private var controller: ChatController
-    /// The phone's pushed detail of a shown file.
+    /// A helper's thread (a sheet over the pane): the pushed detail of a shown file.
     @State private var opened: OpenedMedia?
     /// The list's end is in view (within 72 points).
     @State private var atBottom = true
@@ -346,13 +349,14 @@ struct ChatThreadScreen: View {
         }
     }
 
-    /// A shown file: the phone pushes its detail, the iPad and Mac show it in the library tab (the inspector).
+    /// A shown file opens in the screen pane. In a helper's sheet the pane is behind the sheet, so its detail is pushed
+    /// there instead.
     private func open(_ post: LibraryPost) {
-        if tier == .compact {
+        if helperOf == nil, let pane {
+            pane.open(.post(post.id))
+        } else {
             let item = model.mediaItem(for: post)
             opened = OpenedMedia(item: item, initial: item.face.id)
-        } else {
-            model.revealInLibrary(postID: post.id)
         }
     }
 

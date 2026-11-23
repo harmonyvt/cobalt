@@ -3,8 +3,9 @@ import SwiftUI
 
 // The chat tab (APP-API-CONTRACT section 27): the threads with Claude about the library, newest first, each with its title,
 // the start of the last message and when it changed. "new chat" makes an empty thread and opens it; a row opens its thread
-// (a push, `ChatThreadScreen`); swipe or the context menu rename and delete (delete asks first). The list is
-// `model.chat` (a refresh on appear and a pull keep it honest).
+// (a push on the tab's own stack, `ChatThreadScreen`, on every device: the conversation is never the screen pane;
+// apple/CONTRACT-PANE.md section 5); swipe or the context menu rename and delete (delete asks first). The list is
+// `model.chat` (a refresh on appear and a pull keep it honest). What the AI made opens in the pane from the thread.
 
 struct ChatScreen: View {
     let model: AppModel
@@ -12,8 +13,6 @@ struct ChatScreen: View {
 
     @Environment(\.shell) private var shell
     @State private var controller: ChatController
-    /// The tab's own width: from `Spread.minWidth` the thread opens beside the list instead of on top of it.
-    @State private var width: CGFloat = 0
 
     init(model: AppModel, tier: Tier) {
         self.model = model
@@ -34,15 +33,9 @@ struct ChatScreen: View {
         }
     }
 
-    private var spread: Bool {
-        if width > 0 { return width >= Spread.minWidth }
-        return tier != .compact
-    }
-
     var body: some View {
-        layout
+        content
             .background(CobaltColor.bg)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .navigationTitle(Copy.Chat.title)
             .toolbar {
                 #if os(iOS)
@@ -68,18 +61,11 @@ struct ChatScreen: View {
                 #endif
             }
             .task { await store.refresh() }
+            // a thread is pushed on the tab's own stack, whatever the width; the pane stays free for what the AI made
+            .navigationDestination(item: openedThread) { route in
+                ChatThreadScreen(model: model, threadID: route.id, tier: tier)
+            }
             .chatPresentations(controller)
-    }
-
-    /// iPhone and a narrow window: the list, and a thread pushed on it. A spread (two screens, a landscape iPad, the Mac):
-    /// the list on the left, the open thread on the right. With no thread open the list has the whole width: an empty
-    /// right side ("pick a chat") is not drawn at all. The thread side always has a close (`DetailSplit`).
-    private var layout: some View {
-        DetailSplit(queue: model.queue, spread: spread, open: openedThread) {
-            content
-        } detail: { route in
-            ChatThreadScreen(model: model, threadID: route.id, tier: tier)
-        }
     }
 
     private var openedThread: Binding<ChatRoute?> {
