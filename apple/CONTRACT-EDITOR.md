@@ -788,3 +788,87 @@ No migration. The owner picks the method. Nothing is chosen automatically.
   when `limits.edit_overlay_hidden` (or `features.overlay_hidden`) is set; otherwise it is preview-only and stripped before
   save. Lock is device-only and never sent. More than 8 videos at one moment draws a half-size preview and says
   `lots of videos at once — preview may stutter, render is fine`.
+
+## 15. One editor for every screen (addendum, 2026-11-23; server half: APP-API-CONTRACT 69.7)
+
+Owner, 2026-11-23, on the Duo: overhaul the editor "to better work in everything ... portrait, landscape, even in the
+small folded mode", "clean slate", rethink every gesture. Picked direction A ("flow") from the mockup
+(`https://claude.ai/artifact/UL4evKiKK61t2SVoezDkMR`). Then: "bottom row can just be icons, remember show not tell",
+and the timeline scrubber must feel better. Green-screen case: remove the green on the top clip, tap the clip showing
+through, "four dots around each corner, drag it to resize it ... a rotate at the top".
+
+### 15.1 Layout: one shell, slots from the size
+
+- `EditorShell` replaces the 900 pt switch between `EditorScreen` and `EditorPhoneScreen` in `EditorRoot`. One view
+  tree; a pure `EditorLayout` value (size, size class, platform → regime and slot rects) decides where things go. Never
+  `if wide { A } else { B }` around subtrees that hold state (the Duo list-and-detail lesson, 8.37): the player, the
+  timeline and the inspector are each one instance moved between slots.
+- Regimes (content size after safe area): **compact** width < 600 (iPhone, Duo folded ~461); **tall** width ≥ 600 and
+  height > width (Duo open 669 × 951, iPad portrait); **wide** width ≥ 900, or width ≥ 700 and width > height (Duo turned
+  951 × 669, iPad landscape, Mac).
+- **Picture**: the slot is exactly the fitted canvas (the project's aspect), no empty band above or below. Height cap:
+  42 % of the content height compact, 50 % tall, wide = whatever is left above the timeline in the middle column.
+- **Transport** (48 pt) under the picture: time on the left, play in the middle with undo and redo either side when
+  compact or tall (the top bar then keeps close, title, more, render), fit-to-screen on the right. No hint text.
+- **Timeline** takes every point left. Lanes grow to fill it: lane 0 and keyed/large lanes up to 130 pt, others at
+  least 40 pt; past that it scrolls. Wide: full width under the picture row, 40 % of the height, at least 230 pt.
+- **Tools**: icons only (44 pt targets; accessibilityLabel and, on the Mac, `.help`), never captions. Compact and tall:
+  one bottom row; wide: a 64 pt vertical rail left of the picture. Contextual:
+  - nothing selected: add clip, add layer, canvas, effects, post.
+  - a clip: trim, split, speed, crop, sound, remove green, effects, delete; overflow goes in a `more` menu.
+  - picked on the picture (15.3): fit to canvas, turn 90°, bring up, send down, opacity, reset, delete.
+  - a selection shows a `done` (checkmark) at the row's end that lets go of it.
+- **Inspector**: one view (clip, layer, sound, speed, crop, trim, effects pages; the current sheets' controls). Wide: a
+  300 pt column right of the picture, always there (nothing selected = project: canvas, fps, fit). Compact and tall: a
+  drawer that rises over the timeline only, never over the picture or transport, with two detents (about 260 pt and
+  62 % of the timeline area) and a drag handle. Opening a tool opens its page. The add sheet and the render card stay
+  presentations.
+
+### 15.2 Nothing resets on fold, unfold or turn
+
+`EditorUI` (@Observable, one per open session, owned by `EditorHost`, not view `@State`): open tool and inspector page,
+drawer detent, timeline zoom (points per second) and scroll position (seconds), picture zoom. Selection stays on
+`EditSession`. A gesture in flight commits (`endGesture`) before the regime changes. Playback position and play state
+are the player's and survive because the player view is never rebuilt.
+
+### 15.3 The picture is touchable
+
+- Tap: picks the top clip under the finger at the playhead (frames with `r`, off-canvas boxes). A keyed clip (`key`) is
+  passed over when a lower clip is also under that point, so a tap inside a green-screen hole picks what shows through.
+  Tap the same spot again: the next clip down. Tap where nothing is picked while something is selected: let go. Tap
+  with nothing selected: play or pause.
+- Selected clip: a box turned with the clip, four round corner dots (drag: resize from the opposite corner, keeps the
+  shape), a knob on an 18 pt stick above the top edge (drag around: turn; clicks at 0°, ±90°, 180° within 3°), drag
+  inside: move. Pinch and twist anywhere on the picture: size and turn the selected clip. Edges and centre lines snap
+  (6 pt) with the selection haptic. A small readout (angle · width %) shows while dragging and fades. Hit areas 44 pt.
+- A clip with no `frame` gets one on its first move, size or turn (the box `fit`/`fill` gave it), so nothing jumps.
+- One undo step per gesture. Two-finger tap undo, three-finger tap redo (iOS); ⌘Z and ⇧⌘Z unchanged.
+- Model: `EditFrame.r` (Double, degrees clockwise, omitted when 0) and the 69.7 bounds in `EditValidation` (w 0.05…4,
+  x < 1, x + w > 0, y < 1, y + h > 0), `EditJSON` rounding half away from zero; the shared fixtures
+  `v2-frame-turned`, `v2-frame-off-canvas`, `v2-frame-leaves-canvas` must pass. The compositor draws the turn about the
+  box centre and allows boxes past the edges. Only a v2 project (69) can hold these; a v1 project is converted to v2 on
+  the first turn or off-canvas move (as other v2-only edits already do).
+
+### 15.4 Remove green
+
+`remove green` on a selected clip sets `key` to `EditChromaKey()` (green preset). If other clips overlap it in time on
+lower lanes only, nothing moves. If it is under clips it overlaps in time, it moves to the lowest free lane above them
+(animated in the timeline), so the green hole shows what is under it straight away. Strength (`similarity`) and edges
+(`blend`) sit in the inspector's clip page; the full effects page (colour picker, background, output) is one tap further.
+
+### 15.5 Timeline feel
+
+- Playhead fixed in the middle; scrub with one finger. Seeks are coalesced (one in flight, the latest wins, exact seek
+  on release); a fling keeps going and slows down; a light tick when the playhead crosses a clip edge.
+- Pinch zooms about the playhead; the zoom and scroll live in `EditorUI` (15.2).
+- A selected clip shows edge handles: drag to trim in place; the picture shows the frame under the finger; snaps to
+  the playhead and neighbouring edges with a tick.
+- Hold then drag: move a clip in time and between lanes (lane 0 included).
+- Lane headers: a small icon and number. Adding a lane is a `+` at the bottom of the header column; the dashed
+  "new lane" row goes.
+
+### 15.6 Show, not tell
+
+No hint or caption text in the editor: "pinch to zoom", "lane 1 · sets the length", "this overlay covers the whole
+picture" and similar go. State is shown (handles, highlights, badges on clips such as a small key glyph), not written.
+Errors that block a render stay (they are not hints).

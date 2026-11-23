@@ -5,9 +5,10 @@ import SwiftUI
 import AppKit
 #endif
 
-/// The Mac and iPad timeline once the project is version 2. Every lane is the same height. Lane 0 is the bottom row,
-/// labelled "lane 1", with a caption that it sets the length. A dashed zone above the top lane starts a new one.
-/// Dragging a clip lifts it; the lane under the pointer lights up and a ghost shows where it will land.
+/// The Mac and iPad timeline once the project is version 2. Every lane is the same height. Lane 0 is the bottom row; the
+/// header column numbers the lanes with a small icon, and a `+` at the bottom of it adds a lane. Dragging a clip lifts it; a
+/// dashed strip above the top lane (shown only while a clip is lifted) opens a new lane, the lane under the pointer lights up
+/// and a ghost shows where it will land. The ruler scrubs through `TimelineRulerScrub`: coalesced seeks and a tick on a clip edge.
 struct EditorEqualLanes: View {
     let session: EditSession
     @Binding var scale: TimelineScale
@@ -22,6 +23,14 @@ struct EditorEqualLanes: View {
     @State private var scrubbing = false
     @State private var laneScroll = ScrollPosition(idType: Int.self)
     @State private var keepGap = false
+    @State private var rulerScrub: TimelineRulerScrub
+
+    init(session: EditSession, scale: Binding<TimelineScale>, height: CGFloat) {
+        self.session = session
+        self._scale = scale
+        self.height = height
+        self._rulerScrub = State(initialValue: TimelineRulerScrub(session: session))
+    }
 
     private static let headerWidth: CGFloat = 92
     private static let rulerHeight: CGFloat = 28
@@ -54,6 +63,7 @@ struct EditorEqualLanes: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Editor.timelineA11y)
         .laneRefusalToast(session)
+        .haptic(.impact(weight: .light), trigger: rulerScrub.tick)
         .background { EqualLanePlayheadFollow(session: session) { followPlayhead() } }
     }
 
@@ -63,8 +73,9 @@ struct EditorEqualLanes: View {
         VStack(spacing: 0) {
             Color.clear.frame(height: Self.rulerHeight)
             laneHeaderScroll
-            laneHeader(Copy.Editor.trackAudio, caption: nil, lane: nil, height: audioHeight)
+            audioHeader
             Spacer(minLength: 0)
+            addLaneButton
             zoomRow
         }
     }
@@ -74,7 +85,7 @@ struct EditorEqualLanes: View {
         let stack = VStack(spacing: 0) {
             Color.clear.frame(height: Self.zoneHeight)
             ForEach((0..<laneCount).reversed(), id: \.self) { lane in
-                laneHeader(Copy.Editor.laneTitle(lane), caption: lane == 0 ? Copy.Editor.laneSetsLength : nil, lane: lane, height: rowHeight)
+                laneHeader(lane: lane, height: rowHeight)
                     .id(lane)
             }
         }
@@ -87,28 +98,54 @@ struct EditorEqualLanes: View {
         }
     }
 
-    private func laneHeader(_ title: String, caption: String?, lane: Int?, height: CGFloat) -> some View {
+    /// A small icon and the lane's number: a film strip for lane 0 (it sets the length), a stack for the others.
+    private func laneHeader(lane: Int, height: CGFloat) -> some View {
         HStack(spacing: 2) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title)
-                    .font(Font.cobalt(11, .regular, relativeTo: .caption2))
-                    .foregroundStyle(CobaltColor.text)
-                    .lineLimit(1)
-                if let caption {
-                    Text(caption)
-                        .font(Font.cobalt(8.5, .regular, relativeTo: .caption2))
-                        .foregroundStyle(CobaltColor.caption)
-                        .lineLimit(1)
-                }
+            HStack(spacing: 4) {
+                Image(systemName: lane == 0 ? "film" : "square.stack")
+                    .font(.system(size: 10, weight: .medium))
+                Text("\(lane + 1)")
+                    .font(Font.cobalt(11, .semibold, relativeTo: .caption2))
+                    .monospacedDigit()
             }
+            .foregroundStyle(CobaltColor.text)
+            .accessibilityLabel(Copy.Editor.laneTitle(lane))
             Spacer(minLength: 0)
-            if let lane { laneControls(lane) }
+            laneControls(lane)
         }
         .padding(.leading, 8)
         .padding(.trailing, 2)
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .leading)
         .overlay(alignment: .bottom) { Rectangle().fill(EditorColor.line).frame(height: 1) }
         .accessibilityElement(children: .contain)
+    }
+
+    private var audioHeader: some View {
+        Text(Copy.Editor.trackAudio)
+            .font(Font.cobalt(11, .regular, relativeTo: .caption2))
+            .foregroundStyle(CobaltColor.caption)
+            .padding(.leading, 8)
+            .frame(maxWidth: .infinity, minHeight: audioHeight, maxHeight: audioHeight, alignment: .leading)
+            .overlay(alignment: .bottom) { Rectangle().fill(EditorColor.line).frame(height: 1) }
+            .accessibilityHidden(true)
+    }
+
+    /// `+` at the bottom of the header column: a new lane (the add sheet in layer mode).
+    private var addLaneButton: some View {
+        let can = EditLaneDrop.canInsertLane(above: laneCount - 1, occupied: session.timeline.clips.map(\.lane))
+        return Button { host.ui.open(.addLayer, page: nil) } label: {
+            Image(systemName: Symbol.Editor.add)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: Platform.isMac ? 28 : 44, height: Platform.isMac ? 24 : 32)
+                .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(can ? CobaltColor.text : CobaltColor.caption)
+        .disabled(!can)
+        .help(Copy.Editor.addLayer)
+        .accessibilityLabel(Copy.Editor.addLayer)
+        .padding(.bottom, 4)
     }
 
     private func laneControls(_ lane: Int) -> some View {
@@ -172,8 +209,16 @@ struct EditorEqualLanes: View {
             board.frame(maxHeight: .infinity, alignment: .topLeading)
         }
         .scrollPosition($scroll)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in scrollX.x = x }
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in
+            scrollX.x = x
+            // kept as seconds (CONTRACT-EDITOR 15.2), so a zoom or a new layout puts the same moment at the left edge
+            host.ui.timelineScrollSeconds = Double(max(0, x) / scale.pointsPerSecond)
+        }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { visibleWidth = $0 }
+        .onAppear {
+            let x = CGFloat(host.ui.timelineScrollSeconds) * scale.pointsPerSecond
+            if x > 0 { scroll.scrollTo(x: x) }
+        }
         .simultaneousGesture(pinch)
     }
 
@@ -199,13 +244,13 @@ struct EditorEqualLanes: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        if !scrubbing {
-                            scrubbing = true
-                            if session.isPlaying { session.pause() }
-                        }
-                        session.seek(frame: session.timing.frame(at: scale.seconds(at: value.location.x)))
+                        scrubbing = true
+                        rulerScrub.move(to: scale.seconds(at: value.location.x))
                     }
-                    .onEnded { _ in scrubbing = false })
+                    .onEnded { value in
+                        scrubbing = false
+                        rulerScrub.end(at: scale.seconds(at: value.location.x))
+                    })
     }
 
     @ViewBuilder
@@ -237,28 +282,22 @@ struct EditorEqualLanes: View {
         .frame(width: width, height: Self.zoneHeight + rowHeight * CGFloat(laneCount), alignment: .topLeading)
     }
 
+    /// The strip above the top lane: bin files can be dropped on it for a new lane, and while a clip is lifted it shows dashed
+    /// (lit when the pointer is on it). No words.
     private func newLaneZone(width: CGFloat) -> some View {
-        let hot = drag?.moved == true && drag?.target == .newLane
-        return ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(hot ? EditorColor.selection : CobaltColor.border, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                .background(hot ? EditorColor.selection.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-            HStack(spacing: 8) {
-                Text(Copy.Editor.newLaneZone)
-                if Platform.isMac, drag?.fromLane == 0, drag?.moved == true {
-                    Text(Copy.Editor.keepGapHint)
-                }
-            }
-            .font(Font.cobalt(10, .regular, relativeTo: .caption2))
-            .foregroundStyle(CobaltColor.caption)
-            .padding(.leading, 14)
-        }
-        .frame(width: width, height: Self.zoneHeight)
-        .dropDestination(for: String.self) { items, location in
-            dropFiles(items, lane: nil, x: location.x)
-        } isTargeted: { _ in }
+        let lifted = drag?.moved == true
+        let hot = lifted && drag?.target == .newLane
+        return RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .strokeBorder(hot ? EditorColor.selection : CobaltColor.border, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+            .background(hot ? EditorColor.selection.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .opacity(lifted ? 1 : 0)
+            .frame(width: width, height: Self.zoneHeight)
+            .contentShape(Rectangle())
+            .dropDestination(for: String.self) { items, location in
+                dropFiles(items, lane: nil, x: location.x)
+            } isTargeted: { _ in }
     }
 
     private func laneRow(_ lane: Int, width: CGFloat) -> some View {

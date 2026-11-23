@@ -56,6 +56,10 @@ public enum EditProblem: Sendable, Equatable {
 
 public enum EditValidation {
     public static let maxSeconds = 600.0
+    /// The widest a version 2 clip's `frame` may be, in canvas widths (69.7, the server's `EDIT_FRAME_MAX_W`).
+    public static let frameMaxWidth = 4.0
+    /// The narrowest frame, in canvas widths (the same 0.05 a version 1 overlay has).
+    public static let frameMinWidth = 0.05
     /// The clip ceiling when the server does not send `limits.edit_max_clips`. A server that sends one (200 on the
     /// companion) is used instead; `check` takes it.
     public static let maxClips = 50
@@ -225,14 +229,18 @@ public enum EditValidation {
                 problems.append(.range(path: "\(path).crop"))
             }
             if let frame = clip.frame {
-                if !(frame.w >= 0.05 && frame.w <= 1) {
+                // 69.7: the box may hang past any edge and be up to 4 canvases wide, turned; some of it has to be on the canvas
+                if !(frame.w >= frameMinWidth && frame.w <= frameMaxWidth) {
                     problems.append(.range(path: "\(path).frame.w"))
-                } else if !(frame.x >= 0) || frame.x + frame.w > 1 + frameSlack {
+                } else if !(frame.x < 1 && frame.x + frame.w > 0) {
                     problems.append(.range(path: "\(path).frame.x"))
-                } else if !(frame.y >= 0) {
+                } else if !(frame.y < 1 && frame.y >= -frameMaxWidth * 4) {
                     problems.append(.range(path: "\(path).frame.y"))
-                } else if let display = sources[clip.item]?.display, canvasOK,
-                          frame.y + EditGeometry.overlayHeightFraction(display: display, frame: frame, canvas: t.canvas) > 1 + frameSlack {
+                } else if !(frame.r >= -180 && frame.r <= 180) {
+                    problems.append(.range(path: "\(path).frame.r"))
+                } else if canvasOK, let display = croppedDisplay(of: clip, sources: sources),
+                          frame.y + EditGeometry.overlayHeightFraction(display: display, frame: frame, canvas: t.canvas) <= 0 {
+                    // `checkSources`: y + h <= 0 needs the picture's size
                     problems.append(.range(path: "\(path).frame.y"))
                 }
             }
@@ -256,6 +264,14 @@ public enum EditValidation {
         }
         problems.append(contentsOf: checkLaneSources(t, sources: sources))
         return problems
+    }
+
+    /// The picture a clip draws: the source's display size, cropped when the clip has a crop. Nil when the size is not known.
+    static func croppedDisplay(of clip: EditLaneClip, sources: [String: EditSource]) -> PixelSize? {
+        guard let display = sources[clip.item]?.display else { return nil }
+        guard let crop = clip.crop else { return display }
+        guard cropIsValid(crop), let px = EditGeometry.cropPixels(crop, display: display) else { return nil }
+        return PixelSize(w: px.w, h: px.h)
     }
 
     static func checkLaneSources(_ t: EditTimeline, sources: [String: EditSource]) -> [EditProblem] {

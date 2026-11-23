@@ -1,7 +1,8 @@
 import CobaltKit
 import SwiftUI
 
-/// The right column (apple/CONTRACT-EDITOR.md 4.3, 272 pt): driven by the selection. A main clip shows trim, speed, crop and
+/// The older right column (apple/CONTRACT-EDITOR.md 4.3, 272 pt), still used by `EditorScreen`; the shell uses
+/// `EditorShellInspector` and its pages instead (15.1). Driven by the selection. A main clip shows trim, speed, crop and
 /// fit, volume, and the `split at playhead` / `delete clip` icons; an overlay shows start, length, trim (video), position, size,
 /// opacity, volume and a `delete overlay` icon; with nothing selected it says so and summarises the project.
 struct EditorInspector: View {
@@ -42,9 +43,6 @@ struct EditorInspector: View {
 
     private var nothing: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(Copy.Editor.nothingSelected)
-                .font(Font.cobalt(12.5, .semibold, relativeTo: .subheadline))
-                .foregroundStyle(CobaltColor.text)
             Text(Copy.Editor.summary(
                 canvas: session.timeline.canvas.shape.rawValue, quality: session.qualityLine,
                 duration: Copy.Editor.clock(session.timing.seconds), clips: session.timeline.main.count))

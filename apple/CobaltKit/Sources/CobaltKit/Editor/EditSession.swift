@@ -14,6 +14,8 @@ import Observation
 ///   drag, a slider) are one step; `endGesture()` ends a run at once. A save never clears the stacks.
 /// - The player is rebuilt (`EditComposition`) 150 ms after the timeline settles, and keeps the playhead. During a drag or
 ///   slider run it waits for `endGesture()` (or 0.6 s of quiet), so the item is not swapped mid-gesture.
+///   The picture does not wait: a clip's frame or opacity that differs from the playing item's goes into `liveFrames`, which
+///   the compositor reads for every output frame, and a paused player is asked to draw its frame again (CONTRACT-EDITOR 15.3).
 @MainActor @Observable
 public final class EditSession {
     public enum Tool: String, CaseIterable, Sendable { case select, blade, crop }
@@ -42,7 +44,7 @@ public final class EditSession {
     /// Greenscreen the canvas is previewing, before Apply. Not saved.
     public var effectDraft: EditEffectDraft?
     /// "fx" on a clip whose file a cut or Bria replaced. A greenscreen shows from its `key` alone.
-    public private(set) var effectMarks: [String: EditEffectKind] = [:]
+    public internal(set) var effectMarks: [String: EditEffectKind] = [:]
     /// The line on the effects card while a cut or a background-removal job is running.
     public var effectStatus: String?
     public private(set) var saveState: SaveState = .saved
@@ -74,7 +76,7 @@ public final class EditSession {
     public private(set) var canUndo = false
     public private(set) var canRedo = false
     /// Why the last lane edit was refused (`all 64 lanes are in use`, a locked lane, an older server). Nil after a success.
-    public private(set) var laneRefusal: String?
+    public internal(set) var laneRefusal: String?
     /// Bumps on every refusal, including the same line twice, so the timeline can toast it.
     public private(set) var laneRefusalNonce = 0
     /// Clip ids the preview skipped because their file could not be read. The last good frame stays up; the chip names these.
@@ -92,6 +94,8 @@ public final class EditSession {
     @ObservationIgnored private var redoStack: [EditTimeline] = []
     @ObservationIgnored private var lastKey: String?
     @ObservationIgnored private var lastEditAt = Date.distantPast
+    /// Between `beginGesture` and `endGesture`: keyed edits with the same key are one step however long the finger rests.
+    @ObservationIgnored private var gestureOpen = false
 
     // saving
     @ObservationIgnored private var dirty = false
@@ -114,8 +118,14 @@ public final class EditSession {
     @ObservationIgnored private var assets: [String: EditSourceAsset] = [:]
     @ObservationIgnored private var loads: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var timeObserver: Any?
-    @ObservationIgnored private var seekInFlight = false
-    @ObservationIgnored private var pendingSeekFrame: Int?
+    /// One seek in flight, the latest wins: scrubs and redraws of the picture (`EditSeekChase`).
+    @ObservationIgnored private var seekChase = EditSeekChase()
+    /// The time of the last seek sent, so a redraw at the same frame is nudged (`EditSeekChase.Target.redraw`).
+    @ObservationIgnored private var lastSeekTime: CMTime?
+    /// Frames and opacity the picture draws before the item is rebuilt with them (`EditLiveFrames`, CONTRACT-EDITOR 15.3).
+    @ObservationIgnored let liveFrames = EditLiveFrames()
+    /// The rounded timeline the current player item was built from; `liveFrames` holds what differs from it.
+    @ObservationIgnored private var playingTimeline: EditTimeline?
     @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
     /// The newest build threw and the previous item is still in the player. Its `.readyToPlay` must not clear `previewFailed`.
@@ -173,6 +183,7 @@ public final class EditSession {
     public func play() {
         guard isPlayerReady, timing.frames > 0 else { return }
         if playhead >= timing.frames - 1 { seek(frame: 0) }
+        lastSeekTime = nil                                                     // playing moves the picture off any seek
         player.play()
         isPlaying = true
     }
@@ -186,32 +197,59 @@ public final class EditSession {
         if isPlaying { pause() } else { play() }
     }
 
-    public func seek(frame k: Int) {
+    /// `exact: false` is a scrub's seek while the finger is down (CONTRACT-EDITOR 15.5): any frame near the target will do,
+    /// so the picture keeps up; the release sends an exact one.
+    public func seek(frame k: Int, exact: Bool = true) {
         let clamped = min(max(0, k), max(0, timing.frames - 1))
         playhead = clamped
         guard player.currentItem != nil else { return }
-        chaseSeek(to: clamped)
+        chaseSeek(to: clamped, exact: exact)
     }
 
-    /// One exact seek in flight; a scrub's newer targets wait, and only the latest is sent when it lands.
-    private func chaseSeek(to frame: Int) {
-        if seekInFlight {
-            pendingSeekFrame = frame
-            return
+    /// One seek in flight; a scrub's newer targets wait, and only the latest is sent when it lands.
+    private func chaseSeek(to frame: Int, exact: Bool = true) {
+        guard let target = seekChase.request(.init(frame: frame, exact: exact)) else { return }
+        sendSeek(target)
+    }
+
+    private func sendSeek(_ target: EditSeekChase.Target) {
+        let scale = Int32(timing.fps) * 1_000
+        var time = CMTime(value: Int64(target.frame) * 1_000, timescale: scale)
+        // a paused player composes again only for a time it is not at: a redraw at the same frame goes a thousandth of a frame on
+        if target.redraw, let last = lastSeekTime, CMTimeCompare(last, time) == 0 {
+            time = CMTime(value: Int64(target.frame) * 1_000 + 1, timescale: scale)
         }
-        seekInFlight = true
-        let time = CMTime(value: Int64(frame), timescale: Int32(timing.fps))
-        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+        lastSeekTime = time
+        let tolerance: CMTime = target.exact ? .zero : CMTime(value: 1, timescale: 10)
+        player.seek(to: time, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
             Task { @MainActor [weak self] in self?.seekLanded() }
         }
     }
 
     private func seekLanded() {
-        seekInFlight = false
-        guard let next = pendingSeekFrame else { return }
-        pendingSeekFrame = nil
-        guard !isClosed, player.currentItem != nil else { return }
-        chaseSeek(to: min(next, max(0, timing.frames - 1)))
+        guard var next = seekChase.landed() else { return }
+        guard !isClosed, player.currentItem != nil else {
+            _ = seekChase.landed()                                  // nothing is sent: the queue is idle again
+            return
+        }
+        next.frame = min(next.frame, max(0, timing.frames - 1))
+        sendSeek(next)
+    }
+
+    /// The paused picture is drawn again at the playhead, so a frame or opacity change in `liveFrames` shows now. Playing, the
+    /// next output frame reads it anyway.
+    private func redrawPicture() {
+        guard !isClosed, player.currentItem != nil, player.rate == 0 else { return }
+        guard let target = seekChase.redraw(at: playhead) else { return }
+        sendSeek(target)
+    }
+
+    /// Puts into `liveFrames` every clip whose frame or opacity differs from what the playing item was built with, and redraws
+    /// when that changed. Runs after every edit (a drag tick, a slider, undo), so the picture never waits for the rebuild to
+    /// show a place, a size, a turn or an opacity.
+    private func refreshLive(redraw: Bool = true) {
+        let next = playingTimeline.map { EditLiveFrames.overrides(playing: $0, current: timeline) } ?? [:]
+        if liveFrames.replace(next), redraw { redrawPicture() }
     }
 
     public func step(frames: Int) { seek(frame: playhead + frames) }
@@ -961,6 +999,98 @@ public final class EditSession {
         }
     }
 
+    // MARK: - Turned and off-canvas frames (APP-API-CONTRACT 69.7)
+
+    /// The picture a clip draws, in pixels: the file's display size, cropped when the clip has a crop. Nil while the file's size is
+    /// not known. Any lane; a version 1 overlay or main clip too.
+    public func pictureSize(ofClip id: String) -> PixelSize? {
+        guard let clip = laneClip(id) else { return nil }
+        return pictureSize(item: clip.item, crop: clip.crop)
+    }
+
+    private func pictureSize(item: String, crop: EditCrop?) -> PixelSize? {
+        guard let display = assets[item]?.display ?? sources[item]?.display, display.w > 0, display.h > 0 else { return nil }
+        guard let crop else { return display }
+        guard let px = EditGeometry.cropPixels(crop, display: display) else { return nil }
+        return PixelSize(w: px.w, h: px.h)
+    }
+
+    /// The clip as one lane clip: a version 2 clip, or a version 1 overlay or main clip described the same way (only the fields
+    /// the frame reads).
+    private func laneClip(_ id: String) -> EditLaneClip? {
+        if timeline.version >= 2 { return timeline.clips.first { $0.id == id } }
+        if let o = timeline.overlay.first(where: { $0.id == id }) {
+            return EditLaneClip(id: o.id, item: o.item, lane: o.track + 1, at: o.at, in: o.`in`, out: o.out, frame: o.frame)
+        }
+        if let m = timeline.main.first(where: { $0.id == id }) {
+            return EditLaneClip(id: m.id, item: m.item, lane: 0, at: 0, in: m.`in`, out: m.out, crop: m.crop, fit: m.fit)
+        }
+        return nil
+    }
+
+    /// The box a clip has now: its own `frame`, or, when it has none, the one `fit` or `fill` gives it. A first move, size or
+    /// turn starts from this, so the picture does not jump. Nil while the file's size is not known.
+    public func frameBox(ofClip id: String) -> EditFrame? {
+        guard let clip = laneClip(id) else { return nil }
+        if let frame = clip.frame { return frame }
+        guard let display = assets[clip.item]?.display ?? sources[clip.item]?.display, display.w > 0, display.h > 0 else { return nil }
+        return EditGeometry.fitFrame(display: display, crop: clip.crop, fit: clip.fit, canvas: timeline.canvas)
+    }
+
+    /// Sets a clip's `frame` (x, y, w and the turn `r`), one undo step per gesture (`beginGesture` ... `endGesture`, or edits
+    /// within 0.6 s of each other). The frame is held to what 69.7 allows: `w` 0.05...4, some of the box on the canvas, `r`
+    /// wrapped into -180...180 and rounded to 0.1. It may hang past any edge.
+    ///
+    /// A turn or a box past an edge needs version 2: a version 1 project becomes version 2 on the first one (that is one undo
+    /// step too). False, with `laneRefusal`, when the server saves only version 1 and this frame is not a version 1 overlay
+    /// frame (or the project cannot become version 2), when the clip's lane is locked, or when there is no such clip.
+    @discardableResult
+    public func setClipFrame(id: String, _ wanted: EditFrame) -> Bool {
+        var next = timeline
+        if next.version < 2 {
+            guard case .ok(let v2) = EditLanes.v1ToV2(next) else {
+                refuseLane(EditLanes.staysV1Message)
+                return false
+            }
+            next = v2
+        }
+        guard let index = next.clips.firstIndex(where: { $0.id == id }) else { return false }
+        if lockedLanes.contains(next.clips[index].lane) { return false }
+        let display = pictureSize(item: next.clips[index].item, crop: next.clips[index].crop)
+        next.clips[index].frame = Self.clampLaneFrame(wanted, display: display, canvas: next.canvas)
+        guard allowsSave(EditJSON.rounded(next)) else {
+            refuseLane(EditLanes.needsServerMessage)
+            return false
+        }
+        laneRefusal = nil
+        commit(key: "frame:\(id)") { $0 = next }
+        return true
+    }
+
+    func refuseLane(_ message: String) {
+        laneRefusal = message
+        laneRefusalNonce += 1
+    }
+
+    /// `frame` held to 69.7: `w` 0.05...4; `x < 1` and `x + w > 0`; `y < 1` and, when the picture's size is known, `y + h > 0`
+    /// (else `y >= -16`); `r` wrapped into -180...180. Not rounded: the session's rounding does that. A bit of the box always
+    /// stays on the canvas, so rounding cannot push it off.
+    static func clampLaneFrame(_ frame: EditFrame, display: PixelSize?, canvas: EditCanvas) -> EditFrame {
+        let keep = 0.0003
+        func finite(_ v: Double, _ fallback: Double) -> Double { v.isFinite ? v : fallback }
+        let w = min(EditValidation.frameMaxWidth, max(EditValidation.frameMinWidth, finite(frame.w, 0.35)))
+        let x = min(max(finite(frame.x, 0), keep - w), 1 - keep)
+        var lowest = -EditValidation.frameMaxWidth * 4 + keep
+        if let display, display.w > 0, display.h > 0, canvas.h > 0 {
+            let h = EditGeometry.overlayHeightFraction(display: display, frame: EditFrame(x: 0, y: 0, w: w), canvas: canvas)
+            lowest = max(lowest, keep - h)
+        }
+        let y = min(max(finite(frame.y, 0), lowest), 1 - keep)
+        var r = finite(frame.r, 0).truncatingRemainder(dividingBy: 360)
+        if r > 180 { r -= 360 } else if r < -180 { r += 360 }
+        return EditFrame(x: x, y: y, w: w, r: r)
+    }
+
     public func setOverlayOpacity(id: String, _ v: Double) {
         editOverlay(id, key: "opacity:\(id)") { $0.opacity = min(1, max(0.1, v.isFinite ? v : 1)) }
     }
@@ -1202,7 +1332,7 @@ public final class EditSession {
     }
 
     /// A new lane was opened above `lane`, so a lock on a higher overlay track moves up with that track.
-    private func shiftLocks(above lane: Int) {
+    func shiftLocks(above lane: Int) {
         lockedTracks = Set(lockedTracks.map { track in
             track + 1 > lane ? track + 1 : track
         })
@@ -1226,9 +1356,17 @@ public final class EditSession {
 
     // MARK: - Undo
 
+    /// Starts a drag, pinch or twist whose keyed edits (`setClipFrame`) are one undo step however long the finger rests, until
+    /// `endGesture()`. Optional: without it a run is one step only while edits arrive within 0.6 s of each other.
+    public func beginGesture() {
+        lastKey = nil
+        gestureOpen = true
+    }
+
     /// Ends a run of drag or slider edits: the next edit is a step of its own.
     /// A rebuild held back during the run is scheduled now (the usual 150 ms debounce, so a burst of nudges is one rebuild).
     public func endGesture() {
+        gestureOpen = false
         lastKey = nil
         if gestureRebuildPending {
             gestureRebuildPending = false
@@ -1277,15 +1415,17 @@ public final class EditSession {
         }
     }
 
-    /// Applies `change` to a copy, normalizes it, and (if anything changed) records the undo step and takes it.
-    private func commit(key: String?, _ change: (inout EditTimeline) -> Void) {
+    /// Applies `change` to a copy, normalizes it, and (if anything changed) records the undo step and takes it. `key` nil is
+    /// a step of its own; a key repeated within a gesture (or 0.6 s) is the same step. Internal so the session's own extension
+    /// files (remove green, the picture tools) make several changes in one step.
+    func commit(key: String?, _ change: (inout EditTimeline) -> Void) {
         var t = timeline
         let clamp = !savesTimelineV2
         change(&t)
         t = normalized(t, clampOverlays: clamp)
         guard t != timeline else { return }
         let now = ctx.clock.now()
-        if let key, key == lastKey, now.timeIntervalSince(lastEditAt) < Self.coalesceWindow {
+        if let key, key == lastKey, gestureOpen || now.timeIntervalSince(lastEditAt) < Self.coalesceWindow {
             // the same drag or slider: one step
         } else {
             undoStack.append(timeline)
@@ -1318,6 +1458,7 @@ public final class EditSession {
             gestureRebuildPending = false
             scheduleRebuild()
         }
+        refreshLive()
     }
 
     /// The probed length of every video file, for the end-of-source clamp the renderer applies.
@@ -1789,7 +1930,8 @@ public final class EditSession {
             let hints = EditPreviewHints(
                 maskOverlayID: effectDraft?.showMask == true ? effectDraft?.overlayID : nil,
                 splitOverlayID: effectDraft?.split == true ? effectDraft?.overlayID : nil)
-            let built = try await EditComposition.build(playing, assets: assets, shifted: ready, preview: hints)
+            let built = try await EditComposition.build(
+                playing, assets: assets, shifted: ready, preview: hints, live: liveFrames)
             guard generation == rebuildGeneration, !isClosed else { return }
             builds += 1
             let wasPlaying = isPlaying
@@ -1812,7 +1954,10 @@ public final class EditSession {
             previewSkips = built.skippedClipIDs
             let k = min(playhead, max(0, built.timing.frames - 1))
             playhead = k
-            pendingSeekFrame = nil                                                        // this seek goes to the playhead
+            seekChase.dropPending()                                                       // this seek goes to the playhead
+            lastSeekTime = CMTime(value: Int64(k), timescale: Int32(built.timing.fps))
+            playingTimeline = EditJSON.rounded(playing)
+            refreshLive(redraw: false)
             player.seek(to: CMTime(value: Int64(k), timescale: Int32(built.timing.fps)), toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
             if wasPlaying { player.play() }
         } catch {

@@ -39,4 +39,38 @@ private struct EditorPreviewHost: View {
 #Preview("editor · conflict · dark") { EditorPreviewHost(.editorConflict, open: "beach").preferredColorScheme(.dark) }
 #Preview("editor · server down · light") { EditorPreviewHost(.editorFail, open: "beach").preferredColorScheme(.light) }
 #Preview("editor · server down · dark") { EditorPreviewHost(.editorFail, open: "beach").preferredColorScheme(.dark) }
+/// `EditorShell` (CONTRACT-EDITOR 15.1) at the six sizes of the layout tests, the content size after the safe area. The
+/// shell lays itself out from the size alone, so each one shows its regime: compact, tall or wide.
+private struct EditorShellPreviewHost: View {
+    @State private var model: AppModel
+    @State private var host = EditorHost()
+    let size: CGSize
+
+    init(_ scenario: PreviewScenario, open: String, width: CGFloat, height: CGFloat) {
+        _model = State(initialValue: AppModel.previewEditor(scenario, open: open))
+        size = CGSize(width: width, height: height)
+    }
+
+    var body: some View {
+        Group {
+            if let session = model.editor.session {
+                EditorShell(model: model, session: session)
+                    .environment(host)
+            } else {
+                EditorOpeningView(model: model, previewWaiting: true)
+            }
+        }
+        .cobaltRoot(model: model)
+        .frame(width: size.width, height: size.height)
+    }
+}
+
+#Preview("shell · iPhone 402×874") { EditorShellPreviewHost(.happy, open: "beach", width: 402, height: 874) }
+#Preview("shell · Duo folded 461×940") { EditorShellPreviewHost(.happy, open: "cats", width: 461, height: 940) }
+#Preview("shell · Duo open 669×951") { EditorShellPreviewHost(.happy, open: "beach", width: 669, height: 951) }
+#Preview("shell · Duo turned 951×669") { EditorShellPreviewHost(.happy, open: "beach", width: 951, height: 669) }
+#Preview("shell · iPad 1180×820 · dark") {
+    EditorShellPreviewHost(.happy, open: "cats", width: 1180, height: 820).preferredColorScheme(.dark)
+}
+#Preview("shell · Mac 1280×800") { EditorShellPreviewHost(.happy, open: "beach", width: 1280, height: 800) }
 #endif

@@ -503,26 +503,52 @@ extension EditTimeline {
     public var overlayTracks: [Int] { Array(Set(overlay.map(\.track))).sorted() }
 }
 
-/// An overlay's rectangle as fractions of the canvas: `x`, `y` the top-left corner, `w` the width. The height follows the
-/// overlay's own aspect (`EditGeometry.overlayHeightFraction`).
+/// A clip's rectangle as fractions of the canvas: `x`, `y` the top-left corner, `w` the width, and (version 2, 69.7) `r` the
+/// turn about its centre. The height follows the picture's own aspect (`EditGeometry.overlayHeightFraction`).
+///
+/// A version 1 overlay is always inside the canvas and unturned. A version 2 clip's frame may hang past any edge (`x`, `y`
+/// negative, `w` up to 4) and be turned; `EditValidation` holds the bounds.
 public struct EditFrame: Sendable, Equatable, Codable {
     public var x: Double, y: Double, w: Double
+    /// Degrees clockwise, -180...180, rounded to 0.1. 0 is left out of the JSON, so a frame saved before 69.7 keeps its bytes.
+    public var r: Double
 
-    public init(x: Double, y: Double, w: Double) {
+    public init(x: Double, y: Double, w: Double, r: Double = 0) {
         self.x = x
         self.y = y
         self.w = w
+        self.r = r
+    }
+
+    private enum CodingKeys: String, CodingKey { case x, y, w, r }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        x = try c.decode(Double.self, forKey: .x)
+        y = try c.decode(Double.self, forKey: .y)
+        w = try c.decode(Double.self, forKey: .w)
+        r = try c.decodeIfPresent(Double.self, forKey: .r) ?? 0
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(x, forKey: .x)
+        try c.encode(y, forKey: .y)
+        try c.encode(w, forKey: .w)
+        if r != 0 { try c.encode(r, forKey: .r) }
     }
 }
 
 // MARK: - Canonical JSON (31.2)
 
 public enum EditJSON {
-    /// `x` rounded to the nearest `1 / scale` (half away from zero), the way the server's `Math.round(x * scale) / scale`
-    /// does for the non-negative values a timeline holds.
+    /// `x` rounded to the nearest `1 / scale`, halves away from zero, the way the server does it (`roundTo` in `timeline.js`:
+    /// `floor(|x| * scale + 0.5 + 1e-9) / scale`, negated for a negative `x`). A frame's `x` and `y` can be negative (69.7), so
+    /// -0.00005 is -0.0001. Never -0.
     static func round(_ x: Double, to scale: Double) -> Double {
         guard x.isFinite else { return x }
-        return (x * scale).rounded(.toNearestOrAwayFromZero) / scale
+        let magnitude = (abs(x) * scale + 0.5 + 1e-9).rounded(.down) / scale
+        return x < 0 && magnitude != 0 ? -magnitude : magnitude
     }
 
     /// Times and lengths to 0.001.
@@ -531,6 +557,8 @@ public enum EditJSON {
     static func level(_ x: Double) -> Double { round(x, to: 100) }
     /// Crop and frame fractions to 0.0001.
     static func fraction(_ x: Double) -> Double { round(x, to: 10_000) }
+    /// A frame's turn, in degrees, to 0.1 (69.7).
+    static func angle(_ x: Double) -> Double { round(x, to: 10) }
     /// Speed to the nearest multiple of 0.05 (then 2 decimals: `n / 20` is the double nearest that decimal).
     static func speed(_ x: Double) -> Double {
         guard x.isFinite else { return x }
@@ -601,7 +629,7 @@ public enum EditJSON {
                 clip.crop = crop
             }
             if var frame = clip.frame {
-                frame.x = fraction(frame.x); frame.y = fraction(frame.y); frame.w = fraction(frame.w)
+                frame.x = fraction(frame.x); frame.y = fraction(frame.y); frame.w = fraction(frame.w); frame.r = angle(frame.r)
                 clip.frame = frame
             }
             if let key = clip.key {

@@ -53,7 +53,7 @@ export type LaneClip = {
     speed?: number;
     crop?: Crop;
     fit?: "fill" | "fit";
-    frame?: { x: number; y: number; w: number };
+    frame?: { x: number; y: number; w: number; r?: number };
     opacity?: number;
     volume?: number;
     muted?: boolean;
@@ -490,7 +490,8 @@ function overlayFits(t: Timeline, rows: Map<string, MediaRow>): { ok: true } | {
             const sw = c.crop && c.crop.w > 0 ? src.width * c.crop.w : src.width;
             const sh = c.crop && c.crop.h > 0 ? src.height * c.crop.h : src.height;
             const h = ((c.frame.w * t.canvas.w) / t.canvas.h) * (sh / sw);
-            if (c.frame.y + h > 1.001) return { ok: false, path: `clips[${i}].frame` };
+            // a v2 frame may hang past any edge (69.7); some of it has to be on the canvas
+            if (c.frame.y + h <= 0) return { ok: false, path: `clips[${i}].frame` };
         }
         return { ok: true };
     }

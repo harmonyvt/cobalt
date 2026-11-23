@@ -25,6 +25,14 @@ struct EditorTimelinePane: View {
     @State private var mainTargeted = false
     @State private var overlayTargeted: Int?
     @State private var layerScroll = ScrollPosition(idType: Int.self)
+    @State private var rulerScrub: TimelineRulerScrub
+
+    init(session: EditSession, scale: Binding<TimelineScale>, height: CGFloat) {
+        self.session = session
+        self._scale = scale
+        self.height = height
+        self._rulerScrub = State(initialValue: TimelineRulerScrub(session: session))
+    }
 
     private static let headerWidth: CGFloat = 92
     private static let rulerHeight: CGFloat = 28
@@ -78,6 +86,7 @@ struct EditorTimelinePane: View {
             TimelinePlayheadFollower(session: session) { followPlayhead() }
         }
         .haptic(.selection, trigger: session.selection)
+        .haptic(.impact(weight: .light), trigger: rulerScrub.tick)
     }
 
     // MARK: headers and zoom
@@ -169,8 +178,16 @@ struct EditorTimelinePane: View {
             content
         }
         .scrollPosition($scroll)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in scrollX.x = x }
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in
+            scrollX.x = x
+            // kept as seconds (CONTRACT-EDITOR 15.2), so a zoom or a new layout puts the same moment at the left edge
+            host.ui.timelineScrollSeconds = Double(max(0, x) / scale.pointsPerSecond)
+        }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { visibleWidth = $0 }
+        .onAppear {
+            let x = CGFloat(host.ui.timelineScrollSeconds) * scale.pointsPerSecond
+            if x > 0 { scroll.scrollTo(x: x) }
+        }
         .simultaneousGesture(pinch)
     }
 
@@ -199,13 +216,13 @@ struct EditorTimelinePane: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        if !scrubbing {
-                            scrubbing = true
-                            if session.isPlaying { session.pause() }
-                        }
-                        session.seek(frame: session.timing.frame(at: scale.seconds(at: value.location.x)))
+                        scrubbing = true
+                        rulerScrub.move(to: scale.seconds(at: value.location.x))
                     }
-                    .onEnded { _ in scrubbing = false })
+                    .onEnded { value in
+                        scrubbing = false
+                        rulerScrub.end(at: scale.seconds(at: value.location.x))
+                    })
     }
 
     // MARK: lanes

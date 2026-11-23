@@ -1,0 +1,52 @@
+{
+  "name": "v2-frame-off-canvas",
+  "note": "A frame past the left and top edges and wider than the canvas (69.7). Negative x and y round half away from zero. Never converts to v1.",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "b",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 0,
+        "at": 0,
+        "in": 0,
+        "out": 2
+      },
+      {
+        "id": "o",
+        "item": "BBBBBBBBBBBBBBBB",
+        "lane": 1,
+        "at": 0,
+        "in": 0,
+        "out": 2,
+        "frame": {
+          "x": -0.12345,
+          "y": -0.05,
+          "w": 1.5,
+          "r": 0
+        }
+      }
+    ]
+  },
+  "kinds": {
+    "AAAAAAAAAAAAAAAA": "video",
+    "BBBBBBBBBBBBBBBB": "video"
+  },
+  "to_v1": {
+    "ok": false,
+    "code": "error.edit.needs_timeline_v2",
+    "path": "clips[1].frame"
+  },
+  "parse": {
+    "ok": true,
+    "canonical": "{\"canvas\":{\"fps\":30,\"h\":1920,\"w\":1080},\"clips\":[{\"at\":0,\"id\":\"b\",\"in\":0,\"item\":\"AAAAAAAAAAAAAAAA\",\"lane\":0,\"out\":2},{\"at\":0,\"frame\":{\"w\":1.5,\"x\":-0.1235,\"y\":-0.05},\"id\":\"o\",\"in\":0,\"item\":\"BBBBBBBBBBBBBBBB\",\"lane\":1,\"out\":2}],\"version\":2}"
+  },
+  "clip_count": 2,
+  "cover_item": "AAAAAAAAAAAAAAAA",
+  "timing_frames": 60
+}

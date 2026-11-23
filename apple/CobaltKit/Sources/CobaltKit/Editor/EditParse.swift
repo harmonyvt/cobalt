@@ -77,7 +77,10 @@ extension EditLanes {
                 }
                 lane0.append((index, clip))
             } else {
-                if clip.frame == nil { return .failed(code: "error.edit.needs_timeline_v2", path: "\(path).frame") }
+                // no frame, a turned one, or one that is not inside the canvas (69.7): a version 1 overlay cannot hold it
+                if !(clip.frame.map(EditGeometry.isV1Frame) ?? false) {
+                    return .failed(code: "error.edit.needs_timeline_v2", path: "\(path).frame")
+                }
                 if clip.crop != nil { return .failed(code: "error.edit.needs_timeline_v2", path: "\(path).crop") }
                 if clip.speed != 1 { return .failed(code: "error.edit.needs_timeline_v2", path: "\(path).speed") }
                 if clip.fit != .fill { return .failed(code: "error.edit.needs_timeline_v2", path: "\(path).fit") }
@@ -287,6 +290,35 @@ private func parseFrame(_ value: ParseValue?, path: String) -> Step<EditFrame> {
         w: EditJSON.fraction(min(2, max(-1, w0))))
     if frame.w < 0.05 || frame.w > 1 { return .failed(code: "error.edit.range", path: "\(path).w") }
     if frame.x + frame.w > 1 + 1e-3 { return .failed(code: "error.edit.range", path: "\(path).x") }
+    return .value(frame)
+}
+
+/// A version 2 clip's `frame` (69.7): `x`, `y`, `w` as fractions of the canvas and an optional `r` (degrees, clockwise).
+/// The box may hang past any edge and be up to 4 canvases wide as long as part of it is on the canvas (`x < 1`,
+/// `x + w > 0`, `y < 1`; `y + h > 0` needs the picture's size and is `EditValidation`'s). `r` is -180...180, rounded to 0.1,
+/// and left out when 0, so a frame saved before 69.7 is the same document. Mirrors `parseLaneFrame` in `timeline.js`.
+private func parseLaneFrame(_ value: ParseValue?, path: String) -> Step<EditFrame> {
+    guard let object = value?.object else { return .failed(code: "error.edit.bad_request", path: path) }
+    if let failure = keysOK(object, required: ["x", "y", "w"], optional: ["r"], prefix: path) {
+        return .failed(code: failure.code, path: failure.path)
+    }
+    for key in ["x", "y", "w"] where object[key]?.number == nil {
+        return .failed(code: "error.edit.bad_request", path: "\(path).\(key)")
+    }
+    let fx = object["x"]!.number!, fy = object["y"]!.number!, fw = object["w"]!.number!
+    let w = EditJSON.fraction(min(8, max(0, fw)))
+    if fw < 0 || w < 0.05 || w > EditValidation.frameMaxWidth { return .failed(code: "error.edit.range", path: "\(path).w") }
+    let x = EditJSON.fraction(min(8, max(-8, fx)))
+    if x >= 1 || x + w <= 0 { return .failed(code: "error.edit.range", path: "\(path).x") }
+    let y = EditJSON.fraction(min(8, max(-8, fy)))
+    if y >= 1 || y < -EditValidation.frameMaxWidth * 4 { return .failed(code: "error.edit.range", path: "\(path).y") }
+    var frame = EditFrame(x: x, y: y, w: w)
+    if object["r"] != nil {
+        guard let raw = object["r"]?.number else { return .failed(code: "error.edit.bad_request", path: "\(path).r") }
+        let r = EditJSON.angle(raw)
+        if r < -180 || r > 180 { return .failed(code: "error.edit.range", path: "\(path).r") }
+        frame.r = r
+    }
     return .value(frame)
 }
 
@@ -505,7 +537,7 @@ private func parseLane(_ value: ParseValue, path: String, seen: inout Set<String
     }
     var frame: EditFrame?
     if object["frame"] != nil {
-        switch parseFrame(object["frame"], path: "\(path).frame") {
+        switch parseLaneFrame(object["frame"], path: "\(path).frame") {
         case .value(let value): frame = value
         case .failed(let code, let failPath): return .failed(code: code, path: failPath)
         }

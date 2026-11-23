@@ -64,7 +64,14 @@ public enum EditPreviewCover {
             let slot = timing.overlay[j]
             guard frame >= slot.start, frame < slot.start + slot.frames else { continue }
             guard let size = display(overlay.item), size.w > 0, size.h > 0 else { continue }
-            let rect = EditGeometry.overlay(display: size, frame: overlay.frame, canvas: canvas)
+            let rect: PixelRect
+            if timeline.version >= 2 {
+                // 69.7: a turned box, or one with nothing on the canvas, hides nothing; one past the edges is not pushed back in
+                guard overlay.frame.r == 0, let box = EditGeometry.laneBox(display: size, frame: overlay.frame, canvas: canvas) else { continue }
+                rect = PixelRect(x: box.x, y: box.y, w: box.w, h: box.h)
+            } else {
+                rect = EditGeometry.overlay(display: size, frame: overlay.frame, canvas: canvas)
+            }
             let covers = rect.x <= 2 && rect.y <= 2
                 && rect.x + rect.w >= canvas.w - 2 && rect.y + rect.h >= canvas.h - 2
             if covers { found = overlay.id }
