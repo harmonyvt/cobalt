@@ -8,76 +8,56 @@ import AppKit
 /// The open editor: picks the layout, owns the toast, the unsaved-changes alert and the render outcomes (apple/CONTRACT-EDITOR.md
 /// 4.2, 4.6). Every layout below it reads the same `EditorHost` from the environment.
 ///
-/// Layout: `EditorScreen` (Mac A) on the Mac, and on iPad when the width is 900 pt or more with a regular size class;
-/// `EditorPhoneScreen` (lane 6) otherwise. Resizing across 900 pt switches layouts and keeps the session.
+/// Layout: one `EditorShell` on every screen (15.1). It lays itself out from its size (`EditorLayout`) and moves its parts
+/// between slots instead of switching screens, so folding, unfolding, turning or resizing keeps everything (15.2).
 struct EditorRoot: View {
     let model: AppModel
     let session: EditSession
 
     @State private var host = EditorHost()
-    #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    #else
+    #if os(macOS)
     @Environment(\.openWindow) private var openWindow
     #endif
 
-    /// The width at which iPad gets the Mac layout.
-    static let deskWidth: CGFloat = 900
-
     var body: some View {
-        GeometryReader { geo in
-            layout(width: geo.size.width)
-        }
-        .environment(host)
-        .overlay(alignment: .bottom) {
-            if let toast = host.toast {
-                EditorToastView(toast: toast) { host.dismissToast() }
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-        }
-        .motion(Motion.card, value: host.toast?.id)
-        .alert(Copy.Editor.closeUnsavedTitle, isPresented: $host.confirmingClose) {
-            Button(Copy.Editor.keepEditing, role: .cancel) {}
-            Button(Copy.Editor.closeAnyway, role: .destructive) { host.closeAnyway(model) }
-        } message: {
-            Text(Copy.Editor.closeUnsavedBody)
-        }
-        .onChange(of: session.activeRender?.status) { old, new in renderChanged(from: old, to: new) }
-        .onAppear {
-            if let line = EditorLauncher.shared.firstToast {
-                EditorLauncher.shared.firstToast = nil
-                host.show(line)
-            }
-        }
-        .haptic(.success, trigger: host.doneTick)
-        #if os(macOS)
-        .background(EditorWindowGuard(
-            onCloseButton: { host.requestClose(model) },
-            onClosed: {
-                // the window went some way other than the red button (Window > Close, quit): flush and close the session;
-                // if that cannot be done (unsaved or conflicted edits) keep it and bring the window back
-                guard model.editor.session != nil else { return }
-                Task {
-                    if await model.editor.close() { return }
-                    EditorLauncher.shared.firstToast = Copy.Editor.closeUnsavedTitle
-                    openWindow(id: EditorWindowID.editor)
+        EditorShell(model: model, session: session)
+            .environment(host)
+            .overlay(alignment: .bottom) {
+                if let toast = host.toast {
+                    EditorToastView(toast: toast) { host.dismissToast() }
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
-            }))
-        .navigationTitle(session.project.title)
-        #endif
-    }
-
-    @ViewBuilder
-    private func layout(width: CGFloat) -> some View {
-        #if os(macOS)
-        EditorScreen(model: model, session: session)
-        #else
-        if sizeClass == .regular && width >= Self.deskWidth {
-            EditorScreen(model: model, session: session)
-        } else {
-            EditorPhoneScreen(model: model, session: session)
-        }
-        #endif
+            }
+            .motion(Motion.card, value: host.toast?.id)
+            .alert(Copy.Editor.closeUnsavedTitle, isPresented: $host.confirmingClose) {
+                Button(Copy.Editor.keepEditing, role: .cancel) {}
+                Button(Copy.Editor.closeAnyway, role: .destructive) { host.closeAnyway(model) }
+            } message: {
+                Text(Copy.Editor.closeUnsavedBody)
+            }
+            .onChange(of: session.activeRender?.status) { old, new in renderChanged(from: old, to: new) }
+            .onAppear {
+                if let line = EditorLauncher.shared.firstToast {
+                    EditorLauncher.shared.firstToast = nil
+                    host.show(line)
+                }
+            }
+            .haptic(.success, trigger: host.doneTick)
+            #if os(macOS)
+            .background(EditorWindowGuard(
+                onCloseButton: { host.requestClose(model) },
+                onClosed: {
+                    // the window went some way other than the red button (Window > Close, quit): flush and close the session;
+                    // if that cannot be done (unsaved or conflicted edits) keep it and bring the window back
+                    guard model.editor.session != nil else { return }
+                    Task {
+                        if await model.editor.close() { return }
+                        EditorLauncher.shared.firstToast = Copy.Editor.closeUnsavedTitle
+                        openWindow(id: EditorWindowID.editor)
+                    }
+                }))
+            .navigationTitle(session.project.title)
+            #endif
     }
 
     // MARK: render outcomes

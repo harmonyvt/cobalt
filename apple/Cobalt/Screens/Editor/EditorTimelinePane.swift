@@ -169,8 +169,16 @@ struct EditorTimelinePane: View {
             content
         }
         .scrollPosition($scroll)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in scrollX.x = x }
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in
+            scrollX.x = x
+            // kept as seconds (CONTRACT-EDITOR 15.2), so a zoom or a new layout puts the same moment at the left edge
+            host.ui.timelineScrollSeconds = Double(max(0, x) / scale.pointsPerSecond)
+        }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { visibleWidth = $0 }
+        .onAppear {
+            let x = CGFloat(host.ui.timelineScrollSeconds) * scale.pointsPerSecond
+            if x > 0 { scroll.scrollTo(x: x) }
+        }
         .simultaneousGesture(pinch)
     }
 

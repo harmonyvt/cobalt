@@ -8,9 +8,9 @@ import UIKit
 import AppKit
 #endif
 
-/// What the open editor shares between its parts (the Mac and iPad screen, the iPhone screen, the presenter): the toast, the
-/// unsaved-changes alert, and the one way to close. `EditorRoot` makes one and puts it in the environment
-/// (`@Environment(EditorHost.self)`), so lane 6's `EditorPhoneScreen` reads the same instance.
+/// What the open editor shares between its parts (`EditorShell` and everything in its slots, the presenter): the toast, the
+/// unsaved-changes alert, the one way to close, and the screen's memory (`ui`). `EditorRoot` makes one per open session and
+/// puts it in the environment (`@Environment(EditorHost.self)`), so every part reads the same instance.
 @MainActor @Observable
 final class EditorHost {
     struct Toast: Identifiable {
@@ -26,6 +26,9 @@ final class EditorHost {
     var confirmingClose = false
     /// +1 whenever a render finishes (the success haptic).
     private(set) var doneTick = 0
+    /// What the editor's screen remembers across folds, unfolds and turns (apple/CONTRACT-EDITOR.md 15.2): the open tool and
+    /// page, the drawer, the timeline's zoom and scroll, the picture's zoom. One per open session, as this host is.
+    let ui = EditorUI()
 
     @ObservationIgnored private var dismissTask: Task<Void, Never>?
 
