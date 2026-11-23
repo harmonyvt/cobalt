@@ -26,7 +26,7 @@ final class SevenTvTabController {
     }
 
     /// What the Mac's right column shows.
-    enum Pane: Hashable {
+    enum Column: Hashable {
         case set(String)
         case search
         case upload
@@ -41,12 +41,10 @@ final class SevenTvTabController {
 
     let card: SevenTvController
     var segment: Segment = .sets
-    var pane: Pane?
+    var column: Column?
     /// The set "search" adds to; nil: the channel's live set (else its first).
     var targetSetID: String?
     var uploading: UploadItem?
-    /// "add to a set…" (57.14): the emote being put in sets.
-    var addingToSet: SevenTvAddToSetModel?
 
     init(model: AppModel) {
         card = SevenTvController(model: model)
@@ -68,7 +66,7 @@ final class SevenTvTabController {
 
     /// The Mac's open set: the picked one, else the live one.
     var paneSetID: String? {
-        switch pane {
+        switch column {
         case .search?, .upload?:
             return nil
         case .set(let id)?:
@@ -94,12 +92,14 @@ final class SevenTvTabController {
     func addEmotes(to setID: String) {
         targetSetID = setID
         segment = .search
-        pane = .search
+        column = .search
     }
 
-    /// "add to a set…" on a row of "your emotes on 7tv": the picker shares this tab's set models, so an open set's grid shows it.
-    func addToSet(_ emote: SevenTvOwnedEmote) {
-        addingToSet = store.addToSetPicker(for: emote, setModel: setModels)
+    /// "add to a set…" on a row of "your emotes on 7tv": the pane's page (`SevenTvAddToSetPage`) shares this tab's set models
+    /// (the tab gives the card to the pane), so an open set's grid shows the add.
+    func addToSet(_ emote: SevenTvOwnedEmote, pane: Pane?) {
+        pane?.provide(card)
+        pane?.open(.emoteAddToSet(emote.emoteID))
     }
 
     /// The tab's shared set models (`SevenTvController.setModel`), for the picker and the upload sheet.
@@ -120,6 +120,7 @@ struct SevenTvScreen: View {
     /// The tab's own width: in the other screen of a spread it is half the window, whatever the window's tier.
     @State private var width: CGFloat = 0
     @Environment(\.shell) private var shell
+    @Environment(Pane.self) private var pane: Pane?
 
     #if DEBUG
     @State private var debugUpload: SevenTvUploadModel?
@@ -139,7 +140,7 @@ struct SevenTvScreen: View {
             case "upload": controller.segment = .upload
             default: break
             }
-            if raw == "upload", tier != .compact { controller.pane = .upload }
+            if raw == "upload", tier != .compact { controller.column = .upload }
         }
         #endif
         _tab = State(initialValue: controller)
@@ -147,22 +148,22 @@ struct SevenTvScreen: View {
 
     private var store: SevenTvStore { model.sevenTv }
 
-    /// Three columns on the Mac and from a two-screen spread up (a landscape phone, an iPad).
+    /// The tab's own width from which the middle column and the right one sit side by side (the three-column layout needs
+    /// the 280 pt column and a grid beside it). With the pane open beside the tab the tab is measured as it is.
+    private static let twoColumnMinWidth: CGFloat = 700
+
+    /// Three columns on the Mac and wherever the tab is wide enough (a landscape phone, an iPad).
     private var twoPane: Bool {
         #if os(macOS)
         return true
         #else
-        if width > 0 { return width >= Spread.minWidth }
+        if width > 0 { return width >= Self.twoColumnMinWidth }
         return tier != .compact
         #endif
     }
 
     private var uploadShown: Binding<SevenTvTabController.UploadItem?> {
         Binding(get: { tab.uploading }, set: { tab.uploading = $0 })
-    }
-
-    private var addToSetShown: Binding<SevenTvAddToSetModel?> {
-        Binding(get: { tab.addingToSet }, set: { tab.addingToSet = $0 })
     }
 
     var body: some View {
@@ -175,6 +176,7 @@ struct SevenTvScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .task { await store.load() }
+            .task { pane?.provide(tab.card) }
             #if DEBUG
             .task { await debugOpenSet() }
             .task { await debugOpenAddToSet() }
@@ -186,9 +188,6 @@ struct SevenTvScreen: View {
             .sheet(item: uploadShown) { item in
                 SevenTvUploadSheet(
                     upload: item.upload, picture: SevenTvUploadIcon.picture(model: model, file: item.file), setModels: tab.setModels)
-            }
-            .spreadSheet(item: addToSetShown) { picker in
-                SevenTvAddToSetSheet(picker: picker).panelDrawsOwnClose()
             }
             #if DEBUG
             .sheet(item: $debugUpload) { upload in
@@ -213,18 +212,14 @@ struct SevenTvScreen: View {
         }
     }
 
-    /// `-previewSevenTvAddPicker <emote id or name>` (simulator evidence): opens "add to a set…" for that owned emote once the
-    /// list is in. `-previewSevenTvAddPickerPick main` then adds it to that set (a name or id) in the open picker.
+    /// `-previewSevenTvAddPicker <emote id or name>` (simulator evidence): opens "add to a set…" for that owned emote in the
+    /// pane once the list is in.
     private func debugOpenAddToSet() async {
         guard let want = UserDefaults.standard.string(forKey: "previewSevenTvAddPicker") else { return }
         await store.load()
         await store.loadOwned()
         guard let emote = store.owned.first(where: { $0.emoteID == want || $0.name == want }) else { return }
-        tab.addToSet(emote)
-        guard let name = UserDefaults.standard.string(forKey: "previewSevenTvAddPickerPick"), let picker = tab.addingToSet else { return }
-        await picker.prepare()
-        guard let row = picker.sets.first(where: { $0.id == name || $0.name == name }) else { return }
-        _ = await picker.add(to: row)
+        tab.addToSet(emote, pane: pane)
     }
 
     /// `-previewSevenTvUploadDone 1` (simulator evidence): uploads a preview library file and shows the sheet's result.
@@ -643,7 +638,7 @@ private struct SevenTvWideLayout: View {
             SevenTvMiddleColumn(tab: tab)
                 .frame(width: 280)
                 .background(CobaltColor.surface.opacity(0.5))
-            HingeSeam(queue: tab.model.queue)
+            Rectangle().fill(CobaltColor.hairline).frame(width: 1)
             SevenTvRightColumn(tab: tab)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -685,8 +680,8 @@ private struct SevenTvMiddleColumn: View {
                 }
                 sectionTitle(Copy.SevenTv.more)
                 VStack(alignment: .leading, spacing: 2) {
-                    paneButton(Copy.SevenTv.searchSevenTv, symbol: Symbol.SevenTv.search, pane: .search)
-                    paneButton(Copy.SevenTv.uploadFromLibrary, symbol: Symbol.SevenTv.library, pane: .upload)
+                    paneButton(Copy.SevenTv.searchSevenTv, symbol: Symbol.SevenTv.search, column: .search)
+                    paneButton(Copy.SevenTv.uploadFromLibrary, symbol: Symbol.SevenTv.library, column: .upload)
                 }
             }
             .padding(14)
@@ -703,7 +698,7 @@ private struct SevenTvMiddleColumn: View {
 
     private func setRow(_ row: SevenTvSetRow) -> some View {
         let picked = tab.paneSetID == row.id
-        return Button { tab.pane = .set(row.id) } label: {
+        return Button { tab.column = .set(row.id) } label: {
             HStack(spacing: 8) {
                 Text(row.name)
                     .font(Font.cobalt(13, picked ? .semibold : .regular, relativeTo: .body))
@@ -740,9 +735,9 @@ private struct SevenTvMiddleColumn: View {
 
     @Environment(\.shell) private var shellActions
 
-    private func paneButton(_ title: String, symbol: String, pane: SevenTvTabController.Pane) -> some View {
-        let picked = tab.pane == pane
-        return Button { tab.pane = pane } label: {
+    private func paneButton(_ title: String, symbol: String, column: SevenTvTabController.Column) -> some View {
+        let picked = tab.column == column
+        return Button { tab.column = column } label: {
             Label(title, systemImage: symbol)
                 .font(Font.cobalt(13, picked ? .semibold : .regular, relativeTo: .body))
                 .foregroundStyle(CobaltColor.text)
@@ -763,7 +758,7 @@ private struct SevenTvRightColumn: View {
     let tab: SevenTvTabController
 
     var body: some View {
-        switch tab.pane {
+        switch tab.column {
         case .search?:
             SevenTvSearchPage(tab: tab)
                 .padding(.horizontal, Metrics.gutter)

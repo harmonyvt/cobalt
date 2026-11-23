@@ -49,6 +49,7 @@ struct SevenTvUploadPage: View {
     let tab: SevenTvTabController
 
     @Environment(\.openURL) private var openURL
+    @Environment(Pane.self) private var pane: Pane?
     /// "make an emote" (APP-API-CONTRACT 71): the next tap on a picture opens the emote editor on it instead of the upload sheet.
     @State private var picking = false
     @State private var emoting: EmoteEditorTarget?
@@ -162,7 +163,7 @@ struct SevenTvUploadPage: View {
                     SevenTvOwnedRow(
                         emote: emote, fallbackPicture: emote.fileID.flatMap(libraryPicture),
                         ago: emote.createdAt.map { Copy.SevenTv.ago($0, now: store.now()) }, canAddToSet: canAddToSet,
-                        addToSet: { tab.addToSet(emote) }, open: { openURL(emote.pageURL) })
+                        addToSet: { tab.addToSet(emote, pane: pane) }, open: { openURL(emote.pageURL) })
                 }
             }
             .motion(Motion.rows, value: store.owned.map(\.id))

@@ -10,12 +10,28 @@ struct StageSpotlightBar: View {
     let controller: StageController
 
     @Environment(\.shell) private var shell
+    @Environment(Pane.self) private var pane: Pane?
 
     private var pinned: Bool { stage.spotlight?.isPinned(now: Date()) ?? false }
     private var busy: Bool { controller.isBusy("action") }
 
     var body: some View {
         StageCard {
+            nowShowing
+            buttons
+            if !stage.onAir {
+                Text(Copy.Stage.spotlightOffAir)
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(CobaltColor.caption)
+            }
+        }
+    }
+
+    /// The file in the spotlight; a tap opens it in the screen pane (`StagePoolVideoPage`).
+    private var nowShowing: some View {
+        Button {
+            if let item = stage.spotlight?.item { pane?.open(.poolVideo(item.id)) }
+        } label: {
             HStack(spacing: 12) {
                 StageThumb(item: stage.spotlight?.item)
                 VStack(alignment: .leading, spacing: 2) {
@@ -28,16 +44,15 @@ struct StageSpotlightBar: View {
                         .foregroundStyle(CobaltColor.text)
                         .lineLimit(2)
                 }
+                .multilineTextAlignment(.leading)
                 Spacer(minLength: 0)
             }
-            .accessibilityElement(children: .combine)
-            buttons
-            if !stage.onAir {
-                Text(Copy.Stage.spotlightOffAir)
-                    .font(CobaltType.captionSmall)
-                    .foregroundStyle(CobaltColor.caption)
-            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .disabled(stage.spotlight == nil)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(stage.spotlight == nil ? "" : Copy.Stage.spotlightOpenHint)
     }
 
     private var caption: String {
@@ -133,14 +148,15 @@ struct StageMenuButton<Items: View>: View {
 
 // MARK: - the pick sheet
 
-/// "pick for the spotlight": the pool's public videos, 60 at a time, newest first as the server lists them. A tap puts the
-/// video in the spotlight as the owner's own pick (`spotlight` action) and closes the sheet. Pictures stay in the pool for
+/// "pick for the spotlight": the pool's public videos, 60 at a time, newest first as the server lists them. A tap closes the
+/// sheet and opens the video in the screen pane (`StagePoolVideoPage`), whose first button puts it in the spotlight as the
+/// owner's own pick (`spotlight` action). Pictures stay in the pool for
 /// the tiles; they are not offered here.
 struct StagePickSheet: View {
     let controller: StageController
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.shell) private var shell
+    @Environment(Pane.self) private var pane: Pane?
 
     private var store: StageStore { controller.store }
     /// Pictures stay on the canvas as tiles. The spotlight is videos only.
@@ -206,7 +222,10 @@ struct StagePickSheet: View {
                     .foregroundStyle(CobaltColor.caption)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 10)], spacing: 12) {
                     ForEach(videos) { item in
-                        PickTile(item: item) { controller.pickItem(item, shell: shell) }
+                        PickTile(item: item) {
+                            controller.pickShown = false
+                            pane?.open(.poolVideo(item.id))
+                        }
                             .onAppear {
                                 if item.id == videos.last?.id { Task { await store.loadMorePool() } }
                             }

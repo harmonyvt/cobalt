@@ -1,14 +1,12 @@
 import CobaltKit
 import SwiftUI
 
-// The booru filters (APP-API-CONTRACT 72): this device's content level (general or sensitive; raising it asks
+// The booru filters page in the pane (APP-API-CONTRACT 72): this device's content level (general or sensitive; raising it asks
 // for Face ID), presets, the theme modes, sort and refine, the blacklist, and the one block that is never a setting.
 
-struct BooruFilterSheet: View {
+struct BooruFiltersPage: View {
     let model: AppModel
 
-    /// "done" works in a sheet and in the spread pane alike (a plain `dismiss` did nothing in the pane, 8.34).
-    var dismiss = SheetOrPaneDismiss()
     @State private var blacklist = ""
     @State private var blacklistState: SaveState = .idle
     @State private var busy = false
@@ -19,46 +17,36 @@ struct BooruFilterSheet: View {
     private var level: BooruLevel { store.settings?.level ?? .general }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    section(Copy.Booru.contentLevel) { levelCard }
-                    Text(Copy.Booru.thisDevice).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.caption).padding(.horizontal, 4)
-                    section(Copy.Booru.presets) { presets }
-                    section(Copy.Booru.themes) { themes }
-                    Text(Copy.Booru.themesHint).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.caption).padding(.horizontal, 4)
-                    section(Copy.Booru.alwaysHidden) {
-                        row(Copy.Booru.hardBlock, detail: Copy.Booru.hardBlockDetail) {
-                            Image(systemName: Symbol.Booru.lock).foregroundStyle(CobaltColor.errorText)
-                        }
-                        .card()
-                    }
-                    section(Copy.Booru.refine) { refine }
-                    section(Copy.Booru.blacklist) { blacklistEditor }
-                    if let err = store.settingsError, err != "error.booru.not_ready" {
-                        Text(Copy.Booru.saveFailed).font(CobaltType.caption).foregroundStyle(CobaltColor.errorText)
-                    }
-                }
-                .padding(16)
-                .frame(maxWidth: 640)
-                .frame(maxWidth: .infinity)
+        PanePage(title: Copy.Booru.filters, subtitle: Copy.Booru.upTo(store.effectiveLevel)) {
+            EmptyView()
+        } controls: {
+            VStack(alignment: .leading, spacing: 8) {
+                section(Copy.Booru.contentLevel) { levelCard }
+                Text(Copy.Booru.thisDevice).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.caption).padding(.horizontal, 4)
             }
-            .background(CobaltColor.bg)
-            .navigationTitle(Copy.Booru.filters)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(Copy.Booru.done) { dismiss() }
+        } body: {
+            VStack(alignment: .leading, spacing: 8) {
+                section(Copy.Booru.presets) { presets }
+                section(Copy.Booru.themes) { themes }
+                Text(Copy.Booru.themesHint).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.caption).padding(.horizontal, 4)
+                section(Copy.Booru.alwaysHidden) {
+                    row(Copy.Booru.hardBlock, detail: Copy.Booru.hardBlockDetail) {
+                        Image(systemName: Symbol.Booru.lock).foregroundStyle(CobaltColor.errorText)
+                    }
+                    .card()
+                }
+                section(Copy.Booru.refine) { refine }
+                section(Copy.Booru.blacklist) { blacklistEditor }
+                if let err = store.settingsError, err != "error.booru.not_ready" {
+                    Text(Copy.Booru.saveFailed).font(CobaltType.caption).foregroundStyle(CobaltColor.errorText)
                 }
             }
+            .padding(.horizontal, 16)
         }
         .task {
             if !store.settingsLoaded { await store.loadSettings() }
             blacklist = store.settings?.blacklist ?? ""
         }
-        .panelDrawsOwnClose()
     }
 
     // MARK: level

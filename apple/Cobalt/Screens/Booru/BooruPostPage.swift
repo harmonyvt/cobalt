@@ -1,108 +1,118 @@
 import CobaltKit
 import SwiftUI
 
-// One booru post (APP-API-CONTRACT 72): the picture, save (the file's link goes to the queue like any paste), open on
-// Danbooru, share, and its tags by kind. A tag searches; its menu adds it to the search or hides it (the blacklist).
+// One booru post in the pane (APP-API-CONTRACT 72, apple/CONTRACT-PANE.md section 5): the picture as the hero (spanned, a
+// whole screen to itself), save (the file's link goes to the queue like any paste), open on Danbooru, share, and its tags by
+// kind. A tag searches; its menu adds it to the search or hides it (the blacklist). Picking a tag runs the search and hides
+// the pane, so the grid under it shows the result.
 
-struct BooruPostSheet: View {
+struct BooruPostPage: View {
     let model: AppModel
-    let post: BooruPost
-    /// A tag was picked: (tag, replace the search) or add it to the search.
-    let pick: (String, Bool) -> Void
+    let id: Int
 
-    /// The close works in a sheet and in the spread pane alike (a plain `dismiss` did nothing in the pane, 8.34).
-    var dismiss = SheetOrPaneDismiss()
+    @Environment(Pane.self) private var pane: Pane?
+    @Environment(\.openURL) private var openURL
     @State private var saved = false
     @State private var hiddenTags: Set<String> = []
+    /// The post as last seen: a search that replaces the grid (a tag picked, a filter changed) must not empty the page.
+    @State private var kept: BooruPost?
 
     private var store: BooruStore { model.booru }
+    private var post: BooruPost? { store.posts.first { $0.id == id } ?? kept }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    picture
-                    actions
-                    info
-                    tagGroup(Copy.Booru.artist, post.tags.artist, .artist)
-                    tagGroup(Copy.Booru.character, post.tags.character, .character)
-                    tagGroup(Copy.Booru.copyright, post.tags.copyright, .copyright)
-                    tagGroup(Copy.Booru.general, post.tags.general, .general)
-                    tagGroup(Copy.Booru.meta, post.tags.meta, .meta)
-                }
-                .padding(16)
-                .frame(maxWidth: 760)
-                .frame(maxWidth: .infinity)
-            }
-            .background(CobaltColor.bg)
-            .navigationTitle(post.tags.character.first ?? Copy.Booru.title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(Copy.Booru.close, systemImage: Symbol.Booru.close) { dismiss() }
-                }
+        Group {
+            if let post {
+                page(post)
+            } else if store.phase == .loaded || store.phase.isFailed {
+                PaneGonePage()
+            } else {
+                PaneLoadingPage()
             }
         }
-        .panelDrawsOwnClose()
-    }
-
-    private var picture: some View {
-        Color.clear
-            .aspectRatio(max(0.4, min(post.aspect, 2.5)), contentMode: .fit)
-            .overlay {
-                AsyncImage(url: post.sampleUrl) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFit()
-                    } else {
-                        ZStack {
-                            LinearGradient(colors: [CobaltColor.frameTop, CobaltColor.frameBottom], startPoint: .top, endPoint: .bottom)
-                            ProgressView()
-                        }
-                    }
-                }
-                .mediaMask()
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(alignment: .topLeading) {
-                Text(Copy.Booru.level(post.rating))
-                    .font(CobaltType.pill)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .foregroundStyle(.white)
-                    .background(BooruLevelColor.of(post.rating).opacity(0.85), in: Capsule())
-                    .padding(10)
-            }
-    }
-
-    private var actions: some View {
-        HStack(spacing: 8) {
-            Button(saved ? Copy.Booru.savedToLibrary : Copy.Booru.save, systemImage: Symbol.Booru.save) {
-                _ = model.queue.add([.link(post.fileUrl)], via: .paste)
-                saved = true
-            }
-            .buttonStyle(.cobaltPrimary(fullWidth: true, compact: true))
-            .disabled(saved)
-            ShareLink(item: post.pageUrl) {
-                Label(Copy.Booru.share, systemImage: Symbol.Booru.share).labelStyle(.iconOnly)
-            }
-            .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-            Link(destination: post.pageUrl) {
-                Label(Copy.Booru.openDanbooru, systemImage: Symbol.Booru.open).labelStyle(.iconOnly)
-            }
-            .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+        .task { await store.load() }
+        .onChange(of: store.posts, initial: true) { _, posts in
+            if let found = posts.first(where: { $0.id == id }) { kept = found }
         }
     }
 
-    private var info: some View {
+    private func page(_ post: BooruPost) -> some View {
+        PanePage(
+            title: post.tags.character.first?.replacingOccurrences(of: "_", with: " ") ?? Copy.Booru.title,
+            subtitle: Copy.Booru.size(post.width, post.height, post.ext),
+            actions: [
+                PaneAction(Copy.Booru.openDanbooru, systemImage: Symbol.Booru.open) { openURL(post.pageUrl) },
+            ]
+        ) {
+            picture(post)
+        } controls: {
+            PaneActionGrid([
+                PaneAction(saved ? Copy.Booru.savedToLibrary : Copy.Booru.save, systemImage: Symbol.Booru.save,
+                           disabled: saved) {
+                    _ = model.queue.add([.link(post.fileUrl)], via: .paste)
+                    saved = true
+                },
+                PaneAction(Copy.Booru.openDanbooru, systemImage: Symbol.Booru.open) { openURL(post.pageUrl) },
+            ])
+        } body: {
+            VStack(alignment: .leading, spacing: 14) {
+                info(post)
+                tagGroup(Copy.Booru.artist, post.tags.artist, .artist)
+                tagGroup(Copy.Booru.character, post.tags.character, .character)
+                tagGroup(Copy.Booru.copyright, post.tags.copyright, .copyright)
+                tagGroup(Copy.Booru.general, post.tags.general, .general)
+                tagGroup(Copy.Booru.meta, post.tags.meta, .meta)
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func picture(_ post: BooruPost) -> some View {
+        ZStack {
+            LinearGradient(colors: [CobaltColor.frameTop, CobaltColor.frameBottom], startPoint: .top, endPoint: .bottom)
+            AsyncImage(url: post.sampleUrl) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFit()
+                } else {
+                    ProgressView()
+                }
+            }
+            .mediaMask()
+        }
+        .aspectRatio(max(0.4, min(post.aspect, 2.5)), contentMode: .fit)
+        .overlay(alignment: .bottomLeading) {
+            Text(Copy.Booru.level(post.rating))
+                .font(CobaltType.pill)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .foregroundStyle(.white)
+                .background(BooruLevelColor.of(post.rating).opacity(0.85), in: Capsule())
+                .padding(10)
+        }
+    }
+
+    private func info(_ post: BooruPost) -> some View {
         HStack(spacing: 14) {
             Label(Copy.Booru.score(post.score), systemImage: Symbol.Booru.score)
             Label(Copy.Booru.favs(post.favs), systemImage: Symbol.Booru.favs)
-            Text(Copy.Booru.size(post.width, post.height, post.ext))
+            Spacer(minLength: 0)
+            ShareLink(item: post.pageUrl) {
+                Label(Copy.Booru.share, systemImage: Symbol.Booru.share).labelStyle(.iconOnly)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
         }
         .font(CobaltType.caption)
         .foregroundStyle(CobaltColor.caption)
+    }
+
+    /// A tag was picked: search it (or add it to the search), then show the grid.
+    private func pick(_ tag: String, replace: Bool) {
+        let next = replace ? tag : (store.query.tagList + [tag]).suffix(BooruQuery.maxTags).joined(separator: " ")
+        var q = store.query
+        q.tags = next
+        pane?.close()
+        Task { await store.search(q) }
     }
 
     @ViewBuilder
@@ -114,8 +124,8 @@ struct BooruPostSheet: View {
                 BooruFlow(spacing: 6, lineSpacing: 6) {
                     ForEach(shown, id: \.self) { tag in
                         Menu {
-                            Button(Copy.Booru.searchTag, systemImage: Symbol.Booru.search) { pick(tag, true) }
-                            Button(Copy.Booru.addTag, systemImage: Symbol.Booru.add) { pick(tag, false) }
+                            Button(Copy.Booru.searchTag, systemImage: Symbol.Booru.search) { pick(tag, replace: true) }
+                            Button(Copy.Booru.addTag, systemImage: Symbol.Booru.add) { pick(tag, replace: false) }
                             Button(Copy.Booru.hideTag, systemImage: Symbol.Booru.hide, role: .destructive) {
                                 hiddenTags.insert(tag)
                                 Task { await store.blacklist(tag: tag) }
@@ -128,7 +138,7 @@ struct BooruPostSheet: View {
                                 .padding(.vertical, 5)
                                 .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 8))
                         } primaryAction: {
-                            pick(tag, true)
+                            pick(tag, replace: true)
                         }
                         .buttonStyle(.plain)
                     }
@@ -136,6 +146,10 @@ struct BooruPostSheet: View {
             }
         }
     }
+}
+
+private extension BooruStore.Phase {
+    var isFailed: Bool { if case .failed = self { true } else { false } }
 }
 
 /// Tags that wrap onto as many lines as they need.
