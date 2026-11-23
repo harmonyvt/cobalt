@@ -1,12 +1,8 @@
 import Foundation
 
 // Remove green (apple/CONTRACT-EDITOR.md 15.4): one tap on a selected clip sets its `key` to the green preset and, when
-// other clips sit above it in time, lifts it above them so the green hole shows what is under it straight away.
-//
-// Written against the session's public edits only (`applyGreenscreen`, `moveClip`), because `EditSession.swift` is shared
-// and was not touched. Those are two commits, so a lift is two undo steps (the key, then the move) instead of the
-// contract's one. Making `EditSession.commit(key:_:)` internal lets this body become a single
-// `commit(key: nil) { $0 = next }` with both changes in it; nothing else here would change.
+// other clips sit above it in time, lifts it above them so the green hole shows what is under it straight away. The key and
+// the lift are one `commit`, so one undo puts both back.
 
 extension EditSession {
     /// The lane `removeGreen` lifts a clip to, or nil when it stays where it is: the lowest lane above every visible clip
@@ -54,22 +50,42 @@ extension EditSession {
         return kind == .video
     }
 
-    /// Sets the clip's `key` to `EditChromaKey()` (the green preset) and lifts it above the clips it is under (15.4). A clip
-    /// that already has a key keeps it (its strength and edges are the owner's). Lane 0's hole is left open when the clip
-    /// leaves it. False, and nothing changed, when the clip cannot take a key (`canRemoveGreen`). A lift that is refused
-    /// (an older server that cannot save the lane) still leaves the key set.
+    /// Sets the clip's `key` to `EditChromaKey()` (the green preset) and lifts it above the clips it is under (15.4), in one
+    /// undo step. A clip that already has a key keeps it (its strength and edges are the owner's). Lane 0's hole is left open
+    /// when the clip leaves it. False, and nothing changed, when the clip cannot take a key (`canRemoveGreen`). A lift that is
+    /// refused (an older server that cannot save the lane, a full stack) still sets the key, and `laneRefusal` says why.
     @discardableResult
     public func removeGreen(clipID: String) -> Bool {
         guard canRemoveGreen(clipID: clipID) else { return false }
         let wasSelected = selection == .main(clipID) || selection == .overlay(clipID)
         if timeline.isV2 {
-            guard let clip = timeline.clips.first(where: { $0.id == clipID }) else { return false }
-            if clip.key == nil {
-                applyGreenscreen(id: clipID, key: EditChromaKey(), background: clip.background, output: timeline.output)
+            guard let index = timeline.clips.firstIndex(where: { $0.id == clipID }) else { return false }
+            let clip = timeline.clips[index]
+            var next = timeline
+            let keyed = clip.key == nil
+            if keyed {
+                guard let key = EditChromaKey().normalized() else { return false }
+                next.clips[index].key = key
             }
-            let current = timeline.clips.first(where: { $0.id == clipID }) ?? clip
-            if let lane = Self.greenLane(for: current, in: timeline, locked: lockedLanes) {
-                moveClip(id: clipID, toLane: lane, at: current.at, keepGap: true)
+            var inserted: Int?
+            if let lane = Self.greenLane(for: next.clips[index], in: next, locked: lockedLanes) {
+                switch EditLanes.moveClip(next, id: clipID, toLane: lane, at: clip.at, keepGap: true, locked: lockedLanes) {
+                case .done(let success) where allowsSave(success.timeline):
+                    next = success.timeline
+                    inserted = success.insertedAbove
+                    laneRefusal = nil
+                case .done:
+                    refuseLane(EditLanes.needsServerMessage)
+                case .refused(let message):
+                    refuseLane(message)
+                }
+            }
+            if let inserted { shiftLocks(above: inserted) }
+            commit(key: nil) { $0 = next }
+            if keyed {
+                effectMarks[clipID] = .greenscreen
+                effectDraft = nil
+                effectStatus = nil
             }
             if wasSelected, let now = timeline.clips.first(where: { $0.id == clipID }) {
                 selection = now.lane == 0 ? .main(clipID) : .overlay(clipID)

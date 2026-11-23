@@ -126,8 +126,10 @@ enum EditFrameComposer {
         let rect = CGRect(x: 0, y: 0, width: canvas.w, height: canvas.h)
         var out = CIImage(color: CIColor.black).cropped(to: rect)
         guard plan.timing.laneClips.count == plan.timeline.clips.count else { return out }
+        // a clip being moved, sized, turned or faded right now draws where the session has it, not where this plan was built
+        let live = plan.live?.snapshot() ?? [:]
         for index in EditLanes.drawOrder(plan.timeline) {
-            let clip = plan.timeline.clips[index]
+            let clip = live.isEmpty ? plan.timeline.clips[index] : EditLiveFrames.applied(live, to: plan.timeline.clips[index])
             let row = plan.timing.laneClips[index]
             guard !clip.hidden, k >= row.start, k < row.start + row.frames, let picture = plan.lanes[clip.id] else { continue }
             guard var source = laneSource(picture, video: videos[clip.id], at: k, start: row.start, fps: plan.timing.fps) else {

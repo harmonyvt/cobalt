@@ -99,6 +99,15 @@ private struct EditorClipPage: View {
         if let key = laneClip?.key {
             EditorKeyControls(session: session, clipID: clip.id, key: key, background: laneClip?.background)
         }
+        // lane 0 has an opacity on a version 2 timeline (APP-API-CONTRACT 69.1), over the black base
+        if let opacity = laneClip?.opacity, session.canSetClipOpacity(id: clip.id) {
+            EditorSection(Copy.Editor.opacity, trailing: "\(Int((opacity * 100).rounded()))%") {
+                EditorSlider(
+                    value: Binding(get: { opacity }, set: { session.setClipOpacity(id: clip.id, $0) }),
+                    range: 0.1...1, step: 0.01, label: Copy.Editor.opacity, onEnd: { session.endGesture() })
+            }
+            .id(EditorInspectorFocus.opacity)
+        }
         IconRow(alignment: .leading) {
             if isVideo {
                 EditorInspectorButton(title: Copy.Editor.effects, symbol: Symbol.Editor.effects) {

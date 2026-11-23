@@ -114,11 +114,48 @@ struct EditorRemoveGreenTests {
         let before = session.timeline
         #expect(session.removeGreen(clipID: "a"))
         #expect(clip(session, "a")?.lane == 2 && clip(session, "a")?.key != nil)
-        // the key and the lift are two edits of the session (see EditSession+RemoveGreen): two undos
-        session.undo()
+        // the key and the lift are one step: one undo puts both back, one redo brings both again
         session.undo()
         #expect(session.timeline == before)
         #expect(!session.canUndo)
+        session.redo()
+        #expect(clip(session, "a")?.lane == 2 && clip(session, "a")?.key == EditChromaKey())
+    }
+
+    @Test func aKeyWithNoLiftIsOneStepToo() {
+        let session = open([lane("a", 0), lane("low", 1, at: 5)])
+        defer { session.tearDown() }
+        let before = session.timeline
+        #expect(session.removeGreen(clipID: "a"))
+        #expect(clip(session, "a")?.lane == 0 && clip(session, "a")?.key != nil)
+        session.undo()
+        #expect(session.timeline == before)
+        #expect(!session.canUndo)
+    }
+
+    @Test func aFullStackStillSetsTheKeyInOneStep() {
+        // every lane up to the ceiling is taken at that time: there is no lane to lift to
+        var clips = [lane("a", 0)]
+        for n in 1..<EditLanes.laneLimit { clips.append(lane("l\(n)", n)) }
+        let session = open(clips)
+        defer { session.tearDown() }
+        let before = session.timeline
+        #expect(session.removeGreen(clipID: "a"))
+        #expect(clip(session, "a")?.lane == 0 && clip(session, "a")?.key != nil)
+        session.undo()
+        #expect(session.timeline == before)
+        #expect(!session.canUndo)
+    }
+
+    @Test func liftingOnALaneZeroHoleKeepsTheGapAndIsOneStep() {
+        let session = open([lane("first", 0, at: 0, out: 2), lane("a", 0, at: 2, out: 2), lane("b", 1, at: 2, out: 2)])
+        defer { session.tearDown() }
+        let before = session.timeline
+        #expect(session.removeGreen(clipID: "a"))
+        #expect(clip(session, "a")?.lane == 2 && clip(session, "a")?.at == 2)
+        #expect(clip(session, "first")?.at == 0)
+        session.undo()
+        #expect(session.timeline == before)
     }
 
     @Test func aClipThatAlreadyHasAKeyKeepsItAndIsStillLifted() {
@@ -130,6 +167,7 @@ struct EditorRemoveGreenTests {
         #expect(clip(session, "a")?.lane == 2)
         session.undo()
         #expect(clip(session, "a")?.lane == 0)
+        #expect(clip(session, "a")?.key == mine)
         #expect(!session.canUndo)
     }
 
@@ -228,14 +266,76 @@ struct EditorPictureToolsTests {
         #expect(frame(session, "a") == EditFrame(x: box.x, y: box.y, w: box.w, r: 90))
     }
 
-    @Test func resetGoesBackToTheBoxFillGivesAndUndoesInOneStep() throws {
+    @Test func resetTakesTheFrameAwayAndUndoesInOneStep() throws {
         let session = open([lane("a", 0), lane("c", 1, frame: EditFrame(x: 0.1, y: 0.1, w: 0.3, r: 30))])
         defer { session.tearDown() }
-        let fill = try #require(EditGeometry.fitFrame(display: PixelSize(w: 1920, h: 1080), crop: nil, fit: .fill, canvas: story))
         #expect(session.resetClipFrame(id: "c"))
-        #expect(frame(session, "c") == fill)
+        #expect(frame(session, "c") == nil)
+        // no frame: the box is the one fill gives it again
+        let fill = try #require(EditGeometry.fitFrame(display: PixelSize(w: 1920, h: 1080), crop: nil, fit: .fill, canvas: story))
+        #expect(session.frameBox(ofClip: "c") == fill)
         session.undo()
-        #expect(frame(session, "c")?.r == 30)
+        #expect(frame(session, "c") == EditFrame(x: 0.1, y: 0.1, w: 0.3, r: 30))
+        #expect(!session.canUndo)
+    }
+
+    @Test func resetAfterADragIsAStepOfItsOwn() {
+        let session = open([lane("a", 0), lane("c", 1, frame: EditFrame(x: 0.1, y: 0.1, w: 0.3))])
+        defer { session.tearDown() }
+        session.beginGesture()
+        #expect(session.setClipFrame(id: "c", EditFrame(x: 0.2, y: 0.1, w: 0.3)))
+        #expect(session.setClipFrame(id: "c", EditFrame(x: 0.3, y: 0.1, w: 0.3)))
+        session.endGesture()
+        #expect(session.resetClipFrame(id: "c"))
+        #expect(frame(session, "c") == nil)
+        session.undo()
+        #expect(frame(session, "c")?.x == 0.3)
+        session.undo()
+        #expect(frame(session, "c")?.x == 0.1)
+        #expect(!session.canUndo)
+    }
+
+    @Test func resetOnAClipWithNoFrameOrALockedLaneChangesNothing() {
+        let session = open([lane("a", 0), lane("c", 1, frame: EditFrame(x: 0.1, y: 0.1, w: 0.3))])
+        defer { session.tearDown() }
+        #expect(session.resetClipFrame(id: "a"))
+        #expect(!session.canUndo)
+        session.setTrackLocked(0, true)            // lane 1
+        #expect(!session.resetClipFrame(id: "c"))
+        #expect(frame(session, "c") != nil)
+        #expect(!session.resetClipFrame(id: "nope"))
+    }
+
+    @Test func laneZeroTakesAnOpacityAndASliderRunIsOneStep() {
+        let session = open([lane("a", 0), lane("c", 1, frame: EditFrame(x: 0.1, y: 0.1, w: 0.3))])
+        defer { session.tearDown() }
+        #expect(session.canSetClipOpacity(id: "a"))
+        #expect(session.setClipOpacity(id: "a", 0.8))
+        #expect(session.setClipOpacity(id: "a", 0.5))
+        #expect(session.setClipOpacity(id: "a", 0.04))          // held to 0.1
+        session.endGesture()
+        #expect(session.clipOpacity(id: "a") == 0.1)
+        #expect(session.timeline.clips.first { $0.id == "a" }?.lane == 0)
+        session.undo()
+        #expect(session.clipOpacity(id: "a") == 1)
+        #expect(!session.canUndo)
+        // a layer goes the same way
+        #expect(session.setClipOpacity(id: "c", 0.4))
+        #expect(session.clipOpacity(id: "c") == 0.4)
+        // a locked lane and a missing clip change nothing
+        session.setTrackLocked(0, true)
+        #expect(!session.canSetClipOpacity(id: "c"))
+        #expect(!session.setClipOpacity(id: "c", 0.9))
+        #expect(!session.setClipOpacity(id: "nope", 0.9))
+        #expect(session.clipOpacity(id: "c") == 0.4)
+    }
+
+    @Test func aLaneZeroOpacityIsSavedInTheTimeline() throws {
+        let session = open([lane("a", 0)])
+        defer { session.tearDown() }
+        #expect(session.setClipOpacity(id: "a", 0.55))
+        let json = try #require(String(data: try EditJSON.encode(session.timeline), encoding: .utf8))
+        #expect(json.contains("\"opacity\":0.55"))
     }
 
     @Test func broughtUpAndSentDownKeepTheSelectionOnTheClip() {
@@ -333,6 +433,36 @@ struct EditorInspectorPageTests {
 
 @MainActor
 struct EditorRemoveGreenOlderServerTests {
+    @Test func aServerThatSavesOnlyVersionOneCannotKeepAnOpacityOnLaneZero() {
+        let h = Harness(.happy)
+        h.ctx.capabilities.limits.editTimelineVersion = 1
+        let clips = [lane("a", 0), lane("b", 1, frame: EditFrame(x: 0.1, y: 0.1, w: 0.3))]
+        let timeline = EditTimeline(canvas: story, clips: clips)
+        let project = EditProject(
+            id: "AbCdEfGhIjKlMnOp", title: "old", revision: 1, timeline: nil, canvas: story, duration: 4,
+            clipCount: 2, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0))
+        let cache = EditSourceCache(
+            directory: FileManager.default.temporaryDirectory.appendingPathComponent("old-\(UUID().uuidString)"),
+            client: { [ctx = h.ctx] in ctx.client }, provider: { _ in nil })
+        let session = EditSession(
+            project: project, timeline: timeline,
+            sources: [video: EditSource(id: video, name: "a.mp4", kind: .video, width: 1920, height: 1080, duration: 10)],
+            context: h.ctx, cache: cache, onProject: { _ in }, onRender: { _ in })
+        defer { session.tearDown() }
+        let before = session.timeline
+        #expect(!session.canSetClipOpacity(id: "a"))
+        #expect(!session.setClipOpacity(id: "a", 0.5))
+        #expect(session.laneRefusal == EditLanes.needsServerMessage)
+        #expect(session.timeline == before)
+        // a layer still can
+        #expect(session.canSetClipOpacity(id: "b"))
+        #expect(session.setClipOpacity(id: "b", 0.5))
+        // and reset keeps a frame inside the canvas on the layer there (version 1 needs one): the whole picture
+        #expect(session.resetClipFrame(id: "b"))
+        let fit = EditGeometry.fitFrame(display: PixelSize(w: 1920, h: 1080), crop: nil, fit: .fit, canvas: story)
+        #expect(session.timeline.clips.first { $0.id == "b" }?.frame == fit)
+    }
+
     @Test func aServerThatSavesOnlyVersionOneCannotKeepAKeyOnLaneZero() {
         let h = Harness(.happy)
         h.ctx.capabilities.limits.editTimelineVersion = 1

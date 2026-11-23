@@ -185,9 +185,9 @@ struct EditorShellTools: View {
                 tick += 1
                 session.moveClipLayerKeepingSelection(id: id, by: -1)
             },
-            // lane 0's clips carry no opacity in the project (an overlay, a clip on lane 1 or higher, does)
+            // any lane on a version 2 timeline (APP-API-CONTRACT 69.1); lane 0 not on a server that saves only version 1
             EditorToolItem(
-                id: "opacity", title: Copy.Editor.opacity, symbol: Symbol.Editor.shellOpacity, enabled: lane > 0,
+                id: "opacity", title: Copy.Editor.opacity, symbol: Symbol.Editor.shellOpacity, enabled: session.canSetClipOpacity(id: id),
                 on: ui.openTool == nil && focus.section == EditorInspectorFocus.opacity && ui.drawer != .closed) { openOpacity() },
             EditorToolItem(id: "reset", title: Copy.Editor.cropReset, symbol: Symbol.Editor.cropReset, enabled: canFrame) {
                 tick += 1

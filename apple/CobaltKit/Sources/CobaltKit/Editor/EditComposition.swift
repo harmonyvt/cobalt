@@ -80,9 +80,12 @@ public enum EditComposition {
     /// `shifted`: pre-shifted copies of clips' sound (31.16, `EditPitchShifter`, by `EditPitchKey`). A clip with a pitch whose copy
     /// is here plays the copy's sound instead of the source's (scaled for speed the same way); one whose copy is not here yet
     /// plays the source's sound unshifted.
+    ///
+    /// `live`: frames and opacity the compositor draws instead of the timeline's while a finger moves a clip (version 2 only,
+    /// `EditLiveFrames`). The session passes its one store to every build.
     public static func build(
         _ t: EditTimeline, assets: [String: EditSourceAsset], shifted: [EditPitchKey: URL] = [:],
-        preview: EditPreviewHints = EditPreviewHints()
+        preview: EditPreviewHints = EditPreviewHints(), live: EditLiveFrames? = nil
     ) async throws -> EditPlayable {
         let t = EditJSON.rounded(t)
         // a clip's `out` is clamped to its file's length, as the renderer does
@@ -97,7 +100,7 @@ public enum EditComposition {
         let timing = EditTiming(t, sourceDurations: durations)
         if t.version >= 2 {
             guard !t.clips.isEmpty, timing.frames > 0 else { throw EditError.other("empty") }
-            return try await buildLanes(t, assets: assets, shifted: shifted, preview: preview, timing: timing)
+            return try await buildLanes(t, assets: assets, shifted: shifted, preview: preview, live: live, timing: timing)
         }
         guard !t.main.isEmpty, timing.frames > 0 else { throw EditError.other("empty") }
         let fps = Int32(timing.fps)
@@ -422,7 +425,7 @@ public enum EditComposition {
     /// assigned by peak overlap (interval colouring), not one per lane. A clip whose file is missing is skipped.
     private static func buildLanes(
         _ t: EditTimeline, assets: [String: EditSourceAsset], shifted: [EditPitchKey: URL], preview: EditPreviewHints,
-        timing: EditTiming
+        live: EditLiveFrames?, timing: EditTiming
     ) async throws -> EditPlayable {
         let fps = Int32(timing.fps)
         let composition = AVMutableComposition()
@@ -519,7 +522,7 @@ public enum EditComposition {
         let proxy = peak > EditOverlap.comfortableVideos
         let plan = EditRenderPlan(
             timeline: t, timing: timing, main: [], overlay: [], proxy: proxy,
-            previewMaskID: preview.maskOverlayID, previewSplitID: preview.splitOverlayID, lanes: media)
+            previewMaskID: preview.maskOverlayID, previewSplitID: preview.splitOverlayID, lanes: media, live: live)
         let spans = laneSpans(t, timing: timing)
         let end = CMTimeMaximum(full, composition.duration)
         var instructions: [EditInstruction] = []
@@ -624,10 +627,13 @@ final class EditRenderPlan: @unchecked Sendable {
     let lanes: [String: LanePicture]
     /// One plate for every missing main span, made once. Nil when every main clip has a picture.
     let missingPlate: CIImage?
+    /// Version 2: frames and opacity drawn instead of `timeline`'s while the session waits to rebuild (`EditLiveFrames`).
+    let live: EditLiveFrames?
 
     init(
         timeline: EditTimeline, timing: EditTiming, main: [MainClip], overlay: [OverlayClip], proxy: Bool = false,
-        previewMaskID: String? = nil, previewSplitID: String? = nil, lanes: [String: LanePicture] = [:]
+        previewMaskID: String? = nil, previewSplitID: String? = nil, lanes: [String: LanePicture] = [:],
+        live: EditLiveFrames? = nil
     ) {
         self.timeline = timeline
         self.timing = timing
@@ -637,6 +643,7 @@ final class EditRenderPlan: @unchecked Sendable {
         self.previewMaskID = previewMaskID
         self.previewSplitID = previewSplitID
         self.lanes = lanes
+        self.live = live
         self.missingPlate = main.contains(where: \.missing) ? EditFrameComposer.missingPlate(canvas: timeline.canvas) : nil
     }
 

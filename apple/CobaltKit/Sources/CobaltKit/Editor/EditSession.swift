@@ -14,6 +14,8 @@ import Observation
 ///   drag, a slider) are one step; `endGesture()` ends a run at once. A save never clears the stacks.
 /// - The player is rebuilt (`EditComposition`) 150 ms after the timeline settles, and keeps the playhead. During a drag or
 ///   slider run it waits for `endGesture()` (or 0.6 s of quiet), so the item is not swapped mid-gesture.
+///   The picture does not wait: a clip's frame or opacity that differs from the playing item's goes into `liveFrames`, which
+///   the compositor reads for every output frame, and a paused player is asked to draw its frame again (CONTRACT-EDITOR 15.3).
 @MainActor @Observable
 public final class EditSession {
     public enum Tool: String, CaseIterable, Sendable { case select, blade, crop }
@@ -42,7 +44,7 @@ public final class EditSession {
     /// Greenscreen the canvas is previewing, before Apply. Not saved.
     public var effectDraft: EditEffectDraft?
     /// "fx" on a clip whose file a cut or Bria replaced. A greenscreen shows from its `key` alone.
-    public private(set) var effectMarks: [String: EditEffectKind] = [:]
+    public internal(set) var effectMarks: [String: EditEffectKind] = [:]
     /// The line on the effects card while a cut or a background-removal job is running.
     public var effectStatus: String?
     public private(set) var saveState: SaveState = .saved
@@ -74,7 +76,7 @@ public final class EditSession {
     public private(set) var canUndo = false
     public private(set) var canRedo = false
     /// Why the last lane edit was refused (`all 64 lanes are in use`, a locked lane, an older server). Nil after a success.
-    public private(set) var laneRefusal: String?
+    public internal(set) var laneRefusal: String?
     /// Bumps on every refusal, including the same line twice, so the timeline can toast it.
     public private(set) var laneRefusalNonce = 0
     /// Clip ids the preview skipped because their file could not be read. The last good frame stays up; the chip names these.
@@ -116,9 +118,14 @@ public final class EditSession {
     @ObservationIgnored private var assets: [String: EditSourceAsset] = [:]
     @ObservationIgnored private var loads: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var timeObserver: Any?
-    @ObservationIgnored private var seekInFlight = false
-    @ObservationIgnored private var pendingSeekFrame: Int?
-    @ObservationIgnored private var pendingSeekExact = true
+    /// One seek in flight, the latest wins: scrubs and redraws of the picture (`EditSeekChase`).
+    @ObservationIgnored private var seekChase = EditSeekChase()
+    /// The time of the last seek sent, so a redraw at the same frame is nudged (`EditSeekChase.Target.redraw`).
+    @ObservationIgnored private var lastSeekTime: CMTime?
+    /// Frames and opacity the picture draws before the item is rebuilt with them (`EditLiveFrames`, CONTRACT-EDITOR 15.3).
+    @ObservationIgnored let liveFrames = EditLiveFrames()
+    /// The rounded timeline the current player item was built from; `liveFrames` holds what differs from it.
+    @ObservationIgnored private var playingTimeline: EditTimeline?
     @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
     /// The newest build threw and the previous item is still in the player. Its `.readyToPlay` must not clear `previewFailed`.
@@ -176,6 +183,7 @@ public final class EditSession {
     public func play() {
         guard isPlayerReady, timing.frames > 0 else { return }
         if playhead >= timing.frames - 1 { seek(frame: 0) }
+        lastSeekTime = nil                                                     // playing moves the picture off any seek
         player.play()
         isPlaying = true
     }
@@ -200,25 +208,48 @@ public final class EditSession {
 
     /// One seek in flight; a scrub's newer targets wait, and only the latest is sent when it lands.
     private func chaseSeek(to frame: Int, exact: Bool = true) {
-        if seekInFlight {
-            pendingSeekFrame = frame
-            pendingSeekExact = exact
-            return
+        guard let target = seekChase.request(.init(frame: frame, exact: exact)) else { return }
+        sendSeek(target)
+    }
+
+    private func sendSeek(_ target: EditSeekChase.Target) {
+        let scale = Int32(timing.fps) * 1_000
+        var time = CMTime(value: Int64(target.frame) * 1_000, timescale: scale)
+        // a paused player composes again only for a time it is not at: a redraw at the same frame goes a thousandth of a frame on
+        if target.redraw, let last = lastSeekTime, CMTimeCompare(last, time) == 0 {
+            time = CMTime(value: Int64(target.frame) * 1_000 + 1, timescale: scale)
         }
-        seekInFlight = true
-        let time = CMTime(value: Int64(frame), timescale: Int32(timing.fps))
-        let tolerance: CMTime = exact ? .zero : CMTime(value: 1, timescale: 10)
+        lastSeekTime = time
+        let tolerance: CMTime = target.exact ? .zero : CMTime(value: 1, timescale: 10)
         player.seek(to: time, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
             Task { @MainActor [weak self] in self?.seekLanded() }
         }
     }
 
     private func seekLanded() {
-        seekInFlight = false
-        guard let next = pendingSeekFrame else { return }
-        pendingSeekFrame = nil
-        guard !isClosed, player.currentItem != nil else { return }
-        chaseSeek(to: min(next, max(0, timing.frames - 1)), exact: pendingSeekExact)
+        guard var next = seekChase.landed() else { return }
+        guard !isClosed, player.currentItem != nil else {
+            _ = seekChase.landed()                                  // nothing is sent: the queue is idle again
+            return
+        }
+        next.frame = min(next.frame, max(0, timing.frames - 1))
+        sendSeek(next)
+    }
+
+    /// The paused picture is drawn again at the playhead, so a frame or opacity change in `liveFrames` shows now. Playing, the
+    /// next output frame reads it anyway.
+    private func redrawPicture() {
+        guard !isClosed, player.currentItem != nil, player.rate == 0 else { return }
+        guard let target = seekChase.redraw(at: playhead) else { return }
+        sendSeek(target)
+    }
+
+    /// Puts into `liveFrames` every clip whose frame or opacity differs from what the playing item was built with, and redraws
+    /// when that changed. Runs after every edit (a drag tick, a slider, undo), so the picture never waits for the rebuild to
+    /// show a place, a size, a turn or an opacity.
+    private func refreshLive(redraw: Bool = true) {
+        let next = playingTimeline.map { EditLiveFrames.overrides(playing: $0, current: timeline) } ?? [:]
+        if liveFrames.replace(next), redraw { redrawPicture() }
     }
 
     public func step(frames: Int) { seek(frame: playhead + frames) }
@@ -1036,7 +1067,7 @@ public final class EditSession {
         return true
     }
 
-    private func refuseLane(_ message: String) {
+    func refuseLane(_ message: String) {
         laneRefusal = message
         laneRefusalNonce += 1
     }
@@ -1301,7 +1332,7 @@ public final class EditSession {
     }
 
     /// A new lane was opened above `lane`, so a lock on a higher overlay track moves up with that track.
-    private func shiftLocks(above lane: Int) {
+    func shiftLocks(above lane: Int) {
         lockedTracks = Set(lockedTracks.map { track in
             track + 1 > lane ? track + 1 : track
         })
@@ -1384,8 +1415,10 @@ public final class EditSession {
         }
     }
 
-    /// Applies `change` to a copy, normalizes it, and (if anything changed) records the undo step and takes it.
-    private func commit(key: String?, _ change: (inout EditTimeline) -> Void) {
+    /// Applies `change` to a copy, normalizes it, and (if anything changed) records the undo step and takes it. `key` nil is
+    /// a step of its own; a key repeated within a gesture (or 0.6 s) is the same step. Internal so the session's own extension
+    /// files (remove green, the picture tools) make several changes in one step.
+    func commit(key: String?, _ change: (inout EditTimeline) -> Void) {
         var t = timeline
         let clamp = !savesTimelineV2
         change(&t)
@@ -1425,6 +1458,7 @@ public final class EditSession {
             gestureRebuildPending = false
             scheduleRebuild()
         }
+        refreshLive()
     }
 
     /// The probed length of every video file, for the end-of-source clamp the renderer applies.
@@ -1896,7 +1930,8 @@ public final class EditSession {
             let hints = EditPreviewHints(
                 maskOverlayID: effectDraft?.showMask == true ? effectDraft?.overlayID : nil,
                 splitOverlayID: effectDraft?.split == true ? effectDraft?.overlayID : nil)
-            let built = try await EditComposition.build(playing, assets: assets, shifted: ready, preview: hints)
+            let built = try await EditComposition.build(
+                playing, assets: assets, shifted: ready, preview: hints, live: liveFrames)
             guard generation == rebuildGeneration, !isClosed else { return }
             builds += 1
             let wasPlaying = isPlaying
@@ -1919,7 +1954,10 @@ public final class EditSession {
             previewSkips = built.skippedClipIDs
             let k = min(playhead, max(0, built.timing.frames - 1))
             playhead = k
-            pendingSeekFrame = nil                                                        // this seek goes to the playhead
+            seekChase.dropPending()                                                       // this seek goes to the playhead
+            lastSeekTime = CMTime(value: Int64(k), timescale: Int32(built.timing.fps))
+            playingTimeline = EditJSON.rounded(playing)
+            refreshLive(redraw: false)
             player.seek(to: CMTime(value: Int64(k), timescale: Int32(built.timing.fps)), toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
             if wasPlaying { player.play() }
         } catch {
