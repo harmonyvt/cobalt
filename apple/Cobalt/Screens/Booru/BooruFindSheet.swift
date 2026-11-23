@@ -36,7 +36,7 @@ struct BooruFindSection: View {
             } header: {
                 Text(Copy.BooruFind.header).font(CobaltType.caption).textCase(nil)
             }
-            .spreadSheet(isPresented: $shown, id: "booru-find-\(fileID)") {
+            .sheet(isPresented: $shown) {
                 BooruFindSheet(model: model, fileID: fileID, rendition: rendition)
             }
         }
@@ -49,7 +49,7 @@ struct BooruFindSheet: View {
     let model: AppModel
     let fileID: String
     let rendition: Rendition
-    var dismiss = SheetOrPaneDismiss()
+    @Environment(\.dismiss) private var dismiss
 
     private enum Phase: Equatable {
         case reading
@@ -81,7 +81,6 @@ struct BooruFindSheet: View {
             }
         }
         .task { await run() }
-        .panelDrawsOwnClose()
     }
 
     @ViewBuilder private var content: some View {

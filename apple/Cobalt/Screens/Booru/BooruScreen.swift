@@ -6,16 +6,15 @@ import UIKit
 
 // The booru tab (APP-API-CONTRACT 72): Danbooru search under this device's own content level (general, sensitive or
 // never questionable or explicit) and filters, all applied by the server. A grid of posts; a post opens
-// in a sheet with its tags and "save". While the screen is mirrored, recorded or on a TV, only general shows (safe mode).
+// in the screen pane (`BooruPostPage`: the picture, its tags and "save"), and so do the filters (`BooruFiltersPage`). While the screen is mirrored, recorded or on a TV, only general shows (safe mode).
 
 struct BooruScreen: View {
     let model: AppModel
     let tier: Tier
 
     @State private var text = ""
-    @State private var open: BooruPost?
-    @State private var filtersShown = false
     @FocusState private var searchFocused: Bool
+    @Environment(Pane.self) private var pane: Pane?
 
     private var store: BooruStore { model.booru }
 
@@ -42,26 +41,15 @@ struct BooruScreen: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button(Copy.Booru.filters, systemImage: Symbol.Booru.filters) { filtersShown = true }
+                Button(Copy.Booru.filters, systemImage: Symbol.Booru.filters) { pane?.open(.booruFilters) }
             }
         }
         .task {
             text = store.query.tags
             await store.load()
         }
-        .spreadSheet(item: $open) { post in
-            BooruPostSheet(model: model, post: post) { tag, replace in
-                open = nil
-                let next = replace ? tag : (store.query.tagList + [tag]).suffix(BooruQuery.maxTags).joined(separator: " ")
-                text = next
-                var q = store.query
-                q.tags = next
-                Task { await store.search(q) }
-            }
-        }
-        .spreadSheet(isPresented: $filtersShown, id: "booru-filters") {
-            BooruFilterSheet(model: model)
-        }
+        // a tag picked on a post's page searches from there: the field follows the store's search
+        .onChange(of: store.query.tags) { _, tags in text = tags }
     }
 
     // MARK: search
@@ -182,11 +170,17 @@ struct BooruScreen: View {
 
     // MARK: the grid
 
+    private var loadingLine: some View {
+        Text(Copy.Booru.loading).font(CobaltType.body).foregroundStyle(CobaltColor.caption).padding(.top, 30)
+            .frame(maxWidth: .infinity)
+    }
+
     @ViewBuilder private var content: some View {
         switch store.phase {
-        case .idle, .loading where store.posts.isEmpty:
-            Text(Copy.Booru.loading).font(CobaltType.body).foregroundStyle(CobaltColor.caption).padding(.top, 30)
-                .frame(maxWidth: .infinity)
+        case .idle:
+            loadingLine
+        case .loading where store.posts.isEmpty:
+            loadingLine
         case .failed(let code):
             VStack(spacing: 10) {
                 Text(Copy.Booru.failure(code)).font(CobaltType.body).foregroundStyle(CobaltColor.caption)
@@ -220,7 +214,7 @@ struct BooruScreen: View {
                         if post.blur && !store.revealed.contains(post.id) {
                             store.reveal(post.id)
                         } else {
-                            open = post
+                            pane?.open(.booruPost(post.id))
                         }
                     }
                     .onAppear {
@@ -319,5 +313,6 @@ struct BooruTile: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(post.tags.character.first ?? post.tags.general.prefix(3).joined(separator: ", "))
+        .accessibilityIdentifier("booru.tile")
     }
 }

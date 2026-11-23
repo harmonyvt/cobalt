@@ -35,6 +35,12 @@ public final class BooruStore {
     var askedLevel: BooruLevel? { .general }
     public var available: Bool { client != nil }
 
+    /// The post may be shown: general only (72.9). The pane's post page asks this. Only the level is judged here: themes
+    /// and the blacklist are the server's, and a post a new search merely left out of the grid is still allowed.
+    public func allows(_ post: BooruPost) -> Bool {
+        BooruLevel.shows(post.rating, at: .general)
+    }
+
     @ObservationIgnored private let ctx: PipelineContext
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var suggestGeneration = 0

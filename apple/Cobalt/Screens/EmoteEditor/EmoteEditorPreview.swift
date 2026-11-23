@@ -451,7 +451,7 @@ private struct EmoteCheckPill: View {
 
 // MARK: - the seam
 
-/// The line between the two panes (the hinge of a two-screen phone, `HingeSeam`): it glows while the server remakes the file.
+/// The line between the two panes (the hinge of a two-screen phone): it glows while the server remakes the file.
 struct EmoteSeam: View {
     let active: Bool
 

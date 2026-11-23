@@ -133,15 +133,16 @@ struct LinkFileThumb: View {
     let entry: LinkFileEntry
     let side: CGFloat
     var radius: CGFloat = 8
+    var maxPixel = 240
     let model: AppModel
 
     var body: some View {
         if entry.shows, !entry.item.isPublic, let post = entry.post {
-            FacePicture(item: model.mediaItem(for: post), maxPixel: 240, showsGlyph: false)
+            FacePicture(item: model.mediaItem(for: post), maxPixel: maxPixel, showsGlyph: false)
                 .frame(width: side, height: side)
                 .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         } else {
-            LinkThumb(item: entry.item, side: side, radius: radius)
+            LinkThumb(item: entry.item, side: side, radius: radius, maxPixel: maxPixel)
         }
     }
 }
@@ -313,7 +314,7 @@ struct LinkHeader: View {
 }
 
 /// The badge and the collection chips under a link's title.
-private struct LinkHeaderTags: View {
+struct LinkHeaderTags: View {
     let link: ShareSet
     let controller: LinksController
 

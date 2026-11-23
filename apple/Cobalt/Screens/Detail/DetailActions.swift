@@ -28,13 +28,13 @@ struct DetailActions: View {
     // MARK: the plan
 
     private var canMake: Bool { controller.canMakeWebp(item) }
-    private var shareURL: URL? {
+    var shareURL: URL? {
         if let url = rendition.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url }
         return model.capabilities.liveLink(for: rendition)
     }
     /// The video's live link: its private link (APP-API-CONTRACT 36.6), else its public one.
-    private var videoLink: URL? { rendition.privateURL ?? rendition.hosted?.url ?? rendition.publicURL }
-    private var canSave: Bool { RenditionPhotos.canSave(rendition) }
+    var videoLink: URL? { rendition.privateURL ?? rendition.hosted?.url ?? rendition.publicURL }
+    var canSave: Bool { RenditionPhotos.canSave(rendition) }
     /// The old "public share" button: only on a server without the switch (with it, the switch under the actions
     /// is the one way to make a link).
     private var canHost: Bool {
@@ -43,7 +43,7 @@ struct DetailActions: View {
     }
     private var placed: Bool { controller.placement(of: rendition) != .none }
     /// What "post frame" frames: the video tab of a video saved from a post, on a server with post frames.
-    private var postFrameTarget: PostFrameTarget? {
+    var postFrameTarget: PostFrameTarget? {
         guard rendition.kind == .video else { return nil }
         return PostFrameTarget.item(item, model: model)
     }

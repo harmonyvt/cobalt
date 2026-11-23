@@ -175,6 +175,10 @@ public final class AppModel {
     /// opens that media's detail and sets this back to nil.
     public var requestedMediaID: String?
 
+    /// A single item a deep link or a Shortcut asks the window's screen pane to open (apple/CONTRACT-PANE.md section 3):
+    /// set with `openInPane(_:)` (Pane/AppModel+Pane.swift); the shell opens it and takes it back with `takePaneRequest()`.
+    public internal(set) var paneRequest: PaneRequest?
+
     /// Asks the save tab to open the tray fully; the view that shows it sets this back to false. `cobalt-apple://jobs`
     /// (the Hark summary, APP-API-CONTRACT 17.8) used to set it; it now opens the queue tab (apple/CONTRACT.md 12).
     public var requestedJobs = false

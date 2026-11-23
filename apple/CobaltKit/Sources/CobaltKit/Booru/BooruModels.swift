@@ -175,6 +175,15 @@ public struct BooruCredit: Sendable, Equatable, Codable {
     }
 }
 
+extension BooruLevel {
+    /// A post rated `rating` may be shown while the level asked for is `level`: no higher than it. A nil level (settings
+    /// the device could not read, nothing to compare with) lets everything the server sent stand.
+    public static func shows(_ rating: BooruLevel, at level: BooruLevel?) -> Bool {
+        guard let level else { return true }
+        return rating <= level
+    }
+}
+
 public struct BooruPost: Sendable, Equatable, Decodable, Identifiable {
     public var id: Int
     public var rating: BooruLevel

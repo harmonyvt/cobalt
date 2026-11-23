@@ -57,7 +57,7 @@ struct LibrarySkyMapPresenter: ViewModifier {
 extension LibraryController {
     /// A star of the sky map was chosen. `MapPost.id` is the post key, which is the library's post id, so the library
     /// loads pages until the post is in (`locate`), makes sure no filter hides it, and then opens it the way a tap does:
-    /// the phone pushes the detail, the iPad and Mac select it in the inspector. The tile is lit either way.
+    /// the phone pushes the detail, the iPad and Mac select it, which opens it in the pane. The tile is lit either way.
     func openFromSkyMap(_ postKey: String) async {
         guard await library.locate(postID: postKey), let post = library.post(id: postKey) else {
             showStatus(Copy.Library2.notFound)
@@ -75,7 +75,6 @@ extension LibraryController {
             open(model.mediaItem(for: post), initial: nil)
         } else {
             selection = postKey
-            inspectorOpen = true
         }
     }
 }

@@ -13,9 +13,7 @@ struct LibraryDeleteSheet: View {
 
     @State private var plans: [DeletePick]
     @State private var open: Set<String> = []
-    var dismiss = SheetOrPaneDismiss()
-
-    @Environment(\.paneClose) private var inPane
+    @Environment(\.dismiss) private var dismiss
 
     init(picks: [MediaItem], impact: DeleteImpact = .none, delete: @escaping ([DeletePick]) -> Void) {
         self.picks = picks
@@ -74,18 +72,7 @@ struct LibraryDeleteSheet: View {
         delete(chosen)
     }
 
-    /// On the other screen of a spread the button is a hold (a big button beside the grid is easy to brush); in a
-    /// sheet it stays a tap.
-    @ViewBuilder private var deleteButton: some View {
-        if inPane != nil {
-            HoldToDelete(title: Copy.DeletePicks.holdButton(files), enabled: files > 0 && !blocked, action: deleteChosen)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(.bar)
-        } else {
-            tapButton
-        }
-    }
+    private var deleteButton: some View { tapButton }
 
     private var tapButton: some View {
         Button(role: .destructive) {
@@ -285,44 +272,5 @@ private struct DeleteImpactCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(CobaltColor.errorText.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-}
-
-/// A destructive button that runs only after a 1 s hold, filling as it goes.
-struct HoldToDelete: View {
-    let title: String
-    let enabled: Bool
-    let action: () -> Void
-
-    @State private var holding = false
-
-    var body: some View {
-        Label(title, systemImage: Symbol.Library.deleteEverything)
-            .labelStyle(.titleAndIcon)
-            .font(CobaltType.bodySemibold)
-            .foregroundStyle(CobaltColor.errorText)
-            .frame(maxWidth: .infinity, minHeight: 48)
-            .background(alignment: .leading) {
-                GeometryReader { geo in
-                    Rectangle()
-                        .fill(CobaltColor.errorText.opacity(0.35))
-                        .frame(width: holding ? geo.size.width : 0)
-                        .animation(holding ? .linear(duration: 1) : .easeOut(duration: 0.2), value: holding)
-                }
-            }
-            .background(CobaltColor.errorText.opacity(0.15))
-            .clipShape(Capsule())
-            .contentShape(Capsule())
-            .opacity(enabled ? 1 : 0.4)
-            .onLongPressGesture(minimumDuration: 1, maximumDistance: 30) {
-                guard enabled else { return }
-                holding = false
-                action()
-            } onPressingChanged: { pressing in
-                holding = pressing && enabled
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { if enabled { action() } }
     }
 }

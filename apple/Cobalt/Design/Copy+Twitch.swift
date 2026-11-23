@@ -114,5 +114,12 @@ extension Copy {
         static let emotesEmpty = "no emotes here yet"
         static let copyName = "copy name"
         static let locked = "subscribe to use"
+
+        // MARK: in the pane
+
+        static let pause = "pause"
+        static let play = "play"
+        static let stop = "stop watching"
+        static func watching(_ n: Int) -> String { "\(viewers(n)) watching" }
     }
 }

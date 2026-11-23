@@ -121,5 +121,24 @@ import Testing
         let a = DanbooruAccount(login: " mochi ", apiKey: "k3y\n")
         #expect(a.login == "mochi" && a.authorization == "Basic " + Data("mochi:k3y".utf8).base64EncodedString())
     }
-}
 
+    @Test func levelShowsNoHigherThanAsked() {
+        #expect(BooruLevel.shows(.general, at: .general))
+        #expect(!BooruLevel.shows(.sensitive, at: .general))
+        #expect(BooruLevel.shows(.sensitive, at: .sensitive))
+        #expect(BooruLevel.shows(.general, at: .sensitive))
+        #expect(BooruLevel.shows(.sensitive, at: nil))
+    }
+
+    /// A post open in the pane is judged by the store: general only (72.9), whatever the device's old settings said.
+    @MainActor @Test func storeAllowsGeneralOnly() async throws {
+        let model = AppModel.preview(.happy)
+        let store = model.booru
+        await store.load()
+        let general = try #require(store.posts.first { $0.rating == .general })
+        #expect(store.allows(general))
+        var sensitive = general
+        sensitive.rating = .sensitive
+        #expect(!store.allows(sensitive))
+    }
+}

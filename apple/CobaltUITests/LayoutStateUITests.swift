@@ -2,12 +2,12 @@ import UIKit
 import XCTest
 
 /// What the owner chose in the library survives layout and lifecycle changes (the lifecycle audit, rule 4): a rotation,
-/// a trip to the background, and on the iPad the spread pane opening and closing beside the library.
+/// a trip to the background, and on the iPad the screen pane opening and closing beside the library.
 ///
 /// Runs the Debug build over the preview data (`-previewScenario happy -previewTab library`, `CobaltApp.LaunchConfig`;
 /// both are DEBUG-only, so this target tests the Debug configuration). Driven by `deploy/apple/layout-checks.sh`.
 /// The identifiers it looks for are set in `Cobalt/Screens/Library/` (`library.tile`, `library.select`,
-/// `library.select.count`, `library.select.stop`, `library.more`, `library.sort`, `library.inspector.empty`).
+/// `library.select.count`, `library.select.stop`, `library.more`, `library.sort`) and `pane` (`Cobalt/Pane/PaneChrome.swift`).
 @MainActor
 final class LayoutStateUITests: XCTestCase {
     /// Simulators are slow on a cold boot and the preview data animates in: every wait is generous.
@@ -47,35 +47,34 @@ final class LayoutStateUITests: XCTestCase {
         XCTAssertTrue(barMenu(app).waitForExistence(timeout: wait), "the bar menu is gone after the background")
     }
 
-    /// iPad: a post in the inspector, then the spread pane opens and closes beside the library (select mode on a spread
-    /// puts its panel in the pane; `stop selecting` closes it). The inspector still shows the post, and the bar is whole
-    /// again. This is the 8.27 bug (the selection cleared after the pane closed) and the iPadOS half-width bar after it.
-    func testInspectorSurvivesPane() throws {
-        guard isPad else { throw XCTSkip("the spread pane beside the library is an iPad check") }
+    /// iPad: a post in the screen pane, then select mode puts the select actions in the same pane (`stop selecting` closes it).
+    /// The bar is whole again and the select button is back. (Was the 8.27 spread-pane check; the inspector and the spread pane
+    /// are the screen pane now: apple/CONTRACT-PANE.md. `PaneTests` covers the pane itself.)
+    func testSelectPanesBesideLibrary() throws {
+        guard isPad else { throw XCTSkip("the pane beside the library is an iPad check (the phone keeps its overlays)") }
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = launch()
 
         let tile = firstHittableTile(app)
         XCTAssertNotNil(tile, "no library tile to open")
         tile?.tap()
+        XCTAssertTrue(find(app, "pane").waitForExistence(timeout: wait), "the tapped post did not open in the pane")
         settle()
-        XCTAssertFalse(find(app, "library.inspector.empty").exists, "the tapped post is not in the inspector")
 
-        // opens the pane: the select panel goes to the other screen
+        // select mode: the select panel takes the pane
         let select = find(app, "library.select")
         XCTAssertTrue(select.waitForExistence(timeout: wait), "no select button")
         select.tap()
-        let stop = find(app, "library.select.stop")
+        let stop = stopButton(app)
         XCTAssertTrue(stop.waitForExistence(timeout: wait), "the select panel did not open")
         settle()
 
         // closes it again, then waits out `LibraryController.tierChanged` (600 + 300 + 60 ms) with room to spare
         stop.tap()
-        XCTAssertTrue(waitGone(stop), "the pane did not close")
+        XCTAssertTrue(waitGone(stop), "the select panel did not close")
         settle(3)
 
-        XCTAssertFalse(find(app, "library.inspector.empty").exists, "the inspector lost its post when the pane closed")
-        XCTAssertTrue(find(app, "library.sort").waitForExistence(timeout: wait), "the bar's menu is gone after the pane closed")
+        XCTAssertTrue(barMenu(app).waitForExistence(timeout: wait), "the bar's menu is gone after the pane closed")
         XCTAssertTrue(find(app, "library.select").waitForExistence(timeout: wait), "the select button did not come back")
 
         XCUIDevice.shared.orientation = .portrait
@@ -97,7 +96,7 @@ final class LayoutStateUITests: XCTestCase {
         let select = find(app, "library.select")
         XCTAssertTrue(select.waitForExistence(timeout: wait), "no select button")
         select.tap()
-        XCTAssertTrue(find(app, "library.select.count").waitForExistence(timeout: wait), "no select panel")
+        XCTAssertNotNil(count(app), "no select panel")
 
         let tiles = app.descendants(matching: .any).matching(identifier: "library.tile")
         for index in 0..<min(tiles.count, 16) {
@@ -109,16 +108,33 @@ final class LayoutStateUITests: XCTestCase {
         throw XCTSkip("the preview library has fewer than two posts that can be picked on screen (now: \(count(app) ?? "none"))")
     }
 
-    /// The select panel's count ("2 picked"), wherever the panel is (inline, or in the pane on a spread).
+    /// The select panel's count ("2 picked"), wherever the panel is: the pill's label (one screen), or the title of the
+    /// screen pane's select page (the pane's container reads "pane, 2 picked").
     private func count(_ app: XCUIApplication) -> String? {
         let label = find(app, "library.select.count")
-        guard label.waitForExistence(timeout: wait) else { return nil }
-        return label.label
+        if label.waitForExistence(timeout: 3) { return label.label }
+        let pane = find(app, "pane")
+        guard pane.waitForExistence(timeout: wait) else { return nil }
+        return pane.label.replacingOccurrences(of: "pane, ", with: "")
     }
 
-    /// The bar's menu a stale half-width bar drops: the iPhone's "…" (paste and files), the iPad's sort menu.
+    /// The button that ends select mode: the pill's x, or the select page's "done selecting" in the pane.
+    private func stopButton(_ app: XCUIApplication) -> XCUIElement {
+        let pill = find(app, "library.select.stop")
+        if pill.waitForExistence(timeout: 3) { return pill }
+        return find(app, "pane.action.done selecting")
+    }
+
+    /// The bar's menu a stale half-width bar drops: the iPhone's "…" (paste and files), the iPad's sort menu. With the screen
+    /// pane open beside the library the tab is laid out for the room it keeps, so the iPad shows a narrow bar then.
     private func barMenu(_ app: XCUIApplication) -> XCUIElement {
-        find(app, isPad ? "library.sort" : "library.more")
+        // (the narrow tab beside the pane folds the bar into the system's own "More": `OverflowBarButtonItem`)
+        let names = isPad ? ["library.sort", "library.more", "OverflowBarButtonItem"] : ["library.more"]
+        for name in names {
+            let element = find(app, name)
+            if element.waitForExistence(timeout: 6) { return element }
+        }
+        return find(app, names[0])
     }
 
     private func firstHittableTile(_ app: XCUIApplication) -> XCUIElement? {

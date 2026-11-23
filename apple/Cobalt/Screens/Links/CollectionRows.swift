@@ -98,23 +98,32 @@ struct CollectionMenuItems: View {
         if controller.privateLinksEnabled {
             CollectionPrivacyMenu(collection: collection, controller: controller)
         }
-        if controller.setsEnabled {
-            // which sets hold it: a tick on each, a tap moves it in or out
-            Menu(Copy.Sets.sets, systemImage: Symbol.collectionSet) {
-                ForEach(controller.store.groups) { set in
-                    Toggle(set.name, isOn: Binding(
-                        get: { set.contains(collection.id) },
-                        set: { _ in controller.toggle(collection, in: set, shell: shell) }))
-                }
-                if !controller.store.groups.isEmpty { Divider() }
-                Button(Copy.Sets.newWith(collection.name), systemImage: Symbol.collectionSetNew) {
-                    controller.naming = .create(including: collection.id)
-                }
-            }
-        }
+        if controller.setsEnabled { CollectionSetsMenu(collection: collection, controller: controller) }
         Divider()
         Button(Copy.Collections.delete, systemImage: Symbol.collectionDelete, role: .destructive) {
             controller.deleting = collection
+        }
+    }
+}
+
+/// Which sets hold a collection: a tick on each, a tap moves it in or out, then "new set with …". The long press's `sets`
+/// and the collection page's own menu.
+struct CollectionSetsMenu: View {
+    let collection: ShareCollection
+    let controller: LinksController
+    @Environment(\.shell) private var shell
+
+    var body: some View {
+        Menu(Copy.Sets.sets, systemImage: Symbol.collectionSet) {
+            ForEach(controller.store.groups) { set in
+                Toggle(set.name, isOn: Binding(
+                    get: { set.contains(collection.id) },
+                    set: { _ in controller.toggle(collection, in: set, shell: shell) }))
+            }
+            if !controller.store.groups.isEmpty { Divider() }
+            Button(Copy.Sets.newWith(collection.name), systemImage: Symbol.collectionSetNew) {
+                controller.naming = .create(including: collection.id)
+            }
         }
     }
 }

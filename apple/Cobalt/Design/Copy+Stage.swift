@@ -74,7 +74,20 @@ extension Copy {
         static func pickItemA11y(title: String, kind: StageItem.Kind) -> String {
             "\(title), \(kind == .video ? "video" : "photo")"
         }
-        static let pickItemHint = "puts it in the spotlight"
+        /// The pool video page: its first button, and what the page says of the file.
+        static let spotlightIt = "spotlight it"
+        static let inTheSpotlight = "in the spotlight"
+        static func videoLine(code: String?, duration: Double?) -> String {
+            var parts: [String] = []
+            if let code { parts.append(code) }
+            if let duration, duration > 0 {
+                let total = Int(duration.rounded())
+                parts.append(String(format: "%d:%02d", total / 60, total % 60))
+            }
+            return parts.isEmpty ? "video" : parts.joined(separator: " · ")
+        }
+        static let pickItemHint = "opens it beside the tab, with the button for the spotlight"
+        static let spotlightOpenHint = "opens it beside the tab"
 
         // MARK: the pool
 
@@ -180,6 +193,10 @@ extension Copy {
             "\(on ? "turn off" : "turn on") \(kind.rawValue)"
         }
         static let editHint = "edit cost and cooldown"
+        /// The reward page's switch: whether the reward is on twitch.
+        static let saved = "saved"
+        static let rewardOnTwitch = "on twitch"
+        static let rewardNotThere = "twitch hasn't made this reward"
         static let editCost = "cost"
         static let editCooldown = "cooldown"
         static let editPoints = "channel points"

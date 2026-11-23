@@ -2,14 +2,14 @@
 import CobaltKit
 import SwiftUI
 
-// `#Preview`s of the swarms screens on the preview server (`PreviewSwarms.swift`): the list, the one swarm screen in each state
-// (waiting, running, ready, applying, done, failed, declined), its plain-lists detail, the agent sheet, the check screen and
-// the results board. The preview server's story swarm takes the state `-previewSwarm` names; a canvas has no launch arguments,
-// so the host sets it first.
+// `#Preview`s of the swarms screens on the preview server (`PreviewSwarms.swift`): the list, the agent sheet, the check screen
+// and the results board (the swarm's own page, in every state and shape, is previewed in `SwarmPage.swift`). The preview
+// server's story swarm takes the state `-previewSwarm` names; a canvas has no launch arguments, so the host sets it first.
 
 /// Builds a preview model on the story state `state`, loads the list and shows the swarm `id`.
 private struct SwarmPreviewHost<Content: View>: View {
     @State private var model: AppModel
+    @State private var pane = Pane()
     private let id: String?
     private let content: (AppModel) -> Content
 
@@ -25,6 +25,7 @@ private struct SwarmPreviewHost<Content: View>: View {
     var body: some View {
         content(model)
             .cobaltRoot(model: model)
+            .environment(pane)
             .task {
                 await model.swarms.loadList()
                 if let id { await model.swarms.show(id: id) }
@@ -33,45 +34,12 @@ private struct SwarmPreviewHost<Content: View>: View {
     }
 }
 
-@MainActor
-private func one(_ model: AppModel, id: String, step: SwarmStep? = nil) -> some View {
-    NavigationStack { SwarmScreen(model: model, dest: SwarmDestination(id: id, step: step)) }
-}
-
 #Preview("swarms · list", traits: .fixedLayout(width: 390, height: 844)) {
     SwarmPreviewHost(.running) { model in NavigationStack { SwarmsScreen(model: model, tier: .compact) } }
 }
 #Preview("swarms · list, light", traits: .fixedLayout(width: 390, height: 844)) {
     SwarmPreviewHost(.awaiting) { model in NavigationStack { SwarmsScreen(model: model, tier: .compact) } }
         .preferredColorScheme(.light)
-}
-#Preview("swarms · waiting for you", traits: .fixedLayout(width: 390, height: 844)) {
-    SwarmPreviewHost(.awaiting) { one($0, id: PreviewSwarmIDs.story) }
-}
-#Preview("swarms · what it's told", traits: .fixedLayout(width: 390, height: 844)) {
-    SwarmPreviewHost(.awaiting) { one($0, id: PreviewSwarmIDs.story, step: .told) }
-}
-#Preview("swarms · running", traits: .fixedLayout(width: 390, height: 844)) {
-    SwarmPreviewHost(.running) { one($0, id: PreviewSwarmIDs.story) }
-}
-#Preview("swarms · running, AX3 text", traits: .fixedLayout(width: 390, height: 1100)) {
-    SwarmPreviewHost(.running) { one($0, id: PreviewSwarmIDs.story) }
-        .dynamicTypeSize(.accessibility3)
-}
-#Preview("swarms · ready to apply", traits: .fixedLayout(width: 390, height: 844)) {
-    SwarmPreviewHost(.review) { one($0, id: PreviewSwarmIDs.story) }
-}
-#Preview("swarms · applying", traits: .fixedLayout(width: 390, height: 844)) {
-    SwarmPreviewHost(.applying) { one($0, id: PreviewSwarmIDs.shorten) }
-}
-#Preview("swarms · done", traits: .fixedLayout(width: 390, height: 844)) {
-    SwarmPreviewHost(.done) { one($0, id: PreviewSwarmIDs.story) }
-}
-#Preview("swarms · failed", traits: .fixedLayout(width: 390, height: 844)) {
-    SwarmPreviewHost(.failed) { one($0, id: PreviewSwarmIDs.failed) }
-}
-#Preview("swarms · declined", traits: .fixedLayout(width: 390, height: 844)) {
-    SwarmPreviewHost(.declined) { one($0, id: PreviewSwarmIDs.declined) }
 }
 #Preview("swarms · agent sheet (asking)", traits: .fixedLayout(width: 390, height: 700)) {
     SwarmPreviewHost(.running) { model in

@@ -6,8 +6,8 @@ import SwiftUI
 /// The **mosaic** is a dense masonry of faces at their real aspect (`LibraryMosaic`); the **table** is a real
 /// sortable `Table` on the iPad and Mac and a dense two-line list on the iPhone (`LibraryTable`). Search, sort and
 /// show live in the toolbar; a search, a filter or a sort other than newest first loads the whole library first
-/// (the server pages by date only). Tapping opens the same tabbed `MediaDetail` as the orbit: pushed on the
-/// phone (with the zoom from the tile), in a trailing inspector on the iPad and Mac. The context menu, rename and
+/// (the server pages by date only). Tapping opens the same media as the orbit in the screen pane (`PanePostPage`): beside
+/// the tab wherever the window has room, the sheet (the cover, spanned) on one narrow screen. The context menu, rename and
 /// `delete everything` are the same in every view.
 ///
 /// iOS: this screen always brings its own navigation stack. Mac: a narrow window gets one; otherwise the window's
@@ -18,7 +18,7 @@ struct LibraryScreen: View {
 
     @State private var controller: LibraryController
     #if os(iOS)
-    /// The library's own width: in a spread it is one column, and the shell's tier for it did not always come back
+    /// The library's own width: beside the pane it is one column, and the shell's tier for it did not always come back
     /// to the window's when the pane closed (a half-width bar, no "…", at full width).
     @State private var ownWidth: CGFloat = 0
     #endif
@@ -42,11 +42,6 @@ struct LibraryScreen: View {
                 // rebuilt when the zoom back from a video leaves the grid out of the stack (LibraryController.checkStackSoon)
                 .id(controller.stackID)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { ownWidth = $0 }
-                // UIKit keeps the bar it built for the old width (a half-width bar with no "…" after the pane closed or
-                // the phone unfolded): a new width class bounces the inspector once (LibraryController.tierChanged)
-                .onChange(of: measuredTier) { was, now in
-                    if let was, let now, was != now { controller.tierChanged() }
-                }
             #else
             if tier == .compact {
                 NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
@@ -88,16 +83,14 @@ private struct LibraryContent: View {
     @Bindable var controller: LibraryController
 
     @Environment(\.shell) private var shell
-    @Environment(\.spreadPane) private var spreadPane
-    @Environment(\.isSpread) private var isSpread
-    /// A hold shows the post on the other screen of a spread instead of over the grid.
-    private var peeksInPane: Bool { isSpread && spreadPane != nil }
+    @Environment(Pane.self) private var pane: Pane?
+    /// The window has room for the screen pane beside the tab (not the one-screen phone layout): a hold's peek and the select
+    /// actions open there instead of being drawn over the grid. A post opens in the pane everywhere (a sheet when compact).
+    private var paneBeside: Bool { pane.map { $0.placement != .compact } ?? false }
     @Environment(\.hapticsEnabled) private var haptics
     /// The app's phase (`AppLifecycle`), not this window's scenePhase: the album relocks when the app goes away.
     @Environment(\.lifecycle) private var lifecycle
     @Namespace private var zoomSpace
-    /// File URLs for the system share sheet. Assigned only once they are ready; the sheet clears this when it finishes.
-    @State private var filesToShare: [URL] = []
     /// The last rows a search showed, kept on screen (dimmed) while the next words are still being searched, so each
     /// keystroke does not flash the tiles away to grey and back.
     @State private var heldRows: [LibraryRow] = []
@@ -297,39 +290,29 @@ private struct LibraryContent: View {
                 if !rows.isEmpty {
                     LibrarySelectPill(
                         model: model, controller: controller, rows: rows, toggle: toggleSelecting,
-                        makeLink: { Task { await makeShareLink() } },
-                        file: { target in Task { await makeShareLink(into: target) } },
-                        share: { Task { await sharePicked() } })
+                        makeLink: { Task { await controller.makeLinkAndEnd(rows) } },
+                        file: { target in Task { await controller.makeLinkAndEnd(rows, into: target) } },
+                        share: { Task { await controller.shareAndEnd(rows) } })
                 }
             }
             .motion(Motion.rows, value: controller.selecting)
             // hold a tile or a pick to see its media; lifting the finger closes it
             .overlay {
-                if let row = controller.peek, !peeksInPane {
+                if let row = controller.peek, !paneBeside {
                     LibraryPeek(row: row)
                         .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
             }
-            // on a spread the held post plays on the other screen and the grid stays as it is (Duo building blocks)
-            .onChange(of: controller.peek?.id) { _, _ in
-                guard peeksInPane, let spreadPane else { return }
-                if let row = controller.peek {
-                    spreadPane.show(id: "library-peek", content: AnyView(LibraryPeek(row: row, dims: false).panelDrawsOwnClose())) {}
-                } else {
-                    spreadPane.close(id: "library-peek")
-                }
-            }
-            // a search on a spread opens its best match beside the results: the query and the top hit both in view
+            // a search with room for the pane opens its best match beside the results: the query and the top hit both in view
             .onChange(of: library.searchState) { _, state in
-                guard isSpread, !controller.selecting, case .results(let count, _) = state, count > 0,
+                guard paneBeside, !controller.selecting, case .results(let count, _) = state, count > 0,
                       let best = rows.first else { return }
-                controller.open(best.item, initial: nil)
+                controller.openAutomatically(best.item)
             }
             .motion(Motion.card, value: controller.peek?.id)
             .haptic(.impact(weight: .light), trigger: controller.peek?.id, enabled: haptics) { $0 != nil }
             .statusConfirm(controller: controller)
-            .modifier(LibraryInspector(model: model, controller: controller, enabled: tier != .compact))
-            .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: tier == .compact))
+            .modifier(LibraryPaneBridge(controller: controller, pane: pane))
             // the freeze hunt (owner, 2026-11-14): the grid is back on screen after a detail
             .onAppear {
                 Breadcrumbs.add("library.appear")
@@ -372,10 +355,8 @@ private struct LibraryContent: View {
             #if os(macOS)
             .background { macShortcuts }
             #endif
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controller.decideInspector(width: $0) }
-            .onChange(of: tier, initial: true) { controller.compact = tier == .compact }
             .modifier(LibraryClickRows(controller: controller, rows: rows))
-            .background { GalleryFileShare(fileURLs: $filesToShare) }
+            .background { GalleryFileShare(fileURLs: $controller.filesToShare) }
             // centred over a light scrim: at the bottom it sat under the floating tab bar
             .overlay {
                 if controller.preparingShare, !controller.sharePrep.isEmpty {
@@ -392,7 +373,7 @@ private struct LibraryContent: View {
             // a tick, select mode on and off, and the share sheet ready: felt as well as seen (Settings › haptics)
             .haptic(.selection, trigger: controller.picked, enabled: haptics)
             .haptic(.impact(weight: .light), trigger: controller.selecting, enabled: haptics)
-            .haptic(.success, trigger: filesToShare.isEmpty, enabled: haptics) { !$0 }
+            .haptic(.success, trigger: controller.filesToShare.isEmpty, enabled: haptics) { !$0 }
             .haptic(.success, trigger: controller.shareLinksMade, enabled: haptics)
             .haptic(.success, trigger: controller.doneTick, enabled: haptics)
             .haptic(.warning, trigger: controller.warnTick, enabled: haptics)
@@ -534,7 +515,7 @@ private struct LibraryContent: View {
             .accessibilityIdentifier("library.sort")
     }
 
-    /// An iPad bar below `wide` (portrait, a spread column) puts the sort menu with the view buttons. iPadOS folds the
+    /// An iPad bar below `wide` (portrait, beside the pane) puts the sort menu with the view buttons. iPadOS folds the
     /// whole trailing group into its "More" overflow there (the floating tab bar shares the row in portrait, and the
     /// bar keeps the overflow after the select panel halves it); the leading group is never folded. The iPhone, the
     /// wide iPad and the Mac keep it on the trailing side.
@@ -588,13 +569,13 @@ private struct LibraryContent: View {
             #else
             PasteFileButtons(showsFile: model.capabilities.showsFileButton)
             #endif
-            if tier != .compact {
+            if paneBeside, let pane {
                 Button(Copy.Library2.toggleDetail, systemImage: Symbol.Library.inspector) {
-                    controller.inspectorOpen.toggle()
+                    if pane.isVisible { pane.close() } else { pane.reveal() }
                 }
                 .labelStyle(.iconOnly)
-                // the column only draws with a post in it (`LibraryInspector`), so with none picked the button has nothing to show
-                .disabled(controller.selectedItem == nil)
+                // with nothing in the pane (never opened, or closed for good) the button has nothing to show
+                .disabled(pane.item == nil)
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help(Copy.Library2.toggleDetail)
             }
@@ -607,37 +588,12 @@ private struct LibraryContent: View {
         }
     }
 
-    /// Copies each ticked face that is on screen, then presents the sheet and leaves select mode (as saving a
-    /// gallery's photos does). A second tap while that runs does nothing.
-    private func sharePicked() async {
-        let urls = await controller.sharePicked(rows)
-        guard !urls.isEmpty else { return }
-        filesToShare = urls
-        withAnimation(Motion.rows) { controller.endSelecting() }
-    }
-
-    /// Makes one link for the ticked posts that are on screen and copies it, then leaves select mode (as the share sheet
-    /// does). The bar's verdict keeps the button off for too few, too many and private files; a second tap while this
-    /// runs does nothing.
-    private func makeShareLink() async {
-        if await controller.makeShareLink(rows) {
-            withAnimation(Motion.rows) { controller.endSelecting() }
-        }
-    }
-
-    /// The pill's `collection`: the same link, filed in a collection (an existing one or a new one).
-    private func makeShareLink(into target: LibraryController.CollectionTarget) async {
-        if await controller.makeShareLink(rows, into: target) {
-            withAnimation(Motion.rows) { controller.endSelecting() }
-        }
-    }
-
     /// A kind chip's long press: the chip's posts ticked in one go, and shared at once for `share all`.
     private func pickKind(_ kind: LibraryKindFilter, thenShare share: Bool) {
         model.library.showingHidden = false     // a kind chip is the library's, not the album's
         model.library.kindFilter = kind
         withAnimation(Motion.rows) { controller.pickOnly(rows) }
-        if share { Task { await sharePicked() } }
+        if share { Task { await controller.shareAndEnd(rows) } }
     }
 
     #if os(macOS)
@@ -677,7 +633,7 @@ private struct LibraryContent: View {
     // MARK: "open in library"
 
     /// Loads pages until the post is in, makes sure a filter does not hide it, and shows it: the mosaic scrolls it
-    /// to the centre and lights it, the table selects it (the iPad and Mac's inspector shows it).
+    /// to the centre and lights it, the table selects it (the pane beside it shows it).
     private func reveal(_ id: String) async {
         guard await library.locate(postID: id) else {
             shell.showStatus(Copy.Library2.notFound)
@@ -689,12 +645,9 @@ private struct LibraryContent: View {
             library.query = ""
             library.show = .everything
         }
-        if tier != .compact {
-            controller.selection = id
-            controller.inspectorOpen = true
-        }
-        // the iPad and Mac's table has only the selection to show; every other view scrolls to it and lights it
-        if tier == .compact || library.viewMode == .mosaic { controller.reveal = LibraryReveal(id: id) }
+        if !controller.compact { controller.selection = id }
+        // the table beside the pane has only the selection to show; every other view scrolls to it and lights it
+        if controller.compact || library.viewMode == .mosaic { controller.reveal = LibraryReveal(id: id) }
     }
 }
 
@@ -768,78 +721,78 @@ struct LibraryActivityBar: View {
     }
 }
 
-// MARK: - the pushed detail (phone) and the inspector (iPad, Mac)
+// MARK: - the pane (a post opens there everywhere)
 
-/// The phone's detail: pushed on the media's face, with the zoom from the tile it was opened from.
-private struct LibraryPush: ViewModifier {
-    let model: AppModel
+/// Where the library's detail goes (apple/CONTRACT-PANE.md section 5; owner, 2026-11-23: pane everywhere). A post is the
+/// pane's `.post` page in every placement: beside the tab where the window has room, the sheet (the cover, spanned) on one
+/// narrow screen. The hold's peek and the select actions are beside-the-tab pages only: on one narrow screen the pane
+/// would cover the grid they work on, so there the hold shows the overlay peek and select mode keeps its pill.
+/// `selection` is the post the pane shows: set by a tap, a click or "open in library", cleared when the pane shows
+/// something else (or is hidden).
+private struct LibraryPaneBridge: ViewModifier {
     @Bindable var controller: LibraryController
-    let zoom: Namespace.ID
-    let enabled: Bool
+    let pane: Pane?
+
+    /// The pane sits beside the tab (a column, or one of two screens), not over it as a sheet.
+    private var beside: Bool { pane.map { $0.placement != .compact } ?? false }
 
     func body(content: Content) -> some View {
-        content.navigationDestination(item: $controller.opened) { target in
-            detail(target)
-        }
-    }
-
-    @ViewBuilder
-    private func detail(_ target: OpenedMedia) -> some View {
-        let screen = MediaDetail(model: model, item: target.item, initial: target.initial)
-            .hiddenCover(controller)
-        #if os(iOS)
-        // A post with a video opens with the plain push: iOS 26/27's zoom back from a playing video leaves the grid out
-        // of the stack (taps die until LibraryController rebuilds it; 8.16 needed that on every back) and costs a 350-540
-        // ms frame on the way. Galleries and webps keep the zoom.
-        if target.item.video != nil {
-            screen
-        } else {
-            screen.navigationTransition(.zoom(sourceID: target.item.post?.id ?? target.item.id, in: zoom))
-        }
-        #else
-        screen
-        #endif
-    }
-}
-
-/// The detail column of the iPad and Mac: a trailing inspector (360-460 pt, resizable) holding the same
-/// `MediaDetail` in its own navigation stack, following the selection. Its state is remembered per device.
-private struct LibraryInspector: ViewModifier {
-    let model: AppModel
-    @Bindable var controller: LibraryController
-    let enabled: Bool
-
-    /// Open only with a post to show: an empty column ("pick something") is not drawn at all. The owner's open/closed
-    /// choice (`inspectorOpen`) is kept, so the column comes back with the next post they pick.
-    private var shown: Binding<Bool> {
-        Binding(
-            get: { enabled && controller.inspectorOpen && controller.selectedItem != nil },
-            set: { if enabled { controller.inspectorOpen = $0 } })
-    }
-
-    func body(content: Content) -> some View {
-        content.inspector(isPresented: shown) {
-            Group {
-                if let item = controller.selectedItem {
-                    NavigationStack {
-                        // the column always hides from inside too, not only from the library's toolbar (owner, 8.34)
-                        MediaDetail(model: model, item: item, initial: item.face.id)
-                            .panelClose { controller.inspectorOpen = false }
-                    }
-                    .hiddenCover(controller)
-                    .id(controller.selection)
+        content
+            .onChange(of: beside, initial: true) { _, now in
+                controller.compact = !now
+                guard let pane else { return }
+                if now {
+                    // back beside the tab (unfolded, rotated) while selecting: the actions page comes back if nothing is in the way
+                    if controller.selecting { openActions(pane) }
                 } else {
-                    Text(Copy.Library2.pickSomething)
-                        .accessibilityIdentifier("library.inspector.empty")
-                        .font(CobaltType.body)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(24)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // the pane lost its side position (rotation to a narrow window, a fold): the actions are the pill's again,
+                    // and a peek in flight is the overlay's
+                    pane.close(ifShowing: .selection)
+                    if pane.isPeeking { pane.endPeek() }
                 }
             }
-            .inspectorColumnWidth(min: 360, ideal: 420, max: 460)
-        }
+            // the select actions page reads the controller from the pane
+            .task { pane?.provide(controller) }
+            .onChange(of: controller.selection) { old, new in
+                guard let pane else { return }
+                if let new {
+                    let automatic = controller.selectionIsAutomatic
+                    controller.selectionIsAutomatic = false
+                    guard pane.item != .post(new) || !pane.isVisible else { return }
+                    if automatic {
+                        // a search's best match: never over a running stream or a post the owner opened
+                        if !pane.openIfIdle(.post(new)) { controller.selection = nil }
+                    } else {
+                        pane.open(.post(new))
+                    }
+                } else if let old, pane.item == .post(old), !pane.isPeeking {
+                    pane.close(ifShowing: .post(old))
+                }
+            }
+            .onChange(of: pane?.route, initial: true) { _, route in
+                guard let pane, !pane.isPeeking else { return }
+                var shown: String?
+                if let route, route.isVisible, case .post(let id)? = route.item { shown = id }
+                // the actions page with no select mode behind it (a restored route, or select ended elsewhere) has nothing to do
+                if let route, route.isVisible, route.item == .selection, !controller.selecting { pane.close(ifShowing: .selection) }
+                if controller.selection != shown { controller.selection = shown }
+            }
+            .onChange(of: controller.selecting) { _, selecting in
+                guard let pane, beside else { return }
+                if selecting { openActions(pane) } else { pane.close(ifShowing: .selection) }
+            }
+            .onChange(of: controller.peek?.id) { _, id in
+                guard let pane, beside else { return }
+                if let id { pane.peek(id) } else { pane.endPeek() }
+            }
+    }
+
+    /// Select mode began: the actions page opens beside the tab. It never takes the place of a running stream, and the
+    /// owner pressing `select` replaces a post they had open; when a running item is in the way the pill's `N picked` capsule
+    /// brings the page back on a tap.
+    private func openActions(_ pane: Pane) {
+        if pane.openIfIdle(.selection) { return }
+        if !pane.isRunning, !pane.isPeeking { pane.open(.selection) }
     }
 }
 

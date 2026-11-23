@@ -4,7 +4,7 @@ import Observation
 import SwiftUI
 
 // What the studio screen's parts share (APP-API-CONTRACT section 30.11): the buttons that call the store and say what came of
-// it, the confirms (rotate, disconnect), the pick sheet and the reward editor. One controller per screen; the parts are small
+// it, the confirms (rotate, disconnect) and the pick sheet. One controller per screen (and one per page of the pane); the parts are small
 // views that read the store (`model.stage`) and send taps here. `.stagePresentations(_:)` draws the confirms and sheets.
 
 /// The three panels of the compact layout's segmented control.
@@ -38,8 +38,6 @@ final class StageController {
     /// The rotate confirm and the disconnect confirm.
     var confirmingRotate = false
     var confirmingDisconnect = false
-    /// The reward editor's sheet.
-    var editingReward: StageRewardKind?
     /// What is in flight (a second tap does nothing): "air", "action", "pool", "sound", "soundAll", "playThrough", "auto",
     /// "rotate", "store", "twitch", "reward-<name>".
     private(set) var busy: Set<String> = []
@@ -125,12 +123,6 @@ final class StageController {
 
     func setSound(_ on: Bool, shell: ShellActions) {
         run("sound", shell: shell) { try await self.store.setSound(on) }
-    }
-
-    /// A file from the pick sheet goes up in the spotlight.
-    func pickItem(_ item: StageItem, shell: ShellActions) {
-        pickShown = false
-        perform(.spotlight(itemID: item.id), shell: shell)
     }
 
     // MARK: the pool
@@ -242,16 +234,13 @@ private struct StagePresentations: ViewModifier {
             .sheet(isPresented: $controller.pickShown) {
                 StagePickSheet(controller: controller)
             }
-            .sheet(item: $controller.editingReward) { kind in
-                StageRewardSheet(controller: controller, kind: kind)
-            }
             .haptic(.success, trigger: controller.doneTick)
             .haptic(.error, trigger: controller.failTick)
     }
 }
 
 extension View {
-    /// The studio's confirms (rotate, disconnect), its pick sheet and its reward editor, with the haptics of `controller`.
+    /// The studio's confirms (rotate, disconnect) and its pick sheet, with the haptics of `controller`.
     func stagePresentations(_ controller: StageController) -> some View {
         modifier(StagePresentations(controller: controller))
     }

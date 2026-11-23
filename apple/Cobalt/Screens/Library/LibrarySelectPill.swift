@@ -6,8 +6,9 @@ import SwiftUI
 /// thumbnails in the order they were tapped (tap one to take it out, hold one to see it), then icon circles (icon-first
 /// controls; hold one to name it) for `make link`,
 /// `collection` (make the link and file it, picked in `CollectionPickerSheet`), `edit` and `share` (the files). While the panel is up, taps on tiles pick them;
-/// otherwise they open, as always. It sits in the library's bottom safe area, so on the iPhone it is above the tab bar,
-/// and the same panel is the Mac's and the iPad's.
+/// otherwise they open, as always. It sits in the library's bottom safe area, so on the iPhone it is above the tab bar.
+/// Where the window has room for the screen pane beside the tab, select mode's actions are the pane's page instead
+/// (`PaneSelectionPage`) and the pill is only the way back to it when the pane was hidden.
 ///
 /// With `features.hidden` the row ends with `status…` (a menu: hidden, off, public link, private link; one request for
 /// every pick, APP-API-CONTRACT 37.7). In the hidden album the row is `unhide` and `status…` only: nothing hidden can be
@@ -21,15 +22,9 @@ struct LibrarySelectPill: View {
     let makeLink: () -> Void
     let file: (LibraryController.CollectionTarget) -> Void
     let share: () -> Void
-    /// Drawn on the other screen of a spread (Duo building blocks): the whole panel there, the picks on the left.
-    var inPane = false
-    /// The inline copy's sheet flags, for the pane's copy.
-    var collectionShown: Binding<Bool>? = nil
-    var deleteShown: Binding<Bool>? = nil
 
     @State private var pickingCollection = false
-    @Environment(\.spreadPane) private var host
-    @Environment(\.isSpread) private var spread
+    @Environment(Pane.self) private var pane: Pane?
     @State private var editNote: String?
     /// The trash circle's sheet is up.
     @State private var deleting = false
@@ -41,41 +36,20 @@ struct LibrarySelectPill: View {
     private var offersStatus: Bool { model.capabilities.hidden }
     private var addsToLinks: Bool { controller.addsToLinks }
 
-    /// The panel belongs on the other screen: a spread, while selecting.
-    private var wantsPane: Bool { !inPane && spread && host != nil && controller.selecting }
+    /// The actions belong to the pane: the window has room for it, and select mode is on.
+    private var paneHasActions: Bool { controller.selecting && (pane.map { $0.placement != .compact } ?? false) }
 
-    private static let paneID = "library-select"
+    /// The pane is showing the actions page.
+    private var paneShowsActions: Bool { pane.map { $0.isVisible && $0.item == .selection } ?? false }
 
     var body: some View {
-        if inPane {
-            ScrollView { panel.padding(16) }
-                .scrollBounceBehavior(.basedOnSize)
-        } else {
-            inline
-                .onChange(of: wantsPane, initial: true) { _, on in
-                    if on { showPane() } else { host?.close(id: Self.paneID) }
-                }
-                // a sheet of the panel (collection, delete) took the pane: the panel comes back when it closes
-                .onChange(of: host?.pane == nil) { _, empty in
-                    if empty, wantsPane { showPane() }
-                }
-        }
-    }
-
-    private func showPane() {
-        guard let host, !host.isShowing(Self.paneID) else { return }
-        // the pane's copy asks this copy's sheets: this one stays on screen, so its sheets outlive the pane they replace
-        let pane = LibrarySelectPill(
-            model: model, controller: controller, rows: rows, toggle: toggle, makeLink: makeLink, file: file, share: share,
-            inPane: true, collectionShown: $pickingCollection, deleteShown: $deleting)
-        // closing the panel is its own close button (it ends selecting); a sheet replacing it changes nothing here
-        host.show(id: Self.paneID, content: AnyView(pane.panelDrawsOwnClose())) {}
+        inline
     }
 
     private var inline: some View {
         Group {
-            if controller.selecting, wantsPane {
-                Color.clear.frame(height: 0)
+            if paneHasActions {
+                if paneShowsActions { Color.clear.frame(height: 0) } else { reopenButton }
             } else if controller.selecting {
                 panel
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -97,6 +71,19 @@ struct LibrarySelectPill: View {
     private var sheets: SelectSheets {
         SelectSheets(
             pickingCollection: $pickingCollection, deleting: $deleting, model: model, controller: controller, rows: rows, file: file)
+    }
+
+    /// The pane was hidden while selecting: a quiet capsule with the count brings the actions back.
+    private var reopenButton: some View {
+        Button { pane?.open(.selection) } label: {
+            Label(Copy.Library2.pickedCount(controller.picked.count), systemImage: Symbol.Library.select)
+                .font(CobaltType.bodySemibold)
+                .padding(.horizontal, 16)
+                .frame(height: 44)
+        }
+        .buttonStyle(.glass)
+        .accessibilityHint(Copy.SelectPane.reopenA11y(controller.picked.count))
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 
     // MARK: the pill
@@ -153,7 +140,7 @@ struct LibrarySelectPill: View {
             }
         }
         .padding(12)
-        .frame(maxWidth: inPane ? .infinity : 520)
+        .frame(maxWidth: 520)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .motion(Motion.rows, value: picks.map(\.id))
         .motion(Motion.rows, value: verdict)
@@ -197,7 +184,7 @@ struct LibrarySelectPill: View {
 
     /// The trash circle (last, in the error red): the sheet that says what goes, and lets a post's files be chosen.
     private func trashButton(_ picks: [LibraryRow]) -> some View {
-        Button { if let deleteShown { deleteShown.wrappedValue = true } else { deleting = true } } label: {
+        Button { deleting = true } label: {
             Label(Copy.DeletePicks.delete, systemImage: Symbol.Library.deleteEverything)
         }
         .buttonStyle(.cobaltIcon(tint: CobaltColor.errorText))
@@ -232,7 +219,7 @@ struct LibrarySelectPill: View {
             .accessibilityHint(Copy.Links.makeA11yHint)
         }
         if files {
-            Button { if let collectionShown { collectionShown.wrappedValue = true } else { pickingCollection = true } } label: {
+            Button { pickingCollection = true } label: {
                 Label(Copy.Library2.collection, systemImage: Symbol.Library.collectionFile)
             }
             .buttonStyle(.cobaltIcon(tint: CobaltColor.collection))
@@ -376,13 +363,12 @@ private struct SelectSheets: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-        .spreadSheet(isPresented: $pickingCollection, id: "library-collection") {
-            CollectionPickerSheet(store: store, picks: controller.pickedRows(rows), file: file).panelDrawsOwnClose()
+        .sheet(isPresented: $pickingCollection) {
+            CollectionPickerSheet(store: store, picks: controller.pickedRows(rows), file: file)
         }
-        .spreadSheet(isPresented: $deleting, id: "library-delete") {
+        .sheet(isPresented: $deleting) {
             let picks = controller.pickedRows(rows).map(\.item).filter { controller.canDelete($0) }
             LibraryDeleteSheet(picks: picks, impact: DeleteImpact(picks: picks, model: model), delete: controller.deletePicks)
-                .panelDrawsOwnClose()
         }
     }
 }

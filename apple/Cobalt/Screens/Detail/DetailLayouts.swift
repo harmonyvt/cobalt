@@ -21,9 +21,10 @@ struct DetailContext {
     var missingIndex: Int? { page.flatMap { $0.isMissing ? $0.index : nil } }
 }
 
-/// The width from which the detail goes two columns (iPad regular, a Mac sheet, a two-screen spread; CONTRACT-MEDIA 5).
+/// The width from which the detail goes two columns (iPad regular, a Mac sheet; CONTRACT-MEDIA 5). The pane's post page
+/// does not use it: it arranges itself by the pane's shape (`PanePostPage`).
 enum DetailWidth {
-    static let wide: CGFloat = Spread.minWidth
+    static let wide: CGFloat = 700
     /// From here a segmented control holds six tabs (iPad, Mac); under it four (iPhone).
     static let sixTabs: CGFloat = 600
 }

@@ -259,3 +259,26 @@ extension Copy.Library2 {
         mode == .mosaic ? mosaic : table
     }
 }
+
+/// The library's pages in the screen pane (apple/CONTRACT-PANE.md): the post, the select actions. Lowercase.
+extension Copy {
+    enum PostPane {
+        static let detailsCard = "details"
+        static let linkCard = "link and files"
+        static let manage = "manage"
+        static let notSaved = "this photo was never saved."
+    }
+
+    enum SelectPane {
+        /// The title row's subtitle when nothing is picked.
+        static let nothingPicked = "tap posts in the library to pick them."
+        /// The header icon that leaves select mode (the pane's xmark only hides the page).
+        static let done = "done selecting"
+        /// The shelf card of the picks.
+        static let picksCard = "picks"
+        /// A sheet-less reopen of the actions when the pane was hidden while selecting.
+        static let reopen = "actions"
+        static func reopenA11y(_ n: Int) -> String { n == 0 ? "show the select actions" : "show the select actions for \(n) picked" }
+        static let makeLinkMaking = "making the link…"
+    }
+}
