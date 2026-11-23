@@ -200,6 +200,11 @@ private struct LayoutKey: Equatable {
 private struct PaneCompactSheet: View {
     let model: AppModel
     @Environment(Pane.self) private var pane
+    /// The detent a resizable item (`PaneItem.compactSheet`) is at: it opens at `.medium`, and is `.medium` again whenever
+    /// another resizable item takes the sheet. A fresh sheet (presented anew) starts here too.
+    @State private var detent: PresentationDetent = .medium
+
+    private var resizable: Bool { pane.item?.compactSheet == .resizable }
 
     var body: some View {
         Group {
@@ -218,8 +223,11 @@ private struct PaneCompactSheet: View {
             }
             #endif
         }
-        .presentationDetents([.large])
+        .presentationDetents(resizable ? [.medium, .large] : [.large], selection: resizable ? $detent : .constant(.large))
+        // resizable: the grid behind the sheet stays tappable at `.medium` (ticks update live in the sheet)
+        .presentationBackgroundInteraction(resizable ? .enabled(upThrough: .medium) : .automatic)
         .presentationDragIndicator(.visible)
+        .onChange(of: pane.item) { _, _ in detent = .medium }
         // a pushed editor with unsaved changes (`.paneHoldsClose`): no swipe down
         .interactiveDismissDisabled(pane.holdsClose)
         #if os(iOS)

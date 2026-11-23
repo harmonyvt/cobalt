@@ -280,5 +280,19 @@ extension Copy {
         static let reopen = "actions"
         static func reopenA11y(_ n: Int) -> String { n == 0 ? "show the select actions" : "show the select actions for \(n) picked" }
         static let makeLinkMaking = "making the link…"
+        /// The iPhone sheet's title (the pill says `3 picked`; its sheet says what they are).
+        static func posts(_ n: Int) -> String { n == 0 ? "tap posts to pick" : n == 1 ? "1 post" : "\(n) posts" }
+        /// The sheet's second line: `2 videos · 1 picture`, in the order videos, pictures, galleries, webps.
+        static func kinds(_ rows: [LibraryRow]) -> String {
+            func count(_ kind: MediaKind) -> Int { rows.filter { $0.kind == kind }.count }
+            func part(_ n: Int, _ one: String, _ many: String) -> String? { n == 0 ? nil : "\(n) \(n == 1 ? one : many)" }
+            return [
+                part(count(.video), "video", "videos"), part(count(.photo), "picture", "pictures"),
+                part(count(.gallery), "gallery", "galleries"), part(count(.webp), "webp", "webps"),
+            ].compactMap { $0 }.joined(separator: " · ")
+        }
+        /// The pill's count and its swipe up open the sheet.
+        static let expandHint = "opens the select actions"
+        static let expandAction = "show the select actions"
     }
 }

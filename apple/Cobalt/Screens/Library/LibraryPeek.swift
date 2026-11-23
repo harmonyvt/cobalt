@@ -4,6 +4,10 @@ import SwiftUI
 /// Hold to peek: a hold on a tile (while selecting) or on a pick's thumbnail shows the post's media full size, with
 /// nothing else on it, for as long as the finger stays down. A short tap still ticks; a scroll still scrolls (the hold
 /// only begins once the finger has stayed put).
+///
+/// `opensOnRelease` (an iPhone tile, select mode or not; owner, 2026-11-23): the hold is the preview of a hold-and-release.
+/// Lifting the finger on the tile opens the post in the pane; sliding off the tile before lifting cancels (the preview
+/// goes, nothing opens). The Mac and the wide placements never set it: their hold is the peek and the context menu.
 struct PeekOnHold: ViewModifier {
     let row: LibraryRow
     let controller: LibraryController
@@ -11,19 +15,29 @@ struct PeekOnHold: ViewModifier {
     /// A hold inside the pane's own page (a pick's thumbnail in the select actions): the page shows the peek itself, over
     /// itself, instead of asking the pane, which would swap the page the finger is on.
     var local: Binding<LibraryRow?>?
+    var opensOnRelease = false
+    /// The held view's size, to tell when the finger has slid off it (the recognizer's own view may be larger).
+    @State private var size: CGSize = .zero
 
-    private func hold(_ on: Bool) {
+    private func hold(_ phase: HoldPhase) {
         if let local {
-            if on { controller.peekSwallowsTap = true; local.wrappedValue = row }
+            if phase == .began { controller.peekSwallowsTap = true; local.wrappedValue = row }
             else if local.wrappedValue?.id == row.id { local.wrappedValue = nil }
             return
         }
-        if on { controller.setPeek(row) } else if controller.peek?.id == row.id { controller.setPeek(nil) }
+        if phase == .began {
+            controller.setPeek(row)
+            return
+        }
+        if controller.peek?.id == row.id { controller.setPeek(nil) }
+        if phase == .lifted, opensOnRelease { controller.open(row) }
     }
 
     #if os(iOS)
     func body(content: Content) -> some View {
-        content.gesture(HoldRecognizer(enabled: enabled) { holding in hold(holding) })
+        content
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .gesture(HoldRecognizer(enabled: enabled, cancelsWhenDraggedOff: opensOnRelease, size: size) { phase in hold(phase) })
     }
     #else
     @GestureState private var holding = false
@@ -37,9 +51,15 @@ struct PeekOnHold: ViewModifier {
                         if case .second(true, _) = value { state = true }
                     },
                 including: enabled ? .all : .subviews)
-            .onChange(of: holding) { _, now in hold(now) }
+            .onChange(of: holding) { _, now in hold(now ? .began : .cancelled) }
     }
     #endif
+}
+
+/// What a hold is doing: it began (the preview shows), the finger was lifted on the view (`lifted`), or the hold ended
+/// any other way (dragged off, interrupted: `cancelled`).
+enum HoldPhase: Equatable {
+    case began, lifted, cancelled
 }
 
 #if os(iOS)
@@ -49,7 +69,13 @@ struct PeekOnHold: ViewModifier {
 /// view, and once the hold has begun the scroll waits until the finger lifts.
 private struct HoldRecognizer: UIGestureRecognizerRepresentable {
     let enabled: Bool
-    let changed: (Bool) -> Void
+    /// A hold that slid off the view ends as `cancelled` at once (its preview goes), and lifting later does not count.
+    let cancelsWhenDraggedOff: Bool
+    let size: CGSize
+    let changed: (HoldPhase) -> Void
+
+    /// How far past the view's edge the finger may wander before the hold is cancelled.
+    private static let slop: CGFloat = 16
 
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
 
@@ -69,15 +95,35 @@ private struct HoldRecognizer: UIGestureRecognizerRepresentable {
     }
 
     func handleUIGestureRecognizerAction(_ hold: UILongPressGestureRecognizer, context: Context) {
+        let coordinator = context.coordinator
         switch hold.state {
-        case .began: changed(true)
-        case .ended, .cancelled, .failed: changed(false)
+        case .began:
+            coordinator.holding = true
+            changed(.began)
+        case .changed:
+            guard coordinator.holding, cancelsWhenDraggedOff, size.width > 0 else { return }
+            let frame = CGRect(origin: .zero, size: size).insetBy(dx: -Self.slop, dy: -Self.slop)
+            if !frame.contains(context.converter.localLocation) {
+                coordinator.holding = false
+                changed(.cancelled)
+            }
+        case .ended:
+            guard coordinator.holding else { return }
+            coordinator.holding = false
+            changed(.lifted)
+        case .cancelled, .failed:
+            guard coordinator.holding else { return }
+            coordinator.holding = false
+            changed(.cancelled)
         default: break
         }
     }
 
     @MainActor
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        /// The hold began and has not ended (or been cancelled) yet.
+        var holding = false
+
         /// Alongside the tile's tap and the context menu, never alongside a scroll: a held peek does not also scroll.
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
@@ -89,9 +135,10 @@ private struct HoldRecognizer: UIGestureRecognizerRepresentable {
 
 extension View {
     func peekOnHold(
-        _ row: LibraryRow, controller: LibraryController, enabled: Bool = true, local: Binding<LibraryRow?>? = nil
+        _ row: LibraryRow, controller: LibraryController, enabled: Bool = true, local: Binding<LibraryRow?>? = nil,
+        opensOnRelease: Bool = false
     ) -> some View {
-        modifier(PeekOnHold(row: row, controller: controller, enabled: enabled, local: local))
+        modifier(PeekOnHold(row: row, controller: controller, enabled: enabled, local: local, opensOnRelease: opensOnRelease))
     }
 }
 

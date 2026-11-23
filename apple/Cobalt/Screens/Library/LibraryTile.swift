@@ -17,6 +17,10 @@ private struct TilePress: ButtonStyle {
 /// its media full size (`LibraryPeek`), and the context menu is not offered. Shift-click and ⌘-click (Mac, iPad with
 /// a keyboard) start selecting and tick a run or this one post (`LibraryController.click`).
 ///
+/// On the iPhone (`holdOpens`, select mode or not) a hold is a preview and lifting the finger opens the post in the pane;
+/// sliding off the tile first cancels. There is no context menu there: its actions are the post page's (its grid and
+/// `more`) and, for VoiceOver, custom actions on the tile (`LibraryTileActions`).
+///
 /// `Equatable` on what it draws, so a new page of tiles (or a refresh that changed nothing) re-evaluates none of
 /// the tiles already there.
 struct LibraryTile: View, Equatable {
@@ -31,6 +35,8 @@ struct LibraryTile: View, Equatable {
     let selected: Bool
     /// Select mode. Passed in (not read off the controller while drawing) so `.equatable()` redraws the tick.
     let selecting: Bool
+    /// iPhone: hold previews and release opens the pane; no context menu (`LibraryController.holdOpens`).
+    var holdOpens = false
     let ticked: Bool
     /// Its place in the picks (1 is the first tapped), drawn on the tick.
     var pickNumber: Int? = nil
@@ -51,7 +57,7 @@ struct LibraryTile: View, Equatable {
     nonisolated static func == (a: LibraryTile, b: LibraryTile) -> Bool {
         a.row == b.row && a.index == b.index && a.size == b.size && a.centerY == b.centerY && a.maxPixel == b.maxPixel
             && a.showsCaption == b.showsCaption && a.lit == b.lit && a.selected == b.selected
-            && a.selecting == b.selecting && a.ticked == b.ticked && a.pickNumber == b.pickNumber && a.reload == b.reload
+            && a.selecting == b.selecting && a.holdOpens == b.holdOpens && a.ticked == b.ticked && a.pickNumber == b.pickNumber && a.reload == b.reload
             && a.share == b.share && a.nearEnd == b.nearEnd
     }
 
@@ -80,8 +86,8 @@ struct LibraryTile: View, Equatable {
 
     var body: some View {
         Button {
-            // the touch that ended a hold-to-peek is not a tick
-            if selecting, controller.takeSwallowedTap() { return }
+            // the touch that ended a hold-to-peek is not a tick (nor a second open)
+            if controller.takeSwallowedTap() { return }
             // shift-click ticks a run, ⌘-click ticks this one (either starts select mode), as in Finder
             let click = LibraryController.Click.current(controller)
             if click == .plain, !selecting {
@@ -91,13 +97,15 @@ struct LibraryTile: View, Equatable {
             }
         } label: { tile }
             .buttonStyle(TilePress())
-            // while selecting, a hold shows the media full size (out of select mode the hold is the context menu)
-            .peekOnHold(row, controller: controller, enabled: selecting)
+            // while selecting, a hold shows the media full size (out of select mode the hold is the context menu); on the
+            // iPhone the hold previews in both, and lifting the finger opens the post in the pane
+            .peekOnHold(row, controller: controller, enabled: selecting || holdOpens, opensOnRelease: holdOpens)
             // a gallery cannot be ticked (galleries are not shared): dimmer, and no tick
             .opacity(selecting ? (row.shareable ? (ticked ? 1 : 0.7) : 0.35) : 1)
             .frame(width: size.width, height: size.height)
             .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting, removing: $removing))
+            .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting && !holdOpens, removing: $removing))
+            .modifier(LibraryTileActions(row: row, controller: controller, enabled: holdOpens, selecting: selecting, removing: $removing))
             .offlineRemoveConfirm($removing, model: controller.model)
             .zoomSource(id: row.id, in: zoom)
             // only a tile that can move watches its visibility: every tile doing so cost each one a tracker as it

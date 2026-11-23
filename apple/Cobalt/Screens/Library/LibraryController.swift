@@ -243,8 +243,19 @@ final class LibraryController {
 
     /// True while the window has no room for the pane beside the tab (one narrow screen: the pane is a sheet over the
     /// grid, which keeps the select pill and the overlay peek); false where the pane sits beside it. Set from the pane's
-    /// placement.
-    @ObservationIgnored var compact = true
+    /// placement. Observed: the tiles' hold (preview and release opens the pane) follows it.
+    var compact = true
+
+    /// A hold on a tile is hold-to-preview, release-opens-the-pane, and the tile has no context menu (the iPhone and a
+    /// narrow iPad window, where the pane is a sheet over the grid). The Mac and the wide placements keep the context menu
+    /// and the plain peek.
+    var holdOpens: Bool {
+        #if os(iOS)
+        compact
+        #else
+        false
+        #endif
+    }
     /// The shell's status line (`ShellActions.showStatus`), set by the screen.
     @ObservationIgnored var showStatus: @MainActor (String) -> Void = { _ in }
 

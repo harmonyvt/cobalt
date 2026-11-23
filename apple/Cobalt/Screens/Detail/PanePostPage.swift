@@ -71,6 +71,11 @@ struct PanePostContent: View {
     @State private var subtitles = SubtitleSession()
     /// File URLs for the system share sheet (empty: nothing is presented).
     @State private var filesToShare: [URL] = []
+    /// `add to link…` is picking a link for this post (the library menu's action, now the page's).
+    @State private var addingToLink: LibraryLinkPicks?
+    /// `hide…` / `unhide` waiting on its confirm (`.hidden` or `.off`).
+    @State private var statusAsk: PostStatus?
+    @State private var creatingEdit = false
     @Environment(\.paneShape) private var shape
     @Environment(\.shell) private var shell
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -149,6 +154,26 @@ struct PanePostContent: View {
         .makeSheet(controller: controller, item: item, model: model)
         .postFrameSheet(controller: controller, model: model)
         .renameAlert(item: item, isPresented: $renaming, model: model) { controller.notice = $0 }
+        .sheet(item: $addingToLink) { picks in
+            LinkPickerSheet(
+                store: model.shareSets, picks: picks.items.map { ShareSetPick(item: $0) },
+                maximum: model.capabilities.limits.shareSetMax, showsBadges: model.capabilities.privateLinks
+            ) { link, ids in addToLink(ids, link: link) }
+        }
+        .confirmationDialog(
+            statusAsk == .hidden ? Copy.Hidden.hideTitle : Copy.Hidden.unhideTitle,
+            isPresented: Binding(get: { statusAsk != nil }, set: { if !$0 { statusAsk = nil } }),
+            titleVisibility: .visible, presenting: statusAsk
+        ) { ask in
+            if ask == .hidden {
+                Button(Copy.Hidden.hideConfirm, role: .destructive) { setStatus(.hidden, item) }
+            } else {
+                Button(Copy.Hidden.unhide) { setStatus(.off, item) }
+            }
+            Button(Copy.Hidden.cancel, role: .cancel) {}
+        } message: { ask in
+            Text(ask == .hidden ? Copy.Hidden.hideMessage : Copy.Hidden.unhideMessage)
+        }
         .navigationDestination(isPresented: $managing) {
             PostSettingsPage(id: id, model: model, controller: controller, fallback: lastShown)
         }
@@ -178,10 +203,17 @@ struct PanePostContent: View {
     private func page(_ c: DetailContext) -> some View {
         let item = c.item
         let actions = PostActions(c: c, share: share, leave: { pane.close() }, shellMakeWebp: { shell.makeWebp($0) })
-        let all = actions.all
-        let grid = Array(all.prefix(PaneActionGrid.limit))
+        // On the iPhone's sheet the grid is what the library's context menu was: share, add to link, edit, delete
+        // (the mockup, 2026-11-23); beside the tab it stays the plan's four, and those go to `more` with the rest.
+        let compact = pane.placement == .compact
+        let delete = deleteAction(item)
+        let arranged = PostActions.arrange(
+            plan: actions.all, compact: compact, addToLink: addToLinkAction(item), edit: editAction(item),
+            delete: compact ? delete : nil)
+        let grid = arranged.grid
         return PanePage(
-            title: item.titleText, subtitle: subtitle(item), actions: headerActions(item), more: moreActions(c, extra: Array(all.dropFirst(PaneActionGrid.limit)))
+            title: item.titleText, subtitle: subtitle(item), actions: headerActions(item),
+            more: moreActions(c, extra: arranged.rest, delete: compact ? nil : delete)
         ) {
             hero(c)
         } controls: {
@@ -240,6 +272,11 @@ struct PanePostContent: View {
                     openInLibrary: { openInLibrary(c.item) }, askAbout: { askAbout(c.item) }, rename: { renaming = true },
                     paneDrawsEssentials: true)
                     .buttonStyle(.cobaltIcon())
+                // "this is…" (a search name's example): a menu, so an icon of the row rather than a pane action
+                if model.capabilities.names, !(fromAlbum || model.isHiddenPost(c.item)), let key = c.item.post?.id {
+                    NamesPostMenu(model: model, postKey: key) { shell.showStatus($0) }
+                        .buttonStyle(.cobaltIcon())
+                }
                 SevenTvUploadIcon(model: model, file: c.rendition.file, title: c.item.titleText)
                 EmoteEditorIcon(model: model, rendition: c.rendition, title: c.item.titleText)
             }
@@ -303,19 +340,103 @@ struct PanePostContent: View {
         return list
     }
 
-    private func moreActions(_ c: DetailContext, extra: [PaneAction]) -> [PaneAction] {
+    private func moreActions(_ c: DetailContext, extra: [PaneAction], delete: PaneAction?) -> [PaneAction] {
         var list = extra
         let item = c.item
         if model.capabilities.library, item.post != nil, model.selectedTab != .library {
             list.append(PaneAction(Copy.Media.openInLibrary, systemImage: Symbol.Media.openInLibrary) { openInLibrary(item) })
         }
-        if controller.canDeleteEverything(item) {
-            list.append(PaneAction(
-                Copy.Media.deleteEverything, systemImage: Symbol.Media.deleteEverything, role: .destructive,
-                disabled: controller.isDeleting || controller.isBusy(item)
-            ) { controller.confirm = .deleteEverything })
-        }
+        if let hide = hideAction(item) { list.append(hide) }
+        if let delete { list.append(delete) }
         return list
+    }
+
+    // MARK: what the library's context menu had (it is gone on the iPhone)
+
+    /// `delete everything`, with its confirm.
+    private func deleteAction(_ item: MediaItem) -> PaneAction? {
+        guard controller.canDeleteEverything(item) else { return nil }
+        return PaneAction(
+            Copy.Media.deleteEverything, systemImage: Symbol.Media.deleteEverything, role: .destructive,
+            disabled: controller.isDeleting || controller.isBusy(item), id: "delete"
+        ) { controller.confirm = .deleteEverything }
+    }
+
+    /// `add to link…`: the link picker, as a sheet of this page.
+    private func addToLinkAction(_ item: MediaItem) -> PaneAction? {
+        let row = LibraryRow(item: item)
+        guard model.capabilities.shareSets, model.capabilities.shareSetEdit, row.shareable, !row.isHidden,
+              ShareSetPick(item: item).anyFileID != nil else { return nil }
+        return PaneAction(
+            Copy.LinkEdit.addToLinkMenu, systemImage: Symbol.LinkEdit.addToLink, needsServer: true, id: "add-to-link"
+        ) { addingToLink = LibraryLinkPicks(items: [item], endsSelecting: false) }
+    }
+
+    /// `edit`: a new editor project from this post's video.
+    private func editAction(_ item: MediaItem) -> PaneAction? {
+        guard model.editor.isAvailable, EditPicksButton.canEdit(LibraryRow(item: item)) else { return nil }
+        return PaneAction(
+            creatingEdit ? Copy.Editor.creating : Copy.Editor.edit, systemImage: Symbol.Editor.edit,
+            needsServer: true, disabled: creatingEdit, id: "edit"
+        ) { createEdit(item) }
+    }
+
+    /// `hide…` (asks first) and, in the hidden album, `unhide`.
+    private func hideAction(_ item: MediaItem) -> PaneAction? {
+        guard model.capabilities.hidden, item.post != nil else { return nil }
+        if fromAlbum || model.isHiddenPost(item) {
+            return PaneAction(
+                Copy.HiddenAlbum.menuUnhide, systemImage: Symbol.HiddenAlbum.unhide, needsServer: true, id: "unhide"
+            ) { statusAsk = .off }
+        }
+        return PaneAction(
+            Copy.HiddenAlbum.menuHide, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, id: "hide"
+        ) { statusAsk = .hidden }
+    }
+
+    private func addToLink(_ ids: [String], link: ShareSet) {
+        guard !ids.isEmpty else { return }
+        let store = model.shareSets
+        let shell = self.shell
+        let pane = self.pane
+        Task {
+            do {
+                let updated = try await store.addFiles(ids, to: link.id)
+                let id = updated.id
+                shell.showNote(StatusNote(
+                    text: Copy.LinkEdit.addedTo(ids.count, updated.displayTitle), actionTitle: Copy.LinkEdit.openAction
+                ) { pane.open(.link(id)) })
+            } catch {
+                shell.showStatus(Copy.LinkEdit.message(for: error))
+            }
+        }
+    }
+
+    private func setStatus(_ status: PostStatus, _ item: MediaItem) {
+        guard let post = item.post else { return }
+        Task {
+            let result = await controller.setPostStatus(status, post: post, key: controller.selected(in: item).id)
+            if result.changed { shell.showStatus(result.words(for: status)) }
+            if result.changed, status == .hidden { pane.close() }
+        }
+    }
+
+    private func createEdit(_ item: MediaItem) {
+        creatingEdit = true
+        Task {
+            defer { creatingEdit = false }
+            do {
+                let left = try await model.editor.create(from: [item])
+                EditorLauncher.shared.firstToast = EditPicksButton.firstToast(left)
+            } catch {
+                switch EditError.from(error) {
+                case .invalid(.empty): shell.showStatus(Copy.Editor.editNoVideo)
+                case .tooMany: shell.showStatus(Copy.Editor.tooManyProjects)
+                case .invalid(let problem): shell.showStatus(Copy.Editor.problem(problem))
+                default: shell.showStatus(Copy.Editor.couldntCreate)
+                }
+            }
+        }
     }
 
     // MARK: the bar
@@ -423,6 +544,22 @@ struct PostActions {
     private var model: AppModel { c.model }
 
     var all: [PaneAction] { c.isGalleryLike ? gallery : classic }
+
+    /// The grid and what goes to `more`. Beside the tab the grid is the plan's first four and `add to link` and `edit`
+    /// follow in `more` (the delete stays in `more` too). On the iPhone's sheet the grid is the library menu's main
+    /// actions: share, add to link, edit, and delete last; the plan's other buttons fill what is left and the rest is `more`.
+    static func arrange(
+        plan: [PaneAction], compact: Bool, addToLink: PaneAction?, edit: PaneAction?, delete: PaneAction?
+    ) -> (grid: [PaneAction], rest: [PaneAction]) {
+        let limit = PaneActionGrid.limit
+        guard compact else {
+            return (Array(plan.prefix(limit)), Array(plan.dropFirst(limit)) + [addToLink, edit].compactMap { $0 })
+        }
+        let share = plan.first { $0.id == "share" }
+        let lead = [share, addToLink, edit].compactMap { $0 } + plan.filter { $0.id != "share" }
+        let room = delete == nil ? limit : limit - 1
+        return (Array(lead.prefix(room)) + [delete].compactMap { $0 }, Array(lead.dropFirst(room)))
+    }
 
     // MARK: a video and its webps
 

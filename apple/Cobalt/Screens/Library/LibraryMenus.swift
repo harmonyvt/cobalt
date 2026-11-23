@@ -224,6 +224,118 @@ struct LibraryRowMenu: ViewModifier {
     }
 }
 
+/// The context menu's actions as VoiceOver custom actions, for a tile or row that has no context menu (the iPhone: a hold
+/// previews and opens the pane instead). The tile's default action stays `open` (or the tick while selecting, so `open`
+/// is also listed then); the rest are the menu's, in its order, each only where the menu would offer it. Submenus (the
+/// names picker) and the Files link are the post page's. The copies, the share, the status and the deletes are the same
+/// calls the menu makes.
+struct LibraryTileActions: ViewModifier {
+    let row: LibraryRow
+    let controller: LibraryController
+    let enabled: Bool
+    let selecting: Bool
+    @Binding var removing: MediaItem?
+    #if os(iOS)
+    @Environment(\.openURL) private var openURL
+    #endif
+
+    private struct Entry: Identifiable {
+        let title: String
+        let run: () -> Void
+        var id: String { title }
+    }
+
+    func body(content: Content) -> some View {
+        content.accessibilityActions {
+            if enabled {
+                ForEach(entries()) { entry in Button(entry.title, action: entry.run) }
+            }
+        }
+    }
+
+    private func entries() -> [Entry] {
+        let item = row.item
+        let controller = self.controller
+        let row = self.row
+        let caps = controller.model.capabilities
+        var out: [Entry] = []
+        func add(_ title: String, _ run: @escaping () -> Void) { out.append(Entry(title: title, run: run)) }
+        func copies(_ url: URL, name: String, single: String) {
+            if caps.hasLinkPair(url) {
+                for form in LinkForm.allCases { add("\(name): \(form.copyTitle)") { controller.copy(url, form: form) } }
+            } else {
+                add(single) { controller.copy(url, form: .share) }
+            }
+        }
+        if selecting { add(Copy.Library2.open) { controller.open(row) } }
+        if let url = controller.photoLink(item) { copies(url, name: Copy.LinkPair.photoLink, single: Copy.Library2.copyPhotoLink) }
+        if controller.canCopyAllLinks(item) {
+            if caps.shareBaseURL != nil {
+                add(Copy.LinkPair.copyAllShare) { controller.copyAllLinks(item, form: .share) }
+                add(Copy.LinkPair.copyAllDirect) { controller.copyAllLinks(item, form: .direct) }
+            } else {
+                add(Copy.Gallery.copyAllLinks) { controller.copyAllLinks(item, form: .share) }
+            }
+        }
+        if let url = controller.webpLink(item) { copies(url, name: Copy.LinkPair.webpLink, single: Copy.Library2.copyWebpLink) }
+        if item.kind != .photo, let url = controller.videoLink(item) {
+            copies(url, name: Copy.LinkPair.videoLink, single: Copy.Library2.copyVideoLink)
+        }
+        if let url = controller.shareURL(item) { add(Copy.Library2.share) { controller.filesToShare = [url] } }
+        if controller.canAddToLink(row) { add(Copy.LinkEdit.addToLinkMenu) { controller.addToLink(row, also: []) } }
+        if controller.canAskAbout(item) { add(Copy.Chat.askAbout) { controller.askAbout(item) } }
+        if controller.canSave(item) { add(Copy.Library2.saveToPhotos) { controller.save(item) } }
+        if controller.canSaveAll(item) { add(Copy.Library2.saveAllToPhotos) { controller.saveAll(item) } }
+        if controller.canMakeFromPost(item) { add(Copy.Library2.makeFromPost) { controller.makeFromPost(item) } }
+        if controller.croppablePicture(item) != nil { add(Copy.Editor.cropAPicture) { controller.cropPicture(item) } }
+        if let made = controller.model.emoteTarget(item: item) { add(Copy.EmoteEditor.makeAnEmote) { controller.makingEmote = made } }
+        out += offline(item)
+        #if os(iOS)
+        if controller.model.store.canKeep, item.renditions.contains(where: { $0.local?.place == .offline }),
+           let url = controller.model.showInFilesURL(item) {
+            add(Copy.Offline.showInFiles) { openURL(url) }
+        }
+        #endif
+        if controller.canSwitchVisibility(item), !row.isHidden {
+            if row.isPublic {
+                add(Copy.Library2.makePrivate) { controller.makingPrivate = item }
+            } else {
+                add(Copy.Library2.makePublic) { controller.setVisibility(item, public: true) }
+            }
+        }
+        add(Copy.Library2.rename) { controller.renaming = item }
+        if caps.hidden {
+            let targets = controller.statusTargets(row, also: [])
+            if row.isHidden {
+                add(Copy.HiddenAlbum.menuUnhide) { controller.chooseStatus(.off, posts: targets) }
+            } else {
+                add(Copy.HiddenAlbum.menuHide) { controller.chooseStatus(.hidden, posts: targets) }
+            }
+        }
+        if controller.canDelete(item), !controller.isBusy(item) {
+            add(Copy.Library2.deleteEverything) { controller.deleting = item }
+        }
+        return out
+    }
+
+    /// Exactly one of keep, stop and remove (both of the first and the last when only some of the media is kept), as in
+    /// `OfflineMenuItems`.
+    private func offline(_ item: MediaItem) -> [Entry] {
+        let model = controller.model
+        guard model.store.canKeep else { return [] }
+        let plan = OfflinePlan(item: item, model: model)
+        let controller = self.controller
+        if plan.active { return [Entry(title: Copy.Offline.stop) { model.stopDownloading(item) }] }
+        var out: [Entry] = []
+        if plan.canKeep { out.append(Entry(title: Copy.Offline.keep) { model.keepOffline(item) }) }
+        if plan.hasKept, !controller.isBusy(item) {
+            // the tile's confirm says when it is the only copy
+            out.append(Entry(title: Copy.Offline.removeCopy) { removing = item })
+        }
+        return out
+    }
+}
+
 /// What the context menu shows above its items: the face at its aspect with the title and its meta under it.
 struct LibraryPreviewCard: View {
     let row: LibraryRow

@@ -10,6 +10,11 @@ import SwiftUI
 /// Where the window has room for the screen pane beside the tab, select mode's actions are the pane's page instead
 /// (`PaneSelectionPage`) and the pill is only the way back to it when the pane was hidden.
 ///
+/// On one narrow screen (the iPhone) the pill stays as it is and expands: a swipe up on it, or a tap on its count, opens
+/// the same page as a `.medium` / `.large` sheet (`PaneItem.compactSheet`) over a grid that stays tappable. The pill
+/// gives way to the sheet with the app's spring (a cross-fade under Reduce Motion) and comes back when the sheet goes
+/// down: swiping it down or its xmark only collapses it, select mode and the ticks stay; leaving select mode closes it.
+///
 /// With `features.hidden` the row ends with `status…` (a menu: hidden, off, public link, private link; one request for
 /// every pick, APP-API-CONTRACT 37.7). In the hidden album the row is `unhide` and `status…` only: nothing hidden can be
 /// shared, filed or edited. Last comes the trash circle (`LibraryDeleteSheet`): what goes, with a post's files to choose.
@@ -25,6 +30,7 @@ struct LibrarySelectPill: View {
 
     @State private var pickingCollection = false
     @Environment(Pane.self) private var pane: Pane?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var editNote: String?
     /// The trash circle's sheet is up.
     @State private var deleting = false
@@ -42,6 +48,14 @@ struct LibrarySelectPill: View {
     /// The pane is showing the actions page.
     private var paneShowsActions: Bool { pane.map { $0.isVisible && $0.item == .selection } ?? false }
 
+    /// The pill is expanded into the pane's sheet (one narrow screen): the pill itself is out of the way.
+    private var expanded: Bool { controller.selecting && !paneHasActions && paneShowsActions }
+
+    /// The pill's way out and in: the app's spring, a plain fade under Reduce Motion.
+    private var panelTransition: AnyTransition {
+        reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity)
+    }
+
     var body: some View {
         inline
     }
@@ -51,8 +65,10 @@ struct LibrarySelectPill: View {
             if paneHasActions {
                 if paneShowsActions { Color.clear.frame(height: 0) } else { reopenButton }
             } else if controller.selecting {
-                panel
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                if !expanded {
+                    panel
+                        .transition(panelTransition)
+                }
             } else {
                 startButton
                     .transition(.scale(scale: 0.9).combined(with: .opacity))
@@ -65,7 +81,15 @@ struct LibrarySelectPill: View {
         .padding(.bottom, 6)
         #endif
         .frame(maxWidth: .infinity)
+        .motion(Motion.card, value: expanded)
+        .haptic(.impact(weight: .light), trigger: expanded)
         .modifier(sheets)
+    }
+
+    /// Swipe up or tap the count: the pill becomes the pane's sheet (iPhone only; beside the tab the pane has the page).
+    private func expand() {
+        guard let pane, controller.selecting, pane.placement == .compact else { return }
+        pane.open(.selection)
     }
 
     private var sheets: SelectSheets {
@@ -142,6 +166,13 @@ struct LibrarySelectPill: View {
         .padding(12)
         .frame(maxWidth: 520)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        // a swipe up on the pill expands it (a vertical drag; the thumbnails' own scroll is horizontal)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 18)
+                .onEnded { drag in
+                    if drag.translation.height < -36, abs(drag.translation.width) < abs(drag.translation.height) { expand() }
+                })
+        .accessibilityAction(named: Copy.SelectPane.expandAction) { expand() }
         .motion(Motion.rows, value: picks.map(\.id))
         .motion(Motion.rows, value: verdict)
     }
@@ -276,12 +307,19 @@ struct LibrarySelectPill: View {
             .keyboardShortcut(.cancelAction)
             #endif
             .accessibilityIdentifier("library.select.stop")
-            Text(Copy.Library2.pickedCount(count))
-                .font(CobaltType.bodySemibold)
-                .foregroundStyle(CobaltColor.text)
-                .contentTransition(.numericText())
-                // the layout checks (apple/CobaltUITests) read the count here: "2 picked"
-                .accessibilityIdentifier("library.select.count")
+            Button(action: expand) {
+                Text(Copy.Library2.pickedCount(count))
+                    .font(CobaltType.bodySemibold)
+                    .foregroundStyle(CobaltColor.text)
+                    .contentTransition(.numericText())
+                    .frame(minHeight: 44, alignment: .leading)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .disabled(pane?.placement != .compact)
+            .accessibilityHint(pane?.placement == .compact ? Copy.SelectPane.expandHint : "")
+            // the layout checks (apple/CobaltUITests) read the count here: "2 picked"
+            .accessibilityIdentifier("library.select.count")
             Spacer(minLength: 8)
             Button {
                 withAnimation(Motion.rows) { controller.toggleAll(rows) }
