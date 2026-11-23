@@ -268,6 +268,8 @@ enum Analytics {
 @MainActor
 private final class AnalyticsLifecycle: LifecycleAware {
     func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        // the frame timer never measures time away from the screen
+        if event == .willResignActive || event == .didEnterBackground { FrameMonitor.appLeft() }
         #if os(iOS)
         guard event == .didEnterBackground else { return }
         #else
