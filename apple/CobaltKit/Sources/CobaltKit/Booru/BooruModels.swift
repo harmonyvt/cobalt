@@ -1,8 +1,8 @@
 import Foundation
 
-// The booru tab (APP-API-CONTRACT 72): Danbooru search through the server, under this device's own content level and
-// filters. Questionable and explicit do not exist in capystore (owner, 2026-11-22): the levels are general and sensitive
-// only, and the server drops anything else before it reaches the app.
+// The booru tab (APP-API-CONTRACT 72): Danbooru search through the server. General only (owner, 2026-11-23, 72.9): the app
+// always asks for general, and the server drops anything else (and every theme) before it reaches the app. `sensitive`
+// stays in the enum only so an older server's answers still decode.
 
 /// A content level: Danbooru's rating, general or sensitive only.
 public enum BooruLevel: String, Sendable, Codable, CaseIterable, Comparable {
@@ -120,6 +120,58 @@ public struct BooruTags: Sendable, Equatable, Decodable {
         self.copyright = copyright
         self.general = general
         self.meta = meta
+    }
+}
+
+/// `booru` on `POST /studio` (APP-API-CONTRACT 72.10): a save from the booru tab keeps the Danbooru post page as its link
+/// (not the bare file) and the artist and their own link in the post's details.
+public struct BooruCredit: Sendable, Equatable, Codable {
+    public var page: URL
+    public var artist: String?
+    /// The artist's own post (Pixiv, X ...), Danbooru's `source`.
+    public var source: String?
+    public var title: String?
+    /// ms since 1970
+    public var postedAt: Int?
+    public var favs: Int?
+
+    public init(page: URL, artist: String? = nil, source: String? = nil, title: String? = nil, postedAt: Int? = nil, favs: Int? = nil) {
+        self.page = page
+        self.artist = artist
+        self.source = source
+        self.title = title
+        self.postedAt = postedAt
+        self.favs = favs
+    }
+
+    public init(post: BooruPost) {
+        let words = { (tags: [String]) in tags.prefix(3).map { $0.replacingOccurrences(of: "_", with: " ") }.joined(separator: ", ") }
+        let title = post.tags.character.isEmpty ? words(post.tags.copyright) : words(post.tags.character)
+        self.init(
+            page: post.pageUrl,
+            artist: post.tags.artist.first,
+            source: post.source,
+            title: title.isEmpty ? nil : title,
+            postedAt: post.createdAt.flatMap(Self.millis),
+            favs: post.favs)
+    }
+
+    var wire: [String: Any] {
+        var o: [String: Any] = ["page": page.absoluteString]
+        if let artist { o["artist"] = artist }
+        if let source { o["source"] = source }
+        if let title { o["title"] = title }
+        if let postedAt { o["posted_at"] = postedAt }
+        if let favs { o["favs"] = favs }
+        return o
+    }
+
+    static func millis(_ iso: String) -> Int? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: iso) { return Int(d.timeIntervalSince1970 * 1000) }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: iso).map { Int($0.timeIntervalSince1970 * 1000) }
     }
 }
 
@@ -315,7 +367,7 @@ extension HTTPCobaltClient: BooruClient {
     public func booruPosts(_ query: BooruQuery, page: Int, level: BooruLevel?) async throws -> BooruPage {
         // the owner's tags first; the order and the rating clause are extras, given up in that order when Danbooru refuses
         // the tag count (anonymous searches take 2 tags). The server filters the page again either way.
-        let clause = level ?? .sensitive
+        let clause = level ?? .general
         let ratings = BooruLevel.allCases.filter { $0 <= clause }.map(\.rawValue).joined(separator: ",")
         var extras: [(String, String)] = []
         if let order = query.order.danbooruTag { extras.append(("order", order)) }

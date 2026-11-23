@@ -8,7 +8,7 @@ final class PreviewBooruState: @unchecked Sendable {
     private var _settings: BooruSettings
 
     init() {
-        _settings = BooruSettings(level: .sensitive, themes: [:], themeList: PreviewBooru.themes, blacklist: "")
+        _settings = BooruSettings(level: .general, themes: [:], themeList: PreviewBooru.themes, blacklist: "")
     }
 
     var settings: BooruSettings {

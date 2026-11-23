@@ -14,7 +14,7 @@ extension Copy {
         static let tooManyTags = "danbooru takes 2 tags per search. take one out."
         static func hidden(_ n: Int) -> String { n == 1 ? "1 hidden by your filters" : "\(n) hidden by your filters" }
         static let loading = "loading…"
-        static let empty = "nothing here at this level"
+        static let empty = "nothing here"
         static let emptyHint = "try other tags, or look at your filters."
         static let failed = "danbooru didn't answer"
         static let busy = "danbooru is busy, try again in a moment"
@@ -31,41 +31,14 @@ extension Copy {
             }
         }
 
-        // MARK: levels
-
-        static func level(_ l: BooruLevel) -> String {
-            switch l {
-            case .general: return "general"
-            case .sensitive: return "sensitive"
-            }
-        }
-        static func levelDetail(_ l: BooruLevel) -> String {
-            switch l {
-            case .general: return "safe for anyone"
-            case .sensitive: return "swimsuits, mild"
-            }
-        }
-        static func upTo(_ l: BooruLevel) -> String { l == .general ? "general" : "up to \(level(l))" }
-        static let safeMode = "safe mode: your screen is shared or recorded, so only general shows"
-        static let raiseReason = "raise the booru level on this device"
-
         // MARK: filters
 
         static let filters = "filters"
-        static let contentLevel = "content level"
-        static let thisDevice = "this device only. going up asks for face id."
-        static let presets = "presets"
-        static let presetSafe = "stream safe"
-        static let presetSafeDetail = "general only, gore hidden"
-        static let presetCozy = "cozy"
-        static let presetCozyDetail = "up to sensitive"
-        static let themes = "themes"
-        static let themesHint = "what to do with posts a theme matches, inside your level."
-        static func mode(_ m: BooruThemeMode) -> String { m.rawValue }
-        static let aboveLevel = "only matters at a higher level"
         static let alwaysHidden = "always hidden"
         static let hardBlock = "sexual content with child-like characters"
-        static let hardBlockDetail = "every level, every device. not a setting."
+        static let hardBlockDetail = "every device. not a setting."
+        static let generalOnly = "anything above general, plus swimsuits, suggestive, nudity, gore and body horror"
+        static let generalOnlyDetail = "general only, every device. not a setting."
         static let refine = "sort and refine"
         static let order = "order"
         static func order(_ o: BooruOrder) -> String {

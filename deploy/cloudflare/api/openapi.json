@@ -2610,12 +2610,12 @@
                     "description": "one page of Danbooru's posts.json, as the app fetched it"
                   },
                   "level": {
-                    "description": "lower than the key's own level for this request only (safe mode); never higher",
                     "type": "string",
                     "enum": [
                       "g",
                       "s"
-                    ]
+                    ],
+                    "description": "ignored: general is the only level (older apps sent s)"
                   },
                   "min_score": {
                     "type": "integer",
@@ -2661,11 +2661,8 @@
                     },
                     "level": {
                       "type": "string",
-                      "enum": [
-                        "g",
-                        "s"
-                      ],
-                      "description": "g general, s sensitive; there is no questionable or explicit"
+                      "const": "g",
+                      "description": "g general, the only level there is"
                     },
                     "posts": {
                       "type": "array",
@@ -2749,11 +2746,8 @@
                     },
                     "level": {
                       "type": "string",
-                      "enum": [
-                        "g",
-                        "s"
-                      ],
-                      "description": "g general, s sensitive; there is no questionable or explicit"
+                      "const": "g",
+                      "description": "g general, the only level there is"
                     },
                     "posts": {
                       "type": "array",
@@ -2857,21 +2851,15 @@
                     },
                     "level": {
                       "type": "string",
-                      "enum": [
-                        "g",
-                        "s"
-                      ],
-                      "description": "g general, s sensitive; there is no questionable or explicit"
+                      "const": "g",
+                      "description": "g general, the only level there is"
                     },
                     "levels": {
                       "type": "array",
                       "items": {
                         "type": "string",
-                        "enum": [
-                          "g",
-                          "s"
-                        ],
-                        "description": "g general, s sensitive; there is no questionable or explicit"
+                        "const": "g",
+                        "description": "g general, the only level there is"
                       }
                     },
                     "themes": {
@@ -2912,11 +2900,8 @@
                           },
                           "min_level": {
                             "type": "string",
-                            "enum": [
-                              "g",
-                              "s"
-                            ],
-                            "description": "g general, s sensitive; there is no questionable or explicit"
+                            "const": "g",
+                            "description": "g general, the only level there is"
                           },
                           "tags": {
                             "type": "array",
@@ -2998,7 +2983,7 @@
                       "g",
                       "s"
                     ],
-                    "description": "g general, s sensitive; there is no questionable or explicit"
+                    "description": "ignored: general is the only level (older apps sent s)"
                   },
                   "themes": {
                     "type": "object",
@@ -3046,21 +3031,15 @@
                     },
                     "level": {
                       "type": "string",
-                      "enum": [
-                        "g",
-                        "s"
-                      ],
-                      "description": "g general, s sensitive; there is no questionable or explicit"
+                      "const": "g",
+                      "description": "g general, the only level there is"
                     },
                     "levels": {
                       "type": "array",
                       "items": {
                         "type": "string",
-                        "enum": [
-                          "g",
-                          "s"
-                        ],
-                        "description": "g general, s sensitive; there is no questionable or explicit"
+                        "const": "g",
+                        "description": "g general, the only level there is"
                       }
                     },
                     "themes": {
@@ -3101,11 +3080,8 @@
                           },
                           "min_level": {
                             "type": "string",
-                            "enum": [
-                              "g",
-                              "s"
-                            ],
-                            "description": "g general, s sensitive; there is no questionable or explicit"
+                            "const": "g",
+                            "description": "g general, the only level there is"
                           },
                           "tags": {
                             "type": "array",
@@ -12651,15 +12627,12 @@
           },
           "rating": {
             "type": "string",
-            "enum": [
-              "g",
-              "s"
-            ],
-            "description": "g general, s sensitive; there is no questionable or explicit"
+            "const": "g",
+            "description": "g general, the only level there is"
           },
           "blur": {
             "type": "boolean",
-            "description": "a theme set to blur matched: show a cover until tapped"
+            "description": "always false now: a theme match hides the post"
           },
           "media": {
             "type": "string",

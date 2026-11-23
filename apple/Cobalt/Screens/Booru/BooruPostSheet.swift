@@ -65,21 +65,13 @@ struct BooruPostSheet: View {
                 .mediaMask()
             }
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(alignment: .topLeading) {
-                Text(Copy.Booru.level(post.rating))
-                    .font(CobaltType.pill)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .foregroundStyle(.white)
-                    .background(BooruLevelColor.of(post.rating).opacity(0.85), in: Capsule())
-                    .padding(10)
-            }
     }
 
     private var actions: some View {
         HStack(spacing: 8) {
             Button(saved ? Copy.Booru.savedToLibrary : Copy.Booru.save, systemImage: Symbol.Booru.save) {
-                _ = model.queue.add([.link(post.fileUrl)], via: .paste)
+                // the Danbooru page and the artist go with the file (72.10)
+                _ = model.queue.add([.link(post.fileUrl)], via: .paste, options: JobOptions(booru: BooruCredit(post: post)))
                 saved = true
             }
             .buttonStyle(.cobaltPrimary(fullWidth: true, compact: true))

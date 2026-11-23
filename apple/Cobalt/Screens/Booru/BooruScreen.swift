@@ -25,7 +25,6 @@ struct BooruScreen: View {
                 searchField
                 if searchFocused, !store.suggestions.isEmpty { suggestions }
                 chips
-                if store.safeMode { notice(Copy.Booru.safeMode, symbol: Symbol.Booru.safe) }
                 if !store.dropped.isEmpty, store.query.order != .new { notice(Copy.Booru.dropped, symbol: Symbol.Booru.filters) }
                 content
             }
@@ -50,7 +49,6 @@ struct BooruScreen: View {
             text = store.query.tags
             await store.load()
         }
-        .modifier(BooruSafeModeWatch(store: store))
         .spreadSheet(item: $open) { post in
             BooruPostSheet(model: model, post: post) { tag, replace in
                 open = nil
@@ -142,10 +140,6 @@ struct BooruScreen: View {
     private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                Button { filtersShown = true } label: {
-                    BooruChip(text: Copy.Booru.upTo(store.effectiveLevel), dot: BooruLevelColor.of(store.effectiveLevel), on: true)
-                }
-                .buttonStyle(.plain)
                 Menu {
                     Picker(Copy.Booru.order, selection: orderBinding) {
                         ForEach(BooruOrder.allCases, id: \.self) { Text(Copy.Booru.order($0)).tag($0) }
@@ -267,15 +261,6 @@ struct BooruChip: View {
     }
 }
 
-enum BooruLevelColor {
-    static func of(_ l: BooruLevel) -> Color {
-        switch l {
-        case .general: return CobaltColor.success
-        case .sensitive: return CobaltColor.focus
-        }
-    }
-}
-
 enum BooruTagColor {
     static func of(_ k: BooruSuggestion.Kind) -> Color {
         switch k {
@@ -319,15 +304,6 @@ struct BooruTile: View {
                         }
                     }
                 }
-                .overlay(alignment: .topLeading) {
-                    Text(post.rating.rawValue)
-                        .font(CobaltType.pill)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .foregroundStyle(.white)
-                        .background(BooruLevelColor.of(post.rating).opacity(0.85), in: RoundedRectangle(cornerRadius: 6))
-                        .padding(6)
-                }
                 .overlay(alignment: .bottomTrailing) {
                     if post.media != .image {
                         Image(systemName: post.media == .video ? Symbol.Booru.video : Symbol.Booru.animated)
@@ -344,31 +320,4 @@ struct BooruTile: View {
         .buttonStyle(.plain)
         .accessibilityLabel(post.tags.character.first ?? post.tags.general.prefix(3).joined(separator: ", "))
     }
-}
-
-/// Safe mode: while the screen is mirrored, recorded or shown on another display, the store asks for general only.
-private struct BooruSafeModeWatch: ViewModifier {
-    let store: BooruStore
-
-    func body(content: Content) -> some View {
-        #if os(iOS)
-        content
-            .onAppear(perform: check)
-            .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in check() }
-            .onReceive(NotificationCenter.default.publisher(for: UIScene.willConnectNotification)) { _ in check() }
-            .onReceive(NotificationCenter.default.publisher(for: UIScene.didDisconnectNotification)) { _ in check() }
-        #else
-        content
-        #endif
-    }
-
-    #if os(iOS)
-    private func check() {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let captured = scenes.contains { $0.traitCollection.sceneCaptureState == .active }
-        let external = UIApplication.shared.connectedScenes.contains { $0.session.role != .windowApplication }
-        let safe = captured || external
-        if store.safeMode != safe { store.safeMode = safe }
-    }
-    #endif
 }

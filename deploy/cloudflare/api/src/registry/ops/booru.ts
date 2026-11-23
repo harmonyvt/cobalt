@@ -1,8 +1,9 @@
 // The booru tab (APP-API-CONTRACT.md section 72): Danbooru search, tag suggestions and each key's filter settings. The
 // work is in src/booru.ts.
-//  - A client key or a device session (auth "key"), CORS for the web app, no-store. Settings are per key: each device
-//    session has its own level, themes and blacklist.
-//  - Explicit does not exist here: the level is general or sensitive only (no questionable either).
+//  - A client key or a device session (auth "key"), CORS for the web app, no-store. Settings are per key, but only the
+//    blacklist is still a setting.
+//  - General only (72.9): no sensitive, questionable or explicit, every theme hidden. `level` and theme modes are still
+//    accepted from older apps and ignored.
 //  - Never the chat AI's or the MCP's (tier hidden).
 import * as z from "zod";
 import {
@@ -22,7 +23,9 @@ import {
 import { defineOp, ok, type OpContext, type OpReply } from "../op";
 
 const Status = z.literal("success");
-const Level = z.enum(LEVELS as unknown as ["g", "s"]).describe("g general, s sensitive; there is no questionable or explicit");
+const Level = z.literal("g").describe("g general, the only level there is");
+// what older apps still send (8.37 and before): accepted, ignored
+const LegacyLevel = z.enum(["g", "s"]).describe("ignored: general is the only level (older apps sent s)");
 const Mode = z.enum(THEME_MODES as unknown as ["show", "blur", "hide"]);
 const ThemeIds = THEMES.map((t) => t.id) as [string, ...string[]];
 
@@ -53,7 +56,7 @@ const PostShape = z
     .object({
         id: z.number().int(),
         rating: Level,
-        blur: z.boolean().describe("a theme set to blur matched: show a cover until tapped"),
+        blur: z.boolean().describe("always false now: a theme match hides the post"),
         media: z.enum(["image", "animated", "video"]),
         ext: z.string(),
         width: z.number().int(),
@@ -81,15 +84,15 @@ const SearchQuery = z.object({
     tags: z.string().max(200).optional().default(""),
     page: z.coerce.number().int().min(1).max(1000).optional().default(1),
     order: z.enum(ORDERS as unknown as ["new", "popular", "score", "favs", "random"]).optional().default("new"),
-    level: Level.optional().describe("lower than the key's own level for this request only (safe mode); never higher"),
+    level: LegacyLevel.optional(),
     min_score: z.coerce.number().int().min(-100).max(100000).optional(),
     media: z.enum(["image", "animated", "video"]).optional(),
     shape: z.enum(["tall", "square", "wide"]).optional(),
 });
 
 export const SettingsPatch = z.object({
-    level: Level.optional(),
-    // partialRecord: zod 4's record with enum keys requires every key, which refused every one-theme change (live 400s)
+    level: LegacyLevel.optional(),
+    // ignored (every theme is hidden); partialRecord: zod 4's record with enum keys requires every key, which refused every one-theme change (live 400s)
     themes: z.partialRecord(z.enum(ThemeIds), Mode).optional(),
     blacklist: z.string().max(BLACKLIST_MAX_CHARS).optional(),
 });
@@ -136,7 +139,7 @@ export const BOORU_OPS = [
         route: { method: "POST", path: "/booru/filter" },
         input: z.object({
             posts: z.array(z.unknown()).max(200).describe("one page of Danbooru's posts.json, as the app fetched it"),
-            level: Level.optional().describe("lower than the key's own level for this request only (safe mode); never higher"),
+            level: LegacyLevel.optional(),
             min_score: z.number().int().min(-100).max(100000).optional(),
             media: z.enum(["image", "animated", "video"]).optional(),
             shape: z.enum(["tall", "square", "wide"]).optional(),

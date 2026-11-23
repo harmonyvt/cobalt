@@ -49,19 +49,36 @@ import Testing
         #expect(BooruSettingsPatch(level: .general, themes: ["partial": .hide]).json["level"] as? String == "g")
     }
 
-    @MainActor @Test func storeSearchesAndNeverAsksAboveGeneralInSafeMode() async {
+    @MainActor @Test func storeAsksForGeneralOnly() async {
         let model = AppModel.preview(.happy)
         let store = model.booru
         await store.load()
         #expect(store.phase == .loaded)
         #expect(!store.posts.isEmpty)
-        #expect(store.posts.allSatisfy { $0.rating <= .sensitive })
-        // safeMode's didSet starts the reload itself; a second reload here would be dropped by the generation check
-        store.safeMode = true
-        for _ in 0..<200 where store.pageLevel != .general || store.phase != .loaded {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        #expect(store.askedLevel == .general)
         #expect(store.pageLevel == .general)
         #expect(store.posts.allSatisfy { $0.rating == .general })
+    }
+
+    @Test func creditKeepsThePageAndTheArtist() throws {
+        let json = #"""
+        {"id":7,"rating":"g","blur":false,"media":"image","ext":"png","width":10,"height":10,"size":1,"score":3,"favs":42,
+         "created_at":"2024-01-02T03:04:05.678-05:00","source":"https://www.pixiv.net/artworks/99",
+         "page_url":"https://danbooru.donmai.us/posts/7","thumb_url":"https://cdn.donmai.us/t.jpg","sample_url":"https://cdn.donmai.us/s.jpg",
+         "file_url":"https://cdn.donmai.us/original/f.png",
+         "tags":{"artist":["mochi_(artist)"],"character":["hatsune_miku"],"copyright":["vocaloid"],"general":[],"meta":[]}}
+        """#
+        let d = JSONDecoder()
+        d.keyDecodingStrategy = .convertFromSnakeCase
+        let post = try d.decode(BooruPost.self, from: Data(json.utf8))
+        let c = BooruCredit(post: post)
+        #expect(c.page.absoluteString == "https://danbooru.donmai.us/posts/7")
+        #expect(c.artist == "mochi_(artist)" && c.source == "https://www.pixiv.net/artworks/99" && c.title == "hatsune miku")
+        #expect(c.postedAt == 1_704_182_645_678 && c.favs == 42)
+        var o = StudioCreateOptions()
+        o.booru = c
+        let body = o.body(link: post.fileUrl)
+        #expect(body["url"] as? String == "https://cdn.donmai.us/original/f.png")
+        #expect((body["booru"] as? [String: Any])?["page"] as? String == "https://danbooru.donmai.us/posts/7")
     }
 }

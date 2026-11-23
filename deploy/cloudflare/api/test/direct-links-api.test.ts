@@ -324,3 +324,34 @@ describe("the request log drops userinfo as well as the query", () => {
         expect(row.url_prefix).toBe("https://files.example.com/pics/a.png");
     });
 });
+
+describe("a booru save (72.10): `booru` on POST /studio", () => {
+    const FILE = "https://cdn.donmai.us/original/aa/bb/aabbccdd.png";
+    const PAGE = "https://danbooru.donmai.us/posts/123456";
+
+    it("fetches the file but keeps the Danbooru page as the link, and the artist's link in the post details", async () => {
+        w.helper.fetchDone = { ...SAVED_PNG, title: "aabbccdd", service: "donmai" };
+        const res = await post({
+            url: FILE,
+            booru: { page: PAGE, artist: "mochi_(artist)", source: "https://www.pixiv.net/artworks/99", title: "hatsune miku", posted_at: 1762600000000, favs: 42 },
+        });
+        expect(res.status).toBe(201);
+        const sid = ((await res.json()) as any).id as string;
+        expect(w.helper.fetchBodies[0]).toMatchObject({ id: sid, url: FILE });
+        await settle(sid);
+        expect(w.session(sid)).toMatchObject({ status: "ready", link: PAGE });
+        expect(w.items()[0]).toMatchObject({ link: PAGE });
+        const details = await w.db.prepare("SELECT * FROM post_details WHERE link = ?1").bind(PAGE).first<any>();
+        expect(details).toMatchObject({
+            site: "generic", found: 1, name: "mochi_(artist)", text: "https://www.pixiv.net/artworks/99", title: "hatsune miku",
+            site_name: "danbooru", posted_at: 1762600000000, counts: '{"likes":42}', edited_at: null,
+        });
+    });
+
+    it("refuses a page that is not a Danbooru post, or a file that is not Danbooru's", async () => {
+        expect((await post({ url: FILE, booru: { page: "https://evil.example/posts/1" } })).status).toBe(400);
+        expect((await post({ url: "https://files.example.com/a.png", booru: { page: PAGE } })).status).toBe(400);
+        expect((await post({ url: FILE, booru: "yes" })).status).toBe(400);
+        expect(w.helper.fetchBodies).toHaveLength(0);
+    });
+});
