@@ -78,6 +78,73 @@ final class PaneTests: XCTestCase {
         }
     }
 
+    // MARK: the fix pass (PR #232 review)
+
+    /// An iPhone on its side is one screen: the pane is the sheet, never split down the middle (item 4).
+    func testIPhoneLandscapeIsCompact() throws {
+        guard !isPad else { throw XCTSkip("an iPhone layout") }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launch(["-previewScenario", "happy", "-previewTab", "links", "-paneReset", "YES"])
+        XCTAssertTrue(find(app, "links.row").waitForExistence(timeout: wait), "the links tab never showed its rows")
+        find(app, "links.row").tap()
+        let pane = find(app, "pane")
+        XCTAssertTrue(pane.waitForExistence(timeout: wait), "the link did not open in the pane")
+        settle()
+        shot("landscape", "1-open")
+        let window = app.windows.firstMatch.frame
+        // beside the tab it would be half the window; the sheet is (nearly) all of it
+        XCTAssertGreaterThan(pane.frame.width, window.width * 0.7, "landscape iPhone split the pane beside the tab")
+        app.terminate()
+    }
+
+    /// Escape typed in a text field is the field's, not the pane's (item 8): the pane stays open.
+    func testEscapeInASearchFieldKeepsThePane() throws {
+        guard isPad else { throw XCTSkip("needs the column, where the tab's search field is beside the pane") }
+        let app = launch(["-previewScenario", "happy", "-previewTab", "twitch", "-paneReset", "YES"])
+        let field = find(app, "twitch.search")
+        XCTAssertTrue(field.waitForExistence(timeout: wait), "the twitch tab never showed its search")
+        field.tap()
+        field.typeText("ninja\n")
+        XCTAssertTrue(find(app, "pane").waitForExistence(timeout: wait), "the stream did not open in the pane")
+        settle()
+        field.tap()
+        field.typeText("abc")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        settle()
+        shot("escape", "1-in-field")
+        XCTAssertTrue(find(app, "pane").exists, "Escape in a search field closed the pane")
+        app.terminate()
+    }
+
+    /// A running stream survives another item opening over it (item 5): it goes to the bar, keeps playing there, and the
+    /// bar brings it back.
+    func testARunningStreamSurvivesBeingReplaced() throws {
+        guard isPad else { throw XCTSkip("needs the column: on the phone the pane sheet covers the tabs") }
+        let app = launch(["-previewScenario", "happy", "-previewTab", "twitch", "-paneReset", "YES"])
+        let field = find(app, "twitch.search")
+        XCTAssertTrue(field.waitForExistence(timeout: wait), "the twitch tab never showed its search")
+        field.tap()
+        field.typeText("ninja\n")
+        XCTAssertTrue(find(app, "pane").waitForExistence(timeout: wait), "the stream did not open in the pane")
+        settle(3)
+        // another tab's item opens over it
+        tab(app, "links").tap()
+        XCTAssertTrue(find(app, "links.row").waitForExistence(timeout: wait), "the links tab never showed its rows")
+        find(app, "links.row").tap()
+        let bar = find(app, "pane.bar")
+        XCTAssertTrue(bar.waitForExistence(timeout: wait), "the replaced stream did not go to the bar")
+        XCTAssertTrue(find(app, "pane").exists, "the link is not in the pane")
+        settle()
+        shot("replace", "1-link-over-stream")
+        bar.tap()
+        XCTAssertTrue(waitGone(find(app, "pane.bar")), "the bar stayed after bringing the stream back")
+        XCTAssertTrue(find(app, "pane").exists, "the stream did not come back in the pane")
+        settle()
+        shot("replace", "2-stream-back")
+        app.terminate()
+    }
+
     // MARK: the flow
 
     private func run(
@@ -147,6 +214,12 @@ final class PaneTests: XCTestCase {
         app.launchArguments += args
         app.launch()
         return app
+    }
+
+    /// A tab's button (the iPad's top bar or its sidebar).
+    private func tab(_ app: XCUIApplication, _ name: String) -> XCUIElement {
+        let inBar = app.tabBars.buttons[name]
+        return inBar.exists ? inBar : app.buttons[name].firstMatch
     }
 
     /// The first element with this identifier, whatever its type.

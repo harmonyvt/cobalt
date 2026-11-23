@@ -1,5 +1,10 @@
 import CobaltKit
 import SwiftUI
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
 
 /// The pane's own frame around a page, wherever it is drawn (beside the tab, spanned, the sheet, the cover): the header
 /// (span leading, context label centred, `more` and the xmark trailing, 44 pt glass circles), the page's own
@@ -19,6 +24,7 @@ struct PaneChrome: View {
     var body: some View {
         NavigationStack {
             PaneDestination(item: item, model: model)
+                .environment(\.paneItem, item)
                 .environment(\.paneShape, shape)
                 .environment(\.paneHinge, hinge)
                 .environment(\.paneHeaderHeight, Self.headerHeight)
@@ -35,7 +41,7 @@ struct PaneChrome: View {
         .accessibilityLabel(Copy.Pane.container(pane.title ?? Copy.Pane.context(item)))
         .accessibilityIdentifier("pane")
         .accessibilityAddTraits(pane.state == .span ? .isModal : [])
-        .accessibilityAction(.escape) { pane.close() }
+        .accessibilityAction(.escape) { pane.requestClose() }
     }
 
     // MARK: header
@@ -43,12 +49,13 @@ struct PaneChrome: View {
     @ViewBuilder
     private func header(_ more: [PaneAction]) -> some View {
         Group {
-            if case .split = shape, let hinge, hinge.axis == .vertical {
-                // nothing on the hinge: span on the left screen, the label and the closes centred on the right one
-                PaneHalves(hinge: hinge) {
+            if let halves = headerHalves {
+                // nothing on the hinge (split), nothing over the hero's edge (wide: the media is the left half): span on
+                // the left, the label centred on the right half with the closes
+                PaneHalves(hinge: halves) {
                     HStack { spanButton; Spacer(minLength: 0) }
                     ZStack {
-                        contextLabel
+                        contextLabel.padding(.horizontal, 100)
                         HStack(spacing: 8) { Spacer(minLength: 0); trailing(more) }
                     }
                 }
@@ -65,6 +72,18 @@ struct PaneChrome: View {
         }
         .padding(.horizontal, 10)
         .frame(height: Self.headerHeight)
+    }
+
+    /// Where the header splits in two: on the hinge of a split pane on two screens side by side, and down the middle of
+    /// a wide one (whose hero is its left half), so the context label never sits on a hinge or over the media's edge.
+    /// `.some(nil)`: the middle (wide). `nil`: one centred row.
+    private var headerHalves: PaneHinge?? {
+        switch shape {
+        case .split: if let hinge, hinge.axis == .vertical { return .some(hinge) }
+        case .wide: return .some(nil)
+        default: break
+        }
+        return nil
     }
 
     private var contextLabel: some View {
@@ -118,7 +137,7 @@ struct PaneChrome: View {
             .help(Copy.Pane.more)
             .accessibilityLabel(Copy.Pane.more)
         }
-        CloseButton { pane.close() }
+        CloseButton { pane.requestClose() }
             .help(Copy.Pane.close)
             .accessibilityIdentifier("pane.close")
     }
@@ -126,10 +145,15 @@ struct PaneChrome: View {
     // MARK: keys
 
     /// Escape closes, ⌘⇧F spans and unspans, ⌘[ and ⌘] page the shelf. Drawn with the pane, so they work wherever it is
-    /// (beside the tab, in the sheet, in the cover) and only while it is there.
+    /// (beside the tab, in the sheet, in the cover) and only while it is there. Escape in a text field (a search field,
+    /// twitch chat, a form) is the field's: it ends the editing (clears a search on the Mac) and the pane stays; and a
+    /// pushed editor holding the close (`.paneHoldsClose`) is asked instead.
     private var keys: some View {
         ZStack {
-            Button { pane.close() } label: { EmptyView() }
+            Button {
+                if PaneTextFocus.escapeInField() { return }
+                pane.requestClose()
+            } label: { EmptyView() }
                 .keyboardShortcut(.escape, modifiers: [])
             Button { pane.toggleSpan() } label: { EmptyView() }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
@@ -143,21 +167,24 @@ struct PaneChrome: View {
     }
 }
 
-/// The running item as a bar over the tab (above the tab bar; the bottom of the detail area on the Mac). Tapping it
-/// opens the item at `screen`.
+/// The running item as a bar over the tab (above the tab bar; the bottom of the detail area on the Mac): the current item
+/// closed while running, a running item another open moved aside, or one under a peek (`Pane.barItem`). Its page stays
+/// mounted here, so a stream keeps playing. Tapping it opens the item at `screen`.
 struct PaneBar: View {
     let model: AppModel
     @Environment(Pane.self) private var pane
 
     var body: some View {
-        if let item = pane.item {
+        if let item = pane.barItem {
             PaneDestination(item: item, model: model)
                 .id(item)
+                .environment(\.paneItem, item)
                 .environment(\.paneShape, .bar)
                 .contentShape(.rect)
                 .onTapGesture { pane.tapBar() }
                 .accessibilityElement(children: .contain)
-                .accessibilityLabel(Copy.Pane.container(pane.title ?? Copy.Pane.context(item)))
+                // the reported title is the current item's; a background item in the bar is named by its kind
+                .accessibilityLabel(Copy.Pane.container((item == pane.item ? pane.title : nil) ?? Copy.Pane.context(item)))
                 .accessibilityAction(named: Copy.Pane.reopen) { pane.tapBar() }
                 .accessibilityIdentifier("pane.bar")
                 .help(Copy.Pane.reopen)
@@ -171,7 +198,7 @@ struct PaneBarAccessory: ViewModifier {
     let model: AppModel
     @Environment(Pane.self) private var pane
 
-    private var shown: Bool { pane.state == .bar && pane.item != nil }
+    private var shown: Bool { pane.barItem != nil }
 
     func body(content: Content) -> some View {
         #if os(iOS)
@@ -241,3 +268,41 @@ struct PaneSeam: View {
         .accessibilityHidden(true)
     }
 }
+
+// MARK: - Escape in a text field
+
+/// Whether the keyboard focus is in a text field or text view, where Escape belongs to the field and not to the pane.
+@MainActor
+enum PaneTextFocus {
+    /// Escape was pressed: when a text field or view has the focus, gives the field its Escape (iOS: the editing ends;
+    /// the Mac: the field's own cancel, which clears a search field) and returns true; the pane is left alone.
+    static func escapeInField() -> Bool {
+        #if os(iOS)
+        FirstResponderProbe.found = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.paneProbeFirstResponder(_:)), to: nil, from: nil, for: nil)
+        let responder = FirstResponderProbe.found
+        FirstResponderProbe.found = nil
+        guard let responder, responder is UITextField || responder is UITextView else { return false }
+        responder.resignFirstResponder()
+        return true
+        #else
+        guard let window = NSApp.keyWindow, let responder = window.firstResponder, responder is NSText else { return false }
+        NSApp.sendAction(#selector(NSResponder.cancelOperation(_:)), to: nil, from: nil)
+        return true
+        #endif
+    }
+}
+
+#if os(iOS)
+@MainActor
+private enum FirstResponderProbe {
+    static weak var found: UIResponder?
+}
+
+extension UIResponder {
+    /// Sent down the responder chain from nil: the first responder answers.
+    @objc fileprivate func paneProbeFirstResponder(_ sender: Any?) {
+        FirstResponderProbe.found = self
+    }
+}
+#endif

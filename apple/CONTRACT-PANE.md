@@ -73,7 +73,7 @@ public enum PanePlacement: Equatable, Sendable {
 ```
 
 `resolve` rules: a reported display feature (hinge) wins. Without one, until iOS exposes the Duo's hinge: phone idiom
-and width >= 700 is `twoScreens(.vertical, width/2)`; phone idiom, width >= 600 and height > width is
+and width >= 700 and height >= 560 is `twoScreens(.vertical, width/2)` (an iPhone in landscape, 874 x 402 or 956 x 440, stays `compact`); phone idiom, width >= 600 and height > width is
 `twoScreens(.horizontal, height/2)`; pad or mac and width >= 900 is `column(440 / 400)`; else `compact`. Keep this the
 only place that knows device sizes (today's `Spread.minWidth` checks die with the old code).
 
@@ -126,7 +126,7 @@ PanePage(title:, subtitle:, actions: [PaneAction] /* <= 2 icon buttons */) {
 
 | area | item(s) | span shows | bar | replaces today's |
 |---|---|---|---|---|
-| library | `post`, `peek`, `selection` | the post across both screens | no | `LibraryInspector` (`.inspector`), `library-peek` pane, select pill pane, `LibrarySelectPill` spreadSheets |
+| library | `post`, `peek`, `selection` | the post across both screens | no | on the iPhone and a folded Duo too (Harmony, 2026-11-23: pane everywhere; the zoom push goes, a hold previews and opens the pane on release) · `LibraryInspector` (`.inspector`), `library-peek` pane, select pill pane, `LibrarySelectPill` spreadSheets |
 | home (save) | `post`, `save` | post | save while running | `.inspector` `InspectorColumn` |
 | links | `link`, `collection` | gallery files across both | no | `DetailSplit` in LinksScreen |
 | 7tv | `emote`, `emoteAddToSet` | emote + variants | no | `spreadSheet` add-to-set (login stays a sheet) |

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The pane's big buttons (Harmony, 2026-11-23): a 2×2 grid, each about 96 pt tall, a large icon top-leading and a bold
+/// The pane's big buttons (Harmony, 2026-11-23): a 2×2 grid (one action fills the row; three are two on top and one
+/// full width below), each about 96 pt tall, a large icon top-leading and a bold
 /// label bottom-leading on filled glass. Up to four; pass the rest to `PanePage(more:)`. At accessibility text sizes the
 /// grid becomes a list of full-width rows, so the labels never clip.
 struct PaneActionGrid: View {
@@ -24,12 +25,22 @@ struct PaneActionGrid: View {
                 }
             }
         } else {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                ForEach(actions) { action in
-                    button(action) { PaneActionTile(action: action) }
+            // rows of two; an odd one out takes the whole row (1: full width; 3: two on top, one below), so no hole
+            VStack(spacing: 10) {
+                ForEach(Self.rows(actions.count), id: \.self) { row in
+                    HStack(spacing: 10) {
+                        ForEach(row, id: \.self) { index in
+                            button(actions[index]) { PaneActionTile(action: actions[index]) }
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// The grid's rows as indices: pairs, with an odd last one alone on its row.
+    static func rows(_ count: Int) -> [[Int]] {
+        stride(from: 0, to: count, by: 2).map { start in Array(start..<min(start + 2, count)) }
     }
 
     private func button(_ action: PaneAction, @ViewBuilder label: () -> some View) -> some View {

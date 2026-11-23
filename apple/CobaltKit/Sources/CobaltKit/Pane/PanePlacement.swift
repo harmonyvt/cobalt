@@ -29,8 +29,12 @@ public enum PanePlacement: Equatable, Sendable {
     public static let padColumn: CGFloat = 440
     /// The Mac column's width (pt), after the sidebar.
     public static let macColumn: CGFloat = 400
-    /// A phone this wide (or wider) is two screens side by side (until iOS reports the Duo's hinge).
+    /// A phone this wide (or wider) and `phoneWideMinHeight` high is two screens side by side (until iOS reports the
+    /// Duo's hinge).
     public static let phoneWideMin: CGFloat = 700
+    /// ...and this high: the Duo open wide is about 951 x 669, while every one-screen iPhone in landscape is far lower
+    /// (iPhone 17 Pro 874 x 402, Pro Max 956 x 440), so a rotated iPhone stays compact.
+    public static let phoneWideMinHeight: CGFloat = 560
     /// A phone this wide (or wider) and taller than it is wide is two screens one above the other.
     public static let phoneTallMin: CGFloat = 600
     /// An iPad or Mac window this wide (or wider) gets the column; narrower is compact.
@@ -39,8 +43,9 @@ public enum PanePlacement: Equatable, Sendable {
     /// Resolves the placement for a window of `size`.
     ///
     /// A reported display feature (a hinge, in the window's coordinates) wins: a feature taller than it is wide is a
-    /// vertical hinge at its mid x, otherwise a horizontal one at its mid y. Without one: a phone `phoneWideMin` wide is
-    /// two screens side by side (hinge at half the width); a phone `phoneTallMin` wide and taller than wide is two screens
+    /// vertical hinge at its mid x, otherwise a horizontal one at its mid y. Without one: a phone `phoneWideMin` wide and
+    /// `phoneWideMinHeight` high (a real two-screen shape, not a phone on its side) is two screens side by side (hinge
+    /// at half the width); a phone `phoneTallMin` wide and taller than wide is two screens
     /// one above the other (hinge at half the height); an iPad or a Mac `columnMin` wide gets the column (440 / 400);
     /// anything else is compact.
     public static func resolve(size: CGSize, idiom: Idiom, displayFeatureFrame: CGRect?) -> PanePlacement {
@@ -51,7 +56,7 @@ public enum PanePlacement: Equatable, Sendable {
         }
         switch idiom {
         case .phone:
-            if size.width >= phoneWideMin { return .twoScreens(axis: .vertical, hinge: size.width / 2) }
+            if size.width >= phoneWideMin, size.height >= phoneWideMinHeight { return .twoScreens(axis: .vertical, hinge: size.width / 2) }
             if size.width >= phoneTallMin, size.height > size.width { return .twoScreens(axis: .horizontal, hinge: size.height / 2) }
             return .compact
         case .pad:

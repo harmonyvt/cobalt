@@ -57,6 +57,20 @@ private struct ShapeHost<Content: View>: View {
     }
 }
 
+#Preview("action grid · 1, 2, 3 and 4", traits: .fixedLayout(width: 440, height: 900)) {
+    let all = [
+        PaneAction("copy link", systemImage: "link") {}, PaneAction("make webp", systemImage: "photo.stack") {},
+        PaneAction("edit", systemImage: "scissors") {}, PaneAction("save to photos", systemImage: "square.and.arrow.down") {},
+    ]
+    ScrollView {
+        VStack(spacing: 24) {
+            ForEach(1...4, id: \.self) { n in PaneActionGrid(Array(all.prefix(n))) }
+        }
+        .padding(16)
+    }
+    .background(CobaltColor.bg)
+}
+
 #Preview("page · tall", traits: .fixedLayout(width: 440, height: 900)) {
     ShapeHost(shape: .tall) { SamplePage() }
 }

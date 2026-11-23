@@ -88,9 +88,10 @@ struct AppShell: View {
     }
 
     /// The tier of one column: the room the tab keeps beside the screen pane (a screen laid out for the whole width in
-    /// half of it opened the library's inspector over its own grid), else the window's.
+    /// half of it opened the library's inspector over its own grid), else the window's. The pane measures its own host,
+    /// so on the Mac this is the detail area less the column, not the window less it (the sidebar is not the tab's).
     private var columnTier: Tier {
-        if width > 0, let tabWidth = pane.tabWidth(of: width) { return Tier(width: tabWidth) }
+        if let tabWidth = pane.tabWidth { return Tier(width: tabWidth) }
         return tier
     }
 
@@ -160,9 +161,11 @@ struct AppShell: View {
                 // the picker's asset id rides with the file, so the upload joins the cobalt album as that asset
                 photoImport.load(item, into: model) { [id = item.itemIdentifier] in intake($0, photosAssetID: id) }
             }
+            // the shell's own sheets wear `coversPane`: a pane opened under one waits for it to go (one narrow screen)
             .sheet(item: $titleSheet) { sheet in
                 TitleSheet(pipeline: sheet.pipeline, defaultTitle: sheet.request.defaultTitle) { titleSheet = nil }
                     .cobaltRoot(model: model)
+                    .coversPane(pane)
             }
             .sheet(item: $review) { request in
                 PasteReviewSheet(request: request) {
@@ -171,6 +174,12 @@ struct AppShell: View {
                     finishReview(request, saving: urls)
                 }
                 .cobaltRoot(model: model)
+                .coversPane(pane)
+            }
+            // deep links and Shortcuts that open a single item (`AppModel.openInPane`): this window's pane opens it
+            .onChange(of: model.paneRequest, initial: true) { _, request in
+                guard request != nil, let item = model.takePaneRequest() else { return }
+                pane.open(item)
             }
             .onAppear { consumeMenuBarHandoff() }
             .onChange(of: MenuBarHandoff.shared.token) { _, _ in consumeMenuBarHandoff() }
@@ -197,6 +206,7 @@ struct AppShell: View {
                 .cobaltRoot(model: model)
                 .transformEnvironment(\.dynamicTypeSize) { if DetailDebug.ax5 { $0 = .accessibility5 } }
                 .environment(\.shell, actions)
+                .coversPane(pane)
             }
             #else
             .sheet(item: $debugDetail) { item in
@@ -473,6 +483,8 @@ struct AppShell: View {
         .presentationDetents([.large])
         .cobaltRoot(model: model)
         .environment(\.shell, actions)
+        // a job opened from here closes the queue first: the pane sheet waits for this one to finish going
+        .coversPane(pane)
     }
     #endif
 

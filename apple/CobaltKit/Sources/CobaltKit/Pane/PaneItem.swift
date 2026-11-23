@@ -60,6 +60,12 @@ public enum PaneItem: Hashable, Codable, Sendable {
         }
     }
 
+    /// Who keeps the one bar when two running items want it (`PaneMachine`): a stream stops without its page, so it
+    /// outranks the rest (a job, a save, a swarm or the studio keep running wherever they run; only their bar goes).
+    public var barRank: Int {
+        if case .stream = self { 1 } else { 0 }
+    }
+
     /// The item's kind, a stable short word: the saved route's key, analytics (never ids), placeholders.
     public var kind: String {
         switch self {

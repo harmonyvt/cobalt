@@ -37,6 +37,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
     @Environment(\.paneHeaderHeight) private var headerHeight
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(Pane.self) private var pane: Pane?
+    @Environment(\.paneItem) private var paneItem
 
     init(
         title: String, subtitle: String? = nil, actions: [PaneAction] = [], more: [PaneAction] = [],
@@ -65,7 +66,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
             }
         }
         .preference(key: PaneMoreKey.self, value: more)
-        .onChange(of: title, initial: true) { pane?.reportTitle(title) }
+        .onChange(of: title, initial: true) { pane?.reportTitle(title, for: paneItem) }
     }
 
     // MARK: shapes
@@ -253,6 +254,7 @@ private struct PaneShelf<Cards: View>: View {
     let stacked: Bool
     let cards: Cards
     @Environment(Pane.self) private var pane: Pane?
+    @Environment(\.paneItem) private var paneItem
 
     init(stacked: Bool, @ViewBuilder cards: () -> Cards) {
         self.stacked = stacked
@@ -270,7 +272,7 @@ private struct PaneShelf<Cards: View>: View {
                         pager(parts)
                     }
                 }
-                .onChange(of: parts.count, initial: true) { _, count in pane?.reportShelf(count: count) }
+                .onChange(of: parts.count, initial: true) { _, count in pane?.reportShelf(count: count, for: paneItem) }
             }
         }
     }

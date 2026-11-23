@@ -17,6 +17,12 @@ import UIKit
 /// from the leading (top) edge with the `Motion` spring, or cross-fades under Reduce Motion. The route is saved per
 /// scene with `@SceneStorage("pane")`. A drag held 0.6 s over the leading edge of a hidden pane brings its last item
 /// back. The bar is `PaneBarAccessory` (applied to the tab view on iOS, here on the Mac).
+///
+/// What a page keeps across shape changes: inline, screen <-> span keeps the page's view (only `\.paneShape` changes, and
+/// `PanePage` lays its hero out anew). Inline <-> compact (a rotation, a resize, folding) and, on one narrow screen,
+/// sheet <-> cover are different presentations, so SwiftUI rebuilds the page there; one page at a time is drawn (a
+/// stream never plays twice). Whatever must outlive that (a player and its playhead, a chat connection) lives in
+/// `pane.keepAlive(_:for:make:)`, which keeps it while the pane holds the item, whatever it is drawn in.
 struct PaneHost<Content: View>: View {
     let model: AppModel
     /// A drag is over the window (the shell's drop target): the leading edge listens for a held drag.
@@ -78,7 +84,10 @@ struct PaneHost<Content: View>: View {
         .hapticChange(.impact(weight: .light), trigger: inline ? placement.name : "off") { old, new in
             old != "off" && new != "off"                    // a posture change settling the pane somewhere new
         }
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: {
+            size = $0
+            pane.measure($0)
+        }
         .onChange(of: placement, initial: true) { _, now in if measured { pane.place(now) } }
         .onAppear {
             #if DEBUG
@@ -134,13 +143,16 @@ struct PaneHost<Content: View>: View {
 
     // MARK: compact
 
+    /// The compact sheet is up while the pane is visible on one narrow screen, and no other sheet is (`.coversPane`): a
+    /// pane opened while the queue, a paste review or a title sheet is up waits for it to finish going, then presents,
+    /// so the pane is never `screen` with nothing on screen.
     private var sheetShown: Binding<Bool> {
         Binding(
-            get: { measured && placement == .compact && pane.isVisible },
+            get: { measured && placement == .compact && pane.isVisible && !pane.isCovered },
             set: { shown in
                 // swiped down: hide (a running item goes to the bar). A posture change that took the sheet away is not
-                // a close: the pane is drawn inline now.
-                if !shown, pane.isVisible, placement == .compact { pane.close() }
+                // a close (the pane is drawn inline now), nor is another sheet coming up over the window.
+                if !shown, pane.isVisible, placement == .compact, !pane.isCovered { pane.close() }
             })
     }
 
@@ -208,11 +220,14 @@ private struct PaneCompactSheet: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+        // a pushed editor with unsaved changes (`.paneHoldsClose`): no swipe down
+        .interactiveDismissDisabled(pane.holdsClose)
         #if os(iOS)
         .fullScreenCover(isPresented: coverShown) {
             PaneCover(model: model)
                 .environment(pane)
                 .cobaltRoot(model: model)
+                .interactiveDismissDisabled(pane.holdsClose)
         }
         #endif
     }

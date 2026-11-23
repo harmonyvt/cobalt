@@ -10,11 +10,13 @@ import Testing
     }
 
     @Test func duoOpenWideIsTwoScreensSideBySide() {
-        #expect(resolve(734, 540, .phone) == .twoScreens(axis: .vertical, hinge: 367))
+        #expect(resolve(951, 669, .phone) == .twoScreens(axis: .vertical, hinge: 475.5))   // the Duo open wide
+        #expect(resolve(951, 609, .phone) == .twoScreens(axis: .vertical, hinge: 475.5))   // less its safe areas
         #expect(resolve(1080, 800, .phone) == .twoScreens(axis: .vertical, hinge: 540))
     }
 
     @Test func duoOpenTallIsTwoScreensStacked() {
+        #expect(resolve(669, 951, .phone) == .twoScreens(axis: .horizontal, hinge: 475.5))  // the Duo open tall
         #expect(resolve(640, 900, .phone) == .twoScreens(axis: .horizontal, hinge: 450))
         // 600 wide is the threshold; a square or landscape window that narrow is not tall
         #expect(resolve(600, 601, .phone) == .twoScreens(axis: .horizontal, hinge: 300.5))
@@ -29,10 +31,18 @@ import Testing
     }
 
     @Test func phoneWideThreshold() {
-        #expect(resolve(700, 400, .phone) == .twoScreens(axis: .vertical, hinge: 350))
-        #expect(resolve(699, 400, .phone) == .compact)
-        // a big phone in landscape is wide enough to count as two screens (the same 700 pt rule the spreads used)
-        #expect(resolve(874, 402, .phone) == .twoScreens(axis: .vertical, hinge: 437))
+        #expect(resolve(700, 560, .phone) == .twoScreens(axis: .vertical, hinge: 350))
+        #expect(resolve(699, 560, .phone) == .compact)
+        #expect(resolve(700, 559, .phone) == .compact)
+    }
+
+    /// Every one-screen iPhone on its side is wide but low: compact (a sheet), never split down the middle.
+    @Test func iPhoneLandscapeIsCompact() {
+        #expect(resolve(874, 402, .phone) == .compact)          // iPhone 17 Pro landscape
+        #expect(resolve(956, 440, .phone) == .compact)          // iPhone 17 Pro Max landscape
+        #expect(resolve(754, 381, .phone) == .compact)          // 17 Pro landscape less its safe areas
+        #expect(resolve(852, 393, .phone) == .compact)          // a smaller Pro
+        #expect(resolve(667, 375, .phone) == .compact)          // a small phone
     }
 
     @Test func iPadGetsTheColumnFrom900() {
