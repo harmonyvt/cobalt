@@ -1,18 +1,173 @@
 import CobaltKit
 import SwiftUI
 
-// The name screen (APP-API-CONTRACT 48.6; mockup search-names/mockup.html): the word and its "also called" chips, what it
-// means, a "this is Lia" strip and a "not Lia" strip of pictures, "listen to: the words … the examples" (strength),
+// The name page (APP-API-CONTRACT 48.6; mockup search-names/mockup.html), in the screen pane: the word and its "also called"
+// chips, what it means, a "this is Lia" strip and a "not Lia" strip of pictures, "listen to: the words … the examples" (strength),
 // "cut-off: more posts … stricter", and "who's in": the preview's posts with a dashed cut-off line between those that carry
 // the name and those that don't; a tap cycles a post through example, not and no mark. Slider and mark changes re-run the
 // preview after 300 ms (`SearchNameEditor`); save writes it. "try a search" runs a query with and without names.
+//
+// The editor is the model's (`SearchNamesModel.editor`), so the page can be rebuilt for another shape (beside the tab,
+// spanned) without losing a draft. The names list opens a name with `NamePane.open`; the page reads the editor, and opens
+// the name by id itself when it is not there (a restored pane, a link). A name not made yet is `NamePane.newID`.
 
-struct NameEditorScreen: View {
+/// How a name gets into the pane.
+@MainActor
+enum NamePane {
+    /// The pane item for a name that has no id yet ("new name…").
+    static let newID = "new"
+
+    /// Opens a saved name from the list: the editor first (it is the model's), then the pane.
+    static func open(_ name: TaughtName, model: AppModel, pane: Pane?) {
+        let names = model.searchNames
+        if names.editor?.saved?.id != name.id { names.open(name) }
+        names.showingList = false
+        pane?.open(.name(name.id))
+    }
+
+    /// A new name, with `example` as its first example when it comes from a post's menu.
+    static func startNew(example: String? = nil, model: AppModel, pane: Pane?) {
+        let names = model.searchNames
+        names.startNew(example: example)
+        names.showingList = false
+        pane?.open(.name(newID))
+    }
+}
+
+/// A saved or new name in the pane. The title is the word as it is typed; the one big button is save, the rest of the
+/// editor is the body (a form drawn as cards, since a form would scroll inside the pane's own scrolling).
+struct NamePage: View {
+    let id: String
+    let model: AppModel
+
+    @Environment(Pane.self) private var pane
+    @Environment(\.paneShape) private var shape
+    @Environment(\.paneHeaderHeight) private var headerHeight
+    @State private var failed = false
+    @State private var confirmingDelete = false
+
+    private var names: SearchNamesModel { model.searchNames }
+    private var item: PaneItem { .name(id) }
+    private var isNew: Bool { id == NamePane.newID }
+
+    /// The editor for this page's name, once the model holds it.
+    private var editor: SearchNameEditor? {
+        guard let editor = names.editor else { return nil }
+        if isNew { return editor.isNew ? editor : nil }
+        return editor.saved?.id == id ? editor : nil
+    }
+
+    var body: some View {
+        Group {
+            if let editor {
+                page(editor)
+            } else if failed {
+                PaneGonePage()
+            } else {
+                PaneLoadingPage()
+            }
+        }
+        // again when the model's editor goes (closed from elsewhere) so the page never waits for one that is not coming
+        .task(id: NameTaskKey(id: id, hasEditor: names.editor != nil)) { await open() }
+        .paneKeeps(item) {
+            if names.editor === editor { names.closeEditor() }
+        }
+    }
+
+    /// Makes the model's editor this name's: a name opened from the list already is; a restored pane or a link opens it.
+    private func open() async {
+        failed = false
+        if isNew {
+            if names.editor?.isNew != true { names.startNew() }
+        } else if names.editor?.saved?.id != id {
+            if !(await names.open(id: id)) { failed = true }
+        }
+        names.showingList = false
+    }
+
+    private struct NameTaskKey: Hashable {
+        let id: String
+        let hasEditor: Bool
+    }
+
+    private func page(_ editor: SearchNameEditor) -> some View {
+        PanePage(
+            title: editor.isNew ? Copy.Names.newTitle : Copy.Names.display(editor.draft.name),
+            subtitle: editor.saved.map(Copy.Names.summary),
+            more: editor.isNew ? [] : [
+                PaneAction(Copy.Names.delete, systemImage: Symbol.Names.delete, role: .destructive, needsServer: true) {
+                    confirmingDelete = true
+                },
+            ]
+        ) {
+            hero(editor)
+        } controls: {
+            saveControls(editor)
+        } body: {
+            NameEditorSections(model: model, editor: editor)
+                .padding(.horizontal, 16)
+        }
+        .modifier(NameEditorEvents(editor: editor))
+        .confirmationDialog(Copy.Names.delete, isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button(Copy.Names.delete, role: .destructive) {
+                guard let saved = editor.saved else { return }
+                Task {
+                    await names.delete(saved)
+                    pane.close()
+                }
+            }
+        }
+    }
+
+    /// The name's example pictures, fanned, over a quiet field (nothing in a bar: a name is never running).
+    private func hero(_ editor: SearchNameEditor) -> some View {
+        let keys = Array(editor.posts(marked: .yes).prefix(6).map(\.key))
+        return ZStack {
+            CobaltColor.surface
+            NameStack(model: model, keys: keys)
+                .scaleEffect(1.5)
+        }
+        .frame(height: 120)
+        .padding(.top, shape == .tall ? headerHeight : 0)
+        .background(CobaltColor.surface)
+    }
+
+    /// Save, with the model's own problem line (what the old save bar said).
+    private func saveControls(_ editor: SearchNameEditor) -> some View {
+        VStack(spacing: 6) {
+            if let problem = editor.saveProblem {
+                Text(Copy.Names.problem(problem))
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(CobaltColor.errorText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
+            }
+            Button {
+                Task { await editor.save() }
+            } label: {
+                Text(saveLabel(editor))
+            }
+            .buttonStyle(.cobaltPrimary())
+            .disabled(!editor.canSave)
+        }
+        .motion(Motion.rows, value: editor.saveProblem)
+    }
+
+    private func saveLabel(_ editor: SearchNameEditor) -> String {
+        if editor.isSaving { return Copy.Names.saving }
+        if !editor.isDirty { return Copy.Names.saved }
+        return Copy.Names.save(editor.draft.trimmedName)
+    }
+}
+
+/// The sections of the editor, one card each (what the name screen's form held).
+private struct NameEditorSections: View {
     let model: AppModel
     @Bindable var editor: SearchNameEditor
 
     var body: some View {
-        Form {
+        VStack(alignment: .leading, spacing: 16) {
             NameWordsSection(editor: editor)
             NameMeaningSection(editor: editor)
             NameStripsSection(model: model, editor: editor)
@@ -20,19 +175,50 @@ struct NameEditorScreen: View {
             NameWhosInSection(model: model, editor: editor)
             NameTrySearchSection(model: model, editor: editor)
         }
-        .formStyle(.grouped)
         .font(CobaltType.body)
-        .navigationTitle(editor.isNew ? Copy.Names.newTitle : Copy.Names.display(editor.draft.name))
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .sheetCorner()
-        .safeAreaInset(edge: .bottom, spacing: 0) { NameSaveBar(editor: editor) }
-        .modifier(NameEditorEvents(editor: editor))
     }
 }
 
-/// The preview follows the draft; a save, a mark and a refusal are felt.
+/// A titled card: what a form's section was.
+private struct NameBlock<Header: View, Content: View, Footer: View>: View {
+    let header: Header
+    let content: Content
+    let footer: Footer
+
+    init(@ViewBuilder header: () -> Header, @ViewBuilder content: () -> Content, @ViewBuilder footer: () -> Footer) {
+        self.header = header()
+        self.content = content()
+        self.footer = footer()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            header.padding(.horizontal, 4)
+            VStack(alignment: .leading, spacing: 12) { content }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(CobaltColor.surface, in: .rect(cornerRadius: 20))
+            footer.padding(.horizontal, 4)
+        }
+    }
+}
+
+extension NameBlock where Header == EmptyView, Footer == EmptyView {
+    init(@ViewBuilder content: () -> Content) {
+        self.init(header: { EmptyView() }, content: content, footer: { EmptyView() })
+    }
+}
+
+extension NameBlock where Header == Text, Footer == EmptyView {
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.init(
+            header: { Text(title).font(CobaltType.caption).foregroundStyle(CobaltColor.caption) },
+            content: content, footer: { EmptyView() })
+    }
+}
+
+/// The preview follows the draft; a save, a mark and a refusal are felt. (Its pending read stops when the pane lets the
+/// editor go, not when a page is rebuilt for another shape.)
 private struct NameEditorEvents: ViewModifier {
     let editor: SearchNameEditor
 
@@ -40,7 +226,6 @@ private struct NameEditorEvents: ViewModifier {
         content
             .task { editor.start() }
             .onChange(of: editor.draft) { editor.draftChanged() }
-            .onDisappear { editor.cancel() }
             .haptic(.success, trigger: editor.savedTick)
             .haptic(.selection, trigger: editor.draft.yes.count + editor.draft.no.count * 1_000)
             .haptic(.error, trigger: editor.saveProblem) { $0 != nil }
@@ -56,7 +241,7 @@ private struct NameWordsSection: View {
     @FocusState private var aliasFocused: Bool
 
     var body: some View {
-        Section {
+        NameBlock(Copy.Names.alsoCalled) {
             TextField(Copy.Names.namePlaceholder, text: $editor.draft.name)
                 .font(Font.cobalt(22, .semibold, relativeTo: .title2))
                 .autocorrectionDisabled()
@@ -71,8 +256,6 @@ private struct NameWordsSection: View {
                 if editor.draft.aliases.count < TaughtName.maxAliases { aliasControl }
             }
             .padding(.vertical, 2)
-        } header: {
-            Text(Copy.Names.alsoCalled).font(CobaltType.caption).textCase(nil)
         }
     }
 
@@ -119,7 +302,7 @@ private struct NameMeaningSection: View {
     @Bindable var editor: SearchNameEditor
 
     var body: some View {
-        Section {
+        NameBlock(Copy.Names.means) {
             TextField(Copy.Names.meaningPlaceholder, text: $editor.draft.meaning, axis: .vertical)
                 .lineLimit(2...6)
                 .accessibilityLabel(Copy.Names.meaningA11y)
@@ -134,8 +317,6 @@ private struct NameMeaningSection: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        } header: {
-            Text(Copy.Names.means).font(CobaltType.caption).textCase(nil)
         }
     }
 }
@@ -147,7 +328,7 @@ private struct NameStripsSection: View {
     let editor: SearchNameEditor
 
     var body: some View {
-        Section {
+        NameBlock {
             strip(.yes)
             strip(.no)
         }
@@ -222,7 +403,7 @@ private struct NameDialsSection: View {
     @Bindable var editor: SearchNameEditor
 
     var body: some View {
-        Section {
+        NameBlock {
             NameDial(
                 title: Copy.Names.listenTo(editor.draft.strength), value: $editor.draft.strength, range: 0...1,
                 low: Copy.Names.theWords, high: Copy.Names.theExamples, a11y: Copy.Names.strengthA11y,
@@ -279,7 +460,7 @@ private struct NameWhosInSection: View {
     let editor: SearchNameEditor
 
     var body: some View {
-        Section {
+        NameBlock(header: { header }) {
             if let preview = editor.preview {
                 ForEach(editor.carrying) { entry in row(entry) }
                 if !editor.carrying.isEmpty, !editor.notCarrying.isEmpty { NameCutLine() }
@@ -305,8 +486,8 @@ private struct NameWhosInSection: View {
                     .buttonStyle(.cobaltIcon(.small))
                 }
             }
-        } header: {
-            header
+        } footer: {
+            EmptyView()
         }
     }
 
@@ -314,10 +495,10 @@ private struct NameWhosInSection: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Text(Copy.Names.whosIn(editor.preview?.carries ?? editor.carrying.count))
-                    .font(CobaltType.caption).textCase(nil).monospacedDigit()
+                    .font(CobaltType.caption).foregroundStyle(CobaltColor.caption).monospacedDigit()
                 if editor.isPreviewing, editor.preview != nil { ProgressView().controlSize(.mini) }
             }
-            Text(Copy.Names.whosInHint).font(CobaltType.captionSmall).textCase(nil).foregroundStyle(.secondary)
+            Text(Copy.Names.whosInHint).font(CobaltType.captionSmall).foregroundStyle(.secondary)
         }
     }
 
@@ -426,7 +607,9 @@ private struct NameTrySearchSection: View {
     @State private var query = ""
 
     var body: some View {
-        Section {
+        NameBlock(header: {
+            Text(Copy.Names.trySearch).font(CobaltType.caption).foregroundStyle(CobaltColor.caption)
+        }) {
             HStack(spacing: 8) {
                 TextField(Copy.Names.tryPlaceholder, text: $query)
                     .autocorrectionDisabled()
@@ -450,10 +633,8 @@ private struct NameTrySearchSection: View {
             if editor.compareFailed {
                 Text(Copy.Names.tryFailed).font(CobaltType.captionSmall).foregroundStyle(CobaltColor.errorText)
             }
-        } header: {
-            Text(Copy.Names.trySearch).font(CobaltType.caption).textCase(nil)
         } footer: {
-            Text(Copy.Names.tryHint).font(CobaltType.captionSmall)
+            Text(Copy.Names.tryHint).font(CobaltType.captionSmall).foregroundStyle(.secondary)
         }
         .onAppear { if query.isEmpty { query = suggested } }
     }
@@ -491,61 +672,31 @@ private struct NameTryColumn: View {
     }
 }
 
-// MARK: - save
-
-private struct NameSaveBar: View {
-    let editor: SearchNameEditor
-
-    var body: some View {
-        VStack(spacing: 6) {
-            if let problem = editor.saveProblem {
-                Text(Copy.Names.problem(problem))
-                    .font(CobaltType.captionSmall)
-                    .foregroundStyle(CobaltColor.errorText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.opacity)
-            }
-            Button {
-                Task { await editor.save() }
-            } label: {
-                Text(label)
-            }
-            .buttonStyle(.cobaltPrimary())
-            .disabled(!editor.canSave)
-        }
-        .padding(.horizontal, Metrics.gutter)
-        .padding(.top, 8)
-        .padding(.bottom, 10)
-        .background(.bar)
-        .motion(Motion.rows, value: editor.saveProblem)
-    }
-
-    private var label: String {
-        if editor.isSaving { return Copy.Names.saving }
-        if !editor.isDirty { return Copy.Names.saved }
-        return Copy.Names.save(editor.draft.trimmedName)
-    }
-}
-
 #if DEBUG
 @MainActor
-private struct NameEditorPreview: View {
+private struct NamePageHost: View {
+    let shape: PaneShape
+    var hinge: PaneHinge?
     @State private var model = AppModel.previewNames()
 
     var body: some View {
-        NavigationStack {
-            if let editor = model.searchNames.editor {
-                NameEditorScreen(model: model, editor: editor)
-            } else {
-                ProgressView()
-            }
+        AreaPageHost(item: .name("PrEvIeWname00001"), shape: shape, hinge: hinge) {
+            NamePage(id: "PrEvIeWname00001", model: model)
         }
-        .task { _ = await model.searchNames.open(id: "PrEvIeWname00001") }
+        .cobaltRoot(model: model)
     }
 }
 
-#Preview("names · Lia") {
-    NameEditorPreview()
+#Preview("names · Lia", traits: .fixedLayout(width: 440, height: 900)) {
+    NamePageHost(shape: .tall)
+}
+#Preview("names · Lia, AX3", traits: .fixedLayout(width: 440, height: 1100)) {
+    NamePageHost(shape: .tall).dynamicTypeSize(.accessibility3)
+}
+#Preview("names · Lia, wide", traits: .fixedLayout(width: 1000, height: 600)) {
+    NamePageHost(shape: .wide)
+}
+#Preview("names · Lia, spanned", traits: .fixedLayout(width: 1080, height: 800)) {
+    NamePageHost(shape: .split(.media), hinge: PaneHinge(axis: .vertical, position: 540))
 }
 #endif

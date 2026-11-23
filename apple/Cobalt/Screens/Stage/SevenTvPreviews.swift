@@ -4,7 +4,7 @@ import SwiftUI
 
 // `#Preview`s of 7TV in the studio tab on the preview server (`PreviewSevenTv.swift`): the card linked (three channels, five
 // days left), not linked (`.stageNotConnected`) and signed out by 7TV (`.renditions`); the set screen on both tabs; the link
-// sheet; the emote sheet. Emote pictures come from 7TV's CDN, so they stay blank in a canvas without network.
+// sheet. The emote page and the add-to-set page (the pane's) are previewed in `PaneDestination+SevenTvStudioBooru.swift`. Emote pictures come from 7TV's CDN, so they stay blank in a canvas without network.
 
 @MainActor
 private func card(_ model: AppModel) -> some View {
@@ -71,48 +71,9 @@ private struct LoadedSevenTv<Content: View>: View {
         }
     }
 }
-#Preview("7tv set · variants (held, renamed)", traits: .fixedLayout(width: 390, height: 600)) {
-    PreviewHost(.happy, tab: .stage) { model in
-        LoadedSevenTv(model: model) { model, route in
-            SevenTvVariantsSheet(
-                variants: SevenTvVariantsModel(
-                emote: SevenTvSetItem(
-                    emoteID: "01F6MQ33FG000FFJ97ZB8MWV52", alias: "vibe", name: "catJAM", animated: true,
-                    previewURL: URL(string: "https://cdn.7tv.app/emote/01F6MQ33FG000FFJ97ZB8MWV52/2x.webp"), fileURL: nil)
-            ) { name, page in
-                try await model.library.emoteVariants(name: name, page: page)
-            },
-                emoteSet: model.sevenTv.openSet(route.setID, channelID: route.channelID))
-        }
-    }
-}
 #Preview("7tv · link sheet", traits: .fixedLayout(width: 390, height: 760)) {
     PreviewHost(.stageNotConnected, tab: .stage) { model in
         SevenTvLinkSheet(store: model.sevenTv)
-    }
-}
-
-/// The emote sheet for the second emote of `main` (peepoHey, renamed liaWave).
-private struct LoadedEmote: View {
-    let model: AppModel
-    let route: SevenTvSetRoute
-    @State private var emoteSet: SevenTvSetModel?
-
-    var body: some View {
-        Group {
-            if let emoteSet, emoteSet.all.count > 1 { SevenTvEmoteSheet(emoteSet: emoteSet, emote: emoteSet.all[1]) } else { Color.clear }
-        }
-        .task {
-            let emoteSet = model.sevenTv.openSet(route.setID, channelID: route.channelID)
-            await emoteSet.load()
-            self.emoteSet = emoteSet
-        }
-    }
-}
-
-#Preview("7tv · emote sheet", traits: .fixedLayout(width: 390, height: 360)) {
-    PreviewHost(.happy, tab: .stage) { model in
-        LoadedSevenTv(model: model) { model, route in LoadedEmote(model: model, route: route) }
     }
 }
 #endif

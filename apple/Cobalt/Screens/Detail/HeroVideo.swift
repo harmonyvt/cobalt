@@ -43,6 +43,14 @@ final class HeroVideo {
     /// The shape this clip was measured at earlier in this launch.
     static func knownShape(of url: URL) -> CGFloat? { shapes[url.absoluteString] }
 
+    /// The clip this hero was last told to play.
+    var loadedURL: URL? { url }
+
+    /// The player already holds `url` and is working on it or showing it (a page rebuilt around a kept hero).
+    func isPlaying(_ url: URL) -> Bool {
+        self.url == url && player != nil && !borrowed && (phase == .loading || phase == .ready)
+    }
+
     // MARK: starting
 
     /// Plays `url` muted and looping, from `start`.
@@ -197,6 +205,67 @@ final class HeroVideo {
     }
 }
 
+/// One post's player, its transport and its sound, kept by the screen pane across the page being rebuilt (sheet <->
+/// cover, column <-> sheet, tall <-> wide <-> split): the pane page puts it in the environment (`\.heroKept`) and the hero
+/// uses it in place of its own, so the clip keeps its playhead. The pane drops it when it lets go of the post
+/// (`paneReleased`); a hero view that goes without another taking its place within `grace` (a tab with no video) lets go
+/// of the player itself.
+@MainActor @Observable
+final class HeroKept: PaneKeptObject {
+    /// How long a hero may be gone before nobody is taken to be coming (the sheet and the cover are one presentation each).
+    static let grace: Duration = .seconds(1.5)
+
+    let video = HeroVideo()
+    let transport = HeroTransport()
+    var muted = true
+
+    /// Hero views on screen now (a rebuilt page may show the new one before the old one is gone).
+    @ObservationIgnored private var attached = 0
+    @ObservationIgnored private var letGo: Task<Void, Never>?
+
+    func attach() {
+        attached += 1
+        letGo?.cancel()
+        letGo = nil
+    }
+
+    func detach() {
+        attached = max(0, attached - 1)
+        guard attached == 0 else { return }
+        letGo?.cancel()
+        letGo = Task { [weak self] in
+            try? await Task.sleep(for: Self.grace)
+            guard !Task.isCancelled, let self, self.attached == 0 else { return }
+            self.stop()
+        }
+    }
+
+    /// Nothing shows the player: it stops, and the sound is given back.
+    func stop() {
+        letGo?.cancel()
+        letGo = nil
+        Breadcrumbs.add("video.leave", ["phase": .string(String(describing: video.phase)), "muted": .bool(muted), "kept": .bool(true)])
+        transport.detach()
+        video.stop()
+        if !muted { AudioPolicy.release() }
+        muted = true
+    }
+
+    func paneReleased() { stop() }
+}
+
+private struct HeroKeptKey: EnvironmentKey {
+    static var defaultValue: HeroKept? { nil }
+}
+
+extension EnvironmentValues {
+    /// The pane's kept player for the post this hero is in (nil outside a pane page: the hero makes its own).
+    var heroKept: HeroKept? {
+        get { self[HeroKeptKey.self] }
+        set { self[HeroKeptKey.self] = newValue }
+    }
+}
+
 /// The video hero: the picture at its real shape under the media controls, the poster until frames run, a retry when the
 /// clip will not play. Used for a file on this device and for a hosted or streamed clip alike.
 struct HeroVideoBox: View {
@@ -217,9 +286,11 @@ struct HeroVideoBox: View {
     /// The orbit's player for this planet, when it lent it.
     var lent: LentPlayer?
 
-    @State private var video = HeroVideo()
-    @State private var transport = HeroTransport()
-    @State private var muted = true
+    @State private var ownVideo = HeroVideo()
+    @State private var ownTransport = HeroTransport()
+    @State private var ownMuted = true
+    /// The pane's kept player (a post in the screen pane): used in place of this hero's own, so a rebuilt page plays on.
+    @Environment(\.heroKept) private var kept
     /// The orbit's short-loop player, shown while this hero's own one gets its first frames up (never played from here).
     @State private var bridge: AVPlayer?
     /// The clip's first frame, for a file on this device with no poster.
@@ -229,6 +300,13 @@ struct HeroVideoBox: View {
     @State private var wasPlaying = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.lifecycle) private var lifecycle
+
+    private var video: HeroVideo { kept?.video ?? ownVideo }
+    private var transport: HeroTransport { kept?.transport ?? ownTransport }
+    private var muted: Bool {
+        get { kept?.muted ?? ownMuted }
+        nonmutating set { if let kept { kept.muted = newValue } else { ownMuted = newValue } }
+    }
 
     /// The measured shape, else what this launch measured before, else the record's, else a landscape frame.
     private var shape: CGFloat {
@@ -278,7 +356,8 @@ struct HeroVideoBox: View {
         .onChange(of: video.phase) { _, phase in
             if phase == .ready || phase == .failed { Breadcrumbs.add("video.\(phase)") }
         }
-        .onDisappear { leave() }
+        .onAppear { kept?.attach() }
+        .onDisappear { if let kept { kept.detach() } else { leave() } }
         .onChange(of: lifecycle.isForeground) { _, onScreen in
             if onScreen { video.appBack() } else { appLeft() }
         }
@@ -342,6 +421,12 @@ struct HeroVideoBox: View {
 
     private func start() async {
         var resume = CMTime.zero
+        // a page rebuilt around the pane's kept player: the clip is already playing, from where it was
+        if kept != nil, video.isPlaying(url) {
+            Breadcrumbs.add("video.kept")
+            transport.attach(video.player)
+            return
+        }
         if let lent {
             if lent.wholeClip {
                 // the planet's own player, already over the whole clip: the picture is on screen now

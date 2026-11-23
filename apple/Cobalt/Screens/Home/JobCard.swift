@@ -348,7 +348,7 @@ struct JobCard: View {
 
 /// The card's detail line: real numbers only. Unlike the progress card's it may wrap to two lines ("2nd in line · after
 /// a share from your iphone"), the tray being narrow.
-private struct TrayDetail: View {
+struct TrayDetail: View {
     let detail: ProgressStory.Detail?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

@@ -64,4 +64,28 @@ import Testing
         #expect(store.pageLevel == .general)
         #expect(store.posts.allSatisfy { $0.rating == .general })
     }
+
+    @Test func levelShowsNoHigherThanAsked() {
+        #expect(BooruLevel.shows(.general, at: .general))
+        #expect(!BooruLevel.shows(.sensitive, at: .general))
+        #expect(BooruLevel.shows(.sensitive, at: .sensitive))
+        #expect(BooruLevel.shows(.general, at: .sensitive))
+        #expect(BooruLevel.shows(.sensitive, at: nil))
+    }
+
+    /// A post open in the pane is judged by the store, not the booru screen: safe mode lowers the level at once.
+    @MainActor @Test func storeStopsAllowingASensitivePostInSafeMode() async throws {
+        let model = AppModel.preview(.happy)
+        let store = model.booru
+        await store.load()
+        #expect(store.settings?.level == .sensitive)
+        let sensitive = try #require(store.posts.first { $0.rating == .sensitive })
+        let general = try #require(store.posts.first { $0.rating == .general })
+        #expect(store.allows(sensitive) && store.allows(general))
+        store.safeMode = true
+        #expect(!store.allows(sensitive))
+        #expect(store.allows(general))
+        store.safeMode = false
+        #expect(store.allows(sensitive))
+    }
 }

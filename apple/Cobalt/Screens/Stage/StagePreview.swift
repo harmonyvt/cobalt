@@ -11,7 +11,7 @@ struct StagePreviewCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            screen
+            StageCanvas(stage: stage)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Metrics.radius, style: .continuous))
                 .accessibilityElement(children: .ignore)
@@ -26,8 +26,14 @@ struct StagePreviewCard: View {
             .accessibilityHidden(true)
         }
     }
+}
 
-    private var screen: some View {
+/// The canvas itself: the preview page while on air, else the off-air card. The studio tab's preview and the hero of the
+/// reward and pool-video pages in the pane draw it.
+struct StageCanvas: View {
+    let stage: StageSettings
+
+    var body: some View {
         ZStack {
             Rectangle().fill(CobaltColor.frameBase)
             if stage.onAir {

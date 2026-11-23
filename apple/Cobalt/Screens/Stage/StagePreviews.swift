@@ -63,9 +63,4 @@ private struct LoadedStage<Content: View>: View {
         LoadedStage(model: model) { StagePickSheet(controller: StageController(model: $0)) }
     }
 }
-#Preview("edit reward", traits: .fixedLayout(width: 390, height: 460)) {
-    PreviewHost(.happy, tab: .stage) { model in
-        LoadedStage(model: model) { StageRewardSheet(controller: StageController(model: $0), kind: .summon) }
-    }
-}
 #endif

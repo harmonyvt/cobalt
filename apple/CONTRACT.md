@@ -1175,9 +1175,9 @@ source) frames, with the made file shown and remade on every change. Mockup scen
   `EmoteEditorTabs` (tab bar and controls), `EmoteEditorPreview` (faces, sizes 1x/2x/4x = 28/56/112 pt, chat lines, meter, ticks,
   `EmoteSeam`), `EmoteEditorSource` (the picture and a video's frames; one `EmotePlayback` for every picture), `EmoteEditorEntry`.
   Copy `Copy+EmoteEditor.swift`, symbols `Symbol.EmoteEditor`. Every picture wears `.mediaMask()`.
-- **Layout.** From `Spread.minWidth` (700 pt) of the editor's own width: the result, compare line, sizes, two chat lines and
+- **Layout.** From `EmoteEditorScreen.splitWidth` (700 pt) of the editor's own width: the result, compare line, sizes, two chat lines and
   the meter on one pane; tabs, controls, ticks and actions on the other; `EmoteSeam` between them glows while a remake runs
-  (`HingeSeam` is tied to `JobQueue`, so the seam is its own view). Narrower: preview on top, tab bar and one tab's controls
+  (the pane's `PaneSeam` is tied to `JobQueue`, so the editor's seam is its own view). Narrower: preview on top, tab bar and one tab's controls
   under it, actions at the bottom. The Mac uses the wide layout in a sheet of 820 to 1400 pt.
 - **Entry points.** "make an emote": the icon of a post's page (`EmoteEditorIcon` in `DetailActions`), the page's `more` menu
   (`DetailMenu`), the library's context menu (`LibraryMenus`, `LibraryController.makingEmote`), and a button on the 7tv upload

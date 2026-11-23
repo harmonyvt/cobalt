@@ -67,6 +67,8 @@ struct PhoneTabs<Screen: View>: View {
                 .badge(overflow.reduce(0) { $0 + badge($1) })
             }
         }
+        // a running item in the screen pane closes to a bar over the tabs (apple/CONTRACT-PANE.md; `PaneHost` wraps this)
+        .modifier(PaneBarAccessory(model: model))
         .onChange(of: selection) { _, slot in
             switch slot {
             case .tab(let tab): model.selectedTab = tab
@@ -94,22 +96,14 @@ struct PhoneTabs<Screen: View>: View {
 
     @ViewBuilder
     private func root(_ tab: AppTab) -> some View {
-        SpreadPaneColumn(active: selection == .tab(tab), queue: model.queue) {
-            if tab == .library {
-                screen(tab)
-            } else {
-                NavigationStack { screen(tab) }
-            }
+        if tab == .library {
+            screen(tab)
+        } else {
+            NavigationStack { screen(tab) }
         }
     }
 
     private var moreStack: some View {
-        SpreadPaneColumn(active: selection == .more, queue: model.queue) {
-            moreNavigation
-        }
-    }
-
-    private var moreNavigation: some View {
         NavigationStack(path: $path) {
             List(overflow, id: \.self) { tab in
                 NavigationLink(value: tab) {

@@ -2,30 +2,29 @@ import CobaltKit
 import SwiftUI
 
 // The swarms tab (CONTRACT-SWARMS 2, 3.1): a list in three groups, "waiting for you", "running" and "finished"; a row is the
-// name and one plain line, plus the score once the swarm has one. A tap opens the one swarm screen: pushed on iPhone (inside
-// "more"), beside the list on the Mac and a wide iPad. This screen owns the store's `show` and `hide` (the swarm is shown from
-// the tap to the way back, however deep its own pushes go) and takes `model.swarms.route`: a link may set it before this
-// screen exists, so it is read on appear and on every change.
+// name and one plain line, plus the score once the swarm has one. A tap opens the swarm in the screen pane (`SwarmPage`:
+// the agent grid, the answer to give, the agents' messages, the results), which keeps polling in the bar while it runs.
+// This screen reads the list and takes `model.swarms.route`: a link may set it before this screen exists, so it is read
+// on appear and on every change; it opens the pane (and leaves the step or agent the link named for the page).
 
 struct SwarmsScreen: View {
     let model: AppModel
     let tier: Tier
 
     @Environment(\.lifecycle) private var lifecycle
-    @State private var open: SwarmDestination?
-    @State private var width: CGFloat = 0
+    @Environment(Pane.self) private var pane
 
     private var store: SwarmStore { model.swarms }
 
-    private var wide: Bool {
-        if width > 0 { return width >= Spread.minWidth }
-        return tier != .compact
+    /// The swarm the pane is showing (its row is marked).
+    private var openID: String? {
+        if case .swarm(let id)? = pane.item, pane.isVisible { return id }
+        return nil
     }
 
     var body: some View {
-        layout
+        list
         .background(CobaltColor.bg)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .navigationTitle(Copy.Swarms.title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -44,33 +43,18 @@ struct SwarmsScreen: View {
             await store.loadList()
             takeRoute()
             #if DEBUG
-            if open == nil, let launch = SwarmsLaunch.destination() { open = launch }
+            if openID == nil, let launch = SwarmsLaunch.destination() { open(launch) }
             #endif
         }
         .onChange(of: store.route, initial: true) { _, _ in takeRoute() }
-        .onChange(of: open?.id) { _, id in
-            if let id { Task { await store.show(id: id) } } else { store.hide() }
-        }
         .onChange(of: inFront) { _, inFront in
-            // nothing is read while the app is away; coming back reads the list and the open swarm again
-            if inFront {
-                Task {
-                    await store.loadList()
-                    if let id = open?.id { await store.show(id: id) }
-                }
-            } else {
-                store.hide()
-            }
+            // nothing is read while the app is away; coming back reads the list again
+            if inFront { Task { await store.loadList() } }
         }
-        .onChange(of: model.selectedTab) { _, tab in
-            if tab != .swarms { store.hide() } else if let id = open?.id { Task { await store.show(id: id) } }
-        }
-        .onDisappear { if open == nil { store.hide() } }
     }
 
     /// Whether the app counts as in front for this screen. iPhone and iPad: active (a pulled-down Control Center is
-    /// away, as it was with scenePhase). The Mac: not hidden, because scenePhase never left `.active` for Cmd-Tab, and
-    /// hiding the swarm there would drop the open board's search and sort every time another app came to the front.
+    /// away, as it was with scenePhase). The Mac: not hidden, because scenePhase never left `.active` for Cmd-Tab.
     private var inFront: Bool {
         #if os(macOS)
         return lifecycle.isForeground
@@ -79,24 +63,16 @@ struct SwarmsScreen: View {
         #endif
     }
 
-    /// A link (or a launch argument) asked for a swarm, its check screen or its board: go there and clear the request.
+    /// A link (or a launch argument) asked for a swarm, its check screen or its board: open it and clear the request.
     private func takeRoute() {
         guard let route = store.route else { return }
         store.route = nil
-        open = SwarmDestination(route: route)
+        open(SwarmDestination(route: route))
     }
 
-    // MARK: layouts
-
-    /// iPhone and a narrow window: the list, and the swarm pushed on it. The Mac, a wide iPad and an unfolded phone: the
-    /// list on the left, the same screen on the right. With no swarm open the list has the whole width: an empty right side
-    /// is not drawn at all. The swarm side always has a close (`DetailSplit`).
-    private var layout: some View {
-        DetailSplit(queue: model.queue, spread: wide, open: $open) {
-            list
-        } detail: { dest in
-            SwarmScreen(model: model, dest: dest).id(dest)
-        }
+    private func open(_ destination: SwarmDestination) {
+        SwarmPaneIntent.leave(destination)
+        pane.open(.swarm(destination.id))
     }
 
     // MARK: the list
@@ -155,10 +131,10 @@ struct SwarmsScreen: View {
         if !swarms.isEmpty {
             Section {
                 ForEach(swarms) { swarm in
-                    SwarmRow(swarm: swarm, line: store.rowLine(swarm), waiting: waiting, selected: open?.id == swarm.id) {
-                        open = SwarmDestination(id: swarm.id)
+                    SwarmRow(swarm: swarm, line: store.rowLine(swarm), waiting: waiting, selected: openID == swarm.id) {
+                        open(SwarmDestination(id: swarm.id))
                     }
-                    .listRowBackground(open?.id == swarm.id && wide ? CobaltColor.elevated : CobaltColor.row)
+                    .listRowBackground(openID == swarm.id ? CobaltColor.elevated : CobaltColor.row)
                 }
             } header: {
                 Text(title).font(CobaltType.caption).foregroundStyle(CobaltColor.caption)
@@ -209,6 +185,7 @@ struct SwarmRow: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("swarm.row")
     }
 }
 

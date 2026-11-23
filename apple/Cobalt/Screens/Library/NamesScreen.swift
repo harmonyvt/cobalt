@@ -2,12 +2,15 @@ import CobaltKit
 import SwiftUI
 
 // Library › names (APP-API-CONTRACT 48.6): the words the owner has taught search. Each name with a few of its example
-// pictures, its meaning, how many posts carry it and a switch; swipe or right click to delete; a tap opens the name screen
-// (`NameEditorScreen`), pushed over the list. Its own tab ("search names", under "more" on iPhone), and a sheet from
-// `NamesPresenter` for a name in a post's detail or "this is… › new name…" in a post's menu.
+// pictures, its meaning, how many posts carry it and a switch; swipe or right click to delete; a tap opens the name in the
+// screen pane (`NamePage`, in NameEditorScreen.swift). Its own tab ("search names", under "more" on iPhone), and a sheet
+// from `NamesPresenter` for the list opened from the library; a name opened from a post's detail or "this is… › new
+// name…" in a post's menu goes straight to the pane.
 
 struct NamesScreen: View {
     let model: AppModel
+
+    @Environment(Pane.self) private var pane: Pane?
 
     private var names: SearchNamesModel { model.searchNames }
 
@@ -29,7 +32,7 @@ struct NamesScreen: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { names.startNew() } label: {
+                Button { NamePane.startNew(model: model, pane: pane) } label: {
                     Label(Copy.Names.newName, systemImage: Symbol.Names.add).labelStyle(.iconOnly)
                 }
                 .help(Copy.Names.newName)
@@ -38,16 +41,6 @@ struct NamesScreen: View {
         .sheetCorner()
         .task { await names.load() }
         .motion(Motion.rows, value: names.names)
-        .navigationDestination(isPresented: editorShown) {
-            if let editor = names.editor {
-                NameEditorScreen(model: model, editor: editor)
-            }
-        }
-    }
-
-    /// The pushed name screen follows the model's editor; going back closes it.
-    private var editorShown: Binding<Bool> {
-        Binding(get: { names.editor != nil }, set: { shown in if !shown { names.closeEditor() } })
     }
 
     private var listSection: some View {
@@ -88,11 +81,13 @@ private struct NameRow: View {
     let model: AppModel
     let name: TaughtName
 
+    @Environment(Pane.self) private var pane: Pane?
+
     private var names: SearchNamesModel { model.searchNames }
 
     var body: some View {
         HStack(spacing: 12) {
-            Button { names.open(name) } label: {
+            Button { NamePane.open(name, model: model, pane: pane) } label: {
                 HStack(spacing: 12) {
                     NameStack(model: model, keys: Array(name.yes.prefix(3)))
                     VStack(alignment: .leading, spacing: 2) {
@@ -132,7 +127,7 @@ private struct NameRow: View {
 }
 
 /// Up to three example pictures, fanned; the names glyph when the name has none.
-private struct NameStack: View {
+struct NameStack: View {
     let model: AppModel
     let keys: [String]
 
@@ -177,30 +172,42 @@ struct NameThumb: View {
 }
 
 /// Presents library › names as a sheet while `SearchNamesModel.showingList` is set, and reads the names once the library
-/// is open on a server that has them (so a post's "this is…" lists them).
+/// is open on a server that has them (so a post's "this is…" lists them). A name opened from anywhere (a post's detail,
+/// "new name…") makes an editor: the pane shows it, so the sheet never does.
 struct NamesPresenter: ViewModifier {
     let model: AppModel
+
+    @Environment(Pane.self) private var pane: Pane?
 
     private var names: SearchNamesModel { model.searchNames }
 
     private var shown: Binding<Bool> {
         let model = self.model.searchNames
-        return Binding(get: { model.showingList }, set: { model.showingList = $0 })
+        return Binding(get: { model.showingList && model.editor == nil }, set: { model.showingList = $0 })
     }
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: shown, onDismiss: { names.closeEditor() }) {
+            // No `onDismiss` closing the editor: a name opened from this sheet (`NamePane.open`) closes the sheet by making
+            // the editor, and the page in the pane needs that editor. The sheet never shows an editor itself.
+            .sheet(isPresented: shown) {
                 NavigationStack {
                     NamesScreen(model: model)
                 }
                 .sheetClose { names.closeAll() }
+                // a name opened from the list opens the pane; on one narrow screen it waits for this sheet to go
+                .coversPane()
                 #if os(macOS)
                 .frame(minWidth: 520, idealWidth: 600, minHeight: 560, idealHeight: 760)
                 #endif
             }
             .task(id: model.capabilities.names) {
                 if model.capabilities.names, !names.hasLoaded { await names.load() }
+            }
+            .onChange(of: names.editor.map(ObjectIdentifier.init), initial: true) { _, editor in
+                guard editor != nil, let pane, let editor = names.editor else { return }
+                names.showingList = false
+                pane.open(.name(editor.saved?.id ?? NamePane.newID))
             }
     }
 }
@@ -209,6 +216,7 @@ struct NamesPresenter: ViewModifier {
 /// "new name…", which opens a new name with the post as its first example.
 struct NamesPostMenu: View {
     let model: AppModel
+    @Environment(Pane.self) private var pane: Pane?
     let postKey: String
     /// The shell's status line ("an example of Lia now").
     var showStatus: @MainActor (String) -> Void = { _ in }
@@ -230,7 +238,7 @@ struct NamesPostMenu: View {
             }
             if names.names.contains(where: \.enabled) { Divider() }
             Button(Copy.Names.newNameFromPost, systemImage: Symbol.Names.newName) {
-                names.startNew(example: postKey)
+                NamePane.startNew(example: postKey, model: model, pane: pane)
             }
         } label: {
             Label(Copy.Names.thisIsMenu, systemImage: Symbol.Names.thisIs)

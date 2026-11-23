@@ -5,7 +5,7 @@ import SwiftUI
 //
 //     EmoteEditorScreen(model:, target:, close:)
 //
-// One editor for a picture, a webp, a gif or a video of the library. Duo first: from `Spread.minWidth` (700 pt) of its own
+// One editor for a picture, a webp, a gif or a video of the library. Duo first: from `EmoteEditorScreen.splitWidth` (700 pt) of its own
 // width it is two panes with the seam between (the result, its compare line, its 1x/2x/4x sizes and two chat lines on one;
 // the tabs, their controls, the live ticks and the actions on the other); narrower, the preview stays on top and the tab bar
 // with one tab's controls sits under it. The preview moves on the device at once (crop box, squash as a scale); every settled
@@ -41,6 +41,9 @@ struct EmoteEditorTarget: Identifiable {
 }
 
 struct EmoteEditorScreen: View {
+    /// The editor's own width (pt) from which it is two panes.
+    static let splitWidth: CGFloat = 700
+
     let model: AppModel
     let target: EmoteEditorTarget
     let close: () -> Void
@@ -110,7 +113,7 @@ private struct EmoteEditorContent: View {
     var body: some View {
         GeometryReader { geo in
             Group {
-                if geo.size.width >= Spread.minWidth { spread } else { stacked }
+                if geo.size.width >= EmoteEditorScreen.splitWidth { spread } else { stacked }
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }

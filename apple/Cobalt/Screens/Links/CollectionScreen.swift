@@ -12,9 +12,8 @@ struct CollectionScreen: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.shell) private var shell
+    @Environment(Pane.self) private var pane: Pane?
     @State private var controller: LinksController
-    /// The link a card opened (APP-API-CONTRACT 41.4).
-    @State private var openedLink: LinkRoute?
 
     init(model: AppModel, collectionID: String) {
         self.model = model
@@ -84,9 +83,6 @@ struct CollectionScreen: View {
         .onChange(of: collection == nil) { _, gone in
             if gone { dismiss() }
         }
-        .navigationDestination(item: $openedLink) { route in
-            LinkScreen(model: model, setID: route.id)
-        }
         .linkPresentations(controller)
     }
 
@@ -124,10 +120,10 @@ struct CollectionScreen: View {
 }
 
 extension CollectionScreen {
-    /// What a card's tap does: open the link's screen, only while the server edits links (`features.share_set_edit`).
+    /// What a card's tap does: open the link in the screen pane.
     fileprivate func opener(_ link: ShareSet) -> (() -> Void)? {
-        guard model.capabilities.shareSetEdit else { return nil }
+        guard let pane else { return nil }
         let id = link.id
-        return { openedLink = LinkRoute(id: id) }
+        return { pane.open(.link(id)) }
     }
 }

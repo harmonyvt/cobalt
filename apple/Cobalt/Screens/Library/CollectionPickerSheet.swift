@@ -4,14 +4,17 @@ import SwiftUI
 /// The select panel's `collection` button opens this: the picks become one link, filed in the collection chosen here.
 /// On top, a field to name a new collection; under it every collection as a row with its cover (one file from each of
 /// its newest four links), its name in the collection amber, how many links and files it already holds, and how many
-/// of the picks are already in it. A tap files the picks there and closes the sheet. iPhone and iPad: a sheet; Mac:
-/// the same view, 420 pt wide.
+/// of the picks are already in it. A tap files the picks there and closes the sheet. iPhone: a sheet; in the screen pane
+/// (the select actions page) it is pushed in the pane's own stack; Mac sheet: the same view, 420 pt wide.
 struct CollectionPickerSheet: View {
     let store: ShareSetStore
     let picks: [LibraryRow]
     let file: (LibraryController.CollectionTarget) -> Void
+    /// Pushed in the screen pane's stack (the select actions page) instead of presented as a sheet: it takes the pane's
+    /// width, draws no nav bar of its own, and its close pops.
+    var inPane = false
 
-    var dismiss = SheetOrPaneDismiss()
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var newName = ""
     @FocusState private var naming: Bool
@@ -48,13 +51,16 @@ struct CollectionPickerSheet: View {
         .padding(.top, 20)
         .padding(.bottom, 12)
         #if os(macOS)
-        .frame(width: 420)
+        .frame(width: inPane ? nil : 420)
         #else
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
         .presentationDragIndicator(.visible)
         #endif
         .background(CobaltColor.bg)
+        #if os(iOS)
+        .toolbar(inPane ? .hidden : .automatic, for: .navigationBar)
+        #endif
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Library2.pickCollectionTitle)
     }

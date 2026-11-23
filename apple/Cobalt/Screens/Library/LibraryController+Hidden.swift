@@ -63,8 +63,8 @@ extension LibraryController {
         }
     }
 
-    /// Drops the unlock. While the album is open, nothing of it stays up: select mode ends, the pushed detail and the
-    /// inspector close, so a hidden post is not left on screen behind the locked card.
+    /// Drops the unlock. While the album is open, nothing of it stays up: select mode ends and the pane's post closes, so a
+    /// hidden post is not left on screen behind the locked card.
     func relockHidden() {
         lockEpoch += 1
         hiddenUnlocked = false
@@ -108,7 +108,6 @@ extension LibraryController {
     private func closeAlbumState() {
         endSelecting()
         asking = nil
-        opened = nil
         selection = nil
         lit = nil
         // every sheet or dialog that holds a post of the album
@@ -129,12 +128,11 @@ extension LibraryController {
         return library.hiddenPosts.contains { $0.id == id } || model.settings.hiddenIndex.contains(post: id)
     }
 
-    /// A post became hidden (from its detail, a menu, another device's sync), or the album closed or locked: the pushed
-    /// detail, the inspector and every sheet or dialog holding that post close. The detail of a post hidden from itself
+    /// A post became hidden (from its detail, a menu, another device's sync), or the album closed or locked: the pane's
+    /// post and every sheet or dialog holding that post close. The detail of a post hidden from itself
     /// shows its status line first (the shell's), then goes.
     func closeHiddenDetails() {
         if hiddenOutsideAlbum(selection) { selection = nil }
-        if hiddenOutsideAlbum(opened?.item.post?.id) { opened = nil }
         if hiddenOutsideAlbum(combining?.post?.id) { combining = nil }
         if hiddenOutsideAlbum(renaming?.post?.id) { renaming = nil }
         if hiddenOutsideAlbum(deleting?.post?.id) { deleting = nil }

@@ -57,8 +57,8 @@ struct AppShell: View {
     /// Two or more links pasted or dropped: the review sheet (CONTRACT-PARALLEL 4.5).
     @State private var review: PasteReviewRequest?
     @State private var width: CGFloat = 0
-    /// The other screen of a spread (Duo building blocks): sheets, pickers and confirms open there.
-    @State private var spreadPane = SpreadPaneHost()
+    /// The window's screen pane (apple/CONTRACT-PANE.md): one per scene, drawn by `PaneHost` around the tabs.
+    @State private var pane = Pane()
     /// What a screen that has just popped left to say ("deleted."), drawn over the shell for a moment.
     @State private var status: String?
     @State private var statusToken = 0
@@ -87,43 +87,22 @@ struct AppShell: View {
         #endif
     }
 
-    /// The tier of one column: half the window while the other screen holds a pane (a screen laid out for the whole width
-    /// in half of it opened the library's inspector over its own grid), else the window's.
+    /// The tier of one column: the room the tab keeps beside the screen pane (a screen laid out for the whole width in
+    /// half of it opened the library's inspector over its own grid), else the window's. The pane measures its own host,
+    /// so on the Mac this is the detail area less the column, not the window less it (the sidebar is not the tab's).
     private var columnTier: Tier {
-        #if os(iOS)
-        if isSpread, spreadPane.pane != nil { return Tier(width: width / 2) }
-        #endif
+        if let tabWidth = pane.tabWidth { return Tier(width: tabWidth) }
         return tier
     }
 
-    /// Two screens' width on iPhone and iPad (`Spread.minWidth`): the pane and the hinge notices are on. The Mac keeps
-    /// its sheets.
-    private var isSpread: Bool {
-        #if os(iOS)
-        return width >= Spread.minWidth
-        #else
-        return false
-        #endif
+    /// Where the status notice sits: on the hinge of two screens, between them, instead of over either; else at the bottom.
+    private var noticeAlignment: Alignment {
+        if case .twoScreens = pane.placement { return .center }
+        return .bottom
     }
 
-    private static let photosPaneID = "shell-photos"
-
-    /// The photo picker: on a spread it opens inline on the other screen, beside the screen that asked for it
-    /// (Duo building blocks); otherwise the system sheet.
+    /// The photo picker: the system sheet.
     private func choosePhotos() {
-        #if os(iOS)
-        if isSpread {
-            let picker = PhotosPicker(
-                selection: $pickedPhoto, matching: .any(of: [.videos, .images]), preferredItemEncoding: .current,
-                photoLibrary: .shared()
-            ) { EmptyView() }
-                .photosPickerStyle(.inline)
-                .photosPickerDisabledCapabilities([.selectionActions])
-                .ignoresSafeArea(edges: .bottom)
-            spreadPane.show(id: Self.photosPaneID, content: AnyView(picker)) {}
-            return
-        }
-        #endif
         showPhotos = true
     }
 
@@ -134,17 +113,13 @@ struct AppShell: View {
             .cobaltRoot(model: model)
             .environment(\.shell, actions)
             .environment(\.photoImport, photoImport)
-            .environment(\.spreadPane, spreadPane)
-            .environment(\.isSpread, isSpread)
-            // the pane itself is a column inside the selected tab (`SpreadPaneColumn`), not an overlay
-            .onChange(of: isSpread) { _, spread in if !spread { spreadPane.close() } }
+            .environment(pane)
             .overlay { if dropTargeted { dropHighlight } }
             #if os(iOS)
             .background { KeyboardShelfPublisher(store: model.store) }
             .modifier(AlertsPromptPresenter(model: model, blocked: titleSheet != nil || review != nil))
             #endif
-            // on a spread the notice sits on the hinge, between the two screens, instead of over either
-            .overlay(alignment: isSpread ? .center : .bottom) {
+            .overlay(alignment: noticeAlignment) {
                 if let note {
                     StatusToast(text: note.text, detail: note.detail, actionTitle: note.actionTitle) {
                         let action = note.action
@@ -183,13 +158,14 @@ struct AppShell: View {
             .onChange(of: pickedPhoto) { _, item in
                 guard let item else { return }
                 pickedPhoto = nil
-                spreadPane.close(id: Self.photosPaneID)
                 // the picker's asset id rides with the file, so the upload joins the cobalt album as that asset
                 photoImport.load(item, into: model) { [id = item.itemIdentifier] in intake($0, photosAssetID: id) }
             }
+            // the shell's own sheets wear `coversPane`: a pane opened under one waits for it to go (one narrow screen)
             .sheet(item: $titleSheet) { sheet in
                 TitleSheet(pipeline: sheet.pipeline, defaultTitle: sheet.request.defaultTitle) { titleSheet = nil }
                     .cobaltRoot(model: model)
+                    .coversPane(pane)
             }
             .sheet(item: $review) { request in
                 PasteReviewSheet(request: request) {
@@ -198,6 +174,12 @@ struct AppShell: View {
                     finishReview(request, saving: urls)
                 }
                 .cobaltRoot(model: model)
+                .coversPane(pane)
+            }
+            // deep links and Shortcuts that open a single item (`AppModel.openInPane`): this window's pane opens it
+            .onChange(of: model.paneRequest, initial: true) { _, request in
+                guard request != nil, let item = model.takePaneRequest() else { return }
+                pane.open(item)
             }
             .onAppear { consumeMenuBarHandoff() }
             .onChange(of: MenuBarHandoff.shared.token) { _, _ in consumeMenuBarHandoff() }
@@ -224,6 +206,7 @@ struct AppShell: View {
                 .cobaltRoot(model: model)
                 .transformEnvironment(\.dynamicTypeSize) { if DetailDebug.ax5 { $0 = .accessibility5 } }
                 .environment(\.shell, actions)
+                .coversPane(pane)
             }
             #else
             .sheet(item: $debugDetail) { item in
@@ -380,30 +363,10 @@ struct AppShell: View {
     @ViewBuilder
     private var navigation: some View {
         #if os(iOS)
-        Group {
-            if UIDevice.current.userInterfaceIdiom == .phone {
-                // iPhone: four tabs and our own "more" (one stack), never the system More (see `PhoneTabs`)
-                PhoneTabs(model: model, tabs: model.visibleTabs.filter { $0 != .queue }) { tab in
-                    tabScreen(tab)
-                }
-            } else {
-                TabView(selection: $model.selectedTab) {
-                    // the order is `AppTab`'s; the queue is not a tab here: it is a sheet opened from the toolbar button on
-                    // save, library, links and chat (apple/CONTRACT.md 12; `AppModel.showQueue()`)
-                    ForEach(model.visibleTabs.filter { $0 != .queue }, id: \.self) { tab in
-                        Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
-                            SpreadPaneColumn(active: tab == model.selectedTab, queue: model.queue) {
-                                tabRoot(tab)
-                            }
-                        }
-                        .badge(tab == .swarms ? model.swarms.waitingCount : 0)
-                    }
-                }
-            }
+        // the screen pane wraps the tab views, so it is one per window and switching tabs keeps it (a stream plays on)
+        PaneHost(model: model, dragging: dropTargeted) {
+            iosTabs
         }
-        .tabViewStyle(.sidebarAdaptable)
-        // always expanded: a collapsed bar hid the other two tabs after any scroll (owner's live run)
-        .tabBarMinimizeBehavior(.never)
         .sheet(isPresented: $model.queueShown) { queueSheet }
         .modifier(QueueTabRedirect(model: model))
         #else
@@ -419,25 +382,60 @@ struct AppShell: View {
             .tint(CobaltColor.text)
             .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 260)
         } detail: {
-            Group {
-                switch model.selectedTab {
-                case .save: HomeScreen(model: model, tier: tier)
-                case .library: LibraryScreen(model: model, tier: tier)
-                case .links: NavigationStack { LinksScreen(model: model) }
-                case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
-                case .swarms: NavigationStack { SwarmsScreen(model: model, tier: tier) }
-                case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
-                case .sevenTv: NavigationStack { SevenTvScreen(model: model, tier: tier) }
-                case .twitch: NavigationStack { TwitchScreen(model: model, tier: tier) }
-                case .booru: NavigationStack { BooruScreen(model: model, tier: tier) }
-                case .names: NavigationStack { NamesScreen(model: model) }
-                case .queue: NavigationStack { QueueScreen(model: model) }
-                case .settings: SettingsScreen(model: model)
+            // the screen pane: a 400 pt column after the sidebar, the whole detail area spanned, the bar at its bottom
+            PaneHost(model: model, dragging: dropTargeted) {
+                Group {
+                    let tier = columnTier
+                    switch model.selectedTab {
+                    case .save: HomeScreen(model: model, tier: tier)
+                    case .library: LibraryScreen(model: model, tier: tier)
+                    case .links: NavigationStack { LinksScreen(model: model) }
+                    case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
+                    case .swarms: NavigationStack { SwarmsScreen(model: model, tier: tier) }
+                    case .stage: NavigationStack { StageScreen(model: model, tier: tier) }
+                    case .sevenTv: NavigationStack { SevenTvScreen(model: model, tier: tier) }
+                    case .twitch: NavigationStack { TwitchScreen(model: model, tier: tier) }
+                    case .booru: NavigationStack { BooruScreen(model: model, tier: tier) }
+                    case .names: NavigationStack { NamesScreen(model: model) }
+                    case .queue: NavigationStack { QueueScreen(model: model) }
+                    case .settings: SettingsScreen(model: model)
+                    }
                 }
             }
         }
         #endif
     }
+
+    #if os(iOS)
+    /// The iPhone's and the iPad's tab views (inside `PaneHost`). The bar of a running pane item is the tab view's bottom
+    /// accessory (`PaneBarAccessory`).
+    @ViewBuilder
+    private var iosTabs: some View {
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                // iPhone: four tabs and our own "more" (one stack), never the system More (see `PhoneTabs`)
+                PhoneTabs(model: model, tabs: model.visibleTabs.filter { $0 != .queue }) { tab in
+                    tabScreen(tab)
+                }
+            } else {
+                TabView(selection: $model.selectedTab) {
+                    // the order is `AppTab`'s; the queue is not a tab here: it is a sheet opened from the toolbar button on
+                    // save, library, links and chat (apple/CONTRACT.md 12; `AppModel.showQueue()`)
+                    ForEach(model.visibleTabs.filter { $0 != .queue }, id: \.self) { tab in
+                        Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
+                            tabRoot(tab)
+                        }
+                        .badge(tab == .swarms ? model.swarms.waitingCount : 0)
+                    }
+                }
+                .modifier(PaneBarAccessory(model: model))
+            }
+        }
+        .tabViewStyle(.sidebarAdaptable)
+        // always expanded: a collapsed bar hid the other two tabs after any scroll (owner's live run)
+        .tabBarMinimizeBehavior(.never)
+    }
+    #endif
 
     #if os(iOS)
     /// A tab's screen with no navigation stack around it.
@@ -485,6 +483,8 @@ struct AppShell: View {
         .presentationDetents([.large])
         .cobaltRoot(model: model)
         .environment(\.shell, actions)
+        // a job opened from here closes the queue first: the pane sheet waits for this one to finish going
+        .coversPane(pane)
     }
     #endif
 

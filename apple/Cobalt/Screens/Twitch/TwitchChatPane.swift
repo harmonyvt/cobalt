@@ -8,13 +8,15 @@ struct TwitchChatPane: View {
     let model: AppModel
     /// Seconds lines wait before they show (video-only AirPlay runs the TV behind, 70.5); 0 shows them at once.
     var delay: TimeInterval = 0
+    /// The "chat" word over the lines; off when a card already says it (the pane's shelf).
+    var showsLabel = true
     let onAddEmote: (ChatEmote) -> Void
 
     private var store: TwitchStore { model.twitch }
 
     var body: some View {
         VStack(spacing: 0) {
-            TwitchChatHeader(status: store.chat?.status ?? .connecting, room: store.chat?.room ?? TwitchRoomState())
+            TwitchChatHeader(status: store.chat?.status ?? .connecting, room: store.chat?.room ?? TwitchRoomState(), showsLabel: showsLabel)
             if delay > 0 {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     lines(cutoff: context.date.addingTimeInterval(-delay))
@@ -41,12 +43,15 @@ struct TwitchChatPane: View {
 private struct TwitchChatHeader: View {
     let status: TwitchChatStatus
     let room: TwitchRoomState
+    var showsLabel = true
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(Copy.Twitch.chat)
-                .font(Font.cobalt(13, .semibold))
-                .foregroundStyle(CobaltColor.text)
+            if showsLabel {
+                Text(Copy.Twitch.chat)
+                    .font(Font.cobalt(13, .semibold))
+                    .foregroundStyle(CobaltColor.text)
+            }
             if let s = statusText {
                 Text(s)
                     .font(Font.cobalt(12))

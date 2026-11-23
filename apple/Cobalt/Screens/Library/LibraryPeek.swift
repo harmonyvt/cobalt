@@ -8,12 +8,22 @@ struct PeekOnHold: ViewModifier {
     let row: LibraryRow
     let controller: LibraryController
     var enabled = true
+    /// A hold inside the pane's own page (a pick's thumbnail in the select actions): the page shows the peek itself, over
+    /// itself, instead of asking the pane, which would swap the page the finger is on.
+    var local: Binding<LibraryRow?>?
+
+    private func hold(_ on: Bool) {
+        if let local {
+            if on { controller.peekSwallowsTap = true; local.wrappedValue = row }
+            else if local.wrappedValue?.id == row.id { local.wrappedValue = nil }
+            return
+        }
+        if on { controller.setPeek(row) } else if controller.peek?.id == row.id { controller.setPeek(nil) }
+    }
 
     #if os(iOS)
     func body(content: Content) -> some View {
-        content.gesture(HoldRecognizer(enabled: enabled) { holding in
-            if holding { controller.setPeek(row) } else if controller.peek?.id == row.id { controller.setPeek(nil) }
-        })
+        content.gesture(HoldRecognizer(enabled: enabled) { holding in hold(holding) })
     }
     #else
     @GestureState private var holding = false
@@ -27,9 +37,7 @@ struct PeekOnHold: ViewModifier {
                         if case .second(true, _) = value { state = true }
                     },
                 including: enabled ? .all : .subviews)
-            .onChange(of: holding) { _, now in
-                if now { controller.setPeek(row) } else if controller.peek?.id == row.id { controller.setPeek(nil) }
-            }
+            .onChange(of: holding) { _, now in hold(now) }
     }
     #endif
 }
@@ -80,8 +88,10 @@ private struct HoldRecognizer: UIGestureRecognizerRepresentable {
 #endif
 
 extension View {
-    func peekOnHold(_ row: LibraryRow, controller: LibraryController, enabled: Bool = true) -> some View {
-        modifier(PeekOnHold(row: row, controller: controller, enabled: enabled))
+    func peekOnHold(
+        _ row: LibraryRow, controller: LibraryController, enabled: Bool = true, local: Binding<LibraryRow?>? = nil
+    ) -> some View {
+        modifier(PeekOnHold(row: row, controller: controller, enabled: enabled, local: local))
     }
 }
 
@@ -145,3 +155,50 @@ struct LibraryPeek: View {
         return CGSize(width: room.width, height: room.width / a)
     }
 }
+
+// MARK: - in the pane
+
+/// `.peek(id)`: the held post's media in the pane, nothing else on it. The same page the library's overlay peek is, opened
+/// beside the tab while a finger holds a tile; it takes no touches (the hold on the tile is still tracking), and lifting
+/// the finger puts back whatever the pane showed (`Pane.endPeek`).
+struct PanePeekPage: View {
+    let id: String
+    let model: AppModel
+
+    @Environment(\.paneShape) private var shape
+
+    private var row: LibraryRow? {
+        model.libraryRows.first { $0.id == id } ?? model.paneMedia(id: id).map { LibraryRow(item: $0) }
+    }
+
+    var body: some View {
+        if let row {
+            PanePage(title: row.title, subtitle: row.kind.rawValue) {
+                // a fixed room in the tall shape (the hero is not given a height there); the other shapes fill theirs
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .frame(height: shape == .tall ? 380 : nil)
+                    .frame(maxHeight: shape == .tall ? nil : .infinity)
+                    .overlay { LibraryPeek(row: row, dims: false) }
+            } controls: {
+                EmptyView()
+            }
+            .allowsHitTesting(false)
+            .hiddenCover(whenHidden: row.isHidden || model.isHiddenPost(row.item))
+        } else {
+            PaneGonePage()
+        }
+    }
+}
+
+#if DEBUG
+#Preview("peek · tall", traits: .fixedLayout(width: 440, height: 700)) {
+    PreviewHost(.happy, tab: .library) { model in
+        PanePeekPage(id: model.libraryRows.first?.id ?? "none", model: model)
+            .environment(\.paneShape, .tall)
+            .environment(\.paneHeaderHeight, PaneChrome.headerHeight)
+            .environment(Pane(route: PaneRoute(item: .peek("p"), state: .screen)))
+            .background(CobaltColor.bg)
+    }
+}
+#endif

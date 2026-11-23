@@ -44,6 +44,14 @@ public final class BooruStore {
     public var effectiveLevel: BooruLevel { safeMode ? .general : (settings?.level ?? .general) }
     public var available: Bool { client != nil }
 
+    /// The post may still be shown under the level in force now (safe mode lowers it to general at once, before the page is
+    /// read again). The pane's post page asks this, so a post already open closes when safe mode begins, whichever screen
+    /// is up. Only the level is judged here: themes and the blacklist are the server's, and a post a new search merely
+    /// left out of the grid is still allowed.
+    public func allows(_ post: BooruPost) -> Bool {
+        BooruLevel.shows(post.rating, at: safeMode ? .general : settings?.level)
+    }
+
     @ObservationIgnored private let ctx: PipelineContext
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var suggestGeneration = 0

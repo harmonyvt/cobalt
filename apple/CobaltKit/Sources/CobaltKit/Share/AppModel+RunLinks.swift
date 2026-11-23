@@ -7,7 +7,8 @@ import Foundation
 //   cobalt-apple://job/<uuid>?session=<sid>[&trim=1] the same, with the run's studio session
 //   cobalt-apple://session/<sid>                     a run known only by its session (Hark)
 //
-// A run whose original is already in the store opens as that media (`requestedMediaID`).
+// A run whose original is already in the store opens as that media, in the window's screen pane
+// (`openInPane(.post(id))`, apple/CONTRACT-PANE.md section 3).
 //
 // The session matters on a build re-signed without the app group: the app then cannot read the
 // share sheet's job record, and follows the run from its session alone.
@@ -52,7 +53,7 @@ extension AppModel {
     /// `open(_:)`).
     ///
     /// - The run has settled and its original is in the store (a finished save the share sheet handed
-    ///   off, the Hark "saved" tap): `requestedMediaID` asks the home screen to open that media.
+    ///   off, the Hark "saved" tap): that media opens in the screen pane (`openInPane(.post(id))`).
     /// - The home pipeline already follows the run: the save tab, nothing else (it is on screen).
     /// - The app has the run's job record: `open(_:)` takes it as before (only over a quiet home screen).
     /// - No record, but the link carries the session: the home pipeline follows the session as a
@@ -79,7 +80,7 @@ extension AppModel {
                 if !ctx.isPreview { Notifications.clear(jobID: job.id) }
             }
             Telemetry.log(.info, .share, "run link opened media")
-            requestedMediaID = media.id
+            openInPane(.post(media.id))
             return true
         }
         if following { return true }

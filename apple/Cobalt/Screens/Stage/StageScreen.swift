@@ -127,8 +127,11 @@ private struct StageBody: View {
 
     private var store: StageStore { controller.store }
 
+    /// The tab's own width from which the controls and the 360 pt column sit side by side.
+    private static let twoColumnMinWidth: CGFloat = 700
+
     private var wide: Bool {
-        if width > 0 { return width >= Spread.minWidth }
+        if width > 0 { return width >= Self.twoColumnMinWidth }
         return tier != .compact
     }
 

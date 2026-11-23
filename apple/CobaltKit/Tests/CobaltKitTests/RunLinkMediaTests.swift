@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CobaltKit
 
-// A run link opens a finished run's media (CONTRACT-SHARE-QUICK.md, R3): `AppModel.requestedMediaID`.
+// A run link opens a finished run's media (CONTRACT-SHARE-QUICK.md, R3): `AppModel.openInPane(.post(id))` (the screen pane, CONTRACT-PANE 3).
 
 @MainActor
 @Suite(.serialized)
@@ -27,10 +27,10 @@ struct RunLinkMediaTests {
         let h = Harness(.coldStart)
         let created = try await h.ctx.client.createStudio(link: URL(string: shortLink)!)
         let media = try await storeOriginal(h, session: created.id)
-        #expect(h.app.requestedMediaID == nil)
+        #expect(h.app.paneRequest == nil)
         h.app.selectedTab = .library
         #expect(h.app.openRunLink(URL(string: "cobalt-apple://session/\(created.id)")!))
-        #expect(h.app.requestedMediaID == media.id)
+        #expect(h.app.paneRequest?.item == .post(media.id))
         #expect(h.app.selectedTab == .save)
         #expect(h.pipeline.state == .idle, "nothing is resumed over the media")
     }
@@ -42,7 +42,7 @@ struct RunLinkMediaTests {
         h.ctx.jobs.upsert(job)
         let media = try await storeOriginal(h, session: created.id)
         #expect(h.app.openRunLink(URL(string: "cobalt-apple://job/\(job.id.uuidString)?session=\(created.id)")!))
-        #expect(h.app.requestedMediaID == media.id)
+        #expect(h.app.paneRequest?.item == .post(media.id))
         #expect(h.ctx.jobs.all().isEmpty)
         await h.app.pickUpSharedJobs()
         #expect(h.pipeline.state == .idle, "the run is not taken over the media")
@@ -55,7 +55,7 @@ struct RunLinkMediaTests {
         h.ctx.jobs.upsert(job)
         let media = try await storeOriginal(h, session: created.id)
         #expect(h.app.openRunLink(URL(string: "cobalt-apple://job/\(job.id.uuidString)")!))
-        #expect(h.app.requestedMediaID == media.id)
+        #expect(h.app.paneRequest?.item == .post(media.id))
     }
 
     @Test func aRunWithoutItsOriginalYetStillGoesToTheHomePipeline() async throws {
@@ -63,7 +63,7 @@ struct RunLinkMediaTests {
         let created = try await h.ctx.client.createStudio(link: URL(string: shortLink)!)
         let run = UUID()
         #expect(h.app.openRunLink(URL(string: "cobalt-apple://job/\(run.uuidString)?session=\(created.id)")!))
-        #expect(h.app.requestedMediaID == nil)
+        #expect(h.app.paneRequest == nil)
         #expect(h.pipeline.liveRunID == run && h.pipeline.sessionID == created.id)
     }
 
@@ -73,7 +73,7 @@ struct RunLinkMediaTests {
         try await storeOriginal(h, session: created.id, kind: .webp)
         try await storeOriginal(h, session: "SomeOtherSid")
         #expect(h.app.openRunLink(URL(string: "cobalt-apple://session/\(created.id)")!))
-        #expect(h.app.requestedMediaID == nil, "a webp of the session is not its saved video")
+        #expect(h.app.paneRequest == nil, "a webp of the session is not its saved video")
         #expect(h.pipeline.sessionID == created.id, "so the run is followed as before")
     }
 
@@ -85,7 +85,7 @@ struct RunLinkMediaTests {
         let state = h.pipeline.state
         try await storeOriginal(h, session: sid)
         #expect(h.app.openRunLink(URL(string: "cobalt-apple://session/\(sid)")!))
-        #expect(h.app.requestedMediaID == nil, "the owner is watching this run: the media is not pulled out from under it")
+        #expect(h.app.paneRequest == nil, "the owner is watching this run: the media is not pulled out from under it")
         #expect(h.pipeline.state == state)
     }
 
@@ -94,11 +94,11 @@ struct RunLinkMediaTests {
         let created = try await h.ctx.client.createStudio(link: URL(string: shortLink)!)
         try await storeOriginal(h, session: created.id)
         #expect(h.app.openRunLink(URL(string: "cobalt-apple://session/\(created.id)?trim=1")!))
-        #expect(h.app.requestedMediaID == nil)
+        #expect(h.app.paneRequest == nil)
         let job = shareJob(h, session: created.id, wantsTrim: true)
         h.ctx.jobs.upsert(job)
         #expect(h.app.openRunLink(URL(string: "cobalt-apple://job/\(job.id.uuidString)")!))
-        #expect(h.app.requestedMediaID == nil, "a job that asked for the trim keeps going to the trim")
+        #expect(h.app.paneRequest == nil, "a job that asked for the trim keeps going to the trim")
     }
 
     @Test func aDismissedHomeRunDoesNotBlockTheMedia() async throws {
@@ -109,6 +109,6 @@ struct RunLinkMediaTests {
         let media = try await storeOriginal(h, session: sid)
         h.pipeline.reset()
         #expect(h.app.openRunLink(URL(string: "cobalt-apple://session/\(sid)")!))
-        #expect(h.app.requestedMediaID == media.id)
+        #expect(h.app.paneRequest?.item == .post(media.id))
     }
 }

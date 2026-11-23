@@ -130,8 +130,27 @@ struct LibraryHiddenWatchers: ViewModifier {
     }
 }
 
+/// `HiddenCover` over a screen pane page that shows a hidden post (the post, its peek, the select actions in the album):
+/// the pane is a sheet or a column the library's own cover does not reach, so the app switcher's snapshot would show
+/// the post. `hidden` is about the page's own item, so it covers whether or not the library tab is still behind it.
+struct HiddenItemCoverModifier: ViewModifier {
+    let hidden: Bool
+    @Environment(\.lifecycle) private var lifecycle
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            #if os(iOS)
+            if hidden, !lifecycle.isActive { HiddenCover() }
+            #endif
+        }
+    }
+}
+
 extension View {
     func hiddenCover(_ controller: LibraryController) -> some View { modifier(HiddenCoverModifier(controller: controller)) }
+
+    /// The app-switcher cover for a pane page whose item is hidden (see `HiddenItemCoverModifier`).
+    func hiddenCover(whenHidden hidden: Bool) -> some View { modifier(HiddenItemCoverModifier(hidden: hidden)) }
 }
 
 /// The corner badge of a hidden post: who hid it (`you`, `rule`, `chat`).
