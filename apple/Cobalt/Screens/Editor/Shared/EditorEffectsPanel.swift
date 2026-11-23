@@ -49,7 +49,7 @@ struct EditorEffectsPanel: View {
     // MARK: methods
 
     private var methods: some View {
-        EditorSection(Copy.Editor.effects, trailing: method == nil ? Copy.Editor.effectsPick : nil) {
+        EditorSection(Copy.Editor.effects) {
             VStack(alignment: .leading, spacing: 6) {
                 methodButton(.greenscreen, Copy.Editor.effectGreenscreen)
                 methodButton(.depth, Copy.Editor.effectDepth)
@@ -110,9 +110,7 @@ struct EditorEffectsPanel: View {
                 .foregroundStyle(CobaltColor.caption)
                 .fixedSize(horizontal: false, vertical: true)
         case .person, .subject:
-            Text(method == .person ? "on this device · a person" : "on this device · the subject in front")
-                .font(CobaltType.captionSmall)
-                .foregroundStyle(CobaltColor.caption)
+            EmptyView()
         case .removeBackground:
             Text(quoteLine)
                 .font(CobaltType.captionSmall)
@@ -171,12 +169,6 @@ struct EditorEffectsPanel: View {
                         .init(value: Plate.blur, title: Copy.Editor.effectBlur),
                     ],
                     selected: plate, columns: 2, onSelect: { plate = $0 })
-                if plate == .blur {
-                    Text(Copy.Editor.effectBlurNote)
-                        .font(CobaltType.captionSmall)
-                        .foregroundStyle(CobaltColor.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
             EditorSection(Copy.Editor.effectOutput) {
                 EditorSegmented(
@@ -295,15 +287,6 @@ struct EditorLayersList: View {
             EditorSection(Copy.Editor.layers) {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(tracks, id: \.self) { track in row(track) }
-                    if !session.sendsHidden {
-                        Text(Copy.Editor.layerHiddenNote)
-                            .font(CobaltType.captionSmall)
-                            .foregroundStyle(CobaltColor.caption)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Text(Copy.Editor.layerLockNote)
-                        .font(CobaltType.captionSmall)
-                        .foregroundStyle(CobaltColor.caption)
                 }
             }
         }

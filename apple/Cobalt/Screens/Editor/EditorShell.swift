@@ -12,8 +12,9 @@ import SwiftUI
 /// - wide: top bar (undo and redo in it), a tool rail left of the picture, the inspector column right of it, the timeline
 ///   full width at the bottom.
 ///
-/// Step 2 of 5: the tool row and the inspector are the existing pieces put in their slots (step 3 restyles them); the
-/// timeline is the iPhone one on iOS (playhead fixed in the middle, as 15.5 wants everywhere) and the desk one on the Mac.
+/// The tool row (`EditorShellTools`) and the inspector with its pages (`EditorShellInspector`) are one instance each, whatever
+/// the regime; the timeline is the iPhone one on iOS (playhead fixed in the middle, as 15.5 wants everywhere) and the desk one
+/// on the Mac.
 struct EditorShell: View {
     let model: AppModel
     let session: EditSession
@@ -60,6 +61,10 @@ private struct EditorShellSlots: View {
     let clipTrim: ClipTrimPreview
 
     @Environment(EditorHost.self) private var host
+    /// Where the inspector should scroll to when a tool opens a page at something (the picture's opacity tool).
+    @State private var focus = EditorInspectorFocus()
+    /// The drawer's height while its handle is being dragged (nil = at its detent).
+    @State private var drawerDrag: CGFloat?
 
     private var ui: EditorUI { host.ui }
     private var wide: Bool { layout.regime == .wide }
@@ -73,7 +78,7 @@ private struct EditorShellSlots: View {
             EditorShellTimeline(session: session, layout: layout)
                 .place(layout.timeline)
             inspector
-            EditorShellTools(model: model, session: session, rail: layout.toolsAreRail)
+            EditorShellTools(model: model, session: session, rail: layout.toolsAreRail, focus: focus)
                 .place(layout.tools)
             EditorShellTopBar(model: model, session: session, wide: wide)
                 .place(layout.topBar)
@@ -82,13 +87,22 @@ private struct EditorShellSlots: View {
         .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
     }
 
-    /// One inspector: the wide column, or the drawer at its detent. A closed drawer stays mounted (so the trim player and
-    /// the page keep their state) below the timeline's bottom, hidden.
+    /// One inspector: the wide column, or the drawer at its detent (or at the height its handle is dragged to). A closed drawer
+    /// stays mounted (so the trim player and the page keep their state) below the timeline's bottom, hidden.
     @ViewBuilder
     private var inspector: some View {
-        let closed = !wide && ui.drawer == .closed
-        let rect = layout.inspectorRect(ui.drawer) ?? layout.drawerLow ?? .zero
-        EditorShellInspector(model: model, session: session, clipTrim: clipTrim, drawer: !wide)
+        let closed = !wide && ui.drawer == .closed && drawerDrag == nil
+        let low = layout.drawerLow ?? .zero
+        let high = layout.drawerHigh ?? low
+        let rect: CGRect = {
+            if !wide, let height = drawerDrag, let anchor = layout.drawerLow {
+                return CGRect(x: anchor.minX, y: anchor.maxY - height, width: anchor.width, height: height)
+            }
+            return layout.inspectorRect(ui.drawer) ?? low
+        }()
+        EditorShellInspector(
+            model: model, session: session, clipTrim: clipTrim, focus: focus, drawer: !wide,
+            heights: (low.height, high.height), dragHeight: $drawerDrag)
             .place(rect)
             .offset(y: closed ? rect.height + 12 : 0)
             .opacity(closed ? 0 : 1)
@@ -174,12 +188,15 @@ private struct EditorShellPresentations: ViewModifier {
                 ui.renderShown = true
             }
             .onChange(of: session.effectsFor) { _, id in
-                // the effects menu (from the tools, the picture's hint, a layer's row) is an inspector page
+                // the effects menu (from the tools, a clip's or a layer's page) is an inspector page
                 if id != nil { ui.show(.effects) } else if ui.page == .effects { ui.page = .project }
             }
             .onChange(of: session.selection) { _, selection in
-                // picking a clip while the Mac's library is up shows that clip
+                // picking a clip while the Mac's library is up shows that clip; the canvas page gives way to the clip's own
                 if ui.page == .library, selection != .none { ui.closeTool() }
+                if ui.openTool == .canvas, selection != .none { ui.closeTool() }
+                // letting go of the picture's pick (or of everything) takes the picture tools away
+                if selection == .none { ui.pickedOnPicture = false }
             }
     }
 
@@ -248,7 +265,7 @@ private struct EditorShellPicture: View {
     // Session replay (APP-API-CONTRACT 58): media is always masked.
     var body: some View {
         ZStack {
-            EditorCanvasView(session: session, cornerRadius: cornerRadius) { size in
+            EditorShellCanvasView(session: session, cornerRadius: cornerRadius) { size in
                 EditorShellCanvasLayer(session: session, size: size)
             }
             .opacity(cropClip == nil ? 1 : 0)
@@ -265,8 +282,77 @@ private struct EditorShellPicture: View {
     }
 }
 
-/// What stops a render, on the picture's bottom edge (not a band of its own): a file that would not come with `try again`,
-/// a deleted file, and the crowded-preview note.
+/// The canvas in the picture slot: the player at the canvas's own shape, the line for a missing or loading file, and the preview
+/// failure. `EditorCanvasView` (shared with the older screens) also draws a "this overlay covers the whole picture" banner;
+/// that was a hint and the shell does not (15.6), so the shell draws its own.
+private struct EditorShellCanvasView<Overlay: View>: View {
+    let session: EditSession
+    var cornerRadius: CGFloat = 10
+    @ViewBuilder var overlay: (CGSize) -> Overlay
+
+    var body: some View {
+        GeometryReader { geo in
+            let fit = EditorCanvasFit.size(canvas: session.timeline.canvas, in: geo.size)
+            ZStack {
+                EditorPlayerView(player: session.player)
+                    .opacity(session.isPlayerReady ? 1 : 0)
+                stateLine
+                overlay(fit)
+            }
+            .frame(width: fit.width, height: fit.height)
+            .overlay(alignment: .bottom) {
+                if session.previewFailed { failure }
+            }
+            .background(Color.black)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(CobaltColor.border.opacity(0.35), lineWidth: 1)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Copy.Editor.canvasA11y)
+        }
+    }
+
+    private var failure: some View {
+        Text(session.previewFailure ?? Copy.Editor.previewFailed)
+            .font(CobaltType.captionSmall)
+            .foregroundStyle(.white.opacity(0.92))
+            .multilineTextAlignment(.center)
+            .lineLimit(3)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(10)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private var stateLine: some View {
+        if let line {
+            Text(line)
+                .font(CobaltType.caption)
+                .foregroundStyle(.white.opacity(0.85))
+                .multilineTextAlignment(.center)
+                .padding(10)
+                .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(12)
+                .transition(.opacity)
+        }
+    }
+
+    /// The one line over the canvas: a missing file first, then the download, then a file that would not come.
+    private var line: String? {
+        if session.hasMissingSources { return Copy.Editor.missingClip }
+        if let fraction = session.loadingFraction { return Copy.Editor.loadingSources(Int((fraction * 100).rounded())) }
+        if !session.sourceFailures.isEmpty { return Copy.Editor.sourceFailed }
+        return nil
+    }
+}
+
+/// What stops a render, on the picture's bottom edge (not a band of its own): a file that would not come with `try again`, a
+/// deleted file, and a clip the preview left out. The old crowded-preview note was a hint and is gone (15.6).
 private struct EditorShellNotices: View {
     let session: EditSession
 
@@ -285,7 +371,10 @@ private struct EditorShellNotices: View {
                 Label(Copy.Editor.removeMissing, systemImage: Symbol.Editor.missing)
                     .notice()
             }
-            EditorPreviewCrowdedNote(session: session)
+            if !session.previewSkips.isEmpty {
+                Text(Copy.Editor.previewSkipped(session.previewSkips.count))
+                    .notice()
+            }
         }
         .padding(8)
     }

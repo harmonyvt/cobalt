@@ -293,7 +293,7 @@ struct EditorLogSlider: View {
 
 // MARK: - rows of the inspector and the phone sheet
 
-/// Speed: `0.5× 1× 1.5× 2×`, the log slider, and `clip becomes 4.5s · pitch kept`.
+/// Speed: `0.5× 1× 1.5× 2×` and the log slider. (The line under them, `clip becomes 4.5s · pitch kept`, was a hint and is gone: 15.6.)
 struct EditorSpeedRow: View {
     let speed: Double
     /// The seconds of source the clip plays (`out - in`).
@@ -311,16 +311,12 @@ struct EditorSpeedRow: View {
                 selected: Self.presets.first { abs($0 - speed) < 0.001 },
                 onSelect: { set($0); onEnd() })
             EditorLogSlider(speed: speed, marks: marks, set: set, onEnd: onEnd)
-            Text("\(Copy.Editor.becomes(sourceSeconds / max(0.25, speed))) · \(Copy.Editor.pitchKept)")
-                .font(Font.cobalt(11, .regular, relativeTo: .caption2))
-                .foregroundStyle(CobaltColor.caption)
-                .monospacedDigit()
         }
     }
 }
 
-/// Pitch: a -12...12 semitone slider in steps of a half (so 0 is a natural stop), `changes the voice, not the speed`, and a
-/// `reset` icon when it is not 0. The value itself is the section's trailing text.
+/// Pitch: a -12...12 semitone slider in steps of a half (so 0 is a natural stop) and a `reset` icon when it is not 0. The value
+/// itself is the section's trailing text.
 struct EditorPitchRow: View {
     let pitch: Double
     let set: (Double) -> Void
@@ -335,12 +331,8 @@ struct EditorPitchRow: View {
             }
             .accessibilityLabel(Copy.Editor.pitch)
             .accessibilityValue(Copy.Editor.pitchValue(pitch))
-            HStack {
-                Text(Copy.Editor.pitchHint)
-                    .font(Font.cobalt(11, .regular, relativeTo: .caption2))
-                    .foregroundStyle(CobaltColor.caption)
-                Spacer(minLength: 8)
-                if abs(pitch) > 0.001 {
+            if abs(pitch) > 0.001 {
+                IconRow(alignment: .leading) {
                     Button {
                         set(0)
                         onEnd()
