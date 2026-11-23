@@ -29,6 +29,16 @@ struct StageRewardPage: View {
 
     private var store: StageStore { model.stage }
     private var kind: StageRewardKind? { StageRewardKind(rawValue: id) }
+    /// This reward is not one the stage has: not a reward kind at all, or the loaded stage has no such reward.
+    private var missing: Bool {
+        guard let kind else { return true }
+        return store.stage != nil && store.reward(kind) == nil
+    }
+    /// Whether the reward's stage is on air; nil until the stage has loaded (nothing to report yet) and for a missing reward.
+    private var running: Bool? {
+        guard !missing, let onAir = store.stage?.onAir else { return nil }
+        return onAir
+    }
 
     var body: some View {
         Group {
@@ -41,8 +51,13 @@ struct StageRewardPage: View {
             }
         }
         .task { if store.stage == nil { await store.load() } }
-        .onChange(of: store.stage?.onAir, initial: true) { _, onAir in
-            if let onAir { pane?.setRunning(onAir, for: .reward(id)) }
+        // running only once the stage has loaded AND this reward is one of its own: a reward that is not there (a route
+        // restored for an id the stage has not got) is never running, and the pane lets go of it instead of keeping a bar
+        .onChange(of: running, initial: true) { _, now in
+            if let now { pane?.setRunning(now, for: .reward(id)) }
+        }
+        .onChange(of: missing, initial: true) { _, gone in
+            if gone { pane?.itemGone(.reward(id)) }
         }
         .haptic(.success, trigger: controller.doneTick)
         .haptic(.error, trigger: controller.failTick)
@@ -242,6 +257,8 @@ struct StagePoolVideoPage: View {
     @Environment(\.shell) private var shell
     @State private var controller: StageController
     @State private var looked = false
+    /// The file as last seen: a pool read again (the picker) is empty for a moment and must not make a running video "gone".
+    @State private var kept: StageItem?
 
     init(model: AppModel, id: String) {
         self.model = model
@@ -252,10 +269,21 @@ struct StagePoolVideoPage: View {
     private var store: StageStore { model.stage }
 
     /// The file: the pool's (once read), else the one the spotlight holds.
-    private var item: StageItem? {
+    private var item: StageItem? { live ?? kept }
+    private var live: StageItem? {
         if let found = store.poolItems.first(where: { $0.id == id }) { return found }
         if let held = store.stage?.spotlight?.item, held.id == id { return held }
         return nil
+    }
+    /// Every page of the pool was read and the file is in none of them (nor the spotlight): it does not exist (a route
+    /// restored for a deleted file). A pool still loading, or that failed to load, proves nothing.
+    private var missing: Bool {
+        looked && item == nil && store.stage != nil && store.poolState == .loaded && !store.poolHasMore
+    }
+    /// Whether the stage is on air, once it has loaded and the file is known; nil while either is unknown.
+    private var running: Bool? {
+        guard item != nil, let onAir = store.stage?.onAir else { return nil }
+        return onAir
     }
 
     var body: some View {
@@ -278,8 +306,14 @@ struct StagePoolVideoPage: View {
             }
             looked = true
         }
-        .onChange(of: store.stage?.onAir, initial: true) { _, onAir in
-            if let onAir { pane?.setRunning(onAir, for: .poolVideo(id)) }
+        .onChange(of: live, initial: true) { _, now in
+            if let now { kept = now }
+        }
+        .onChange(of: running, initial: true) { _, now in
+            if let now { pane?.setRunning(now, for: .poolVideo(id)) }
+        }
+        .onChange(of: missing, initial: true) { _, gone in
+            if gone { pane?.itemGone(.poolVideo(id)) }
         }
         .haptic(.success, trigger: controller.doneTick)
         .haptic(.error, trigger: controller.failTick)

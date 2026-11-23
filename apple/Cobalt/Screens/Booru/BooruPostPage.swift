@@ -18,12 +18,23 @@ struct BooruPostPage: View {
     @State private var kept: BooruPost?
 
     private var store: BooruStore { model.booru }
-    private var post: BooruPost? { store.posts.first { $0.id == id } ?? kept }
+    /// A post the level now in force (safe mode, the device's own) does not allow is never shown, not even the copy kept
+    /// for a search that replaced the grid.
+    private var post: BooruPost? {
+        guard let found = store.posts.first(where: { $0.id == id }) ?? kept else { return nil }
+        return store.allows(found) ? found : nil
+    }
+    private var filteredOut: Bool {
+        guard let found = store.posts.first(where: { $0.id == id }) ?? kept else { return false }
+        return !store.allows(found)
+    }
 
     var body: some View {
         Group {
             if let post {
                 page(post)
+            } else if filteredOut {
+                PaneGonePage()
             } else if store.phase == .loaded || store.phase.isFailed {
                 PaneGonePage()
             } else {
@@ -32,7 +43,15 @@ struct BooruPostPage: View {
         }
         .task { await store.load() }
         .onChange(of: store.posts, initial: true) { _, posts in
-            if let found = posts.first(where: { $0.id == id }) { kept = found }
+            if let found = posts.first(where: { $0.id == id }), store.allows(found) { kept = found }
+        }
+        // safe mode (or a lower level) reaches the pane from here, not through the booru screen, which is torn down when
+        // another tab is up (the Mac): the post is dropped and the pane lets go of it
+        .modifier(BooruSafeModeWatch(store: store))
+        .onChange(of: filteredOut, initial: true) { _, gone in
+            guard gone else { return }
+            kept = nil
+            pane?.close(ifShowing: .booruPost(id))
         }
     }
 

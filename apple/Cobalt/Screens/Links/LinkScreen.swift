@@ -36,6 +36,9 @@ struct LinkScreen: View {
     @State private var draft: ShareSetEdit?
     @State private var saving = false
     @State private var askingDiscard = false
+    /// The discard confirm was asked by the pane's close (Escape, the xmark), not by this editor's cancel: discarding closes
+    /// the pane too.
+    @State private var closingPane = false
     @State private var pickingFiles = false
     @State private var openedPost: OpenedMedia?
     @State private var savedToken = 0
@@ -76,14 +79,20 @@ struct LinkScreen: View {
         #endif
         .navigationBarBackButtonHidden(editing)
         .interactiveDismissDisabled(editing)
+        // the editor pushed on the pane's stack with unsaved changes: the pane's close (Escape, the xmark, VoiceOver's
+        // escape, swiping the sheet down) asks first instead of throwing the draft away
+        .paneHoldsClose(!inSheet && (draft?.hasChanges ?? false)) {
+            closingPane = true
+            askingDiscard = true
+        }
         .toolbar { toolbarItems }
         // in a sheet: close and edit sit in its top-right corner (a Mac sheet would draw toolbar items at the bottom)
         .sheetCorner { if canEdit { editButton.labelStyle(.iconOnly) } }
         .environment(\.sheetClose, inSheet && !editing ? SheetCloseAction { dismiss() } : nil)
         .safeAreaInset(edge: .bottom, spacing: 0) { saveBar }
         .modifier(LinkScreenPresentations(
-            model: model, link: link, draft: $draft, askingDiscard: $askingDiscard, pickingFiles: $pickingFiles,
-            openedPost: $openedPost, savedToken: savedToken, failedToken: failedToken))
+            model: model, link: link, draft: $draft, askingDiscard: $askingDiscard, closingPane: $closingPane,
+            pickingFiles: $pickingFiles, openedPost: $openedPost, savedToken: savedToken, failedToken: failedToken))
         .onChange(of: link == nil) { _, gone in
             if gone { draft = nil; dismiss() }
         }
@@ -147,6 +156,7 @@ struct LinkScreen: View {
     private func cancelEdit() {
         guard let draft, !saving else { return }
         if draft.hasChanges {
+            closingPane = false
             askingDiscard = true
         } else {
             withAnimation(Motion.rows) { self.draft = nil }
@@ -348,10 +358,12 @@ private struct LinkAddFilesRow: View {
 
 /// The discard confirm, the add-files sheet, the post a file opens, and the save haptics.
 private struct LinkScreenPresentations: ViewModifier {
+    @Environment(Pane.self) private var pane: Pane?
     let model: AppModel
     let link: ShareSet?
     @Binding var draft: ShareSetEdit?
     @Binding var askingDiscard: Bool
+    @Binding var closingPane: Bool
     @Binding var pickingFiles: Bool
     @Binding var openedPost: OpenedMedia?
     let savedToken: Int
@@ -361,9 +373,13 @@ private struct LinkScreenPresentations: ViewModifier {
         content
             .confirmationDialog(Copy.LinkEdit.discardTitle, isPresented: $askingDiscard, titleVisibility: .visible) {
                 Button(Copy.LinkEdit.discard, role: .destructive) {
+                    let leaving = closingPane
+                    closingPane = false
                     withAnimation(Motion.rows) { draft = nil }
+                    // asked by the pane's close: the owner meant to leave, so the pane closes (never held again)
+                    if leaving { pane?.close(force: true) }
                 }
-                Button(Copy.LinkEdit.keepEditing, role: .cancel) {}
+                Button(Copy.LinkEdit.keepEditing, role: .cancel) { closingPane = false }
             }
             .sheet(isPresented: $pickingFiles) { picker }
             .navigationDestination(item: $openedPost) { target in

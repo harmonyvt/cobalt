@@ -342,7 +342,8 @@ struct BooruTile: View {
 }
 
 /// Safe mode: while the screen is mirrored, recorded or shown on another display, the store asks for general only.
-private struct BooruSafeModeWatch: ViewModifier {
+/// The post page in the pane wears it too, so the pane follows safe mode when this screen is not on show.
+struct BooruSafeModeWatch: ViewModifier {
     let store: BooruStore
 
     func body(content: Content) -> some View {
