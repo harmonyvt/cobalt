@@ -159,7 +159,11 @@ struct EditorShellCanvasLayer: View {
         case .resize(let corner, let start):
             let box = EditPicturePick.resize(
                 start, corner: corner, to: canvasPoint(value.location), minWidth: minWidth, maxWidth: maxWidth)
-            apply(box, id: d.id)
+            // the moving corner's box edges click to the canvas edges and centre lines, like a move
+            let snapped = EditPicturePick.snapResize(
+                box, corner: corner, canvas: canvas, threshold: Double(Self.snap / scale), minWidth: minWidth, maxWidth: maxWidth)
+            setGuides(snapped.guides)
+            apply(snapped.box, id: d.id)
         case .turn(let start, let from):
             let raw = EditPicturePick.turn(startR: start.r, center: start.center, from: from, to: canvasPoint(value.location))
             let snapped = EditPicturePick.snapAngle(raw)

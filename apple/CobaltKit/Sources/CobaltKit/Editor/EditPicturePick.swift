@@ -224,7 +224,13 @@ public enum EditPicturePick {
         let dx = best([(Double(b.minX), 0), (Double(b.midX), cw / 2), (Double(b.maxX), cw)])
         let dy = best([(Double(b.minY), 0), (Double(b.midY), ch / 2), (Double(b.maxY), ch)])
         let out = box.moved(dx: dx, dy: dy)
-        let o = out.bounds
+        return (out, guides(of: out, canvas: canvas))
+    }
+
+    /// The canvas lines the upright bounds of `box` sit on (within half a pixel).
+    static func guides(of box: EditPictureBox, canvas: EditCanvas, edgesOnCentre: Bool = false) -> Guides {
+        let cw = Double(canvas.w), ch = Double(canvas.h)
+        let o = box.bounds
         let on = 0.5
         var guides: Guides = []
         if abs(Double(o.minX)) <= on { guides.insert(.left) }
@@ -233,7 +239,12 @@ public enum EditPicturePick {
         if abs(Double(o.minY)) <= on { guides.insert(.top) }
         if abs(Double(o.midY) - ch / 2) <= on { guides.insert(.centerY) }
         if abs(Double(o.maxY) - ch) <= on { guides.insert(.bottom) }
-        return (out, guides)
+        if edgesOnCentre {
+            // a resized box's edge on a centre line shows it too
+            if abs(Double(o.minX) - cw / 2) <= on || abs(Double(o.maxX) - cw / 2) <= on { guides.insert(.centerX) }
+            if abs(Double(o.minY) - ch / 2) <= on || abs(Double(o.maxY) - ch / 2) <= on { guides.insert(.centerY) }
+        }
+        return guides
     }
 
     /// The angles a turn clicks to.
@@ -283,6 +294,51 @@ public enum EditPicturePick {
         return EditPictureBox(
             center: CGPoint(x: Double(anchor.x) + Double(half.x), y: Double(anchor.y) + Double(half.y)),
             width: w, height: box.height * k, r: box.r)
+    }
+
+    /// A box `resize` made, held to the canvas edges and centre lines. The opposite corner `corner` was dragged from stays
+    /// fixed and the shape is kept, so the only freedom is the size: every edge of the turned box's upright bounds that
+    /// moves with it (and its middle) is tried against the canvas lines, and the size that puts the nearest one (within
+    /// `threshold` pixels) on its line wins. A size outside `minWidth...maxWidth` pixels is not offered. `guides` names every
+    /// line the box then sits on.
+    public static func snapResize(
+        _ box: EditPictureBox, corner: Int, canvas: EditCanvas, threshold: Double, minWidth: Double, maxWidth: Double
+    ) -> (box: EditPictureBox, guides: Guides) {
+        guard box.width > 0, box.height > 0 else { return (box, guides(of: box, canvas: canvas, edgesOnCentre: true)) }
+        let cw = Double(canvas.w), ch = Double(canvas.h)
+        let c = ((corner % 4) + 4) % 4
+        let anchor = box.corners[(c + 2) % 4]
+        let b = box.bounds
+        var factor = 1.0, gap = Double.infinity
+        // an edge at `have` moves to `anchor + f * (have - anchor)` when the box is sized by f about the fixed corner
+        func consider(_ have: Double, anchor a: Double, lines: [Double]) {
+            let offset = have - a
+            guard abs(offset) > 1e-9 else { return }
+            for line in lines {
+                let f = (line - a) / offset
+                let w = box.width * f
+                guard f > 0, w >= minWidth - 1e-9, w <= max(minWidth, maxWidth) + 1e-9 else { continue }
+                let d = abs(line - have)
+                if d <= threshold, d < gap {
+                    gap = d
+                    factor = f
+                }
+            }
+        }
+        let ax = Double(anchor.x), ay = Double(anchor.y)
+        consider(Double(b.minX), anchor: ax, lines: [0, cw / 2, cw])
+        consider(Double(b.maxX), anchor: ax, lines: [0, cw / 2, cw])
+        consider(Double(b.midX), anchor: ax, lines: [cw / 2])
+        consider(Double(b.minY), anchor: ay, lines: [0, ch / 2, ch])
+        consider(Double(b.maxY), anchor: ay, lines: [0, ch / 2, ch])
+        consider(Double(b.midY), anchor: ay, lines: [ch / 2])
+        guard factor != 1 else { return (box, guides(of: box, canvas: canvas, edgesOnCentre: true)) }
+        var out = box
+        out.center = CGPoint(
+            x: ax + (Double(box.center.x) - ax) * factor, y: ay + (Double(box.center.y) - ay) * factor)
+        out.width = box.width * factor
+        out.height = box.height * factor
+        return (out, guides(of: out, canvas: canvas, edgesOnCentre: true))
     }
 
     // MARK: - Turn from the knob

@@ -232,6 +232,72 @@ struct EditorPicturePickTests {
         #expect(near(huge.corners[0], anchor, 1e-6))
     }
 
+    @Test func aCornerResizeSnapsItsEdgesToTheCanvasAndKeepsTheOppositeCorner() {
+        // 400 x 225 at (100, 100), dragged by its bottom-right corner (2) towards the right edge of a 1920 canvas
+        let box = EditPictureBox(center: CGPoint(x: 300, y: 212.5), width: 400, height: 225)
+        let anchor = box.corners[0]
+        // a size whose right edge would be 1920 - 4: inside the 6 px threshold
+        let w = 1916.0 - Double(anchor.x)
+        let k = w / box.width
+        let raw = EditPictureBox(
+            center: CGPoint(x: Double(anchor.x) + w / 2, y: Double(anchor.y) + box.height * k / 2), width: w, height: box.height * k)
+        let snapped = EditPicturePick.snapResize(raw, corner: 2, canvas: wide, threshold: 6, minWidth: 10, maxWidth: 10_000)
+        #expect(snapped.guides.contains(.right))
+        #expect(abs(Double(snapped.box.bounds.maxX) - 1920) < 1e-9)
+        #expect(near(snapped.box.corners[0], anchor, 1e-9))
+        #expect(abs(snapped.box.width / snapped.box.height - 400.0 / 225.0) < 1e-9)
+        #expect(abs(snapped.box.width - 1820) < 1e-9)
+    }
+
+    @Test func aCornerResizeOutsideTheThresholdDoesNotSnap() {
+        let anchor = CGPoint(x: 100, y: 100)
+        let w = 1900.0 - Double(anchor.x)   // right edge 20 px short of 1920, bottom (900 * 9/16 + 100) nowhere near a line
+        let raw = EditPictureBox(center: CGPoint(x: 100 + w / 2, y: 100 + w * 9 / 32), width: w, height: w * 9 / 16)
+        let r = EditPicturePick.snapResize(raw, corner: 2, canvas: wide, threshold: 6, minWidth: 10, maxWidth: 10_000)
+        #expect(r.box == raw)
+        #expect(r.guides.isEmpty)
+    }
+
+    @Test func aCornerResizeSnapsTheEdgeToTheCentreLineAndTheNearestGuideWins() {
+        let canvas = EditCanvas(w: 1000, h: 1000, fps: 30)
+        // anchor (100, 100), 400 x 400 square from it: right edge 500 = centre line; 4 px past it
+        let raw = EditPictureBox(center: CGPoint(x: 302, y: 302), width: 404, height: 404)
+        let r = EditPicturePick.snapResize(raw, corner: 2, canvas: canvas, threshold: 6, minWidth: 10, maxWidth: 10_000)
+        #expect(r.guides.contains(.centerX) && r.guides.contains(.centerY))
+        #expect(abs(r.box.width - 400) < 1e-9)
+        #expect(near(r.box.corners[0], CGPoint(x: 100, y: 100), 1e-9))
+    }
+
+    @Test func aTurnedBoxSnapsItsUprightBoundsWithTheOppositeCornerFixed() {
+        let box = EditPictureBox(center: CGPoint(x: 600, y: 500), width: 300, height: 200, r: 30)
+        let corner = 1
+        let anchor = box.corners[3]
+        // grow it so the upright bounds' right edge is 3 px short of 1920 (a 1920 wide canvas)
+        let probe = EditPicturePick.resize(box, corner: corner, to: CGPoint(x: 1500, y: 100), minWidth: 10, maxWidth: 10_000)
+        let offset = Double(probe.bounds.maxX) - Double(anchor.x)
+        let f = (1917 - Double(anchor.x)) / offset
+        let near917 = EditPictureBox(
+            center: CGPoint(
+                x: Double(anchor.x) + (Double(probe.center.x) - Double(anchor.x)) * f,
+                y: Double(anchor.y) + (Double(probe.center.y) - Double(anchor.y)) * f),
+            width: probe.width * f, height: probe.height * f, r: 30)
+        #expect(abs(Double(near917.bounds.maxX) - 1917) < 1e-6)
+        let r = EditPicturePick.snapResize(near917, corner: corner, canvas: wide, threshold: 6, minWidth: 10, maxWidth: 10_000)
+        #expect(r.guides.contains(.right))
+        #expect(abs(Double(r.box.bounds.maxX) - 1920) < 1e-6)
+        #expect(near(r.box.corners[3], anchor, 1e-6))
+        #expect(r.box.r == 30)
+        #expect(abs(r.box.width / r.box.height - 300.0 / 200.0) < 1e-9)
+    }
+
+    @Test func aSnapSizeOutsideTheWidthLimitsIsNotOffered() {
+        let canvas = EditCanvas(w: 1000, h: 1000, fps: 30)
+        // the centre line would need width 400 but the smallest allowed is 405
+        let raw = EditPictureBox(center: CGPoint(x: 302, y: 302), width: 404, height: 404)
+        let r = EditPicturePick.snapResize(raw, corner: 2, canvas: canvas, threshold: 6, minWidth: 405, maxWidth: 10_000)
+        #expect(r.box == raw)
+    }
+
     // MARK: the knob and the pinch
 
     @Test func theKnobTurnsByTheAngleTheFingerSweeps() {

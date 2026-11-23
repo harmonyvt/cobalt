@@ -62,13 +62,20 @@ struct EditorShellTopBar: View {
     private var renderButton: some View {
         #if os(iOS)
         if wide {
-            RenderButton(model: model, session: session, shown: Binding(
-                get: { host.ui.renderShown && wide }, set: { host.ui.renderShown = $0 }))
+            EditorShellRenderButton(session: session) { host.ui.renderShown = true }
+                .popover(isPresented: Binding(
+                    get: { host.ui.renderShown && wide }, set: { host.ui.renderShown = $0 }), arrowEdge: .bottom) {
+                    EditorRenderCard(model: model, session: session, close: { host.ui.renderShown = false })
+                        .presentationCompactAdaptation(.popover)
+                }
         } else {
-            EditorPhoneRenderButton(session: session) { host.ui.renderShown = true }
+            EditorShellRenderButton(session: session) { host.ui.renderShown = true }
         }
         #else
-        RenderButton(model: model, session: session, shown: Bindable(host.ui).renderShown)
+        EditorShellRenderButton(session: session) { host.ui.renderShown = true }
+            .popover(isPresented: Bindable(host.ui).renderShown, arrowEdge: .bottom) {
+                EditorRenderCard(model: model, session: session, close: { host.ui.renderShown = false })
+            }
         #endif
     }
 
@@ -177,6 +184,52 @@ private struct EditorShellSaveLine: View {
             .truncationMode(.tail)
             .contentTransition(.opacity)
             .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
+/// `render` in the 48 pt top bar: the black pill, as tall as the close and `more` circles (a 34 pt face in a 44 pt touch
+/// target, so nothing is cut off by the bar). While a render of this project runs it carries the progress
+/// (`waiting · 1 ahead`, `preparing`, `rendering 40%`, `finishing`); either way it opens the render card.
+struct EditorShellRenderButton: View {
+    let session: EditSession
+    let action: () -> Void
+
+    private var running: EditRender? {
+        guard let r = session.activeRender, r.isActive else { return nil }
+        return r
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let running {
+                    ProgressView(value: running.progress.map { min(1, max(0, $0)) })
+                        .progressViewStyle(.circular)
+                        .controlSize(.mini)
+                        .tint(CobaltColor.onText)
+                    Text(Copy.Editor.renderLine(running))
+                        .monospacedDigit()
+                        .font(Font.cobalt(11, .semibold, relativeTo: .caption2))
+                } else {
+                    Text(Copy.Editor.render)
+                        .font(CobaltType.buttonSmall)
+                }
+            }
+            .lineLimit(1)
+            .fixedSize()
+            .foregroundStyle(CobaltColor.onText)
+            .padding(.horizontal, 16)
+            .frame(height: 34)
+            .background(CobaltColor.text, in: Capsule())
+            .glassEffect(.regular.tint(CobaltColor.text).interactive(), in: .capsule)
+            .frame(minHeight: Metrics.hit)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        #if os(macOS)
+        .help("\(Copy.Editor.render) · ⌘↩")
+        #endif
+        .accessibilityLabel(running.map { "\(Copy.Editor.render), \(Copy.Editor.renderLine($0))" } ?? Copy.Editor.render)
     }
 }
 

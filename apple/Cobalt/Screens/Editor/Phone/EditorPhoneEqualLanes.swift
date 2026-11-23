@@ -84,7 +84,6 @@ struct EditorPhoneEqualLanes: View {
                 newLaneBand(width: width)
             }
             if let lift, lift.showMenu, !lift.moved, let clip = clip(lift.id) { menu(lift, clip, width: width, area: area, layout: layout) }
-            if showsGap { gapChip(width: width) }
             footer(width: width, area: area)
         }
         .frame(width: width, height: area + Self.footer, alignment: .topLeading)
@@ -229,6 +228,7 @@ struct EditorPhoneEqualLanes: View {
             .buttonStyle(.plain)
             .accessibilityLabel(Copy.Editor.addClip)
             .offset(x: width - Metrics.hit - 4)
+            if showsGap { gapChip }
         }
         .frame(width: width, height: Self.footer)
         .offset(y: area)
@@ -329,18 +329,29 @@ struct EditorPhoneEqualLanes: View {
             .zIndex(20)
     }
 
-    private func gapChip(width: CGFloat) -> some View {
+    /// Whether moving or removing a lane-0 clip leaves its gap behind. It lives in the footer, beside the lane `+`, so it never
+    /// covers a clip's label; it shows while lane 0's clip is selected or lifted (the only time the choice applies).
+    private var gapChip: some View {
         Button { keepGap.toggle() } label: {
-            Text(Copy.Editor.keepGap)
-                .font(Font.cobalt(10.5, .medium, relativeTo: .caption2))
-                .foregroundStyle(keepGap ? .black : CobaltColor.text)
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-                .background(keepGap ? Color.white : Color.black.opacity(0.55), in: Capsule())
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.left.and.right")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(Copy.Editor.keepGap)
+                    .font(Font.cobalt(10.5, .medium, relativeTo: .caption2))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(keepGap ? Color.black : CobaltColor.text)
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(keepGap ? Color.white : Color.black.opacity(0.55), in: Capsule())
+            .overlay { Capsule().strokeBorder(CobaltColor.border, lineWidth: keepGap ? 0 : 1) }
+            .frame(minHeight: Self.footer)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .offset(x: width - 96, y: 2)
-        .zIndex(24)
+        .accessibilityLabel(Copy.Editor.keepGap)
+        .accessibilityAddTraits(keepGap ? .isSelected : [])
+        .offset(x: Self.headerWidth + 8)
     }
 
     /// The fixed playhead. It fades while a trim handle is held: the picture is on the edge, the timeline stays under the finger.
