@@ -188,11 +188,15 @@ struct NamesPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: shown, onDismiss: { names.closeEditor() }) {
+            // No `onDismiss` closing the editor: a name opened from this sheet (`NamePane.open`) closes the sheet by making
+            // the editor, and the page in the pane needs that editor. The sheet never shows an editor itself.
+            .sheet(isPresented: shown) {
                 NavigationStack {
                     NamesScreen(model: model)
                 }
                 .sheetClose { names.closeAll() }
+                // a name opened from the list opens the pane; on one narrow screen it waits for this sheet to go
+                .coversPane()
                 #if os(macOS)
                 .frame(minWidth: 520, idealWidth: 600, minHeight: 560, idealHeight: 760)
                 #endif

@@ -29,8 +29,9 @@ struct QueueJobPage: View {
             }
         }
         .onChange(of: job?.isLive, initial: true) { _, live in
-            // nothing is claimed for a job that is not there: a bar restored at launch keeps its place until it is known
-            if let live { pane.setRunning(live, for: item) }
+            // a job that is not there (cancelled, dismissed, retired, or a restored route for one that never was) is never
+            // running: the pane lets go of it instead of keeping a bar that says "gone"
+            if let live { pane.setRunning(live, for: item) } else { pane.itemGone(item) }
         }
     }
 

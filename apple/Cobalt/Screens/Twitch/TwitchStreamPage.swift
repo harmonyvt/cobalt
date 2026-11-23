@@ -44,6 +44,8 @@ struct TwitchStreamPage: View {
         .onAppear {
             store.open(login)
             pane.setRunning(true, for: item)
+            // the chat and the TV belong to the item, not to this shape of its page (rebuilt for every shape change)
+            if pane.holds(item) { pane.keepAlive("stream", for: item) { TwitchWatch(login: login, model: model) }.begin() }
         }
         .onChange(of: store.channel) { _, channel in
             // closed from somewhere else: nothing is playing any more
@@ -54,14 +56,9 @@ struct TwitchStreamPage: View {
         .onChange(of: lifecycle.phase) { _, phase in
             if phase == .active { Task { await store.load() } }
         }
-        .paneKeeps(item) {
-            if store.channel == login { store.close() }
-        }
         #if os(iOS)
         // The TV (70.5): while this page is up, a mirrored screen shows capystore's own window with the stream.
         .background(TwitchTVAccessory(enabled: TwitchTV.shared.wanted).frame(width: 0, height: 0))
-        .onAppear { TwitchTV.shared.watchStarted(model) }
-        .onDisappear { TwitchTV.shared.watchEnded() }
         .onChange(of: login) { TwitchTV.shared.refresh() }
         .sheet(isPresented: $choosingTV) {
             TwitchTVSheet().presentationDetents([.medium, .large])
@@ -241,6 +238,40 @@ struct TwitchStreamPage: View {
         TwitchTV.shared.activeChatDelay
         #else
         0
+        #endif
+    }
+}
+
+/// What a stream keeps for as long as the pane holds it, whatever shape its page is drawn in (`Pane.keepAlive`): the chat
+/// connection and the TV's watch. A page rebuilt for another shape (screen, span, bar, a peek over it) picks it up again,
+/// so neither is closed and reopened (the TV window would flicker); both end when the pane lets go of the stream.
+@MainActor
+private final class TwitchWatch: PaneKeptObject {
+    private let login: String
+    private let model: AppModel
+    private var started = false
+
+    init(login: String, model: AppModel) {
+        self.login = login
+        self.model = model
+    }
+
+    /// Idempotent: the first page to appear starts it.
+    func begin() {
+        guard !started else { return }
+        started = true
+        #if os(iOS)
+        TwitchTV.shared.watchStarted(model)
+        #endif
+    }
+
+    func paneReleased() {
+        // another channel may have opened since: close only this one's chat
+        if model.twitch.channel == login { model.twitch.close() }
+        guard started else { return }
+        started = false
+        #if os(iOS)
+        TwitchTV.shared.watchEnded()
         #endif
     }
 }

@@ -34,6 +34,11 @@ struct SwarmPage: View {
         return store.list.first { $0.id == id }
     }
 
+    /// The server says this swarm does not exist (deleted, or a restored route for one that was never there).
+    private var isGone: Bool {
+        store.shownProblem == .notFound && (store.shown == nil || store.shown?.id == id)
+    }
+
     private enum Phase { case awaiting, working, applying, review, applied, ended }
 
     private func phase(_ swarm: Swarm) -> Phase {
@@ -78,6 +83,10 @@ struct SwarmPage: View {
         .onChange(of: swarm?.isWorking, initial: true) { _, working in
             // nothing is claimed until the swarm is known: a bar restored at launch keeps its place until then
             if let working { pane.setRunning(working, for: item) }
+        }
+        .onChange(of: isGone, initial: true) { _, gone in
+            // a swarm the server does not know is never running: the pane lets go of it (no stuck bar, no restored route)
+            if gone { pane.itemGone(item) }
         }
         .onChange(of: inFront) { _, inFront in
             // nothing is read while the app is away; coming back reads the list and the swarm again

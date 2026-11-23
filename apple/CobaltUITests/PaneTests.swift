@@ -36,9 +36,7 @@ final class PaneTests: XCTestCase {
     // MARK: the areas
 
     func testLibrary() throws {
-        guard isPad else {
-            throw XCTSkip("the library on the one-screen phone layout keeps its push and overlays (LibraryPaneBridge `beside`): no pane to test")
-        }
+        // the iPad's column and the iPhone's sheet: a tap opens the post in the pane on both (owner, 2026-11-23)
         try run(area: "library", tab: "library", ready: "library.tile", running: false) { app in
             let tiles = app.descendants(matching: .any).matching(identifier: "library.tile")
             for index in 0..<min(tiles.count, 16) {
@@ -66,6 +64,9 @@ final class PaneTests: XCTestCase {
             // the story swarm is the running one
             let rows = app.descendants(matching: .any).matching(identifier: "swarm.row")
             let story = rows.matching(NSPredicate(format: "label CONTAINS[c] 'emotes'")).firstMatch
+            // `-previewSwarm` opens the story swarm in the pane at launch (SwarmsLaunch); on the phone its sheet covers the
+            // list, and a tap at the row's place would land on the sheet's stop button
+            if self.find(app, "pane").waitForExistence(timeout: 3) { return }
             (story.exists ? story : rows.firstMatch).tap()
         }
     }

@@ -67,7 +67,8 @@ struct NamePage: View {
                 PaneLoadingPage()
             }
         }
-        .task(id: id) { await open() }
+        // again when the model's editor goes (closed from elsewhere) so the page never waits for one that is not coming
+        .task(id: NameTaskKey(id: id, hasEditor: names.editor != nil)) { await open() }
         .paneKeeps(item) {
             if names.editor === editor { names.closeEditor() }
         }
@@ -82,6 +83,11 @@ struct NamePage: View {
             if !(await names.open(id: id)) { failed = true }
         }
         names.showingList = false
+    }
+
+    private struct NameTaskKey: Hashable {
+        let id: String
+        let hasEditor: Bool
     }
 
     private func page(_ editor: SearchNameEditor) -> some View {

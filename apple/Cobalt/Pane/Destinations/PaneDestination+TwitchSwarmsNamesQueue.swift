@@ -39,8 +39,8 @@ extension PaneDestination {
 // MARK: - letting go
 
 extension View {
-    /// Runs `gone` once the pane no longer holds `item` on screen or in the bar (another item replaced it, or it was
-    /// hidden). A page is rebuilt whenever the pane changes shape (beside the tab, spanned, the bar), which removes one
+    /// Runs `gone` once the pane no longer holds `item` (`Pane.holds`: not on screen, not in the bar, not under a peek, not
+    /// in the background: it was replaced by a page that is not running, or hidden). A page is rebuilt whenever the pane changes shape (beside the tab, spanned, the bar), which removes one
     /// view and adds the next in the same moment, so this waits a beat and asks the pane what it holds now. Use it to
     /// close what the page opened (a chat connection, a polled swarm, an editor): the next page of the same kind may
     /// already have taken it over, so `gone` must check that what it closes is still its own.
@@ -60,7 +60,8 @@ private struct PaneKeeps: ViewModifier {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1.2))
                 guard let pane else { return }
-                if pane.item != item || pane.state == .hidden { gone() }
+                // held = on screen, in the bar, under a peek or in the background: a stream replaced by a peek or moved to the bar stays
+                if !pane.holds(item) { gone() }
             }
         }
     }

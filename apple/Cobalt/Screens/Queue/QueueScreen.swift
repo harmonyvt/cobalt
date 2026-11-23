@@ -170,16 +170,10 @@ struct QueueScreen: View {
             return
         }
         let id = job.id.uuidString
-        // the queue sheet (iPhone, iPad) gives way first, then the pane (a sheet of its own on a narrow screen) comes up
-        if model.queueShown {
-            model.queueShown = false
-            Task {
-                try? await Task.sleep(for: .milliseconds(450))
-                pane.open(.job(id))
-            }
-        } else {
-            pane.open(.job(id))
-        }
+        // the queue sheet (iPhone, iPad) closes and the pane opens in the same breath: the queue sheet wears `coversPane`, so
+        // on a narrow screen the pane's own sheet waits for it to go, then presents
+        model.queueShown = false
+        pane.open(.job(id))
     }
 
     private func run(_ action: QueueAction, _ item: QueueItem) {
