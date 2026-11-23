@@ -48,8 +48,8 @@ struct BooruPostPage: View {
         // safe mode (or a lower level) reaches the pane from here, not through the booru screen, which is torn down when
         // another tab is up (the Mac): the post is dropped and the pane lets go of it
         .modifier(BooruSafeModeWatch(store: store))
-        .onChange(of: filteredOut, initial: true) { _, gone in
-            guard gone else { return }
+        .task(id: filteredOut) {
+            guard filteredOut else { return }
             kept = nil
             pane?.close(ifShowing: .booruPost(id))
         }
