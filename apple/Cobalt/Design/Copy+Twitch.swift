@@ -37,6 +37,9 @@ extension Copy {
         static let clipping = "making the clip…"
         static let clipSaved = "clip saving to your library"
         static let clipFailed = "twitch didn't make the clip"
+        /// The twitch tab beside a playing stream: back to the channel list, and back to the chat.
+        static let channels = "channels"
+        static let showChat = "show chat"
         static let openOnTwitch = "open on twitch"
         static let playingElsewhere = "playing on the other screen"
 

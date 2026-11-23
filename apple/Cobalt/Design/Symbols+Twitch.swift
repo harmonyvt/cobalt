@@ -23,6 +23,8 @@ extension Symbol {
         static let pin = "pin"
         static let recent = "clock"
         static let jumpToLive = "forward.end.fill"
+        static let chat = "bubble.left.and.bubble.right"
+        static let channels = "list.bullet"
         // the stream on a TV (70.5)
         static let tv = "tv"
         static let airPlay = "airplayvideo"
