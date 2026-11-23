@@ -203,8 +203,15 @@ struct GalleryActions: View {
     private func secondary(_ choice: Choice) -> some View {
         switch choice {
         case .share:
-            DetailChoiceButton(title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare) {
-                share([r])
+            let targets = model.capabilities.shareTargets(for: r, file: true)
+            if targets.isChoice {
+                // the file, its share link or its direct link
+                ShareChoiceMenuItems(targets: targets, file: { share([r]) })
+                    .buttonStyle(.cobaltIcon(state: controller.preparingShare ? .working : .idle))
+            } else {
+                DetailChoiceButton(title: Copy.Media.share, symbol: Symbol.Media.share, working: controller.preparingShare) {
+                    share([r])
+                }
             }
         case .savePhotos:
             let state = controller.photos[r.id] ?? .idle

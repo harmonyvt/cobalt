@@ -59,6 +59,10 @@ public struct LibraryFile: Sendable, Codable, Equatable, Identifiable {
     /// `private_url` (APP-API-CONTRACT 36.3): the file's live private link, `<share_base_url>p/<key>`; nil when it has
     /// none (and from a server without private links). While set the file is not public.
     public var privateURL: URL? = nil
+    /// `private_file_url` (APP-API-CONTRACT 36.3): the file's bytes under its private link, `<private_url>/1.<ext>`; nil
+    /// when it has none or the server does not send it. Read `Rendition.privateFileURL`, which checks it still belongs to
+    /// `privateURL` (a rotate or a revoke here changes that one only).
+    public var privateFileURL: URL? = nil
 
     /// What a made file is (the key a remake replaces); nil for anything else.
     public var madeKind: MadeKind? { MadeKind(role: galleryRole, spec: madeSpec) }
@@ -88,6 +92,7 @@ extension LibraryFile {
         case galleryRole = "role"
         case itemIndex, madeFrom, madeSpec               // `item_index`, `made_from`, `made_spec`
         case privateURL = "privateUrl"                   // `private_url`
+        case privateFileURL = "privateFileUrl"           // `private_file_url`
     }
 
     public init(from decoder: Decoder) throws {
@@ -115,6 +120,7 @@ extension LibraryFile {
         madeFrom = ((try? c.decodeIfPresent([String].self, forKey: .madeFrom)) ?? nil) ?? []
         madeSpec = ((try? c.decodeIfPresent(JSONValue.self, forKey: .madeSpec)) ?? nil)?.object.flatMap(MadeSpec.init(object:))
         privateURL = (try? c.decodeIfPresent(URL.self, forKey: .privateURL)) ?? nil
+        privateFileURL = (try? c.decodeIfPresent(URL.self, forKey: .privateFileURL)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -142,6 +148,7 @@ extension LibraryFile {
             try c.encode(value, forKey: .madeSpec)
         }
         try c.encodeIfPresent(privateURL, forKey: .privateURL)
+        try c.encodeIfPresent(privateFileURL, forKey: .privateFileURL)
     }
 }
 

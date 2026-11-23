@@ -119,10 +119,15 @@ struct PaneChrome: View {
         if !more.isEmpty {
             Menu {
                 ForEach(more) { action in
-                    Button(role: action.role) { action.perform() } label: {
-                        Label(action.title, systemImage: action.systemImage)
+                    if action.choices.isEmpty {
+                        Button(role: action.role) { action.perform() } label: {
+                            Label(action.title, systemImage: action.systemImage)
+                        }
+                        .disabled(action.off(offline: offline))
+                    } else {
+                        Menu(action.title, systemImage: action.systemImage) { PaneChoiceItems(choices: action.choices) }
+                            .disabled(action.off(offline: offline))
                     }
-                    .disabled(action.off(offline: offline))
                 }
             } label: {
                 Image(systemName: Symbol.Pane.more)

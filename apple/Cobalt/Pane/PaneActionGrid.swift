@@ -43,13 +43,23 @@ struct PaneActionGrid: View {
         stride(from: 0, to: count, by: 2).map { start in Array(start..<min(start + 2, count)) }
     }
 
+    @ViewBuilder
     private func button(_ action: PaneAction, @ViewBuilder label: () -> some View) -> some View {
         let off = action.off(offline: offline)
-        return Button(role: action.role) { action.perform() } label: { label() }
-            .buttonStyle(PaneBigButtonStyle(destructive: action.role == .destructive))
-            .disabled(off)
-            .opacity(off ? 0.45 : 1)
-            .accessibilityHint(action.needsServer && offline ? Copy.Pane.needsServer : "")
+        Group {
+            if action.choices.isEmpty {
+                Button(role: action.role) { action.perform() } label: { label() }
+            } else {
+                // `share`: the tile opens its choices
+                Menu { PaneChoiceItems(choices: action.choices) } label: { label() }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+            }
+        }
+        .buttonStyle(PaneBigButtonStyle(destructive: action.role == .destructive))
+        .disabled(off)
+        .opacity(off ? 0.45 : 1)
+        .accessibilityHint(action.needsServer && offline ? Copy.Pane.needsServer : "")
     }
 }
 
@@ -103,5 +113,20 @@ private struct PaneBigButtonStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(Motion.press, value: configuration.isPressed)
             .haptic(.impact(weight: .light), trigger: configuration.isPressed) { $0 }
+    }
+}
+
+/// An action's choices as menu buttons (a tile's, a header icon's, or a submenu of the more menu).
+struct PaneChoiceItems: View {
+    let choices: [PaneAction]
+    @Environment(\.paneOffline) private var offline
+
+    var body: some View {
+        ForEach(choices) { choice in
+            Button(role: choice.role) { choice.perform() } label: {
+                Label(choice.title, systemImage: choice.systemImage)
+            }
+            .disabled(choice.off(offline: offline))
+        }
     }
 }

@@ -96,9 +96,11 @@ struct DetailMenu: View {
                     Task { await controller.savePhotos(rendition, in: item) }
                 }
             }
-            if let url = shareURL(rendition) {
-                ShareLink(item: url) { Label(Copy.Media.share, systemImage: Symbol.Media.share) }
-            }
+            // the file (when it is on this device), its share link or its direct link
+            ShareChoiceMenuItems(
+                targets: model.capabilities.shareTargets(for: rendition, file: rendition.isOnDevice),
+                fileURL: rendition.isOnDevice ? rendition.local?.fileURL : nil
+            )
         }
     }
 
@@ -117,11 +119,6 @@ struct DetailMenu: View {
             }
             .disabled(deleting)
         }
-    }
-
-    private func shareURL(_ r: Rendition) -> URL? {
-        if let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url }
-        return model.capabilities.liveLink(for: r)
     }
 
     var body: some View {

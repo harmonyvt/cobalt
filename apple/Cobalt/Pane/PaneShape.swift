@@ -47,16 +47,19 @@ struct PaneAction: Identifiable {
     /// Dimmed and disabled while the server can't be reached (`\.paneOffline`).
     var needsServer: Bool
     var isDisabled: Bool
+    /// Not empty: the action opens these as a menu instead of running `perform` (`share`: file, share link, direct link).
+    var choices: [PaneAction]
     let perform: @MainActor () -> Void
 
     init(_ title: String, systemImage: String, role: ButtonRole? = nil, needsServer: Bool = false, disabled: Bool = false,
-         id: String? = nil, perform: @escaping @MainActor () -> Void) {
+         id: String? = nil, choices: [PaneAction] = [], perform: @escaping @MainActor () -> Void) {
         self.id = id ?? title
         self.title = title
         self.systemImage = systemImage
         self.role = role
         self.needsServer = needsServer
         self.isDisabled = disabled
+        self.choices = choices
         self.perform = perform
     }
 

@@ -202,7 +202,7 @@ struct PanePostContent: View {
 
     private func page(_ c: DetailContext) -> some View {
         let item = c.item
-        let actions = PostActions(c: c, share: share, leave: { pane.close() }, shellMakeWebp: { shell.makeWebp($0) })
+        let actions = PostActions(c: c, share: share, shareLink: { filesToShare = [$0] }, leave: { pane.close() }, shellMakeWebp: { shell.makeWebp($0) })
         // On the iPhone's sheet the grid is what the library's context menu was: share, add to link, edit, delete
         // (the mockup, 2026-11-23); beside the tab it stays the plan's four, and those go to `more` with the rest.
         let compact = pane.placement == .compact
@@ -535,6 +535,8 @@ struct PanePostContent: View {
 struct PostActions {
     let c: DetailContext
     let share: ([Rendition]) -> Void
+    /// Hands a share link or a direct link to the system sheet.
+    let shareLink: (URL) -> Void
     let leave: () -> Void
     let shellMakeWebp: (MediaItem) -> Void
 
@@ -607,7 +609,7 @@ struct PostActions {
         case .savePhotos:
             return savePhotosAction(inItem: false)
         case .share:
-            return PaneAction(Copy.Media.share, systemImage: Symbol.Media.share, id: "share") { share([r]) }
+            return shareAction(disabled: controller.preparingShare)
         case .publicShare:
             return PaneAction(Copy.Media.publicShare, systemImage: Symbol.Media.publicShare, needsServer: true, id: "public-share") {
                 Task { await controller.publicShare(r) }
@@ -643,7 +645,7 @@ struct PostActions {
                 systemImage: done ? Symbol.Media.copied : Symbol.Media.copyLink, id: "copy-link"
             ) { controller.copy(url, for: r.id) }
         case .share:
-            return PaneAction(Copy.Media.share, systemImage: Symbol.Media.share, disabled: controller.preparingShare, id: "share") { share([r]) }
+            return shareAction(disabled: controller.preparingShare)
         case .savePhotos:
             return savePhotosAction(inItem: true)
         case .tryAgain(let index):
@@ -658,7 +660,7 @@ struct PostActions {
     private func gallerySecondary(_ choice: GalleryActions.Choice) -> PaneAction? {
         switch choice {
         case .share:
-            return PaneAction(Copy.Media.share, systemImage: Symbol.Media.share, disabled: controller.preparingShare, id: "share") { share([r]) }
+            return shareAction(disabled: controller.preparingShare)
         case .savePhotos:
             return savePhotosAction(inItem: true)
         case .makeWebp:
@@ -675,6 +677,12 @@ struct PostActions {
     }
 
     // MARK: shared
+
+    /// `share`: the file, its share link or its direct link (a menu when there is more than one).
+    private func shareAction(disabled: Bool) -> PaneAction? {
+        let targets = model.capabilities.shareTargets(for: r, file: r.isOnDevice || r.file != nil)
+        return PaneAction.share(targets, disabled: disabled, file: { share([r]) }, links: { shareLink($0) })
+    }
 
     /// `save to photos`: once the file is in the owner's photos it says where and stops being a button.
     private func savePhotosAction(inItem: Bool) -> PaneAction? {
