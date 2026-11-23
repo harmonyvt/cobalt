@@ -324,3 +324,70 @@ describe("the request log drops userinfo as well as the query", () => {
         expect(row.url_prefix).toBe("https://files.example.com/pics/a.png");
     });
 });
+
+describe("a booru save (72.10): `booru` on POST /studio", () => {
+    const FILE = "https://cdn.donmai.us/original/aa/bb/aabbccdd.png";
+    const PAGE = "https://danbooru.donmai.us/posts/123456";
+
+    it("fetches the file but keeps the Danbooru page as the link, and the artist's link in the post details", async () => {
+        w.helper.fetchDone = { ...SAVED_PNG, title: "aabbccdd", service: "donmai" };
+        const res = await post({
+            url: FILE,
+            booru: { page: PAGE, artist: "mochi_(artist)", source: "https://www.pixiv.net/artworks/99", title: "hatsune miku", posted_at: 1762600000000, favs: 42 },
+        });
+        expect(res.status).toBe(201);
+        const sid = ((await res.json()) as any).id as string;
+        expect(w.helper.fetchBodies[0]).toMatchObject({ id: sid, url: FILE });
+        await settle(sid);
+        expect(w.session(sid)).toMatchObject({ status: "ready", link: PAGE });
+        expect(w.items()[0]).toMatchObject({ link: PAGE });
+        const details = await w.db.prepare("SELECT * FROM post_details WHERE link = ?1").bind(PAGE).first<any>();
+        expect(details).toMatchObject({
+            site: "generic", found: 1, name: "mochi_(artist)", text: "https://www.pixiv.net/artworks/99", title: "hatsune miku",
+            site_name: "danbooru", posted_at: 1762600000000, counts: '{"likes":42}', edited_at: null,
+        });
+    });
+
+    it("refuses a page that is not a Danbooru post, or a file that is not Danbooru's", async () => {
+        expect((await post({ url: FILE, booru: { page: "https://evil.example/posts/1" } })).status).toBe(400);
+        expect((await post({ url: "https://files.example.com/a.png", booru: { page: PAGE } })).status).toBe(400);
+        expect((await post({ url: FILE, booru: "yes" })).status).toBe(400);
+        expect(w.helper.fetchBodies).toHaveLength(0);
+    });
+});
+
+describe("linking a saved post to its Danbooru post (72.11): PUT /library/items/<id>/booru", () => {
+    const raw = (over: Record<string, unknown> = {}) => ({
+        id: 777, rating: "g", tag_string: "1girl umbrella", tag_string_artist: "mochi_(artist)", tag_string_character: "hatsune_miku",
+        file_url: "https://cdn.donmai.us/original/aa/bb/x.png", file_ext: "png", source: "https://x.com/mochi/status/1",
+        created_at: "2024-01-02T03:04:05.678-05:00", fav_count: 9, ...over,
+    });
+    const put = (id: string, body: unknown) =>
+        call(`/library/items/${id}/booru`, { method: "PUT", headers: { ...auth, "content-type": "application/json" }, body: json(body) });
+
+    it("gives every file of the post the Danbooru page as its link, keeps the post key, and writes the details", async () => {
+        const sid = ((await (await post({ url: DISCORD })).json()) as any).id as string;
+        await settle(sid);
+        const item = w.items()[0]!;
+        const res = await put(item.id, { post: raw() });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({ status: "success", post: sid, link: "https://danbooru.donmai.us/posts/777" });
+        expect(w.items()[0]).toMatchObject({ link: "https://danbooru.donmai.us/posts/777", post_key: sid });
+        expect(w.session(sid)).toMatchObject({ link: "https://danbooru.donmai.us/posts/777" });
+        const d = await w.db.prepare("SELECT * FROM post_details WHERE link = ?1").bind("https://danbooru.donmai.us/posts/777").first<any>();
+        expect(d).toMatchObject({ name: "mochi_(artist)", text: "https://x.com/mochi/status/1", title: "hatsune miku", site_name: "danbooru", posted_at: 1704182645678 });
+        const lib = await library();
+        expect(lib.posts[0]).toMatchObject({ id: sid, link: "https://danbooru.donmai.us/posts/777" });
+    });
+
+    it("refuses a post above general, a themed one, junk, and an unknown item", async () => {
+        const sid = ((await (await post({ url: DISCORD })).json()) as any).id as string;
+        await settle(sid);
+        const id = w.items()[0]!.id;
+        expect((await put(id, { post: raw({ rating: "s" }) })).status).toBe(422);
+        expect((await put(id, { post: raw({ tag_string: "bikini" }) })).status).toBe(422);
+        expect((await put(id, { post: { id: "x" } })).status).toBe(400);
+        expect((await put("ZZZZZZZZZZZZZZZZ", { post: raw() })).status).toBe(404);
+        expect(w.items()[0]!.link).toBe(DISCORD.split("?")[0]);
+    });
+});

@@ -33,11 +33,14 @@ public struct JobOptions: Sendable, Equatable, Codable {
     public var makePublic: Bool?
     /// What to do with a multi-item post; nil = `.saveAll`.
     public var galleries: GalleryHandling?
+    /// A save from the booru tab (APP-API-CONTRACT 72.10): keeps the Danbooru page and the artist. One-input adds only.
+    public var booru: BooruCredit?
 
-    public init(title: String? = nil, makePublic: Bool? = nil, galleries: GalleryHandling? = nil) {
+    public init(title: String? = nil, makePublic: Bool? = nil, galleries: GalleryHandling? = nil, booru: BooruCredit? = nil) {
         self.title = title
         self.makePublic = makePublic
         self.galleries = galleries
+        self.booru = booru
     }
 }
 

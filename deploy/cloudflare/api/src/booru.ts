@@ -1,18 +1,19 @@
 // The booru tab (APP-API-CONTRACT.md section 72): Danbooru search through the Worker, with the content level and the
 // filters applied here, so a device can never see more than its own setting allows.
 //
-//  - Content levels are Danbooru's ratings g (general) and s (sensitive). Questionable (q) and explicit (e) do not exist
-//    in capystore (owner, 2026-11-22: "remove the questionable rating"): they are not levels, never asked for, and a post
-//    rated q or e is dropped even if Danbooru returns one. Nudity tags are always hidden too (ALWAYS_HIDDEN).
+//  - General only (owner, 2026-11-23: "just general, not even sensitive, and no toggles"). Danbooru's s, q and e ratings
+//    are never asked for, and a post rated anything but g is dropped even if Danbooru returns one. Every theme is hidden,
+//    always (THEMES): the level and the theme modes are no longer settings, and old saved values are ignored. Nudity tags
+//    are always hidden too (ALWAYS_HIDDEN).
 //  - A hard block is always on, at every level, for every key: sexualised child-like characters (HARD_BLOCK). Not a setting.
-//  - Each key (each device session, each key for tools) has its own row in D1 `booru_settings` (migration 0046): its level,
-//    the theme modes (show, blur, hide) and its blacklist. No row: level general, the default themes, no blacklist.
+//  - Each key (each device session, each key for tools) has its own row in D1 `booru_settings` (migration 0046). Only its
+//    blacklist still counts (it can only hide more); the level and theme columns are read as general and hide.
 //  - Danbooru lets an anonymous search use 2 tags. The owner's own tags come first; the rating clause and the order are
 //    extras, dropped (and reported in `dropped`) when Danbooru refuses the tag count. Every filter is applied here again
 //    on the posts that come back, so dropping an extra only makes pages thinner, never less safe.
 
-export type BooruLevel = "g" | "s";
-export const LEVELS: readonly BooruLevel[] = ["g", "s"];
+export type BooruLevel = "g";
+export const LEVELS: readonly BooruLevel[] = ["g"];
 export type ThemeMode = "show" | "blur" | "hide";
 export const THEME_MODES: readonly ThemeMode[] = ["show", "blur", "hide"];
 
@@ -25,29 +26,30 @@ const TIMEOUT_MS = 12_000;
 
 // Always hidden, at every level, whatever the settings say.
 export const HARD_BLOCK: readonly string[] = ["loli", "shota", "toddlercon", "lolicon", "shotacon", "child_on_child"];
-// Nudity, hidden at every level (there is no questionable level any more), in case a post rated s carries one.
+// Nudity, always hidden, in case a post rated g carries one.
 export const ALWAYS_HIDDEN: readonly string[] = ["nude", "completely_nude", "nipples", "pussy", "penis", "areolae"];
 
 export type BooruTheme = { id: string; label: string; detail: string; tags: string[]; default: ThemeMode; min_level: BooruLevel };
 
-// The themes inside the levels (section 72.3). A theme matches when a post has any of its tags. Ids are one word: the
-// app decodes with convertFromSnakeCase, which also rewrites dictionary keys.
+// The themes (section 72.3). A theme matches when a post has any of its tags, and a matching post is always hidden (72.9:
+// the modes are no longer settings). Ids are one word: the app decodes with convertFromSnakeCase, which also rewrites
+// dictionary keys.
 export const THEMES: readonly BooruTheme[] = [
     {
         id: "revealing",
         label: "revealing outfits",
         detail: "swimsuits, underwear, lingerie",
         tags: ["swimsuit", "bikini", "one-piece_swimsuit", "underwear", "panties", "bra", "lingerie", "leotard", "underwear_only"],
-        default: "show",
-        min_level: "s",
+        default: "hide",
+        min_level: "g",
     },
     {
         id: "suggestive",
         label: "suggestive",
         detail: "poses and focus shots",
         tags: ["cleavage", "ass_focus", "breast_focus", "pantyshot", "upskirt", "groin", "skindentation", "covering_breasts"],
-        default: "show",
-        min_level: "s",
+        default: "hide",
+        min_level: "g",
     },
     {
         id: "partial",
@@ -55,7 +57,7 @@ export const THEMES: readonly BooruTheme[] = [
         detail: "topless, covered nudity",
         tags: ["topless", "bottomless", "convenient_censoring", "naked_towel", "nude_cover", "naked_shirt", "censored"],
         default: "hide",
-        min_level: "s",
+        min_level: "g",
     },
     {
         id: "violence",
@@ -77,11 +79,11 @@ export const THEMES: readonly BooruTheme[] = [
 
 export type BooruSettings = { level: BooruLevel; themes: Record<string, ThemeMode>; blacklist: string; updated_at: number | null };
 
-export const defaultThemes = (): Record<string, ThemeMode> => Object.fromEntries(THEMES.map((t) => [t.id, t.default]));
+// Every theme hidden: the only modes there are (72.9).
+export const defaultThemes = (): Record<string, ThemeMode> => Object.fromEntries(THEMES.map((t) => [t.id, "hide" as ThemeMode]));
 
 export const isLevel = (v: unknown): v is BooruLevel => typeof v === "string" && (LEVELS as readonly string[]).includes(v);
 export const levelRank = (l: BooruLevel) => LEVELS.indexOf(l);
-export const lowerLevel = (a: BooruLevel, b: BooruLevel): BooruLevel => (levelRank(a) <= levelRank(b) ? a : b);
 
 // ---- settings in D1 -------------------------------------------------------------------------------------------------
 
@@ -94,38 +96,23 @@ export async function readSettings(db: D1Database, keyId: string): Promise<Booru
     } catch {
         row = null; // migration 0046 not applied yet: the defaults
     }
-    const themes = defaultThemes();
-    if (row) {
-        try {
-            const saved = JSON.parse(row.themes) as Record<string, unknown>;
-            for (const t of THEMES) {
-                const m = saved[t.id];
-                if (typeof m === "string" && (THEME_MODES as readonly string[]).includes(m)) themes[t.id] = m as ThemeMode;
-            }
-        } catch {
-            // a broken row reads as the defaults
-        }
-    }
+    // a row's saved level (s, or the old q) and theme modes no longer count: general, every theme hidden (72.9)
     return {
-        // a row saved at the old questionable level reads as sensitive, the highest there is now
-        level: row && isLevel(row.level) ? row.level : row?.level === "q" ? "s" : "g",
-        themes,
+        level: "g",
+        themes: defaultThemes(),
         blacklist: row?.blacklist ?? "",
         updated_at: row?.updated_at ?? null,
     };
 }
 
-export type SettingsPatch = { level?: BooruLevel; themes?: Partial<Record<string, ThemeMode>>; blacklist?: string };
+export type SettingsPatch = { level?: string; themes?: Partial<Record<string, ThemeMode>>; blacklist?: string };
 
+// Only the blacklist is saved; a level or theme modes in the patch (an older app) are ignored (72.9).
 export async function writeSettings(db: D1Database, keyId: string, patch: SettingsPatch, now: number): Promise<BooruSettings> {
     const cur = await readSettings(db, keyId);
-    const themes = { ...cur.themes };
-    for (const [id, mode] of Object.entries(patch.themes ?? {})) {
-        if (mode && THEMES.some((t) => t.id === id)) themes[id] = mode;
-    }
     const next: BooruSettings = {
-        level: patch.level ?? cur.level,
-        themes,
+        level: "g",
+        themes: defaultThemes(),
         blacklist: patch.blacklist !== undefined ? patch.blacklist.slice(0, BLACKLIST_MAX_CHARS) : cur.blacklist,
         updated_at: now,
     };
@@ -138,6 +125,116 @@ export async function writeSettings(db: D1Database, keyId: string, patch: Settin
         .bind(keyId, next.level, JSON.stringify(next.themes), next.blacklist, now)
         .run();
     return next;
+}
+
+// ---- credit for a saved post (72.10) ------------------------------------------------------------------------------------
+
+// `booru` on POST /studio: a save from the booru tab keeps the Danbooru post page as its link (not the bare file) and the
+// artist's own link in its post details (52.1: name = the artist, text = their link, site_name "danbooru").
+export type BooruCredit = { page: string; artist: string | null; source: string | null; title: string | null; posted_at: number | null; favs: number | null };
+
+const PAGE_RE = /^https:\/\/danbooru\.donmai\.us\/posts\/(\d{1,12})$/;
+const short = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+
+/** null: no `booru` field; "bad": one that is not a Danbooru post saved from its own file. */
+export function parseBooruCredit(v: unknown, fileLink: string): BooruCredit | null | "bad" {
+    if (v === undefined || v === null) return null;
+    if (typeof v !== "object" || Array.isArray(v)) return "bad";
+    const o = v as Record<string, unknown>;
+    if (typeof o.page !== "string" || !PAGE_RE.test(o.page)) return "bad";
+    let host = "";
+    try {
+        host = new URL(fileLink).hostname.toLowerCase();
+    } catch {
+        return "bad";
+    }
+    if (!host.endsWith(".donmai.us")) return "bad";
+    let source: string | null = null;
+    if (typeof o.source === "string" && o.source.trim()) {
+        try {
+            const u = new URL(o.source.trim());
+            if ((u.protocol === "https:" || u.protocol === "http:") && o.source.length <= 2048) source = u.toString();
+        } catch {
+            source = null;
+        }
+    }
+    const t = typeof o.posted_at === "number" && Number.isFinite(o.posted_at) && o.posted_at > 0 ? Math.round(o.posted_at) : null;
+    const favs = typeof o.favs === "number" && Number.isFinite(o.favs) && o.favs >= 0 ? Math.round(o.favs) : null;
+    return { page: o.page, artist: short(o.artist, 200), source, title: short(o.title, 200), posted_at: t, favs };
+}
+
+/** The post details row for a booru save; a row already there (Harmony may have edited it) is left alone. */
+export async function writeBooruDetails(db: D1Database, c: BooruCredit, now: number): Promise<void> {
+    await db
+        .prepare(
+            `INSERT INTO post_details (link, site, found, name, handle, text, title, channel, game, clipper, site_name, posted_at, counts, verified, avatar_key, fetched_at, edited_at)
+             VALUES (?1, 'generic', 1, ?2, NULL, ?3, ?4, NULL, NULL, NULL, 'danbooru', ?5, ?6, 0, NULL, ?7, NULL)
+             ON CONFLICT(link) DO NOTHING`,
+        )
+        .bind(c.page, c.artist, c.source, c.title, c.posted_at, c.favs === null ? null : JSON.stringify({ likes: c.favs }), now)
+        .run();
+}
+
+// ---- linking a library post to the Danbooru post it is (72.11) -----------------------------------------------------------
+
+/** The credit of a Danbooru post, worked out here from Danbooru's own post object. */
+export function creditOf(p: DanbooruPost): BooruCredit {
+    const words = (s: string | undefined) => split(s).slice(0, 3).map((t) => t.replace(/_/g, " ")).join(", ");
+    const title = words(p.tag_string_character) || words(p.tag_string_copyright);
+    const t = p.created_at ? Date.parse(p.created_at) : NaN;
+    let source: string | null = null;
+    try {
+        const u = p.source ? new URL(p.source) : null;
+        source = u && (u.protocol === "https:" || u.protocol === "http:") ? u.toString() : null;
+    } catch {
+        source = null;
+    }
+    return {
+        page: `${DANBOORU}/posts/${p.id}`,
+        artist: split(p.tag_string_artist)[0] ?? null,
+        source,
+        title: title || null,
+        posted_at: Number.isFinite(t) ? t : null,
+        favs: typeof p.fav_count === "number" ? p.fav_count : null,
+    };
+}
+
+export type LinkResult = { status: "success"; post: string; link: string; credit: BooruCredit } | { error: string; status: number };
+
+/**
+ * PUT /library/items/<id>/booru: the post `id` belongs to becomes linked to this Danbooru post (the app found it with a
+ * picture search and sends Danbooru's post object, which only the devices can fetch). General only: a post the booru tab
+ * would not show (72.9) is refused. Every file of the post gets the page as its link; the post details are written when
+ * the page has none.
+ */
+export async function linkPost(db: D1Database, itemId: string, raw: unknown, postKeySql: string, now: number): Promise<LinkResult> {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { status: 400, error: "error.booru.bad" };
+    const p = raw as DanbooruPost;
+    if (typeof p.id !== "number" || !Number.isInteger(p.id) || p.id <= 0) return { status: 400, error: "error.booru.bad" };
+    const v = judge(p, "g", defaultThemes(), [], {});
+    if (!v.keep) return { status: 422, error: "error.booru.not_general" };
+    const anchor = await db
+        .prepare(`SELECT ${postKeySql} AS post_key FROM media_items m WHERE (m.id = ?1 OR m.public_id = ?1) AND m.deleted_at IS NULL ORDER BY (m.id = ?1) DESC LIMIT 1`)
+        .bind(itemId)
+        .first<{ post_key: string }>();
+    if (!anchor) return { status: 404, error: "error.library.not_found" };
+    const credit = creditOf(p);
+    // the post's key is written down first (it can fall back to the link), so changing the link never moves the post
+    await db
+        .prepare(`UPDATE media_items AS m SET post_key = ?2, link = ?1 WHERE ${postKeySql} = ?2 AND m.deleted_at IS NULL`)
+        .bind(credit.page, anchor.post_key)
+        .run();
+    // the saves behind it read the same, except an upload's session, whose `upload:` link names the post (post-key.ts)
+    await db
+        .prepare(
+            `UPDATE studio_sessions SET link = ?1
+              WHERE id IN (SELECT session_id FROM media_items WHERE post_key = ?2 AND session_id IS NOT NULL)
+                AND (link IS NULL OR link NOT LIKE 'upload:%')`,
+        )
+        .bind(credit.page, anchor.post_key)
+        .run();
+    await writeBooruDetails(db, credit, now);
+    return { status: "success", post: anchor.post_key, link: credit.page, credit };
 }
 
 // ---- the blacklist: Danbooru's own rule format ------------------------------------------------------------------------
@@ -350,7 +447,7 @@ const ORDER_TAG: Record<Order, string | null> = {
     random: "order:random",
 };
 
-export type SearchInput = { tags: string; page: number; order: Order; level?: BooruLevel } & Refine;
+export type SearchInput = { tags: string; page: number; order: Order; level?: string } & Refine;
 
 export type SearchResult = {
     status: "success";
@@ -438,17 +535,17 @@ export function filterPosts(raw: DanbooruPost[], level: BooruLevel, themes: Reco
 // POST /booru/filter (72.7): Danbooru answers the apps' own requests but refuses the Worker's (live, 2026-11-21), so the
 // apps fetch a page of posts.json themselves and hand it here; this key's settings decide what comes back, exactly as on
 // GET /booru/posts.
-export type FilterInput = { posts: unknown[]; level?: BooruLevel } & Refine;
+export type FilterInput = { posts: unknown[]; level?: string } & Refine;
 
 export function filterRaw(settings: BooruSettings, input: FilterInput) {
-    const level = input.level ? lowerLevel(input.level, settings.level) : settings.level;
+    const level: BooruLevel = "g"; // general only; an older app's `level` is ignored (72.9)
     const raw = input.posts.filter((p): p is DanbooruPost => !!p && typeof p === "object" && !Array.isArray(p));
     const { posts, hidden } = filterPosts(raw, level, settings.themes, parseBlacklist(settings.blacklist), input);
     return { status: "success" as const, level, posts, hidden };
 }
 
 export async function searchPosts(fetchFn: FetchFn, settings: BooruSettings, input: SearchInput): Promise<SearchResult> {
-    const level = input.level ? lowerLevel(input.level, settings.level) : settings.level;
+    const level: BooruLevel = "g"; // general only; an older app's `level` is ignored (72.9)
     const userTags = cleanTags(input.tags);
     const rules = parseBlacklist(settings.blacklist);
     const order = ORDER_TAG[input.order];

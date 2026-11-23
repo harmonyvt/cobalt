@@ -14,7 +14,7 @@ extension Copy {
         static let tooManyTags = "danbooru takes 2 tags per search. take one out."
         static func hidden(_ n: Int) -> String { n == 1 ? "1 hidden by your filters" : "\(n) hidden by your filters" }
         static let loading = "loading…"
-        static let empty = "nothing here at this level"
+        static let empty = "nothing here"
         static let emptyHint = "try other tags, or look at your filters."
         static let failed = "danbooru didn't answer"
         static let busy = "danbooru is busy, try again in a moment"
@@ -31,41 +31,14 @@ extension Copy {
             }
         }
 
-        // MARK: levels
-
-        static func level(_ l: BooruLevel) -> String {
-            switch l {
-            case .general: return "general"
-            case .sensitive: return "sensitive"
-            }
-        }
-        static func levelDetail(_ l: BooruLevel) -> String {
-            switch l {
-            case .general: return "safe for anyone"
-            case .sensitive: return "swimsuits, mild"
-            }
-        }
-        static func upTo(_ l: BooruLevel) -> String { l == .general ? "general" : "up to \(level(l))" }
-        static let safeMode = "safe mode: your screen is shared or recorded, so only general shows"
-        static let raiseReason = "raise the booru level on this device"
-
         // MARK: filters
 
         static let filters = "filters"
-        static let contentLevel = "content level"
-        static let thisDevice = "this device only. going up asks for face id."
-        static let presets = "presets"
-        static let presetSafe = "stream safe"
-        static let presetSafeDetail = "general only, gore hidden"
-        static let presetCozy = "cozy"
-        static let presetCozyDetail = "up to sensitive"
-        static let themes = "themes"
-        static let themesHint = "what to do with posts a theme matches, inside your level."
-        static func mode(_ m: BooruThemeMode) -> String { m.rawValue }
-        static let aboveLevel = "only matters at a higher level"
         static let alwaysHidden = "always hidden"
         static let hardBlock = "sexual content with child-like characters"
-        static let hardBlockDetail = "every level, every device. not a setting."
+        static let hardBlockDetail = "every device. not a setting."
+        static let generalOnly = "anything above general, plus swimsuits, suggestive, nudity, gore and body horror"
+        static let generalOnlyDetail = "general only, every device. not a setting."
         static let refine = "sort and refine"
         static let order = "order"
         static func order(_ o: BooruOrder) -> String {
@@ -115,5 +88,57 @@ extension Copy {
         static func favs(_ n: Int) -> String { "\(n)" }
         static func size(_ w: Int, _ h: Int, _ ext: String) -> String { "\(w) × \(h) · \(ext)" }
         static let close = "close"
+    }
+}
+
+/// Copy for finding a picture's booru post (APP-API-CONTRACT 72.11; lowercase).
+extension Copy {
+    enum BooruFind {
+        static let header = "booru"
+        static let find = "find on booru"
+        static let findAgain = "find on booru again"
+        static func linkedTo(_ url: URL) -> String { "linked: danbooru #\(url.lastPathComponent)" }
+        static let title = "find on booru"
+        static let searching = "looking for this picture on danbooru…"
+        static func waited(_ s: Int) -> String { s < 5 ? "this can take up to a minute" : "\(s) s · this can take up to a minute" }
+        static let none = "no booru post found"
+        static let noneHint = "only general posts count. a very new post may not be searchable yet."
+        static let pick = "close matches, best first. tap one to link it."
+        static let linking = "linking…"
+        static let linked = "linked: this post's source is now the danbooru page"
+        static let wrongOne = "wrong one? pick another"
+        static let use = "use"
+        static func similarity(_ n: Int) -> String { "\(n)% match" }
+        static func who(_ p: BooruPost) -> String {
+            let words = { (tags: [String]) in tags.prefix(2).map { $0.replacingOccurrences(of: "_", with: " ") }.joined(separator: ", ") }
+            let artist = p.tags.artist.first.map { "by \($0.replacingOccurrences(of: "_", with: " "))" }
+            let what = p.tags.character.isEmpty ? words(p.tags.copyright) : words(p.tags.character)
+            return [artist, what.isEmpty ? nil : what, "#\(p.id)"].compactMap { $0 }.joined(separator: " · ")
+        }
+        static func failure(_ code: String) -> String {
+            switch code {
+            case "error.network": return "you're offline"
+            case "error.booru.no_picture": return "couldn't read this picture"
+            case "error.booru.not_general": return "that post isn't general, so it can't be linked"
+            case "error.booru.too_large": return "this picture is too big to search"
+            case "error.booru.upstream", "error.booru.busy": return Copy.Booru.failed
+            default: return "the picture search didn't answer. try again in a bit."
+            }
+        }
+    }
+}
+
+/// Copy for the Danbooru key in the booru filters (APP-API-CONTRACT 72.12; lowercase).
+extension Copy {
+    enum DanbooruKey {
+        static let header = "danbooru account"
+        static let login = "danbooru username"
+        static let key = "api key"
+        static let save = "check and save"
+        static let remove = "remove"
+        static func signedIn(_ name: String) -> String { "using \(name)'s key" }
+        static let hint = "makes \"find on booru\" ask danbooru itself: a few seconds instead of up to a minute. make one on danbooru from your profile, under api key. kept on this device only."
+        static let refused = "danbooru didn't accept that username and key"
+        static let offline = "you're offline"
     }
 }

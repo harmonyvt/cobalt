@@ -1,13 +1,15 @@
 // The booru tab (APP-API-CONTRACT.md section 72): Danbooru search, tag suggestions and each key's filter settings. The
 // work is in src/booru.ts.
-//  - A client key or a device session (auth "key"), CORS for the web app, no-store. Settings are per key: each device
-//    session has its own level, themes and blacklist.
-//  - Explicit does not exist here: the level is general or sensitive only (no questionable either).
+//  - A client key or a device session (auth "key"), CORS for the web app, no-store. Settings are per key, but only the
+//    blacklist is still a setting.
+//  - General only (72.9): no sensitive, questionable or explicit, every theme hidden. `level` and theme modes are still
+//    accepted from older apps and ignored.
 //  - Never the chat AI's or the MCP's (tier hidden).
 import * as z from "zod";
 import {
     autocomplete,
     filterRaw,
+    linkPost,
     BLACKLIST_MAX_CHARS,
     BooruError,
     LEVELS,
@@ -20,9 +22,13 @@ import {
     type BooruSettings,
 } from "../../booru";
 import { defineOp, ok, type OpContext, type OpReply } from "../op";
+import { ITEM_ID_REGEX } from "../../gate";
+import { POST_KEY_SQL } from "../../post-key";
 
 const Status = z.literal("success");
-const Level = z.enum(LEVELS as unknown as ["g", "s"]).describe("g general, s sensitive; there is no questionable or explicit");
+const Level = z.literal("g").describe("g general, the only level there is");
+// what older apps still send (8.37 and before): accepted, ignored
+const LegacyLevel = z.enum(["g", "s"]).describe("ignored: general is the only level (older apps sent s)");
 const Mode = z.enum(THEME_MODES as unknown as ["show", "blur", "hide"]);
 const ThemeIds = THEMES.map((t) => t.id) as [string, ...string[]];
 
@@ -53,7 +59,7 @@ const PostShape = z
     .object({
         id: z.number().int(),
         rating: Level,
-        blur: z.boolean().describe("a theme set to blur matched: show a cover until tapped"),
+        blur: z.boolean().describe("always false now: a theme match hides the post"),
         media: z.enum(["image", "animated", "video"]),
         ext: z.string(),
         width: z.number().int(),
@@ -81,15 +87,15 @@ const SearchQuery = z.object({
     tags: z.string().max(200).optional().default(""),
     page: z.coerce.number().int().min(1).max(1000).optional().default(1),
     order: z.enum(ORDERS as unknown as ["new", "popular", "score", "favs", "random"]).optional().default("new"),
-    level: Level.optional().describe("lower than the key's own level for this request only (safe mode); never higher"),
+    level: LegacyLevel.optional(),
     min_score: z.coerce.number().int().min(-100).max(100000).optional(),
     media: z.enum(["image", "animated", "video"]).optional(),
     shape: z.enum(["tall", "square", "wide"]).optional(),
 });
 
 export const SettingsPatch = z.object({
-    level: Level.optional(),
-    // partialRecord: zod 4's record with enum keys requires every key, which refused every one-theme change (live 400s)
+    level: LegacyLevel.optional(),
+    // ignored (every theme is hidden); partialRecord: zod 4's record with enum keys requires every key, which refused every one-theme change (live 400s)
     themes: z.partialRecord(z.enum(ThemeIds), Mode).optional(),
     blacklist: z.string().max(BLACKLIST_MAX_CHARS).optional(),
 });
@@ -136,7 +142,7 @@ export const BOORU_OPS = [
         route: { method: "POST", path: "/booru/filter" },
         input: z.object({
             posts: z.array(z.unknown()).max(200).describe("one page of Danbooru's posts.json, as the app fetched it"),
-            level: Level.optional().describe("lower than the key's own level for this request only (safe mode); never higher"),
+            level: LegacyLevel.optional(),
             min_score: z.number().int().min(-100).max(100000).optional(),
             media: z.enum(["image", "animated", "video"]).optional(),
             shape: z.enum(["tall", "square", "wide"]).optional(),
@@ -191,6 +197,32 @@ export const BOORU_OPS = [
                     console.error("[booru] settings write failed", String(e));
                     return fail(503, "error.booru.not_ready");
                 }
+            }),
+    }),
+    defineOp({
+        ...base,
+        name: "booru.link",
+        route: { method: "PUT", path: "/library/items/:id/booru", params: { id: ITEM_ID_REGEX } },
+        input: z.object({ post: z.record(z.string(), z.unknown()).describe("Danbooru's post object, as the app fetched it") }),
+        output: z.object({
+            status: Status,
+            post: z.string(),
+            link: z.string(),
+            credit: z.object({
+                page: z.string(),
+                artist: z.string().nullable(),
+                source: z.string().nullable(),
+                title: z.string().nullable(),
+                posted_at: z.number().nullable(),
+                favs: z.number().nullable(),
+            }),
+        }),
+        ai: { tier: "hidden", summary: "Link a library post to the Danbooru post a picture search found (PUT /library/items/<id>/booru)." },
+        handler: (ctx, input) =>
+            guard(async () => {
+                const r = await linkPost(ctx.db, ctx.params.id!, input.post, POST_KEY_SQL, ctx.now());
+                if ("error" in r) return fail(r.status, r.error);
+                return ok(r);
             }),
     }),
 ];

@@ -596,6 +596,9 @@ struct PostSettingsPage: View {
             if model.capabilities.search, let post = item.post {
                 SearchIndexSection(model: model, postKey: post.id, refreshKey: item.titleText)
             }
+            if BooruFindSection.applies(model: model, item: item, rendition: selected) {
+                BooruFindSection(model: model, item: item, rendition: selected)
+            }
         }
         .formStyle(.grouped)
         .navigationTitle(Copy.PostPane.linkCard)

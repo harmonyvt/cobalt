@@ -49,20 +49,77 @@ import Testing
         #expect(BooruSettingsPatch(level: .general, themes: ["partial": .hide]).json["level"] as? String == "g")
     }
 
-    @MainActor @Test func storeSearchesAndNeverAsksAboveGeneralInSafeMode() async {
+    @MainActor @Test func storeAsksForGeneralOnly() async {
         let model = AppModel.preview(.happy)
         let store = model.booru
         await store.load()
         #expect(store.phase == .loaded)
         #expect(!store.posts.isEmpty)
-        #expect(store.posts.allSatisfy { $0.rating <= .sensitive })
-        // safeMode's didSet starts the reload itself; a second reload here would be dropped by the generation check
-        store.safeMode = true
-        for _ in 0..<200 where store.pageLevel != .general || store.phase != .loaded {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        #expect(store.askedLevel == .general)
         #expect(store.pageLevel == .general)
         #expect(store.posts.allSatisfy { $0.rating == .general })
+    }
+
+    @Test func creditKeepsThePageAndTheArtist() throws {
+        let json = #"""
+        {"id":7,"rating":"g","blur":false,"media":"image","ext":"png","width":10,"height":10,"size":1,"score":3,"favs":42,
+         "created_at":"2024-01-02T03:04:05.678-05:00","source":"https://www.pixiv.net/artworks/99",
+         "page_url":"https://danbooru.donmai.us/posts/7","thumb_url":"https://cdn.donmai.us/t.jpg","sample_url":"https://cdn.donmai.us/s.jpg",
+         "file_url":"https://cdn.donmai.us/original/f.png",
+         "tags":{"artist":["mochi_(artist)"],"character":["hatsune_miku"],"copyright":["vocaloid"],"general":[],"meta":[]}}
+        """#
+        let d = JSONDecoder()
+        d.keyDecodingStrategy = .convertFromSnakeCase
+        let post = try d.decode(BooruPost.self, from: Data(json.utf8))
+        let c = BooruCredit(post: post)
+        #expect(c.page.absoluteString == "https://danbooru.donmai.us/posts/7")
+        #expect(c.artist == "mochi_(artist)" && c.source == "https://www.pixiv.net/artworks/99" && c.title == "hatsune miku")
+        #expect(c.postedAt == 1_704_182_645_678 && c.favs == 42)
+        var o = StudioCreateOptions()
+        o.booru = c
+        let body = o.body(link: post.fileUrl)
+        #expect(body["url"] as? String == "https://cdn.donmai.us/original/f.png")
+        #expect((body["booru"] as? [String: Any])?["page"] as? String == "https://danbooru.donmai.us/posts/7")
+    }
+
+    @Test func iqdbPageParses() {
+        let html = """
+        <div><table><tr><th>Your image</th></tr><tr><td class='image'><img src='/thu/x.jpg'></td></tr><tr><td>850×973 JPEG</td></tr></table>
+        <table><tr><th>Best match</th></tr><tr><td class='image'><a href="//danbooru.donmai.us/posts/5001000"><img src='/danbooru/d/8/9/a.jpg' alt="Rating: s Score: 2 Tags: 1girl"></a></td></tr><tr><td>900×1030 [Safe]</td></tr><tr><td>97% similarity</td></tr></table>
+        <table><tr><th>Possible match</th></tr><tr><td class='image'><a href="//danbooru.donmai.us/posts/9310510"><img src='b.jpg'></a></td></tr><tr><td>57% similarity</td></tr></table>
+        <table><tr><th>Possible match</th></tr><tr><td class='image'><a href="//danbooru.donmai.us/posts/7831511"><img src='c.jpg'></a></td></tr><tr><td>62% similarity</td></tr></table>
+        <table><tr><th>Additional match</th></tr><tr><td class='image'><a href="//danbooru.donmai.us/posts/5001000"><img src='d.jpg'></a></td></tr><tr><td>90% similarity</td></tr></table></div>
+        """
+        let found = Iqdb.parse(html: html)
+        #expect(found.map(\.post) == [5001000, 7831511])
+        #expect(found.map(\.similarity) == [97, 62])
+        #expect(Iqdb.parse(html: "<p>No relevant matches</p>").isEmpty)
+        let req = Iqdb.request(jpeg: Data([0xff, 0xd8]), boundary: "B")
+        #expect(req.httpMethod == "POST" && req.url == Iqdb.url)
+        let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+        #expect(body.contains("name=\"service[]\"\r\n\r\n1\r\n") && body.contains("name=\"file\"; filename=\"picture.jpg\""))
+    }
+
+    @Test func sureMatchIsNinetyOrMore() {
+        let p = PreviewBooru.post(1, level: .general)
+        #expect(BooruMatch(post: p, similarity: 90).isSure)
+        #expect(!BooruMatch(post: p, similarity: 89).isSure)
+    }
+
+    @Test func danbooruSearchAnswerParses() {
+        let list: [[String: Any]] = [
+            ["post_id": 12, "score": 71.4, "post": ["id": 12, "rating": "g"]],
+            ["post_id": 34, "score": 96.6],
+            ["post_id": 12, "score": 50.0],
+            ["post_id": 56, "score": 40.2],
+            ["score": 99.0],
+        ]
+        let found = DanbooruAccount.parse(list)
+        #expect(found.map(\.post) == [34, 12])
+        #expect(found.map(\.similarity) == [97, 71])
+        #expect(found[1].object?["rating"] as? String == "g" && found[0].object == nil)
+        let a = DanbooruAccount(login: " mochi ", apiKey: "k3y\n")
+        #expect(a.login == "mochi" && a.authorization == "Basic " + Data("mochi:k3y".utf8).base64EncodedString())
     }
 
     @Test func levelShowsNoHigherThanAsked() {
@@ -73,19 +130,15 @@ import Testing
         #expect(BooruLevel.shows(.sensitive, at: nil))
     }
 
-    /// A post open in the pane is judged by the store, not the booru screen: safe mode lowers the level at once.
-    @MainActor @Test func storeStopsAllowingASensitivePostInSafeMode() async throws {
+    /// A post open in the pane is judged by the store: general only (72.9), whatever the device's old settings said.
+    @MainActor @Test func storeAllowsGeneralOnly() async throws {
         let model = AppModel.preview(.happy)
         let store = model.booru
         await store.load()
-        #expect(store.settings?.level == .sensitive)
-        let sensitive = try #require(store.posts.first { $0.rating == .sensitive })
         let general = try #require(store.posts.first { $0.rating == .general })
-        #expect(store.allows(sensitive) && store.allows(general))
-        store.safeMode = true
-        #expect(!store.allows(sensitive))
         #expect(store.allows(general))
-        store.safeMode = false
-        #expect(store.allows(sensitive))
+        var sensitive = general
+        sensitive.rating = .sensitive
+        #expect(!store.allows(sensitive))
     }
 }

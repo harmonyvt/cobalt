@@ -1,4 +1,4 @@
-// The booru tab (APP-API-CONTRACT.md section 72): levels (never explicit), the hard block, themes, the blacklist, the
+// The booru tab (APP-API-CONTRACT.md section 72): general only (72.9), the hard block, themes, the blacklist, the
 // 2-tag fallback and the per-key settings, on the real migration.
 import { describe, expect, it } from "vitest";
 import { createFakeD1 } from "../../test-support/d1-sqlite";
@@ -35,56 +35,42 @@ const post = (over: Partial<DanbooruPost> = {}): DanbooruPost => ({
 });
 
 const settings = (over: Partial<BooruSettings> = {}): BooruSettings => ({
-    level: "s",
+    level: "g",
     themes: defaultThemes(),
     blacklist: "",
     updated_at: null,
     ...over,
 });
 
+const H = defaultThemes();
+
 describe("judge", () => {
-    it("never keeps explicit, at any level", () => {
-        for (const level of ["g", "s"] as const) {
-            expect(judge(post({ rating: "e" }), level, defaultThemes(), [], {})).toEqual({ keep: false, why: "level" });
+    it("keeps general only: s, q, e and unrated posts are dropped", () => {
+        for (const rating of ["s", "q", "e", undefined]) {
+            expect(judge(post({ rating }), "g", H, [], {})).toEqual({ keep: false, why: "level" });
         }
+        expect(judge(post(), "g", H, [], {})).toEqual({ keep: true, blur: false });
     });
-    it("keeps levels up to the setting only", () => {
-        expect(judge(post({ rating: "q" }), "s", defaultThemes(), [], {}).keep).toBe(false);
-        expect(judge(post({ rating: "s" }), "s", defaultThemes(), [], {}).keep).toBe(true);
-        expect(judge(post({ rating: "s" }), "g", defaultThemes(), [], {}).keep).toBe(false);
-        expect(judge(post({ rating: undefined }), "s", defaultThemes(), [], {}).keep).toBe(false);
+    it("hides every theme, always, and nudity tags even on a general post", () => {
+        expect(Object.values(H).every((m) => m === "hide")).toBe(true);
+        expect(judge(post({ tag_string: "swimsuit" }), "g", H, [], {})).toEqual({ keep: false, why: "theme" });
+        expect(judge(post({ tag_string: "blood" }), "g", H, [], {})).toEqual({ keep: false, why: "theme" });
+        expect(judge(post({ tag_string: "nude" }), "g", H, [], {})).toEqual({ keep: false, why: "level" });
     });
-    it("has no questionable level: a q post is dropped, nudity is hidden, an old q row reads as sensitive", async () => {
-        expect(judge(post({ rating: "q" }), "s", defaultThemes(), [], {})).toEqual({ keep: false, why: "level" });
-        expect(judge(post({ rating: "s", tag_string: "nude" }), "s", Object.fromEntries(Object.keys(defaultThemes()).map((k) => [k, "show" as const])), [], {})).toEqual({ keep: false, why: "level" });
-        expect(defaultThemes().nudity).toBeUndefined();
-        const db = createFakeD1();
-        await expect(db.prepare("INSERT INTO booru_settings (key_id, level, updated_at) VALUES ('old', 'q', 1)").run()).resolves.toBeTruthy();
-        expect((await readSettings(db, "old")).level).toBe("s");
-    });
-    it("always blocks the hard-block tags, even at general with every theme shown", () => {
-        const all = Object.fromEntries(Object.keys(defaultThemes()).map((k) => [k, "show" as const]));
-        expect(judge(post({ tag_string: "loli smile" }), "s", all, [], {})).toEqual({ keep: false, why: "hard" });
-        expect(judge(post({ rating: "g", tag_string: "shota" }), "g", all, [], {})).toEqual({ keep: false, why: "hard" });
-    });
-    it("applies theme modes", () => {
-        const t = defaultThemes();
-        expect(judge(post({ rating: "s", tag_string: "topless" }), "s", t, [], {})).toEqual({ keep: false, why: "theme" });
-        expect(judge(post({ rating: "s", tag_string: "topless" }), "s", { ...t, partial: "blur" }, [], {})).toEqual({ keep: true, blur: true });
-        expect(judge(post({ tag_string: "blood" }), "s", t, [], {})).toEqual({ keep: false, why: "theme" });
-        expect(judge(post({ tag_string: "blood" }), "s", { ...t, violence: "show" }, [], {})).toEqual({ keep: true, blur: false });
+    it("always blocks the hard-block tags", () => {
+        expect(judge(post({ tag_string: "shota" }), "g", H, [], {})).toEqual({ keep: false, why: "hard" });
     });
     it("drops posts without a usable file", () => {
-        expect(judge(post({ file_url: undefined }), "s", defaultThemes(), [], {}).keep).toBe(false);
-        expect(judge(post({ file_url: "https://evil.example/x.png" }), "s", defaultThemes(), [], {}).keep).toBe(false);
-        expect(judge(post({ file_ext: "zip" }), "s", defaultThemes(), [], {}).keep).toBe(false);
-        expect(judge(post({ is_deleted: true }), "s", defaultThemes(), [], {}).keep).toBe(false);
+        expect(judge(post({ file_url: undefined }), "g", H, [], {}).keep).toBe(false);
+        expect(judge(post({ file_url: "https://evil.example/x.png" }), "g", H, [], {}).keep).toBe(false);
+        expect(judge(post({ file_ext: "zip" }), "g", H, [], {}).keep).toBe(false);
+        expect(judge(post({ is_deleted: true }), "g", H, [], {}).keep).toBe(false);
     });
     it("refines by score, media and shape", () => {
-        expect(judge(post({ score: 3 }), "s", defaultThemes(), [], { min_score: 5 }).keep).toBe(false);
-        expect(judge(post({ file_ext: "mp4" }), "s", defaultThemes(), [], { media: "image" }).keep).toBe(false);
-        expect(judge(post(), "s", defaultThemes(), [], { shape: "tall" }).keep).toBe(true);
-        expect(judge(post(), "s", defaultThemes(), [], { shape: "wide" }).keep).toBe(false);
+        expect(judge(post({ score: 3 }), "g", H, [], { min_score: 5 }).keep).toBe(false);
+        expect(judge(post({ file_ext: "mp4" }), "g", H, [], { media: "image" }).keep).toBe(false);
+        expect(judge(post(), "g", H, [], { shape: "tall" }).keep).toBe(true);
+        expect(judge(post(), "g", H, [], { shape: "wide" }).keep).toBe(false);
     });
 });
 
@@ -105,7 +91,7 @@ describe("blacklist", () => {
     });
     it("hides matching posts in judge", () => {
         const rules = parseBlacklist("umbrella");
-        expect(judge(post(), "s", defaultThemes(), rules, {})).toEqual({ keep: false, why: "blacklist" });
+        expect(judge(post(), "g", H, rules, {})).toEqual({ keep: false, why: "blacklist" });
     });
 });
 
@@ -118,28 +104,19 @@ describe("cleanTags", () => {
 });
 
 describe("searchPosts", () => {
-    it("asks for the rating clause, filters again, and counts what it hid", async () => {
+    it("asks for general only, filters again, and counts what it hid, whatever level is asked", async () => {
         const urls: string[] = [];
         const fetchFn = async (url: string) => {
             urls.push(url);
-            return Response.json([post({ id: 1 }), post({ id: 2, rating: "e" }), post({ id: 3, rating: "q" }), post({ id: 4, tag_string: "loli" }), post({ id: 5, rating: "s", tag_string: "topless" })]);
+            return Response.json([post({ id: 1 }), post({ id: 2, rating: "e" }), post({ id: 3, rating: "s" }), post({ id: 4, tag_string: "loli" }), post({ id: 5, tag_string: "bikini" })]);
         };
-        const r = await searchPosts(fetchFn, settings({ level: "s", themes: { ...defaultThemes(), partial: "blur" } }), { tags: "miku", page: 1, order: "popular" });
-        expect(decodeURIComponent(urls[0])).toContain("tags=miku order:rank rating:g,s");
-        expect(r.posts.map((p) => p.id)).toEqual([1, 5]);
-        expect(r.posts[1].blur).toBe(true);
-        expect(r.hidden).toEqual({ level: 2, theme: 0, blacklist: 0, refine: 0, blocked: 1 });
+        const r = await searchPosts(fetchFn, settings(), { tags: "miku", page: 1, order: "popular", level: "s" });
+        expect(decodeURIComponent(urls[0])).toContain("tags=miku order:rank rating:g");
+        expect(decodeURIComponent(urls[0])).not.toContain("rating:g,");
+        expect(r.posts.map((p) => p.id)).toEqual([1]);
+        expect(r.hidden).toEqual({ level: 2, theme: 1, blacklist: 0, refine: 0, blocked: 1 });
         expect(r.next_page).toBeNull();
-        expect(r.level).toBe("s");
-    });
-    it("never goes above the key's level, even when asked", async () => {
-        const urls: string[] = [];
-        const fetchFn = async (url: string) => (urls.push(url), Response.json([post({ rating: "q" })]));
-        const r = await searchPosts(fetchFn, settings({ level: "g" }), { tags: "", page: 1, order: "new", level: "s" });
         expect(r.level).toBe("g");
-        expect(r.posts).toHaveLength(0);
-        expect(decodeURIComponent(urls[0])).toContain("rating:g");
-        expect(decodeURIComponent(urls[0])).not.toContain("rating:g,s");
     });
     it("gives up the extras when Danbooru refuses the tag count", async () => {
         const urls: string[] = [];
@@ -172,15 +149,14 @@ describe("autocomplete", () => {
 });
 
 describe("settings", () => {
-    it("defaults to general, saves per key, and refuses explicit at the table", async () => {
+    it("is general with every theme hidden, saves only the blacklist, and ignores old level and theme rows", async () => {
         const db = createFakeD1();
-        expect((await readSettings(db, "k1")).level).toBe("g");
-        await writeSettings(db, "k1", { level: "s", themes: { violence: "blur" }, blacklist: "rain" }, 5);
-        const s = await readSettings(db, "k1");
-        expect(s).toMatchObject({ level: "s", blacklist: "rain", updated_at: 5 });
-        expect(s.themes.violence).toBe("blur");
-        expect(s.themes.partial).toBe("hide");
-        expect((await readSettings(db, "k2")).level).toBe("g");
+        expect(await readSettings(db, "k1")).toMatchObject({ level: "g", themes: H, blacklist: "" });
+        const w = await writeSettings(db, "k1", { level: "s", themes: { violence: "show" }, blacklist: "rain" }, 5);
+        expect(w).toMatchObject({ level: "g", themes: H, blacklist: "rain", updated_at: 5 });
+        expect(await readSettings(db, "k1")).toMatchObject({ level: "g", themes: H, blacklist: "rain", updated_at: 5 });
+        await db.prepare(`INSERT INTO booru_settings (key_id, level, themes, updated_at) VALUES ('old', 'q', '{"revealing":"show","violence":"show"}', 1)`).run();
+        expect(await readSettings(db, "old")).toMatchObject({ level: "g", themes: H });
         await expect(
             db.prepare("INSERT INTO booru_settings (key_id, level, updated_at) VALUES ('k3', 'e', 1)").run(),
         ).rejects.toThrow();
@@ -188,25 +164,23 @@ describe("settings", () => {
 });
 
 describe("filterRaw (POST /booru/filter)", () => {
-    it("applies the key's level, the hard block and the themes to a page the app fetched, and never goes higher", () => {
-        const raw = [post({ id: 1 }), post({ id: 2, rating: "e" }), post({ id: 3, rating: "q" }), post({ id: 4, tag_string: "loli" }), "junk", null, [1]];
-        const r = filterRaw(settings({ level: "s" }), { posts: raw, level: "s" });
-        expect(r.level).toBe("s");
+    it("keeps general only on a page the app fetched, even when an older app asks for sensitive", () => {
+        const raw = [post({ id: 1 }), post({ id: 2, rating: "e" }), post({ id: 3, rating: "s" }), post({ id: 4, tag_string: "loli" }), "junk", null, [1]];
+        const r = filterRaw(settings(), { posts: raw, level: "s" });
+        expect(r.level).toBe("g");
         expect(r.posts.map((p) => p.id)).toEqual([1]);
         expect(r.hidden).toMatchObject({ level: 2, blocked: 1 });
-        expect(filterRaw(settings({ level: "s" }), { posts: raw, level: "g" }).posts.map((p) => p.id)).toEqual([1]);
     });
 });
 
 describe("PUT /booru/settings input", () => {
-    it("takes one theme at a time, and refuses unknown themes and modes", async () => {
+    it("still accepts what older apps send (ignored), and refuses q, e and unknown themes", async () => {
         const { SettingsPatch } = await import("../src/registry/ops/booru");
         expect(SettingsPatch.safeParse({ themes: { violence: "blur" } }).success).toBe(true);
         expect(SettingsPatch.safeParse({ level: "s", themes: { violence: "hide", horror: "hide" } }).success).toBe(true);
+        expect(SettingsPatch.safeParse({ blacklist: "rain" }).success).toBe(true);
         expect(SettingsPatch.safeParse({ themes: { nope: "blur" } }).success).toBe(false);
-        expect(SettingsPatch.safeParse({ themes: { violence: "maybe" } }).success).toBe(false);
         expect(SettingsPatch.safeParse({ level: "e" }).success).toBe(false);
         expect(SettingsPatch.safeParse({ level: "q" }).success).toBe(false);
-        expect(SettingsPatch.safeParse({ themes: { nudity: "show" } }).success).toBe(false);
     });
 });

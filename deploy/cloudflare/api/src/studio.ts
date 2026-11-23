@@ -24,6 +24,7 @@ import { Crop, HELPER_UPLOAD_MS, JobRecord, KV, MEDIA_NAME_LENGTH, Quality, Webp
 import { AGENT_LIVE_HEADER, KEY_ID_HEADER } from "./headers";
 import { cropToPixels, parseCrop } from "../helper/crop.js";
 import { STUDIO_JOB_REGEX, STUDIO_SID_REGEX } from "./gate";
+import { parseBooruCredit, writeBooruDetails } from "./booru";
 import { SERVICE_KEY_ID, insertMediaItem, mediaNameFromUrl, pageLink, releasePoster, stripLinkSecrets } from "./library";
 import { LIVE_PUSH_MS, type LiveHooks, type LiveRenderEvent } from "./live";
 import {
@@ -948,6 +949,8 @@ type SaveRecord = {
     fellBack?: string;
     // the save asked for its engine (`engine` on POST /studio, the app's yt-dlp toggle): that engine only, no switch
     pinned?: boolean;
+    // a booru save (72.10): the Danbooru post page, stored as the link instead of the file it was fetched from
+    page?: string;
 };
 
 // What holds the helper right now (section 17.2). `owner` is an api_keys.id when the record
@@ -1643,6 +1646,7 @@ export class StudioService {
                         ...(entry.retry ? { retry: true } : {}),
                         ...(entry.engine === "ytdlp" ? { engine: "ytdlp" as const } : {}),
                         ...(entry.pinned ? { pinned: true } : {}),
+                        ...(entry.page ? { page: entry.page } : {}),
                     };
                     await this.d.storage.put(`save:${entry.sid}`, rec);
                     await this.line.remove(key);
@@ -2036,6 +2040,7 @@ export class StudioService {
         let liveField: unknown;
         let engineField: unknown;
         let phoneField: unknown;
+        let booruField: unknown;
         try {
             if (rawBody.length <= MAX_BODY_BYTES) {
                 const parsed = JSON.parse(rawBody);
@@ -2053,12 +2058,16 @@ export class StudioService {
                     liveField = (parsed as { live?: unknown }).live;
                     engineField = (parsed as { engine?: unknown }).engine;
                     phoneField = (parsed as { phone?: unknown }).phone;
+                    booruField = (parsed as { booru?: unknown }).booru;
                 }
             }
         } catch {
             // no link
         }
         if (!link) return studioErr(400, "error.studio.no_link");
+        // `booru` (72.10): a save from the booru tab keeps the Danbooru page as its link and the artist in its details
+        const booru = parseBooruCredit(booruField, link);
+        if (booru === "bad") return studioErr(400, "error.studio.invalid_params");
         // `public: true` (section 13): host the original publicly once the save is ready
         if (publicFlag !== undefined && publicFlag !== null && typeof publicFlag !== "boolean") {
             return studioErr(400, "error.studio.invalid_params");
@@ -2149,7 +2158,15 @@ export class StudioService {
             ...(engine === "ytdlp" ? { engine: "ytdlp" as const } : {}),
             // an engine the save asked for is the only one it uses (49.1)
             ...(engineField === "ytdlp" || engineField === "cobalt" ? { pinned: true } : {}),
+            ...(booru ? { page: booru.page } : {}),
         };
+        if (booru) {
+            try {
+                await writeBooruDetails(this.d.db, booru, this.d.now());
+            } catch (e) {
+                console.error("[studio] booru details failed", String(e)); // best effort: the save goes on
+            }
+        }
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.about.idle(this.d.posterIdleMs);
@@ -2257,7 +2274,7 @@ export class StudioService {
         origin: "share" | null;
         insert: (sid: string, now: number) => Promise<void>;
         // a save of a post's items (section 18.2): carried by the `save:` record, or by the entry that waits
-        extra?: { items?: ItemsChoice; itemCount?: number; retry?: boolean; engine?: "ytdlp"; pinned?: boolean };
+        extra?: { items?: ItemsChoice; itemCount?: number; retry?: boolean; engine?: "ytdlp"; pinned?: boolean; page?: string };
     }): Promise<
         | { ok: true; sid: string; now: number; free: boolean; ahead: number | null }
         | { ok: false; reply: StudioReply }
@@ -2864,7 +2881,8 @@ export class StudioService {
         // a save of a post's items has its own path (section 18.2)
         if (Array.isArray(done.items)) return await this.finalizeItems(sid, row, done, rec);
         // what is stored of the link (the helper's own copy of the full URL was needed only to fetch)
-        const link = done.direct === true ? stripLinkSecrets(row.link) : (row.link ?? "");
+        // a booru save (72.10) keeps the Danbooru post page instead of the file it was fetched from
+        const link = rec?.page ? rec.page : done.direct === true ? stripLinkSecrets(row.link) : (row.link ?? "");
         const keyId = row.key_id ?? "";
         const bytes = finite(done.bytes);
         if (bytes === null || bytes <= 0) return await this.fail(sid, "error.studio.unavailable");
@@ -2872,6 +2890,7 @@ export class StudioService {
         // A direct link (section 19) is stored without its query/userinfo everywhere: the library row, both R2 objects'
         // `source` metadata (and so the public mirror's) and, with this very save becoming ready, the session itself.
         const direct = done.direct === true;
+        const setLink = direct || !!rec?.page;
         // A still image the helper recognised by its bytes stays what it is (section 18.2: a single photo was
         // coerced to a 0.04 s "video/mp4" before); anything else that is not a video or a gif is coerced as ever.
         const stillExt = typeof done.contentType === "string" ? IMAGE_EXT[done.contentType] : undefined;
@@ -2944,7 +2963,7 @@ export class StudioService {
         const thumb = stillExt !== undefined && stillExt !== "heic" && contentType === done.contentType ? await this.storeThumb(sid, null) : null;
         const res = await this.d.db
             .prepare(
-                `UPDATE studio_sessions SET status = 'ready', error_code = NULL, r2_key = ?1, content_type = ?2, bytes = ?3, duration = ?4, width = ?5, height = ?6, title = ?7${direct ? ", link = ?10" : ""} WHERE id = ?8 AND status = 'saving' AND expires_at > ?9`,
+                `UPDATE studio_sessions SET status = 'ready', error_code = NULL, r2_key = ?1, content_type = ?2, bytes = ?3, duration = ?4, width = ?5, height = ?6, title = ?7${setLink ? ", link = ?10" : ""} WHERE id = ?8 AND status = 'saving' AND expires_at > ?9`,
             )
             .bind(
                 key,
@@ -2956,7 +2975,7 @@ export class StudioService {
                 title,
                 sid,
                 this.d.now(),
-                ...(direct ? [link] : []),
+                ...(setLink ? [link] : []),
             )
             .run();
         let becameReady = false;

@@ -87,6 +87,8 @@ export type LineEntry = {
     engine?: "ytdlp";
     // the save asked for its engine: no switch to the other one (section 49.1)
     pinned?: boolean;
+    // a booru save (APP-API-CONTRACT.md 72.10): the Danbooru post page, stored as the link instead of the file
+    page?: string;
     // a render whose upload into the helper began at this time
     starting: number | null;
     // starts that met a foreign 429

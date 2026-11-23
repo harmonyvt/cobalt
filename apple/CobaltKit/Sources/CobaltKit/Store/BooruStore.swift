@@ -1,11 +1,9 @@
 import Foundation
 import Observation
 
-/// The booru tab (APP-API-CONTRACT 72): this device's settings, the search and its pages. The server applies the level,
-/// the hard block, the themes and the blacklist; this model only asks and assigns what changed.
-///
-/// Safe mode: while the screen is mirrored, recorded or sent to a TV (the screen tells the store through `safeMode`), every
-/// request asks for general only. The server never answers above the device's own level, so safe mode can only lower it.
+/// The booru tab (APP-API-CONTRACT 72): this device's settings (only the blacklist is still one), the search and its pages.
+/// General only (72.9): every request asks for general, and the server applies it with the hard block, the themes (always
+/// hidden) and the blacklist; this model only asks and assigns what changed.
 @MainActor @Observable
 public final class BooruStore {
     public enum Phase: Equatable, Sendable {
@@ -25,7 +23,7 @@ public final class BooruStore {
     public private(set) var loadingMore = false
     public private(set) var nextPage: Int?
     public private(set) var dropped: [String] = []
-    /// The level the last page was filtered at (lower than the device's while in safe mode).
+    /// The level the last page was filtered at (general).
     public private(set) var pageLevel: BooruLevel?
     public private(set) var suggestions: [BooruSuggestion] = []
     /// Posts the owner tapped to reveal (blurred ones), for this visit only.
@@ -33,23 +31,14 @@ public final class BooruStore {
 
     /// The search being shown. Change it with `search(_:)`.
     public private(set) var query = BooruQuery()
-    /// The screen is mirrored, recorded or on a TV: ask for general only.
-    public var safeMode = false {
-        didSet { if safeMode != oldValue, phase != .idle { Task { await reload() } } }
-    }
-
-    /// The level asked for: general in safe mode, else the device's own (so Danbooru is asked for those ratings only and a
-    /// page is not mostly posts the server then drops). The server never answers above the device's level either way.
-    var askedLevel: BooruLevel? { safeMode ? .general : settings?.level }
-    public var effectiveLevel: BooruLevel { safeMode ? .general : (settings?.level ?? .general) }
+    /// The level asked for: always general (72.9), so Danbooru is asked for general posts only.
+    var askedLevel: BooruLevel? { .general }
     public var available: Bool { client != nil }
 
-    /// The post may still be shown under the level in force now (safe mode lowers it to general at once, before the page is
-    /// read again). The pane's post page asks this, so a post already open closes when safe mode begins, whichever screen
-    /// is up. Only the level is judged here: themes and the blacklist are the server's, and a post a new search merely
-    /// left out of the grid is still allowed.
+    /// The post may be shown: general only (72.9). The pane's post page asks this. Only the level is judged here: themes
+    /// and the blacklist are the server's, and a post a new search merely left out of the grid is still allowed.
     public func allows(_ post: BooruPost) -> Bool {
-        BooruLevel.shows(post.rating, at: safeMode ? .general : settings?.level)
+        BooruLevel.shows(post.rating, at: .general)
     }
 
     @ObservationIgnored private let ctx: PipelineContext
@@ -59,6 +48,20 @@ public final class BooruStore {
 
     init(context: PipelineContext) {
         self.ctx = context
+    }
+
+    // MARK: find a picture's booru post (72.11)
+
+    /// The booru posts `jpeg` is, general only, best first; empty when none is close. Slow (iqdb.org, about 40 s).
+    public func find(jpeg: Data) async throws -> [BooruMatch] {
+        guard let client else { throw PipelineFailure.unsupported }
+        return try await client.booruFind(jpeg: jpeg)
+    }
+
+    /// Links the library post `item` belongs to with `match`: its link becomes the Danbooru page.
+    public func link(item: String, match: BooruMatch) async throws -> BooruCredit {
+        guard let client else { throw PipelineFailure.unsupported }
+        return try await client.booruLink(item: item, match: match)
     }
 
     /// Reads the settings once, then the first page of the current search.

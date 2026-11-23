@@ -108,6 +108,7 @@ extension Pipeline {
     ) async throws -> StudioCreated {
         let makePublic = publicFlag                              // read here: the closures below are not on the main actor
         let title = jobOptions.title
+        let booru = jobOptions.booru
         let key = lineKey
         // yt-dlp saves one file: a link save (items "all" / "first-video", which the app sends for every link) may ask for
         // it; picked items of a gallery the app already saw are cobalt's (49.1)
@@ -118,6 +119,7 @@ extension Pipeline {
             var o = StudioCreateOptions(
                 makePublic: makePublic, queue: queue, title: title, items: gallery?.choice, itemCount: gallery?.count)
             o.engine = engine
+            o.booru = booru
             return o
         }
         if let line = ctx.line, ctx.capabilities.line {
@@ -142,7 +144,7 @@ extension Pipeline {
                 let created = try await watched {
                     if let item { return try await client.openStudio(item: item) }
                     guard let link else { throw PipelineFailure.noLink }
-                    if gallery != nil || engine != nil { return try await client.createStudio(url: link, options: opts) }
+                    if gallery != nil || engine != nil || booru != nil { return try await client.createStudio(url: link, options: opts) }
                     return try await client.createStudio(link: link, public: makePublic)
                 }
                 if managed { ctx.line?.clearBusyElsewhere() }

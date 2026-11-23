@@ -831,6 +831,11 @@ enum Endpoints {
         APIEndpoint(op: "booru.settings_update", method: "PUT", path: "/booru/settings", auth: .key)
     }
 
+    /// `PUT /library/items/:id/booru` (op `booru.link`, auth key): Link a library post to the Danbooru post a picture search found (PUT /library/items/<id>/booru).
+    static func booruLink(id: String) -> APIEndpoint<WireBooruLinkResponse> {
+        APIEndpoint(op: "booru.link", method: "PUT", path: "/library/items/\(HTTPCobaltClient.encode(id))/booru", auth: .key)
+    }
+
     /// `PUT /live/start-token` (op `live.start_token.put`, auth key): A device's push-to-start token.
     static func liveStartTokenPut() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "live.start_token.put", method: "PUT", path: "/live/start-token", auth: .key)
@@ -2130,9 +2135,9 @@ struct WireBooruPostTags: Decodable, Sendable {
 
 struct WireBooruPost: Decodable, Sendable {
     var id: Int
-    /// g general, s sensitive; there is no questionable or explicit
+    /// g general, the only level there is
     var rating: String
-    /// a theme set to blur matched: show a cover until tapped
+    /// always false now: a theme match hides the post
     var blur: Bool
     var media: String
     var ext: String
@@ -2160,7 +2165,7 @@ struct WireBooruPostsResponseHidden: Decodable, Sendable {
 
 struct WireBooruPostsResponse: Decodable, Sendable {
     var status: String
-    /// g general, s sensitive; there is no questionable or explicit
+    /// g general, the only level there is
     var level: String
     var posts: [WireBooruPost]
     var hidden: WireBooruPostsResponseHidden
@@ -2179,7 +2184,7 @@ struct WireBooruFilterResponseHidden: Decodable, Sendable {
 
 struct WireBooruFilterResponse: Decodable, Sendable {
     var status: String
-    /// g general, s sensitive; there is no questionable or explicit
+    /// g general, the only level there is
     var level: String
     var posts: [WireBooruPost]
     var hidden: WireBooruFilterResponseHidden
@@ -2201,14 +2206,14 @@ struct WireBooruSettingsResponseThemeListItem: Decodable, Sendable {
     var label: String
     var detail: String
     var `default`: String
-    /// g general, s sensitive; there is no questionable or explicit
+    /// g general, the only level there is
     var minLevel: String
     var tags: [String]
 }
 
 struct WireBooruSettingsResponse: Decodable, Sendable {
     var status: String
-    /// g general, s sensitive; there is no questionable or explicit
+    /// g general, the only level there is
     var level: String
     var levels: [String]
     var themeList: [WireBooruSettingsResponseThemeListItem]
@@ -2221,19 +2226,35 @@ struct WireBooruSettingsUpdateResponseThemeListItem: Decodable, Sendable {
     var label: String
     var detail: String
     var `default`: String
-    /// g general, s sensitive; there is no questionable or explicit
+    /// g general, the only level there is
     var minLevel: String
     var tags: [String]
 }
 
 struct WireBooruSettingsUpdateResponse: Decodable, Sendable {
     var status: String
-    /// g general, s sensitive; there is no questionable or explicit
+    /// g general, the only level there is
     var level: String
     var levels: [String]
     var themeList: [WireBooruSettingsUpdateResponseThemeListItem]
     var blacklist: String
     var updatedAt: Int?
+}
+
+struct WireBooruLinkResponseCredit: Decodable, Sendable {
+    var page: String
+    var artist: String?
+    var source: String?
+    var title: String?
+    var postedAt: Double?
+    var favs: Double?
+}
+
+struct WireBooruLinkResponse: Decodable, Sendable {
+    var status: String
+    var post: String
+    var link: String
+    var credit: WireBooruLinkResponseCredit
 }
 
 struct McpSettingsResponseLink: Decodable, Sendable {

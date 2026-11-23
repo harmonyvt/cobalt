@@ -201,7 +201,7 @@ public final class JobQueue {
         // A send straight into the server's line: no "checking the link" first (a batch, a drop of several, a Shortcut).
         let skipCheck = batch || via == .shortcut || via == .review || via == .relaunch
         var opts = options
-        if batch { opts.title = nil }                                    // one-input adds only
+        if batch { opts.title = nil; opts.booru = nil }                                  // one-input adds only
         var out: [Job] = []
         var focused = false
         for input in inputs {

@@ -2610,12 +2610,12 @@
                     "description": "one page of Danbooru's posts.json, as the app fetched it"
                   },
                   "level": {
-                    "description": "lower than the key's own level for this request only (safe mode); never higher",
                     "type": "string",
                     "enum": [
                       "g",
                       "s"
-                    ]
+                    ],
+                    "description": "ignored: general is the only level (older apps sent s)"
                   },
                   "min_score": {
                     "type": "integer",
@@ -2661,11 +2661,8 @@
                     },
                     "level": {
                       "type": "string",
-                      "enum": [
-                        "g",
-                        "s"
-                      ],
-                      "description": "g general, s sensitive; there is no questionable or explicit"
+                      "const": "g",
+                      "description": "g general, the only level there is"
                     },
                     "posts": {
                       "type": "array",
@@ -2749,11 +2746,8 @@
                     },
                     "level": {
                       "type": "string",
-                      "enum": [
-                        "g",
-                        "s"
-                      ],
-                      "description": "g general, s sensitive; there is no questionable or explicit"
+                      "const": "g",
+                      "description": "g general, the only level there is"
                     },
                     "posts": {
                       "type": "array",
@@ -2857,21 +2851,15 @@
                     },
                     "level": {
                       "type": "string",
-                      "enum": [
-                        "g",
-                        "s"
-                      ],
-                      "description": "g general, s sensitive; there is no questionable or explicit"
+                      "const": "g",
+                      "description": "g general, the only level there is"
                     },
                     "levels": {
                       "type": "array",
                       "items": {
                         "type": "string",
-                        "enum": [
-                          "g",
-                          "s"
-                        ],
-                        "description": "g general, s sensitive; there is no questionable or explicit"
+                        "const": "g",
+                        "description": "g general, the only level there is"
                       }
                     },
                     "themes": {
@@ -2912,11 +2900,8 @@
                           },
                           "min_level": {
                             "type": "string",
-                            "enum": [
-                              "g",
-                              "s"
-                            ],
-                            "description": "g general, s sensitive; there is no questionable or explicit"
+                            "const": "g",
+                            "description": "g general, the only level there is"
                           },
                           "tags": {
                             "type": "array",
@@ -2998,7 +2983,7 @@
                       "g",
                       "s"
                     ],
-                    "description": "g general, s sensitive; there is no questionable or explicit"
+                    "description": "ignored: general is the only level (older apps sent s)"
                   },
                   "themes": {
                     "type": "object",
@@ -3046,21 +3031,15 @@
                     },
                     "level": {
                       "type": "string",
-                      "enum": [
-                        "g",
-                        "s"
-                      ],
-                      "description": "g general, s sensitive; there is no questionable or explicit"
+                      "const": "g",
+                      "description": "g general, the only level there is"
                     },
                     "levels": {
                       "type": "array",
                       "items": {
                         "type": "string",
-                        "enum": [
-                          "g",
-                          "s"
-                        ],
-                        "description": "g general, s sensitive; there is no questionable or explicit"
+                        "const": "g",
+                        "description": "g general, the only level there is"
                       }
                     },
                     "themes": {
@@ -3101,11 +3080,8 @@
                           },
                           "min_level": {
                             "type": "string",
-                            "enum": [
-                              "g",
-                              "s"
-                            ],
-                            "description": "g general, s sensitive; there is no questionable or explicit"
+                            "const": "g",
+                            "description": "g general, the only level there is"
                           },
                           "tags": {
                             "type": "array",
@@ -5381,6 +5357,140 @@
           "cors": false,
           "no_store": true,
           "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/library/items/{id}/booru": {
+      "put": {
+        "operationId": "booru.link",
+        "summary": "Link a library post to the Danbooru post a picture search found (PUT /library/items/<id>/booru).",
+        "tags": [
+          "booru"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "post": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {},
+                    "description": "Danbooru's post object, as the app fetched it"
+                  }
+                },
+                "required": [
+                  "post"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "post": {
+                      "type": "string"
+                    },
+                    "link": {
+                      "type": "string"
+                    },
+                    "credit": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "string"
+                        },
+                        "artist": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "source": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "title": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "posted_at": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "favs": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "artist",
+                        "source",
+                        "title",
+                        "posted_at",
+                        "favs"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "post",
+                    "link",
+                    "credit"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
           "ai": "hidden"
         }
       }
@@ -12651,15 +12761,12 @@
           },
           "rating": {
             "type": "string",
-            "enum": [
-              "g",
-              "s"
-            ],
-            "description": "g general, s sensitive; there is no questionable or explicit"
+            "const": "g",
+            "description": "g general, the only level there is"
           },
           "blur": {
             "type": "boolean",
-            "description": "a theme set to blur matched: show a cover until tapped"
+            "description": "always false now: a theme match hides the post"
           },
           "media": {
             "type": "string",

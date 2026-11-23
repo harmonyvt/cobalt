@@ -18,8 +18,7 @@ struct BooruPostPage: View {
     @State private var kept: BooruPost?
 
     private var store: BooruStore { model.booru }
-    /// A post the level now in force (safe mode, the device's own) does not allow is never shown, not even the copy kept
-    /// for a search that replaced the grid.
+    /// A post above general (72.9) is never shown, not even the copy kept for a search that replaced the grid.
     private var post: BooruPost? {
         guard let found = store.posts.first(where: { $0.id == id }) ?? kept else { return nil }
         return store.allows(found) ? found : nil
@@ -45,9 +44,6 @@ struct BooruPostPage: View {
         .onChange(of: store.posts, initial: true) { _, posts in
             if let found = posts.first(where: { $0.id == id }), store.allows(found) { kept = found }
         }
-        // safe mode (or a lower level) reaches the pane from here, not through the booru screen, which is torn down when
-        // another tab is up (the Mac): the post is dropped and the pane lets go of it
-        .modifier(BooruSafeModeWatch(store: store))
         .task(id: filteredOut) {
             guard filteredOut else { return }
             kept = nil
@@ -68,7 +64,7 @@ struct BooruPostPage: View {
             PaneActionGrid([
                 PaneAction(saved ? Copy.Booru.savedToLibrary : Copy.Booru.save, systemImage: Symbol.Booru.save,
                            disabled: saved) {
-                    _ = model.queue.add([.link(post.fileUrl)], via: .paste)
+                    _ = model.queue.add([.link(post.fileUrl)], via: .paste, options: JobOptions(booru: BooruCredit(post: post)))
                     saved = true
                 },
                 PaneAction(Copy.Booru.openDanbooru, systemImage: Symbol.Booru.open) { openURL(post.pageUrl) },
@@ -99,15 +95,6 @@ struct BooruPostPage: View {
             .mediaMask()
         }
         .aspectRatio(max(0.4, min(post.aspect, 2.5)), contentMode: .fit)
-        .overlay(alignment: .bottomLeading) {
-            Text(Copy.Booru.level(post.rating))
-                .font(CobaltType.pill)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .foregroundStyle(.white)
-                .background(BooruLevelColor.of(post.rating).opacity(0.85), in: Capsule())
-                .padding(10)
-        }
     }
 
     private func info(_ post: BooruPost) -> some View {
