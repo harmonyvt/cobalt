@@ -81,4 +81,28 @@ import Testing
         #expect(body["url"] as? String == "https://cdn.donmai.us/original/f.png")
         #expect((body["booru"] as? [String: Any])?["page"] as? String == "https://danbooru.donmai.us/posts/7")
     }
+
+    @Test func iqdbPageParses() {
+        let html = """
+        <div><table><tr><th>Your image</th></tr><tr><td class='image'><img src='/thu/x.jpg'></td></tr><tr><td>850×973 JPEG</td></tr></table>
+        <table><tr><th>Best match</th></tr><tr><td class='image'><a href="//danbooru.donmai.us/posts/5001000"><img src='/danbooru/d/8/9/a.jpg' alt="Rating: s Score: 2 Tags: 1girl"></a></td></tr><tr><td>900×1030 [Safe]</td></tr><tr><td>97% similarity</td></tr></table>
+        <table><tr><th>Possible match</th></tr><tr><td class='image'><a href="//danbooru.donmai.us/posts/9310510"><img src='b.jpg'></a></td></tr><tr><td>57% similarity</td></tr></table>
+        <table><tr><th>Possible match</th></tr><tr><td class='image'><a href="//danbooru.donmai.us/posts/7831511"><img src='c.jpg'></a></td></tr><tr><td>62% similarity</td></tr></table>
+        <table><tr><th>Additional match</th></tr><tr><td class='image'><a href="//danbooru.donmai.us/posts/5001000"><img src='d.jpg'></a></td></tr><tr><td>90% similarity</td></tr></table></div>
+        """
+        let found = Iqdb.parse(html: html)
+        #expect(found.map(\.post) == [5001000, 7831511])
+        #expect(found.map(\.similarity) == [97, 62])
+        #expect(Iqdb.parse(html: "<p>No relevant matches</p>").isEmpty)
+        let req = Iqdb.request(jpeg: Data([0xff, 0xd8]), boundary: "B")
+        #expect(req.httpMethod == "POST" && req.url == Iqdb.url)
+        let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+        #expect(body.contains("name=\"service[]\"\r\n\r\n1\r\n") && body.contains("name=\"file\"; filename=\"picture.jpg\""))
+    }
+
+    @Test func sureMatchIsNinetyOrMore() {
+        let p = PreviewBooru.post(1, level: .general)
+        #expect(BooruMatch(post: p, similarity: 90).isSure)
+        #expect(!BooruMatch(post: p, similarity: 89).isSure)
+    }
 }

@@ -261,6 +261,10 @@ struct DetailControls: View {
             }
             OfflineCopySection(model: c.model, item: c.item, rendition: c.rendition)
         }
+        // find this picture's booru post and link it (APP-API-CONTRACT 72.11)
+        if BooruFindSection.applies(model: c.model, item: c.item, rendition: c.rendition) {
+            BooruFindSection(model: c.model, item: c.item, rendition: c.rendition)
+        }
         // how the post sits in the server's search index (APP-API-CONTRACT 21), last: read-only
         if c.model.capabilities.search, let post = c.item.post {
             SearchIndexSection(model: c.model, postKey: post.id, refreshKey: c.item.titleText)

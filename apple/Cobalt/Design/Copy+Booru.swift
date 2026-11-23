@@ -90,3 +90,40 @@ extension Copy {
         static let close = "close"
     }
 }
+
+/// Copy for finding a picture's booru post (APP-API-CONTRACT 72.11; lowercase).
+extension Copy {
+    enum BooruFind {
+        static let header = "booru"
+        static let find = "find on booru"
+        static let findAgain = "find on booru again"
+        static func linkedTo(_ url: URL) -> String { "linked: danbooru #\(url.lastPathComponent)" }
+        static let title = "find on booru"
+        static let searching = "looking for this picture on danbooru…"
+        static func waited(_ s: Int) -> String { s < 5 ? "this can take up to a minute" : "\(s) s · this can take up to a minute" }
+        static let none = "no booru post found"
+        static let noneHint = "only general posts count. a very new post may not be searchable yet."
+        static let pick = "close matches, best first. tap one to link it."
+        static let linking = "linking…"
+        static let linked = "linked: this post's source is now the danbooru page"
+        static let wrongOne = "wrong one? pick another"
+        static let use = "use"
+        static func similarity(_ n: Int) -> String { "\(n)% match" }
+        static func who(_ p: BooruPost) -> String {
+            let words = { (tags: [String]) in tags.prefix(2).map { $0.replacingOccurrences(of: "_", with: " ") }.joined(separator: ", ") }
+            let artist = p.tags.artist.first.map { "by \($0.replacingOccurrences(of: "_", with: " "))" }
+            let what = p.tags.character.isEmpty ? words(p.tags.copyright) : words(p.tags.character)
+            return [artist, what.isEmpty ? nil : what, "#\(p.id)"].compactMap { $0 }.joined(separator: " · ")
+        }
+        static func failure(_ code: String) -> String {
+            switch code {
+            case "error.network": return "you're offline"
+            case "error.booru.no_picture": return "couldn't read this picture"
+            case "error.booru.not_general": return "that post isn't general, so it can't be linked"
+            case "error.booru.too_large": return "this picture is too big to search"
+            case "error.booru.upstream", "error.booru.busy": return Copy.Booru.failed
+            default: return "the picture search didn't answer. try again in a bit."
+            }
+        }
+    }
+}

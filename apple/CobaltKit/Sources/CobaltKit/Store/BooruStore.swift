@@ -44,6 +44,20 @@ public final class BooruStore {
         self.ctx = context
     }
 
+    // MARK: find a picture's booru post (72.11)
+
+    /// The booru posts `jpeg` is, general only, best first; empty when none is close. Slow (iqdb.org, about 40 s).
+    public func find(jpeg: Data) async throws -> [BooruMatch] {
+        guard let client else { throw PipelineFailure.unsupported }
+        return try await client.booruFind(jpeg: jpeg)
+    }
+
+    /// Links the library post `item` belongs to with `match`: its link becomes the Danbooru page.
+    public func link(item: String, match: BooruMatch) async throws -> BooruCredit {
+        guard let client else { throw PipelineFailure.unsupported }
+        return try await client.booruLink(item: item, match: match)
+    }
+
     /// Reads the settings once, then the first page of the current search.
     public func load() async {
         if !settingsLoaded { await loadSettings() }

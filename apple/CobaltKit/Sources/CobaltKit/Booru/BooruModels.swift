@@ -331,6 +331,10 @@ public protocol BooruClient: Sendable {
     func booruAutocomplete(_ q: String) async throws -> [BooruSuggestion]
     func booruSettings() async throws -> BooruSettings
     func updateBooruSettings(_ patch: BooruSettingsPatch) async throws -> BooruSettings
+    /// The booru posts a picture is (72.11), general only, best first. Slow: iqdb.org takes about 40 s under load.
+    func booruFind(jpeg: Data) async throws -> [BooruMatch]
+    /// Links the library post `item` belongs to with this Danbooru post (72.11).
+    func booruLink(item: String, match: BooruMatch) async throws -> BooruCredit
 }
 
 extension HTTPCobaltClient: BooruClient {
@@ -352,7 +356,7 @@ extension HTTPCobaltClient: BooruClient {
         return URLSession(configuration: c)
     }()
 
-    private static func danbooruGet(_ path: String, _ items: [URLQueryItem]) async throws -> (Any?, Int) {
+    static func danbooruGet(_ path: String, _ items: [URLQueryItem]) async throws -> (Any?, Int) {
         var c = URLComponents(url: danbooru.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         c.queryItems = items
         do {

@@ -9,6 +9,7 @@ import * as z from "zod";
 import {
     autocomplete,
     filterRaw,
+    linkPost,
     BLACKLIST_MAX_CHARS,
     BooruError,
     LEVELS,
@@ -21,6 +22,8 @@ import {
     type BooruSettings,
 } from "../../booru";
 import { defineOp, ok, type OpContext, type OpReply } from "../op";
+import { ITEM_ID_REGEX } from "../../gate";
+import { POST_KEY_SQL } from "../../post-key";
 
 const Status = z.literal("success");
 const Level = z.literal("g").describe("g general, the only level there is");
@@ -194,6 +197,32 @@ export const BOORU_OPS = [
                     console.error("[booru] settings write failed", String(e));
                     return fail(503, "error.booru.not_ready");
                 }
+            }),
+    }),
+    defineOp({
+        ...base,
+        name: "booru.link",
+        route: { method: "PUT", path: "/library/items/:id/booru", params: { id: ITEM_ID_REGEX } },
+        input: z.object({ post: z.record(z.string(), z.unknown()).describe("Danbooru's post object, as the app fetched it") }),
+        output: z.object({
+            status: Status,
+            post: z.string(),
+            link: z.string(),
+            credit: z.object({
+                page: z.string(),
+                artist: z.string().nullable(),
+                source: z.string().nullable(),
+                title: z.string().nullable(),
+                posted_at: z.number().nullable(),
+                favs: z.number().nullable(),
+            }),
+        }),
+        ai: { tier: "hidden", summary: "Link a library post to the Danbooru post a picture search found (PUT /library/items/<id>/booru)." },
+        handler: (ctx, input) =>
+            guard(async () => {
+                const r = await linkPost(ctx.db, ctx.params.id!, input.post, POST_KEY_SQL, ctx.now());
+                if ("error" in r) return fail(r.status, r.error);
+                return ok(r);
             }),
     }),
 ];

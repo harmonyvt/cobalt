@@ -81,4 +81,18 @@ extension PreviewClient: BooruClient {
         PreviewBooru.state.settings = s
         return s
     }
+
+    public func booruFind(jpeg: Data) async throws -> [BooruMatch] {
+        try await booruReady()
+        return [
+            BooruMatch(post: PreviewBooru.post(1, level: .general), similarity: 96),
+            BooruMatch(post: PreviewBooru.post(2, level: .general), similarity: 71),
+            BooruMatch(post: PreviewBooru.post(3, level: .general), similarity: 64),
+        ]
+    }
+
+    public func booruLink(item: String, match: BooruMatch) async throws -> BooruCredit {
+        try await booruReady()
+        return BooruCredit(post: match.post)
+    }
 }

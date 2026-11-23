@@ -5361,6 +5361,140 @@
         }
       }
     },
+    "/library/items/{id}/booru": {
+      "put": {
+        "operationId": "booru.link",
+        "summary": "Link a library post to the Danbooru post a picture search found (PUT /library/items/<id>/booru).",
+        "tags": [
+          "booru"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "post": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {},
+                    "description": "Danbooru's post object, as the app fetched it"
+                  }
+                },
+                "required": [
+                  "post"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "post": {
+                      "type": "string"
+                    },
+                    "link": {
+                      "type": "string"
+                    },
+                    "credit": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "string"
+                        },
+                        "artist": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "source": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "title": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "posted_at": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "favs": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "artist",
+                        "source",
+                        "title",
+                        "posted_at",
+                        "favs"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "post",
+                    "link",
+                    "credit"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "ai": "hidden"
+        }
+      }
+    },
     "/library/items/{id}/crop": {
       "post": {
         "operationId": "library.crop",

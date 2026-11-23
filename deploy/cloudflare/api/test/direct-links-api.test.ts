@@ -355,3 +355,39 @@ describe("a booru save (72.10): `booru` on POST /studio", () => {
         expect(w.helper.fetchBodies).toHaveLength(0);
     });
 });
+
+describe("linking a saved post to its Danbooru post (72.11): PUT /library/items/<id>/booru", () => {
+    const raw = (over: Record<string, unknown> = {}) => ({
+        id: 777, rating: "g", tag_string: "1girl umbrella", tag_string_artist: "mochi_(artist)", tag_string_character: "hatsune_miku",
+        file_url: "https://cdn.donmai.us/original/aa/bb/x.png", file_ext: "png", source: "https://x.com/mochi/status/1",
+        created_at: "2024-01-02T03:04:05.678-05:00", fav_count: 9, ...over,
+    });
+    const put = (id: string, body: unknown) =>
+        call(`/library/items/${id}/booru`, { method: "PUT", headers: { ...auth, "content-type": "application/json" }, body: json(body) });
+
+    it("gives every file of the post the Danbooru page as its link, keeps the post key, and writes the details", async () => {
+        const sid = ((await (await post({ url: DISCORD })).json()) as any).id as string;
+        await settle(sid);
+        const item = w.items()[0]!;
+        const res = await put(item.id, { post: raw() });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({ status: "success", post: sid, link: "https://danbooru.donmai.us/posts/777" });
+        expect(w.items()[0]).toMatchObject({ link: "https://danbooru.donmai.us/posts/777", post_key: sid });
+        expect(w.session(sid)).toMatchObject({ link: "https://danbooru.donmai.us/posts/777" });
+        const d = await w.db.prepare("SELECT * FROM post_details WHERE link = ?1").bind("https://danbooru.donmai.us/posts/777").first<any>();
+        expect(d).toMatchObject({ name: "mochi_(artist)", text: "https://x.com/mochi/status/1", title: "hatsune miku", site_name: "danbooru", posted_at: 1704182645678 });
+        const lib = await library();
+        expect(lib.posts[0]).toMatchObject({ id: sid, link: "https://danbooru.donmai.us/posts/777" });
+    });
+
+    it("refuses a post above general, a themed one, junk, and an unknown item", async () => {
+        const sid = ((await (await post({ url: DISCORD })).json()) as any).id as string;
+        await settle(sid);
+        const id = w.items()[0]!.id;
+        expect((await put(id, { post: raw({ rating: "s" }) })).status).toBe(422);
+        expect((await put(id, { post: raw({ tag_string: "bikini" }) })).status).toBe(422);
+        expect((await put(id, { post: { id: "x" } })).status).toBe(400);
+        expect((await put("ZZZZZZZZZZZZZZZZ", { post: raw() })).status).toBe(404);
+        expect(w.items()[0]!.link).toBe(DISCORD.split("?")[0]);
+    });
+});

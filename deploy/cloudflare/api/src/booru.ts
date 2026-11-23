@@ -175,6 +175,68 @@ export async function writeBooruDetails(db: D1Database, c: BooruCredit, now: num
         .run();
 }
 
+// ---- linking a library post to the Danbooru post it is (72.11) -----------------------------------------------------------
+
+/** The credit of a Danbooru post, worked out here from Danbooru's own post object. */
+export function creditOf(p: DanbooruPost): BooruCredit {
+    const words = (s: string | undefined) => split(s).slice(0, 3).map((t) => t.replace(/_/g, " ")).join(", ");
+    const title = words(p.tag_string_character) || words(p.tag_string_copyright);
+    const t = p.created_at ? Date.parse(p.created_at) : NaN;
+    let source: string | null = null;
+    try {
+        const u = p.source ? new URL(p.source) : null;
+        source = u && (u.protocol === "https:" || u.protocol === "http:") ? u.toString() : null;
+    } catch {
+        source = null;
+    }
+    return {
+        page: `${DANBOORU}/posts/${p.id}`,
+        artist: split(p.tag_string_artist)[0] ?? null,
+        source,
+        title: title || null,
+        posted_at: Number.isFinite(t) ? t : null,
+        favs: typeof p.fav_count === "number" ? p.fav_count : null,
+    };
+}
+
+export type LinkResult = { status: "success"; post: string; link: string; credit: BooruCredit } | { error: string; status: number };
+
+/**
+ * PUT /library/items/<id>/booru: the post `id` belongs to becomes linked to this Danbooru post (the app found it with a
+ * picture search and sends Danbooru's post object, which only the devices can fetch). General only: a post the booru tab
+ * would not show (72.9) is refused. Every file of the post gets the page as its link; the post details are written when
+ * the page has none.
+ */
+export async function linkPost(db: D1Database, itemId: string, raw: unknown, postKeySql: string, now: number): Promise<LinkResult> {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { status: 400, error: "error.booru.bad" };
+    const p = raw as DanbooruPost;
+    if (typeof p.id !== "number" || !Number.isInteger(p.id) || p.id <= 0) return { status: 400, error: "error.booru.bad" };
+    const v = judge(p, "g", defaultThemes(), [], {});
+    if (!v.keep) return { status: 422, error: "error.booru.not_general" };
+    const anchor = await db
+        .prepare(`SELECT ${postKeySql} AS post_key FROM media_items m WHERE (m.id = ?1 OR m.public_id = ?1) AND m.deleted_at IS NULL ORDER BY (m.id = ?1) DESC LIMIT 1`)
+        .bind(itemId)
+        .first<{ post_key: string }>();
+    if (!anchor) return { status: 404, error: "error.library.not_found" };
+    const credit = creditOf(p);
+    // the post's key is written down first (it can fall back to the link), so changing the link never moves the post
+    await db
+        .prepare(`UPDATE media_items AS m SET post_key = ?2, link = ?1 WHERE ${postKeySql} = ?2 AND m.deleted_at IS NULL`)
+        .bind(credit.page, anchor.post_key)
+        .run();
+    // the saves behind it read the same, except an upload's session, whose `upload:` link names the post (post-key.ts)
+    await db
+        .prepare(
+            `UPDATE studio_sessions SET link = ?1
+              WHERE id IN (SELECT session_id FROM media_items WHERE post_key = ?2 AND session_id IS NOT NULL)
+                AND (link IS NULL OR link NOT LIKE 'upload:%')`,
+        )
+        .bind(credit.page, anchor.post_key)
+        .run();
+    await writeBooruDetails(db, credit, now);
+    return { status: "success", post: anchor.post_key, link: credit.page, credit };
+}
+
 // ---- the blacklist: Danbooru's own rule format ------------------------------------------------------------------------
 
 // One rule per line. Every plain term must match; `-tag` must not; `~a ~b` means any of them. Metatags: rating:<g|s|q>
