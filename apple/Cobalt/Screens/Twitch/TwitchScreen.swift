@@ -3,32 +3,107 @@ import SwiftUI
 
 // The twitch tab (APP-API-CONTRACT 70): a list of channels (search, your channel, who you follow that is live, recent).
 // A channel opens in the screen pane (`TwitchStreamPage`: the player in the hero, chat on the shelf), which keeps
-// playing in the bar when it is closed and while you switch tabs, so this list is always the tab's main view.
+// playing in the bar when it is closed and while you switch tabs.
+//
+// While the pane plays a stream on screen BESIDE this tab (the Duo's other screen, the iPad / Mac column), this tab is the
+// right-hand panel of the watch: it shows the stream's live chat at full height, with a "channels" button back to the list
+// (and "show chat" back again). The pane then leaves the chat out (`Pane.twitchChatBeside`).
 
 struct TwitchScreen: View {
     let model: AppModel
     let tier: Tier
 
     @Environment(\.lifecycle) private var lifecycle
+    @Environment(Pane.self) private var pane
+    /// Held here, handed to the pane weakly while this tab is up.
+    @State private var tabChat = TwitchTabChat()
 
     private var store: TwitchStore { model.twitch }
 
     var body: some View {
-        TwitchChannelList(model: model)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(CobaltColor.bg)
-            .navigationTitle(Copy.Twitch.title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .task {
-                await store.load()
-                if model.sevenTv.status == nil { await model.sevenTv.load() }
+        Group {
+            if let login = pane.twitchChatBeside {
+                TwitchBesideChat(login: login, model: model) { tabChat.browsing = true }
+            } else {
+                TwitchChannelList(model: model, besideStream: pane.streamBesideTab) { tabChat.browsing = false }
             }
-            // back from studio (a reconnect) or from the background: a session that could not chat is asked again
-            .onChange(of: lifecycle.phase) { _, phase in
-                if phase == .active { Task { await store.load() } }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(CobaltColor.bg)
+        .navigationTitle(Copy.Twitch.title)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .task {
+            await store.load()
+            if model.sevenTv.status == nil { await model.sevenTv.load() }
+        }
+        // back from studio (a reconnect) or from the background: a session that could not chat is asked again
+        .onChange(of: lifecycle.phase) { _, phase in
+            if phase == .active { Task { await store.load() } }
+        }
+        .onAppear { pane.provide(tabChat) }
+        .onDisappear {
+            if pane.provided(TwitchTabChat.self) === tabChat { pane.withdraw(TwitchTabChat.self) }
+        }
+        // a new stream opens with its chat up
+        .onChange(of: pane.streamBesideTab) { _, login in if login != nil { tabChat.browsing = false } }
+    }
+}
+
+/// The twitch tab is up (handed to the pane while it is): whether it shows the channel list instead of the chat.
+@MainActor
+@Observable
+final class TwitchTabChat {
+    var browsing = false
+}
+
+extension Pane {
+    /// The stream on screen beside the tab (a Duo's other screen, the iPad / Mac column), not spanned, not a sheet.
+    var streamBesideTab: String? {
+        guard state == .screen, tabSize != nil, case .stream(let login)? = item else { return nil }
+        return login
+    }
+
+    /// The stream whose chat the twitch tab beside the pane shows: the tab is up and not on its channel list.
+    var twitchChatBeside: String? {
+        guard let login = streamBesideTab, let tab = provided(TwitchTabChat.self), !tab.browsing else { return nil }
+        return login
+    }
+}
+
+// MARK: - the chat beside the pane
+
+private struct TwitchBesideChat: View {
+    let login: String
+    let model: AppModel
+    let showChannels: () -> Void
+
+    private var store: TwitchStore { model.twitch }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text(name)
+                    .font(Font.cobalt(15, .semibold))
+                    .foregroundStyle(CobaltColor.text)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Button(action: showChannels) {
+                    Label(Copy.Twitch.channels, systemImage: Symbol.Twitch.channels)
+                }
+                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                .accessibilityIdentifier("twitch.channels")
             }
+            TwitchChatCard(model: model, delay: TwitchChatCard.tvDelay, fills: true)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var name: String {
+        (store.channel == login ? store.channelInfo?.displayName : nil) ?? login
     }
 }
 
@@ -36,6 +111,10 @@ struct TwitchScreen: View {
 
 private struct TwitchChannelList: View {
     let model: AppModel
+
+    /// A stream playing in the pane beside this tab (its chat was put away for the list): offer it back.
+    var besideStream: String? = nil
+    var showChat: () -> Void = {}
 
     @Environment(Pane.self) private var pane
     @State private var query = ""
@@ -45,6 +124,13 @@ private struct TwitchChannelList: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                if besideStream != nil {
+                    Button(action: showChat) {
+                        Label(Copy.Twitch.showChat, systemImage: Symbol.Twitch.chat)
+                    }
+                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                    .accessibilityIdentifier("twitch.showChat")
+                }
                 search
                 banner
                 if let me = store.session?.credentials?.login {

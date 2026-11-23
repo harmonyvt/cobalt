@@ -2,7 +2,13 @@ import CobaltKit
 import SwiftUI
 
 // A twitch stream in the screen pane (apple/CONTRACT-PANE.md section 5; APP-API-CONTRACT 70). The player is the hero, the
-// live chat is the shelf (stacked on the details screen when spanned over two screens, the right half when spanned wide).
+// live chat is the shelf, laid out per room:
+// - the pane beside the twitch tab (Duo held wide, iPad / Mac column): the chat moves to the tab, the right-hand panel
+//   (`TwitchScreen`, `Pane.twitchChatBeside`), and the pane keeps the player and its buttons;
+// - the pane on the Duo's top screen (held tall or half folded): the stream fills that whole screen, its buttons float over
+//   the black band under the picture, and the chat is the twitch tab on the bottom screen (a chat button opens it);
+// - spanned wide (iPad, Mac): the player over its buttons on the left, the chat the full height of the right half;
+// - spanned over two screens: the player on one, the buttons over the chat filling the other.
 // `keepsRunning`: the page tells the pane the stream is at work in every shape, so closing it leaves the bar, and the bar
 // is the same stream playing in a small window with one play / pause button. Stopping is a button on the page.
 //
@@ -29,7 +35,8 @@ struct TwitchStreamPage: View {
 
     var body: some View {
         PanePage(
-            title: title, subtitle: subtitle, actions: actions
+            title: title, subtitle: subtitle, actions: actions,
+            wideStyle: fillsScreen ? .heroOnly : .columns, fillsShelf: shape != .tall
         ) {
             hero
         } controls: {
@@ -37,8 +44,10 @@ struct TwitchStreamPage: View {
         } body: {
             clipNote
         } shelf: {
-            PaneCard(Copy.Twitch.chat) {
-                TwitchChatCard(model: model, delay: chatDelay)
+            if !chatElsewhere {
+                PaneCard(Copy.Twitch.chat) {
+                    TwitchChatCard(model: model, delay: chatDelay, fills: shape != .tall)
+                }
             }
         }
         .onAppear {
@@ -65,6 +74,20 @@ struct TwitchStreamPage: View {
         }
         #endif
     }
+
+    // MARK: where things go
+
+    /// The pane is one whole screen of a Duo held tall or half folded (the hinge across it): the stream takes all of it.
+    private var fillsScreen: Bool {
+        guard shape == .wide, pane.state == .screen, case .twoScreens(axis: .horizontal, hinge: _) = pane.placement else { return false }
+        return true
+    }
+
+    /// The twitch tab beside the pane shows this stream's chat.
+    private var chatInTab: Bool { pane.twitchChatBeside == login }
+
+    /// The pane draws no chat: the tab beside it has it, or the stream fills the screen.
+    private var chatElsewhere: Bool { chatInTab || fillsScreen }
 
     // MARK: words
 
@@ -138,12 +161,43 @@ struct TwitchStreamPage: View {
                 playerOrTV(compact: true)
             }
             .background(Color.black)
+        case .wide where fillsScreen:
+            ZStack(alignment: .bottom) {
+                Color.black
+                playerOrTV(compact: false)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                overlayControls
+            }
         case .wide, .split:
             ZStack {
                 Color.black
                 playerOrTV(compact: false)
             }
         }
+    }
+
+    /// The buttons over the bottom of a stream filling the screen: the big buttons as icons, the chat (on the twitch tab)
+    /// when it is not up already, open on twitch, and stop.
+    private var overlayControls: some View {
+        VStack(spacing: 8) {
+            clipNote
+            HStack(spacing: 10) {
+                ForEach(overlayActions) { PaneIconButton(action: $0) }
+            }
+        }
+        .padding(.bottom, 14)
+        .padding(.horizontal, 12)
+    }
+
+    private var overlayActions: [PaneAction] {
+        var out = gridActions
+        if !chatInTab {
+            out.append(PaneAction(Copy.Twitch.showChat, systemImage: Symbol.Twitch.chat) {
+                pane.provided(TwitchTabChat.self)?.browsing = false
+                model.selectedTab = .twitch
+            })
+        }
+        return out + actions
     }
 
     @ViewBuilder private var controls: some View {
@@ -232,14 +286,7 @@ struct TwitchStreamPage: View {
         }
     }
 
-    /// Video-only AirPlay runs the TV behind the phone: chat waits to match (70.5).
-    private var chatDelay: TimeInterval {
-        #if os(iOS)
-        TwitchTV.shared.activeChatDelay
-        #else
-        0
-        #endif
-    }
+    private var chatDelay: TimeInterval { TwitchChatCard.tvDelay }
 }
 
 /// What a stream keeps for as long as the pane holds it, whatever shape its page is drawn in (`Pane.keepAlive`): the chat
@@ -276,10 +323,21 @@ private final class TwitchWatch: PaneKeptObject {
     }
 }
 
-/// The chat as the shelf's card: a fixed height, since the column it sits in scrolls.
-private struct TwitchChatCard: View {
+/// The chat as the shelf's card: a fixed height in a column that scrolls, or the rest of the room (`fills`). Also the
+/// twitch tab's chat beside the pane (`TwitchScreen`).
+struct TwitchChatCard: View {
     let model: AppModel
     let delay: TimeInterval
+    var fills = false
+
+    /// Video-only AirPlay runs the TV behind the phone: chat waits to match (70.5).
+    static var tvDelay: TimeInterval {
+        #if os(iOS)
+        TwitchTV.shared.activeChatDelay
+        #else
+        0
+        #endif
+    }
 
     @Environment(\.paneShape) private var shape
     /// "add to a set" from the chat: a standard sheet over the pane, so the stream page stays mounted (and playing) under it.
@@ -293,7 +351,8 @@ private struct TwitchChatCard: View {
             SevenTvEmoteHits.remember(hit)
             addingToSet = model.sevenTv.addToSetPicker(emote: hit)
         }
-        .frame(height: height)
+        .frame(height: fills ? nil : height)
+        .frame(maxHeight: fills ? .infinity : nil)
         .clipShape(.rect(cornerRadius: 14))
         .sheet(item: $addingToSet) { picker in
             SevenTvAddToSetSheet(picker: picker)
