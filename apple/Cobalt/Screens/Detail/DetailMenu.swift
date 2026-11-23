@@ -15,6 +15,9 @@ struct DetailMenu: View {
     var askAbout: () -> Void = {}
     /// Opens the rename alert; the same item sits in the detail's title menu.
     var rename: () -> Void = {}
+    /// The pane's post page draws `rename`, `open in library`, `ask about this` and `delete everything` itself (the title
+    /// row and the header's `more`); this menu then holds the rest.
+    var paneDrawsEssentials = false
 
     /// `crop…` and `repost frame…` (lane A7, `Screens/Tools`): the tool sheet that is up.
     @State private var tool: ToolSheet?
@@ -26,12 +29,12 @@ struct DetailMenu: View {
     private var model: AppModel { controller.model }
 
     /// From the orbit, when the library has the post: the library tab, on this media.
-    private var showsOpenInLibrary: Bool {
+    var showsOpenInLibrary: Bool {
         model.capabilities.library && item.post != nil && model.selectedTab != .library
     }
 
     /// With chat on the server, a media that has a library post can start a thread (APP-API-CONTRACT 27.4).
-    private var showsAskAbout: Bool { model.capabilities.chat && item.post != nil && !model.isHiddenPost(item) }
+    var showsAskAbout: Bool { model.capabilities.chat && item.post != nil && !model.isHiddenPost(item) }
 
     /// Some of the media is kept offline and the rest can still be fetched (nothing runs for it right now).
     private var showsKeepEverything: Bool {
@@ -125,13 +128,15 @@ struct DetailMenu: View {
         let deleting = controller.isDeleting
         let busy = controller.isBusy(item)
         Menu {
-            Button(Copy.Library2.rename, systemImage: Symbol.Library.rename, action: rename)
-                .disabled(deleting)
-            if showsOpenInLibrary {
-                Button(Copy.Media.openInLibrary, systemImage: Symbol.Media.openInLibrary, action: openInLibrary)
-            }
-            if showsAskAbout {
-                Button(Copy.Chat.askAbout, systemImage: Symbol.chatAsk, action: askAbout)
+            if !paneDrawsEssentials {
+                Button(Copy.Library2.rename, systemImage: Symbol.Library.rename, action: rename)
+                    .disabled(deleting)
+                if showsOpenInLibrary {
+                    Button(Copy.Media.openInLibrary, systemImage: Symbol.Media.openInLibrary, action: openInLibrary)
+                }
+                if showsAskAbout {
+                    Button(Copy.Chat.askAbout, systemImage: Symbol.chatAsk, action: askAbout)
+                }
             }
             if item.detailShape != .classic { galleryItems(deleting: deleting) }
             if let picture = croppablePicture {
@@ -167,7 +172,7 @@ struct DetailMenu: View {
                     .disabled(deleting)
                 }
             }
-            if controller.canDeleteEverything(item) {
+            if !paneDrawsEssentials, controller.canDeleteEverything(item) {
                 Button(Copy.Media.deleteEverything, systemImage: Symbol.Media.deleteEverything, role: .destructive) {
                     controller.confirm = .deleteEverything
                 }

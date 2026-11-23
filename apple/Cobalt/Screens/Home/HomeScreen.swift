@@ -41,7 +41,7 @@ struct HomeScreen: View {
     #endif
     @State private var failureToken = 0
     @State private var inspectorOpen = true
-    /// The width the home column itself gets (the inspector and the sidebar already taken out).
+    /// The width the home column itself gets (the pane and the sidebar already taken out).
     @State private var contentWidth: CGFloat = 0
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
     /// The 7tv circle has opened into its card. Closed when a save starts.
@@ -97,7 +97,7 @@ struct HomeScreen: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
     @Environment(\.shell) private var shell
-    @Environment(\.hingeEdge) private var hingeEdge
+    @Environment(Pane.self) private var pane: Pane?
     @Environment(\.photoImport) private var photoImport
     @Environment(\.hapticsEnabled) private var haptics
 
@@ -284,7 +284,7 @@ struct HomeScreen: View {
 
     /// Where the tray sits (CONTRACT-PARALLEL option A): above the circles on the phone, at the top right on the Mac
     /// and iPad, and as a pill under the title while a planet is in focus (or beside it where the home column is too
-    /// narrow to keep the tray out of the planet's way: the inspector is open).
+    /// narrow to keep the tray out of the planet's way: the pane is open).
     private var trayStyle: JobTray.Style {
         if tier == .compact { return hasFocus ? .pill(centered: true) : .above }
         if hasFocus, contentWidth > 0, contentWidth < 1100 { return .pill(centered: false) }
@@ -322,16 +322,19 @@ struct HomeScreen: View {
         return 44
     }
 
-    /// The inspector is the trim's settings (quality, width, make webp): a gallery has none of them.
+    /// The window has room for the screen pane beside the tab: planets and runs open there instead of being pushed.
+    private var paneBeside: Bool { pane.map { $0.placement != .compact } ?? false }
+
+    /// The trim's settings (quality, width, make webp) are the pane's save page: a gallery has none of them.
     private var canInspect: Bool {
         if case .gallery = pipeline.state { return false }
-        return tier == .wide && stage == .focus && focusLifted
+        return paneBeside && stage == .focus && focusLifted
     }
 
-    private var inspectorBinding: Binding<Bool> {
-        Binding(
-            get: { canInspect && inspectorOpen },
-            set: { if canInspect { inspectorOpen = $0 } })
+    /// The run whose save page the pane should show now: the focused one, while its planet is lifted and the owner has
+    /// not turned the settings off.
+    private var savePaneID: String? {
+        canInspect && inspectorOpen ? model.queue.focusedID?.uuidString : nil
     }
 
     private var glassID: String {
@@ -393,10 +396,7 @@ struct HomeScreen: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { homeFrame = $0 }
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
         }
-        .inspector(isPresented: inspectorBinding) {
-            InspectorColumn(model: model)
-                .inspectorColumnWidth(min: 280, ideal: Metrics.inspector, max: 420)
-        }
+        .modifier(HomeSavePane(pane: pane, wanted: savePaneID, inspectorOpen: $inspectorOpen))
         .navigationTitle(Copy.appName)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -605,7 +605,7 @@ struct HomeScreen: View {
             .ignoresSafeArea()
             // one of two screens: the planets stay in this one (they crossed the hinge) and fade out at its sides
             // instead of stopping on a hard line; the extension under the sidebar would smear across the hinge
-            .modifier(OrbitColumnEdges(hinge: hingeEdge, extendUnderSidebar: tier != .compact))
+            .modifier(ExtendUnderSidebar(enabled: tier != .compact))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Copy.orbitA11y)
             .accessibilityValue(orbitSummary)
@@ -1090,6 +1090,11 @@ struct HomeScreen: View {
     /// Opens the media's detail (CONTRACT-MEDIA 1.8): on the face's tab. On the phone the planet's own
     /// player is lent to it when the face is the video, so the zoom carries the picture and nothing restarts.
     private func open(_ media: StoredMedia) {
+        // with room for the pane the media opens beside the orbit, which keeps turning
+        if let pane, pane.placement != .compact {
+            pane.open(.post(baseID(media.id)))
+            return
+        }
         #if os(macOS)
         openedSheet = PlanetID(id: media.id)
         #else
@@ -1278,34 +1283,39 @@ struct CircleLabel: View {
 #Preview("home · regular (preview beside trim)", traits: .fixedLayout(width: 820, height: 760)) {
     PreviewHost(.happy, script: .input) { HomeScreen(model: $0, tier: .regular) }
 }
-#Preview("home · wide (inspector)", traits: .fixedLayout(width: 1280, height: 780)) {
+#Preview("home · wide", traits: .fixedLayout(width: 1280, height: 780)) {
     PreviewHost(.happy, script: .input) { HomeScreen(model: $0, tier: .wide) }
 }
 #endif
 
-/// On iPad and the Mac the orbit continues under the sidebar (the system's background extension);
-/// on a phone there is no sidebar, so it is left alone.
-/// The orbit's sides: full-bleed (and under the sidebar) alone; in a spread it stays in its own column and fades out
-/// on the hinge side only (the outer side is a real screen edge and cuts it as before).
-private struct OrbitColumnEdges: ViewModifier {
-    let hinge: HorizontalEdge?
-    let extendUnderSidebar: Bool
+/// Shows the focused run's save page in the pane while its planet is lifted (what the `.inspector` column was), and
+/// forgets the owner's choice to have it when they close the pane: the toolbar's trim settings button brings it back.
+private struct HomeSavePane: ViewModifier {
+    let pane: Pane?
+    let wanted: String?
+    @Binding var inspectorOpen: Bool
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if let hinge {
-            content.mask {
-                LinearGradient(
-                    stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.05), .init(color: .black, location: 1)],
-                    startPoint: hinge == .leading ? .leading : .trailing,
-                    endPoint: hinge == .leading ? .trailing : .leading)
+        content
+            .onChange(of: wanted) { old, new in
+                guard let pane else { return }
+                if let new {
+                    pane.open(.save(new))
+                } else if let old, pane.item == .save(old), pane.isVisible, !pane.isRunning {
+                    // the planet went home (or the owner turned the settings off): its page goes with it
+                    pane.close()
+                }
             }
-        } else {
-            content.modifier(ExtendUnderSidebar(enabled: extendUnderSidebar))
-        }
+            .onChange(of: pane?.route) { _, route in
+                // the owner closed the save page: the settings are off until they ask again
+                guard let route, case .save? = route.item, !route.isVisible, inspectorOpen, wanted != nil else { return }
+                inspectorOpen = false
+            }
     }
 }
 
+/// On iPad and the Mac the orbit continues under the sidebar (the system's background extension);
+/// on a phone there is no sidebar, so it is left alone.
 private struct ExtendUnderSidebar: ViewModifier {
     let enabled: Bool
 

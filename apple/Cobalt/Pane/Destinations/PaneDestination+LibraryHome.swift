@@ -16,23 +16,28 @@ import SwiftUI
 // - save(id):    a save run (job id) while it runs, then its result. `keepsRunning`: report with
 //                `pane.setRunning(isLive, for: .save(id))` in every shape (the bar included).
 extension PaneDestination {
+    /// The post: `PanePostPage` (Screens/Detail), from just the media's id, so the library, home, a link's file and a chat
+    /// result all open the same page. Narrow window: the same page in the sheet.
     @MainActor @ViewBuilder
     static func post(_ id: String, model: AppModel, pane: Pane) -> some View {
-        PanePlaceholderPage(item: .post(id))
+        PanePostPage(id: id, model: model, pane: pane)
     }
 
+    /// The hold-to-peek: the media alone (`PanePeekPage`, Screens/Library). Takes no touches.
     @MainActor @ViewBuilder
     static func peek(_ id: String, model: AppModel, pane: Pane) -> some View {
-        PanePlaceholderPage(item: .peek(id))
+        PanePeekPage(id: id, model: model)
     }
 
+    /// The select actions (`PaneSelectionPage`, Screens/Library), over the library's own controller.
     @MainActor @ViewBuilder
     static func selection(model: AppModel, pane: Pane) -> some View {
-        PanePlaceholderPage(item: .selection)
+        PaneSelectionPage(model: model, pane: pane)
     }
 
+    /// A save run (`PaneSavePage`, Screens/Home): progress while it works, then the trim's settings and what was made.
     @MainActor @ViewBuilder
     static func save(_ id: String, model: AppModel, pane: Pane) -> some View {
-        PanePlaceholderPage(item: .save(id))
+        PaneSavePage(id: id, model: model, pane: pane)
     }
 }

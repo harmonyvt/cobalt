@@ -67,8 +67,8 @@ struct SharePrepRow: Identifiable, Equatable {
     }
 }
 
-/// The library screen's state and what its menus do: what is opened (a push on the phone, the inspector on the
-/// iPad and Mac), what is lit, select mode for the posts on screen, the rename and delete in progress, and each
+/// The library screen's state and what its menus do: what is opened (a push on the phone, the pane beside the tab
+/// elsewhere), what is lit, select mode for the posts on screen, the rename and delete in progress, and each
 /// action of the context menu. One per screen; the views read the parts they draw, so a lit tile never re-evaluates
 /// the table.
 @MainActor @Observable
@@ -159,60 +159,22 @@ final class LibraryController {
         unstick("tap")
     }
 
-    /// The library's width class changed (a pane opened or closed beside it, a fold, a rotation). Nothing the owner chose
-    /// depends on the width: the selection, the picks, the album and the sheets are this controller's and stay as they
-    /// are. The only thing done here works around iPadOS (below).
-    ///
-    /// The iPadOS part, and only that: when the library's column changes width under an open inspector, UIKit keeps the
-    /// navigation bar it laid out for the old width (a half-width bar with no "…", no queue and no search at full width;
-    /// seen on the iPad simulator after the spread pane closed, PR #203) until the split's columns change once. A new
-    /// navigation stack does not clear it. Closing and reopening the inspector, with no animation, does. Two costs, both
-    /// accepted: the detail in the inspector is built again (its own tab and scroll start over; the post shown,
-    /// `selection`, stays), and the bounce is not remembered as the owner's choice (`bouncing`). With the inspector closed
-    /// there is nothing to bounce.
-    /// Waits for the change to settle first: a pane opening or closing animates the column's width and the bar's row, and
-    /// a fix applied mid-animation (the stack rebuild this replaced) came up with the same half-width bar.
-    ///
-    /// (05a9bfe called this a rebuild's fix too: the stack rebuild it replaced re-ran the album's `initial` watcher, which
-    /// cleared the selection. That watcher now compares with what it last saw (`albumSeen`), so no rebuild clears anything.)
-    func tierChanged() {
-        tierRebuild?.cancel()
-        tierRebuild = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(600))
-            guard !Task.isCancelled, let self else { return }
-            Breadcrumbs.add("library.tierChanged")
-            guard !self.compact, self.inspectorOpen else { return }
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            var quiet = Transaction(); quiet.disablesAnimations = true
-            self.bouncing = true
-            defer { self.bouncing = false }
-            withTransaction(quiet) { self.inspectorOpen = false }
-            try? await Task.sleep(for: .milliseconds(60))
-            // cancelled in between (another width change): open it again anyway, the next bounce starts from open
-            withTransaction(quiet) { self.inspectorOpen = true }
-        }
-    }
-    @ObservationIgnored private var tierRebuild: Task<Void, Never>?
-
     private func unstick(_ how: String) {
         Breadcrumbs.add("library.unstuck", ["how": .string(how)])
         stackID += 1
     }
     #endif
 
-    /// The row the inspector shows (iPad, Mac).
+    /// The post the pane shows beside the library (a window with room for the pane): set by a tap or a click, mirrored
+    /// from the pane (`LibraryContent` opens `.post(selection)` when it is set and clears it when the pane shows
+    /// something else or is hidden), and what the mosaic lights.
     var selection: String?
-    /// The inspector's open state (remembered per device once the owner or the width decides).
+    /// Kept for `openFromSkyMap` (Screens/SkyMap): turning it on shows the selected post in the pane, which is what
+    /// setting `selection` already does, so there is nothing more to keep here.
     var inspectorOpen: Bool {
-        didSet {
-            guard inspectorOpen != oldValue, !bouncing else { return }
-            Self.defaults.set(inspectorOpen, forKey: Self.inspectorKey)
-            decided = true
-        }
+        get { false }
+        set { _ = newValue }
     }
-    /// `tierChanged`'s iPadOS bounce is running: its close and reopen are not the owner's and are not stored.
-    @ObservationIgnored private var bouncing = false
     /// The `showingHidden` this controller last acted on (nil before the screen first showed it): what `albumSeen`
     /// compares with, so a view built again does not start the album over.
     @ObservationIgnored var albumShown: Bool?
@@ -237,6 +199,10 @@ final class LibraryController {
     @ObservationIgnored var peekSwallowsTap = false
     /// A share of the ticked posts is copying files. A second tap while this is set does nothing.
     var preparingShare = false
+    /// Files ready for the system share sheet; the library screen presents them and the sheet clears this when it ends.
+    /// Here, not on the screen, so the select actions (in the pill or in the pane's page) can ask for it and then leave
+    /// select mode, which takes that page away.
+    var filesToShare: [URL] = []
     /// A share link is being made (`make share link`). A second tap while this is set does nothing.
     var makingShareLink = false
     /// Bumped when a share link was made and copied: the success haptic.
@@ -292,39 +258,21 @@ final class LibraryController {
     /// The system sheet was already asked for in this lock, so a return from the sheet does not ask again.
     @ObservationIgnored var lockPrompted = false
 
-    /// True on the phone layout (a push); false where the detail is an inspector.
+    /// True while the window has no room for the pane beside the tab (the phone layout: the detail is pushed); false
+    /// where the detail opens in the pane. Set from the pane's placement.
     @ObservationIgnored var compact = true
-    /// Set once the owner (or the width, the first time) has decided the inspector's state.
-    @ObservationIgnored private(set) var decided: Bool
     /// The shell's status line (`ShellActions.showStatus`), set by the screen.
     @ObservationIgnored var showStatus: @MainActor (String) -> Void = { _ in }
 
-    private static let inspectorKey = "library.inspector"
-    private static let defaults = UserDefaults.standard
-
     init(model: AppModel) {
         self.model = model
-        if let stored = Self.defaults.object(forKey: Self.inspectorKey) as? Bool {
-            inspectorOpen = stored
-            decided = true
-        } else {
-            inspectorOpen = false
-            decided = false
-        }
     }
 
     var library: LibraryModel { model.library }
 
-    /// The first time, an iPad in landscape or a normal Mac window opens the inspector (decision 15).
-    func decideInspector(width: CGFloat) {
-        guard !decided, !compact else { return }
-        decided = true
-        if width >= 1100 { inspectorOpen = true }
-    }
-
     // MARK: opening
 
-    /// A tap: the phone pushes the detail on the media's face; the iPad and Mac select it in the inspector.
+    /// A tap: the phone pushes the detail on the media's face; with room for the pane, the post opens there.
     func open(_ row: LibraryRow) {
         open(row.item, initial: row.item.face.id)
     }
@@ -334,12 +282,13 @@ final class LibraryController {
         if compact {
             opened = OpenedMedia(item: item, initial: initial)
         } else {
-            selection = item.post?.id ?? item.id
-            inspectorOpen = true
+            let id = item.post?.id ?? item.id
+            // the same post again (the pane was closed since): the library's watcher sees a change from nil
+            selection = id
         }
     }
 
-    /// The media the inspector shows: the loaded post whatever the filter says (else the post a search returned).
+    /// The media the pane shows: the loaded post whatever the filter says (else the post a search returned).
     /// A hidden post resolves only in the open (unlocked) album; everywhere else it is nil (APP-API-CONTRACT 37.7).
     var selectedItem: MediaItem? {
         guard let id = selection else { return nil }
@@ -534,6 +483,22 @@ final class LibraryController {
         if shareCancelled { return [] }
         if urls.isEmpty { showStatus(Copy.actionFailed); failTick += 1 }
         return urls
+    }
+
+    /// `share` of the select actions: copies each ticked face on screen, hands the files to the share sheet and leaves
+    /// select mode (as saving a gallery's photos does). A second call while that runs does nothing.
+    func shareAndEnd(_ rows: [LibraryRow]) async {
+        let urls = await sharePicked(rows)
+        guard !urls.isEmpty else { return }
+        filesToShare = urls
+        withAnimation(Motion.rows) { endSelecting() }
+    }
+
+    /// `make link` / `collection` of the select actions: makes the link, copies it, files it when `target` says so, and
+    /// leaves select mode once it was made.
+    func makeLinkAndEnd(_ rows: [LibraryRow], into target: CollectionTarget? = nil) async {
+        let made = if let target { await makeShareLink(rows, into: target) } else { await makeShareLink(rows) }
+        if made { withAnimation(Motion.rows) { endSelecting() } }
     }
 
     // MARK: gallery share link (APP-API-CONTRACT 24)
