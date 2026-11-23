@@ -17,10 +17,10 @@ Cobalt/App/KeyboardShelf.swift: try? data.write(to: dir.appendingPathComponent("
 Cobalt/App/PhotoImport.swift: if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) } # 8.17 baseline, move off main
 Cobalt/App/PhotoImport.swift: let fm = FileManager.default # 8.17 baseline, move off main
 Cobalt/App/PhotoImport.swift: let size = (try? fm.attributesOfItem(atPath: received.file.path)[.size] as? NSNumber)?.int64Value ?? 0 # 8.17 baseline, move off main
+Cobalt/Design/ShareChoice.swift: return FileManager.default.fileExists(atPath: url.path) # 8.17 baseline, move off main (was in DetailMenu and LibraryController)
 Cobalt/Screens/Combine/CombineModel.swift: if item(id)?.isPhoto == true, let url = stored.fileURL, FileManager.default.fileExists(atPath: url.path) { out.append(.file(url)) } # 8.17 baseline, move off main
 Cobalt/Screens/Combine/CombineModel.swift: if rendition.itemType == .photo, let url = rendition.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { # 8.17 baseline, move off main
 Cobalt/Screens/Detail/DetailActions.swift: if let url = rendition.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url } # 8.17 baseline, move off main
-Cobalt/Screens/Detail/DetailMenu.swift: if let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url } # 8.17 baseline, move off main
 Cobalt/Screens/Detail/DetailPhotos.swift: guard let url = r.local?.fileURL, FileManager.default.fileExists(atPath: url.path) else { # 8.17 baseline, move off main
 Cobalt/Screens/Detail/DetailPhotos.swift: if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) } # 8.17 baseline, move off main
 Cobalt/Screens/Detail/DetailPhotos.swift: if let url = r.local?.fileURL, fm.fileExists(atPath: url.path) { # 8.17 baseline, move off main
@@ -40,7 +40,6 @@ Cobalt/Screens/Home/OrbitGallery.swift: if isStill(video), let file = video.file
 Cobalt/Screens/Home/OrbitGallery.swift: if let poster = video.posterURL, fm.fileExists(atPath: poster.path) { return poster } # 8.17 baseline, move off main
 Cobalt/Screens/Home/OrbitGallery.swift: if let url = face.fileURL, fm.fileExists(atPath: url.path) { out.onDisk.insert(m.id) } # 8.17 baseline, move off main
 Cobalt/Screens/Home/OrbitGallery.swift: let fm = FileManager.default # 8.17 baseline, move off main
-Cobalt/Screens/Library/LibraryController.swift: if let url = face.local?.fileURL, FileManager.default.fileExists(atPath: url.path) { return url } # 8.17 baseline, move off main
 Cobalt/Screens/Library/LibraryController.swift: if let url = face.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) { # 8.17 baseline, move off main
 Cobalt/Screens/Library/LibraryDeleteSheet.swift: if let poster = r.local?.posterURL, fm.fileExists(atPath: poster.path) { # 8.17 baseline, move off main
 Cobalt/Screens/Library/LibraryDeleteSheet.swift: let fm = FileManager.default # 8.17 baseline, move off main

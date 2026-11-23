@@ -681,7 +681,7 @@ struct PostActions {
     /// `share`: the file, its share link or its direct link (a menu when there is more than one).
     private func shareAction(disabled: Bool) -> PaneAction? {
         let targets = model.capabilities.shareTargets(for: r, file: r.isOnDevice || r.file != nil)
-        return PaneAction.share(targets, disabled: disabled) { share([r]) } links: shareLink
+        return PaneAction.share(targets, disabled: disabled, file: { share([r]) }, links: { shareLink($0) })
     }
 
     /// `save to photos`: once the file is in the owner's photos it says where and stops being a button.
