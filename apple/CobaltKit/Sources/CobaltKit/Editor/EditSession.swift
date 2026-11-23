@@ -92,6 +92,8 @@ public final class EditSession {
     @ObservationIgnored private var redoStack: [EditTimeline] = []
     @ObservationIgnored private var lastKey: String?
     @ObservationIgnored private var lastEditAt = Date.distantPast
+    /// Between `beginGesture` and `endGesture`: keyed edits with the same key are one step however long the finger rests.
+    @ObservationIgnored private var gestureOpen = false
 
     // saving
     @ObservationIgnored private var dirty = false
@@ -961,6 +963,98 @@ public final class EditSession {
         }
     }
 
+    // MARK: - Turned and off-canvas frames (APP-API-CONTRACT 69.7)
+
+    /// The picture a clip draws, in pixels: the file's display size, cropped when the clip has a crop. Nil while the file's size is
+    /// not known. Any lane; a version 1 overlay or main clip too.
+    public func pictureSize(ofClip id: String) -> PixelSize? {
+        guard let clip = laneClip(id) else { return nil }
+        return pictureSize(item: clip.item, crop: clip.crop)
+    }
+
+    private func pictureSize(item: String, crop: EditCrop?) -> PixelSize? {
+        guard let display = assets[item]?.display ?? sources[item]?.display, display.w > 0, display.h > 0 else { return nil }
+        guard let crop else { return display }
+        guard let px = EditGeometry.cropPixels(crop, display: display) else { return nil }
+        return PixelSize(w: px.w, h: px.h)
+    }
+
+    /// The clip as one lane clip: a version 2 clip, or a version 1 overlay or main clip described the same way (only the fields
+    /// the frame reads).
+    private func laneClip(_ id: String) -> EditLaneClip? {
+        if timeline.version >= 2 { return timeline.clips.first { $0.id == id } }
+        if let o = timeline.overlay.first(where: { $0.id == id }) {
+            return EditLaneClip(id: o.id, item: o.item, lane: o.track + 1, at: o.at, in: o.`in`, out: o.out, frame: o.frame)
+        }
+        if let m = timeline.main.first(where: { $0.id == id }) {
+            return EditLaneClip(id: m.id, item: m.item, lane: 0, at: 0, in: m.`in`, out: m.out, crop: m.crop, fit: m.fit)
+        }
+        return nil
+    }
+
+    /// The box a clip has now: its own `frame`, or, when it has none, the one `fit` or `fill` gives it. A first move, size or
+    /// turn starts from this, so the picture does not jump. Nil while the file's size is not known.
+    public func frameBox(ofClip id: String) -> EditFrame? {
+        guard let clip = laneClip(id) else { return nil }
+        if let frame = clip.frame { return frame }
+        guard let display = assets[clip.item]?.display ?? sources[clip.item]?.display, display.w > 0, display.h > 0 else { return nil }
+        return EditGeometry.fitFrame(display: display, crop: clip.crop, fit: clip.fit, canvas: timeline.canvas)
+    }
+
+    /// Sets a clip's `frame` (x, y, w and the turn `r`), one undo step per gesture (`beginGesture` ... `endGesture`, or edits
+    /// within 0.6 s of each other). The frame is held to what 69.7 allows: `w` 0.05...4, some of the box on the canvas, `r`
+    /// wrapped into -180...180 and rounded to 0.1. It may hang past any edge.
+    ///
+    /// A turn or a box past an edge needs version 2: a version 1 project becomes version 2 on the first one (that is one undo
+    /// step too). False, with `laneRefusal`, when the server saves only version 1 and this frame is not a version 1 overlay
+    /// frame (or the project cannot become version 2), when the clip's lane is locked, or when there is no such clip.
+    @discardableResult
+    public func setClipFrame(id: String, _ wanted: EditFrame) -> Bool {
+        var next = timeline
+        if next.version < 2 {
+            guard case .ok(let v2) = EditLanes.v1ToV2(next) else {
+                refuseLane(EditLanes.staysV1Message)
+                return false
+            }
+            next = v2
+        }
+        guard let index = next.clips.firstIndex(where: { $0.id == id }) else { return false }
+        if lockedLanes.contains(next.clips[index].lane) { return false }
+        let display = pictureSize(item: next.clips[index].item, crop: next.clips[index].crop)
+        next.clips[index].frame = Self.clampLaneFrame(wanted, display: display, canvas: next.canvas)
+        guard allowsSave(EditJSON.rounded(next)) else {
+            refuseLane(EditLanes.needsServerMessage)
+            return false
+        }
+        laneRefusal = nil
+        commit(key: "frame:\(id)") { $0 = next }
+        return true
+    }
+
+    private func refuseLane(_ message: String) {
+        laneRefusal = message
+        laneRefusalNonce += 1
+    }
+
+    /// `frame` held to 69.7: `w` 0.05...4; `x < 1` and `x + w > 0`; `y < 1` and, when the picture's size is known, `y + h > 0`
+    /// (else `y >= -16`); `r` wrapped into -180...180. Not rounded: the session's rounding does that. A bit of the box always
+    /// stays on the canvas, so rounding cannot push it off.
+    static func clampLaneFrame(_ frame: EditFrame, display: PixelSize?, canvas: EditCanvas) -> EditFrame {
+        let keep = 0.0003
+        func finite(_ v: Double, _ fallback: Double) -> Double { v.isFinite ? v : fallback }
+        let w = min(EditValidation.frameMaxWidth, max(EditValidation.frameMinWidth, finite(frame.w, 0.35)))
+        let x = min(max(finite(frame.x, 0), keep - w), 1 - keep)
+        var lowest = -EditValidation.frameMaxWidth * 4 + keep
+        if let display, display.w > 0, display.h > 0, canvas.h > 0 {
+            let h = EditGeometry.overlayHeightFraction(display: display, frame: EditFrame(x: 0, y: 0, w: w), canvas: canvas)
+            lowest = max(lowest, keep - h)
+        }
+        let y = min(max(finite(frame.y, 0), lowest), 1 - keep)
+        var r = finite(frame.r, 0).truncatingRemainder(dividingBy: 360)
+        if r > 180 { r -= 360 } else if r < -180 { r += 360 }
+        return EditFrame(x: x, y: y, w: w, r: r)
+    }
+
     public func setOverlayOpacity(id: String, _ v: Double) {
         editOverlay(id, key: "opacity:\(id)") { $0.opacity = min(1, max(0.1, v.isFinite ? v : 1)) }
     }
@@ -1226,9 +1320,17 @@ public final class EditSession {
 
     // MARK: - Undo
 
+    /// Starts a drag, pinch or twist whose keyed edits (`setClipFrame`) are one undo step however long the finger rests, until
+    /// `endGesture()`. Optional: without it a run is one step only while edits arrive within 0.6 s of each other.
+    public func beginGesture() {
+        lastKey = nil
+        gestureOpen = true
+    }
+
     /// Ends a run of drag or slider edits: the next edit is a step of its own.
     /// A rebuild held back during the run is scheduled now (the usual 150 ms debounce, so a burst of nudges is one rebuild).
     public func endGesture() {
+        gestureOpen = false
         lastKey = nil
         if gestureRebuildPending {
             gestureRebuildPending = false
@@ -1285,7 +1387,7 @@ public final class EditSession {
         t = normalized(t, clampOverlays: clamp)
         guard t != timeline else { return }
         let now = ctx.clock.now()
-        if let key, key == lastKey, now.timeIntervalSince(lastEditAt) < Self.coalesceWindow {
+        if let key, key == lastKey, gestureOpen || now.timeIntervalSince(lastEditAt) < Self.coalesceWindow {
             // the same drag or slider: one step
         } else {
             undoStack.append(timeline)

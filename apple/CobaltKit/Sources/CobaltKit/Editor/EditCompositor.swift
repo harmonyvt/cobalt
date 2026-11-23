@@ -176,13 +176,11 @@ enum EditFrameComposer {
         }
     }
 
-    /// A lane clip on the canvas. A `frame` uses the overlay placement; without one, crop and fit cover the canvas.
+    /// A lane clip on the canvas. A `frame` uses the box placement of 69.7 (`EditGeometry.laneBox`): not pushed back inside the
+    /// canvas, turned about its centre; without one, crop and fit cover the canvas.
     private static func drawLane(_ image: CIImage, clip: EditLaneClip, canvas: EditCanvas, under: CIImage) -> CIImage {
         if let frame = clip.frame {
-            let overlay = EditOverlay(
-                id: clip.id, item: clip.item, at: clip.at, in: clip.`in`, out: clip.out, frame: frame, opacity: clip.opacity,
-                volume: clip.volume, muted: clip.muted, pitch: clip.pitch, hidden: false, key: nil, background: clip.background)
-            return drawOverlay(image, overlay: overlay, canvas: canvas, under: under) ?? under
+            return drawLaneBox(image, clip: clip, frame: frame, canvas: canvas, under: under)
         }
         let main = EditClip(
             id: clip.id, item: clip.item, in: clip.`in`, out: clip.out, speed: clip.speed, crop: clip.crop, fit: clip.fit,
@@ -329,6 +327,45 @@ enum EditFrameComposer {
             if t < passed { return i }
         }
         return count - 1
+    }
+
+    /// A framed version 2 clip (69.7). The clip's crop is applied first (the box has the cropped picture's shape), the picture is
+    /// scaled to its box, then turned about the box centre with the corners it uncovers see-through, then drawn at the box
+    /// (which may be past any edge). A box with nothing on the canvas draws nothing: `under` comes back as it was.
+    static func drawLaneBox(_ image: CIImage, clip: EditLaneClip, frame: EditFrame, canvas: EditCanvas, under: CIImage) -> CIImage {
+        var picture = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+        var display = PixelSize(w: Int(picture.extent.width.rounded()), h: Int(picture.extent.height.rounded()))
+        guard display.w > 0, display.h > 0 else { return under }
+        if let crop = clip.crop, let px = EditGeometry.cropPixels(crop, display: display) {
+            let rect = CGRect(x: px.x, y: display.h - px.y - px.h, width: px.w, height: px.h)
+            picture = picture.cropped(to: rect).transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+            display = PixelSize(w: px.w, h: px.h)
+        }
+        guard let box = EditGeometry.laneBox(display: display, frame: frame, canvas: canvas) else { return under }
+        var c = scale(picture, to: PixelSize(w: box.w, h: box.h))
+        if clip.opacity < 0.9999 {
+            c = c.applyingFilter("CIColorMatrix", parameters: [
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(max(0, clip.opacity))),
+            ])
+        }
+        // the backing sits inside the box, so it turns with the picture
+        let plate = CGRect(x: 0, y: 0, width: box.w, height: box.h)
+        switch clip.background {
+        case .color(let raw):
+            if let rgb = EditChromaKey(color: raw).rgb {
+                c = c.composited(over: CIImage(color: CIColor(red: rgb.r, green: rgb.g, blue: rgb.b)).cropped(to: plate))
+            }
+        case .blur:
+            let behind = under
+                .cropped(to: CGRect(x: box.x, y: canvas.h - box.y - box.h, width: box.w, height: box.h))
+                .transformed(by: CGAffineTransform(translationX: CGFloat(-box.x), y: CGFloat(-(canvas.h - box.y - box.h))))
+            let blurred = behind.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 18]).cropped(to: plate)
+            c = c.composited(over: blurred)
+        case .clip, nil:
+            break
+        }
+        let placed = c.transformed(by: box.coreImageTransform(canvasHeight: canvas.h))
+        return placed.composited(over: under)
     }
 
     /// A main clip on the canvas: crop, Lanczos scale, place (y flipped: Core Image's origin is the bottom-left).
