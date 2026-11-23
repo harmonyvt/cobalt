@@ -34,6 +34,8 @@ export const EDIT_TIMELINE_VERSION = 2;
 export const MIN_CROP_PX = 64;
 /** Slack on x + w <= 1 and y + h <= 1 (a client's float rounding). */
 export const EDIT_EPS = 1e-3;
+/** The widest a v2 clip's `frame` may be, in canvas widths (section 69.7). */
+export const EDIT_FRAME_MAX_W = 4;
 /** A source may end this much before a clip's `out` (seconds); the render clamps `out` to the duration. */
 export const EDIT_END_SLACK = 0.05;
 export const EDIT_SAMPLE_RATE = 48000;
@@ -53,8 +55,9 @@ export const EDIT_CROP_ASPECTS = ["free", "9:16", "1:1", "4:5", "16:9"];
  * @typedef {{version: 1, canvas: {w: number, h: number, fps: number}, main: MainClip[], overlay: OverlayClip[],
  *            output?: Exclude<EditOutput, "mp4">}} Timeline
  * @typedef {{id: string, item: string, lane: number, at: number, in: number, out: number, speed?: number, crop?: EditCrop,
- *            fit?: "fill" | "fit", frame?: {x: number, y: number, w: number}, opacity?: number, volume?: number,
+ *            fit?: "fill" | "fit", frame?: LaneFrame, opacity?: number, volume?: number,
  *            muted?: boolean, pitch?: number, hidden?: boolean, key?: ChromaKey, background?: KeyBackground}} LaneClip
+ * @typedef {{x: number, y: number, w: number, r?: number}} LaneFrame
  * @typedef {{version: 2, canvas: {w: number, h: number, fps: number}, clips: LaneClip[],
  *            output?: Exclude<EditOutput, "mp4">}} TimelineV2
  * @typedef {Timeline | TimelineV2} EditTimeline
@@ -633,6 +636,35 @@ export function overlayPlacement(display, frame, canvas) {
     return { h: oh, w: ow, x: ox, y: oy };
 }
 
+/**
+ * A v2 clip's box on the canvas (69.7): like `overlayPlacement`, but not pushed back inside the canvas, so the box may
+ * hang past any edge, up to 4 canvases wide. `r` turns it about its centre: `rot` is the even-sized box the turned
+ * picture needs, placed so the centre stays put. Null when nothing of it would be on the canvas.
+ * @param {{w: number, h: number}} display @param {LaneFrame} frame @param {{w: number, h: number}} canvas
+ * @returns {{x: number, y: number, w: number, h: number, r: number, rot: {x: number, y: number, w: number, h: number} | null} | null}
+ */
+export function laneBoxPlacement(display, frame, canvas) {
+    const { w: W, h: H } = canvas;
+    const ow = clamp(evenNearest(frame.w * W), 2, evenFloor(W * EDIT_FRAME_MAX_W));
+    const oh = clamp(evenNearest((ow * display.h) / display.w), 2, evenFloor(H * EDIT_FRAME_MAX_W * 4));
+    const ox = Math.round(frame.x * W);
+    const oy = Math.round(frame.y * H);
+    const r = frame.r ?? 0;
+    /** @type {{x: number, y: number, w: number, h: number} | null} */
+    let rot = null;
+    let bx = ox, by = oy, bw = ow, bh = oh;
+    if (r !== 0) {
+        const a = (r * Math.PI) / 180;
+        const c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+        const rw = 2 * Math.ceil((ow * c + oh * s) / 2 - 1e-6);
+        const rh = 2 * Math.ceil((ow * s + oh * c) / 2 - 1e-6);
+        rot = { h: rh, w: rw, x: ox + (ow - rw) / 2, y: oy + (oh - rh) / 2 };
+        bx = rot.x; by = rot.y; bw = rw; bh = rh;
+    }
+    if (bx >= W || by >= H || bx + bw <= 0 || by + bh <= 0) return null;
+    return { h: oh, r, rot, w: ow, x: ox, y: oy };
+}
+
 // --- timeline v2: equal lanes (section 69) -----------------------------------------------------------------------
 
 /**
@@ -732,6 +764,46 @@ function parseTimelineV2(t) {
     return { ok: true, timeline };
 }
 
+/** Round to `places` decimals, half away from zero (Swift's .toNearestOrAwayFromZero), for numbers that may be negative. @param {number} x @param {number} places */
+function roundSym(x, places) {
+    return x < 0 ? -roundTo(-x, places) + 0 : roundTo(x, places);
+}
+
+/**
+ * A v2 clip's `frame` (section 69.7): `x`, `y`, `w` as fractions of the canvas, optional `r` (degrees, clockwise).
+ * Unlike a v1 overlay, the box may hang past any edge and be up to 4 canvases wide, as long as part of it is on the
+ * canvas (`x < 1`, `x + w > 0`, `y < 1`; `y + h > 0` needs the picture's size and is checked at save and render).
+ * `r` is -180..180, rounded to 0.1, and omitted when 0, so every frame saved before this section keeps its bytes.
+ * @param {unknown} v @param {string} p @returns {{ok: true, frame: LaneFrame} | Failure}
+ */
+function parseLaneFrame(v, p) {
+    if (!isObj(v)) return bad(p);
+    const f = keysOk(v, ["x", "y", "w"], ["r"], p);
+    if (f) return f;
+    for (const k of ["x", "y", "w"]) if (!isNum(v[k])) return bad(`${p}.${k}`);
+    const fx = /** @type {number} */ (v.x), fy = /** @type {number} */ (v.y), fw = /** @type {number} */ (v.w);
+    const w = roundTo(clamp(fw, 0, 8), 4);
+    if (fw < 0 || w < 0.05 || w > EDIT_FRAME_MAX_W) return range(`${p}.w`);
+    const x = roundSym(clamp(fx, -8, 8), 4);
+    if (x >= 1 || x + w <= 0) return range(`${p}.x`);
+    const y = roundSym(clamp(fy, -8, 8), 4);
+    if (y >= 1 || y < -EDIT_FRAME_MAX_W * 4) return range(`${p}.y`);
+    /** @type {LaneFrame} */
+    const frame = { w, x, y };
+    if (v.r !== undefined) {
+        if (!isNum(v.r)) return bad(`${p}.r`);
+        const r = roundSym(/** @type {number} */ (v.r), 1);
+        if (r < -180 || r > 180) return range(`${p}.r`);
+        if (r !== 0) frame.r = r;
+    }
+    return { ok: true, frame: sortKeys(frame) };
+}
+
+/** True when a v2 frame is also a valid v1 overlay frame (inside the canvas, not turned). @param {LaneFrame} f */
+function frameIsV1(f) {
+    return f.r === undefined && f.x >= 0 && f.y >= 0 && f.w <= 1 && f.x + f.w <= 1 + EDIT_EPS;
+}
+
 /**
  * @param {unknown} c @param {string} p @param {(id: unknown, path: string) => Failure | null} idOk
  * @returns {{ok: true, clip: LaneClip} | Failure}
@@ -778,19 +850,12 @@ function parseClipV2(c, p, idOk) {
         if (!cr.ok) return cr;
         crop = cr.crop;
     }
-    /** @type {{x: number, y: number, w: number} | undefined} */
+    /** @type {LaneFrame | undefined} */
     let frame;
     if (c.frame !== undefined) {
-        if (!isObj(c.frame)) return bad(`${p}.frame`);
-        f = keysOk(c.frame, ["x", "y", "w"], [], `${p}.frame`);
-        if (f) return f;
-        for (const k of ["x", "y", "w"]) if (!isNum(c.frame[k])) return bad(`${p}.frame.${k}`);
-        const fx = /** @type {number} */ (c.frame.x), fy = /** @type {number} */ (c.frame.y), fw = /** @type {number} */ (c.frame.w);
-        if (fx < 0) return range(`${p}.frame.x`);
-        if (fy < 0) return range(`${p}.frame.y`);
-        frame = { w: roundTo(clamp(fw, -1, 2), 4), x: roundTo(clamp(fx, 0, 2), 4), y: roundTo(clamp(fy, 0, 2), 4) };
-        if (frame.w < 0.05 || frame.w > 1) return range(`${p}.frame.w`);
-        if (frame.x + frame.w > 1 + EDIT_EPS) return range(`${p}.frame.x`);
+        const fr = parseLaneFrame(c.frame, `${p}.frame`);
+        if (!fr.ok) return fr;
+        frame = fr.frame;
     }
     /** @type {number | undefined} */
     let opacity;
@@ -945,7 +1010,8 @@ function checkSourcesV2(timeline, rows) {
             const disp = c.crop ? cropToPixels(c.crop, r.width, r.height) : { h: r.height, w: r.width };
             if (disp) {
                 const fh = ((c.frame.w * W) / H) * (disp.h / disp.w);
-                if (c.frame.y + fh > 1 + EDIT_EPS) return range(`${p}.frame.y`);
+                // may hang past the bottom (69.7), but some of it has to be on the canvas
+                if (c.frame.y + fh <= 0) return range(`${p}.frame.y`);
             }
         }
     }
@@ -1040,7 +1106,7 @@ export function timelineV2ToV1(timeline, kinds = null) {
             }
             lane0.push({ c, i });
         } else {
-            if (!c.frame) return fail("error.edit.needs_timeline_v2", `${p}.frame`);
+            if (!c.frame || !frameIsV1(c.frame)) return fail("error.edit.needs_timeline_v2", `${p}.frame`);
             if (c.crop) return fail("error.edit.needs_timeline_v2", `${p}.crop`);
             if (c.speed !== undefined && c.speed !== 1) return fail("error.edit.needs_timeline_v2", `${p}.speed`);
             if (c.fit !== undefined && c.fit !== "fill") return fail("error.edit.needs_timeline_v2", `${p}.fit`);

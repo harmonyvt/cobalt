@@ -13,7 +13,7 @@
 // the whole file; timestamps are relative to that seek, so the filter times are `in - seek`.
 
 import { chromaChain, colorUnderlay } from "./chroma.js";
-import { EDIT_SAMPLE_RATE, clipDrawOrder, cropToPixels, mainPlacement, overlayDrawOrder, overlayPlacement, timing } from "./timeline.js";
+import { EDIT_SAMPLE_RATE, clipDrawOrder, cropToPixels, laneBoxPlacement, mainPlacement, overlayDrawOrder, overlayPlacement, timing } from "./timeline.js";
 import { orientationFilters } from "./probe.js";
 
 /** Seconds of decoding before `in` (a held source frame older than this is not found; a keyframe interval is usually 1-2 s). */
@@ -297,21 +297,26 @@ function compileV2(t, sources, opts) {
         inputArgs.push(...inp.args);
         const inT = c.in - inp.seek, outT = c.out - inp.seek;
         const fit = c.fit === "fit" ? "fit" : "fill";
-        /** @type {{x: number, y: number, w: number, h: number} | null} */
+        /** @type {ReturnType<typeof laneBoxPlacement>} */
         let box = null;
         /** @type {ReturnType<typeof mainPlacement>} */
         let pl = null;
+        // A framed clip with nothing on the canvas (69.7) draws nothing; its sound still plays.
+        let offCanvas = false;
         if (c.frame) {
             const display = croppedDisplay(s, c.crop);
             if (!display) return { code: "error.edit.range", ok: false, path: `clips[${i}].crop` };
-            box = overlayPlacement(display, c.frame, t.canvas);
+            box = laneBoxPlacement(display, c.frame, t.canvas);
+            offCanvas = box === null;
         } else {
             pl = mainPlacement({ h: s.height, w: s.width }, c.crop ?? null, fit, t.canvas);
             if (!pl) return { code: "error.edit.range", ok: false, path: `clips[${i}].crop` };
         }
         const place = box
             ? `scale=${box.w}:${box.h}:flags=bicubic:out_color_matrix=bt709:out_range=tv`
-            : `scale=${pl.scaled.w}:${pl.scaled.h}:flags=bicubic:out_color_matrix=bt709:out_range=tv`;
+            : pl
+              ? `scale=${pl.scaled.w}:${pl.scaled.h}:flags=bicubic:out_color_matrix=bt709:out_range=tv`
+              : "";
         const v = [...decodeSteps(s)];
         const cropFilter = () => {
             if (!c.crop) return;
@@ -327,6 +332,7 @@ function compileV2(t, sources, opts) {
                 if (pl.scaled.w !== W || pl.scaled.h !== H) v.push(`pad=${W}:${H}:${pl.place.x}:${pl.place.y}:black`);
             } else if (pl.scaled.w !== W || pl.scaled.h !== H) v.push(`crop=${W}:${H}:${-pl.place.x}:${-pl.place.y}`);
         };
+        if (!offCanvas) {
         if (s.kind === "gif") {
             if (c.frame) cropFilter();
             if (c.frame) v.push(place);
@@ -359,10 +365,19 @@ function compileV2(t, sources, opts) {
                 ovLabel = `[p${i}]`;
             }
         }
-        const ox = box ? box.x : 0;
-        const oy = box ? box.y : 0;
+        let ox = box ? box.x : 0;
+        let oy = box ? box.y : 0;
+        if (box?.rot) {
+            // turned about its centre, the corners it uncovers see-through (69.7)
+            const rad = dec((box.r * Math.PI) / 180, 9);
+            chains.push(`${ovLabel}rotate=a=${rad}:ow=${box.rot.w}:oh=${box.rot.h}:c=black@0[r${i}]`);
+            ovLabel = `[r${i}]`;
+            ox = box.rot.x;
+            oy = box.rot.y;
+        }
         chains.push(`${vLast}${ovLabel}overlay=${ox}:${oy}:eof_action=pass:format=auto[vo${i}]`);
         vLast = `[vo${i}]`;
+        }
         if (s.kind === "video" && s.hasAudio && c.muted !== true) {
             const vol = c.volume ?? 1;
             const a = [audioTrim(inT, outT), ...speedPitchSteps(cm.speed, c.pitch), `volume=${dec(vol, 2)}`, ...toStereo(s.channels), `atrim=end_sample=${cm.samples}`, "asetpts=PTS-STARTPTS"];

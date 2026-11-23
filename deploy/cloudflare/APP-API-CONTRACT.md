@@ -7676,6 +7676,33 @@ The cases cover a v1 round trip (beach, and a timeline with crop, pitch, a keyed
 refusing to convert, a gap, a picture on lane 0, all 64 lanes, an overlap, lane 64, a key on lane 0, and a higher
 lane that runs past lane 0.
 
+### 69.7 Turned and off-canvas frames (addendum, 2026-11-23)
+
+Owner, 2026-11-23, editing a green-screen clip: tap the clip showing through the hole, "the four dots around each
+corner, drag it to resize it, and then also like a rotate at the top". A v2 clip's `frame` gains an optional `r` and
+looser bounds. v1 overlays (section 31, 39) are unchanged.
+
+| field | rule |
+|---|---|
+| `w` | `0.05..4` canvas widths (`EDIT_FRAME_MAX_W`), rounded to 0.0001 |
+| `x` | rounded to 0.0001 half away from zero; `x < 1` and `x + w > 0` (some of it on the canvas across) |
+| `y` | rounded the same way; `y < 1`. `y + h > 0` (with `h` from the picture's size) is checked where the size is known: `PUT /edits` against the library row and `checkSources` at render |
+| `r` | degrees, clockwise, `-180..180`, rounded to 0.1 half away from zero, omitted when 0 |
+
+Out of range is `error.edit.range` at `clips[i].frame.<field>`; an unknown key in `frame` is `error.edit.bad_request`.
+A frame saved before this section is byte for byte the same document.
+
+Rendering: the clip is scaled to its box exactly as before (`laneBoxPlacement`, which does not push the box back
+inside the canvas), keyed, then turned about its centre with `rotate=a=<rad>:ow:oh:c=black@0` into the even-sized box
+that holds the turned picture, so the uncovered corners are see-through, then overlaid at that box's corner (negative
+positions allowed). A clip whose box misses the canvas entirely draws nothing; its sound still plays.
+
+v2 → v1 (69.2): a frame with `r`, or one that is not inside the canvas (`x < 0`, `y < 0`, `w > 1`, `x + w > 1`),
+refuses with `error.edit.needs_timeline_v2` at `clips[i].frame`.
+
+An app from before this section that opens such a project as v2 keeps unknown keys out of its model: it shows the clip
+unturned and saving would drop `r`. Only builds that know 69.7 should edit these projects.
+
 ### 69.6 Not in this section
 
 The chat and MCP tool text (`TIMELINE_TYPE`, `edits.addOverlay`) still describe version 1. `parseEditTimeline` already
