@@ -20,12 +20,32 @@ struct PaneSavePage: View {
     let model: AppModel
     let pane: Pane
 
+    /// The run was in the queue while this page was up: a run that vanishes after that is gone for good at once.
+    @State private var seen = false
+
+    private var job: Job? { UUID(uuidString: id).flatMap { model.queue.job($0) } }
+
     var body: some View {
-        if let uuid = UUID(uuidString: id), let job = model.queue.job(uuid) {
-            PaneSaveContent(id: id, job: job, model: model, pane: pane)
-        } else {
-            PaneGonePage()
+        Group {
+            if let job {
+                PaneSaveContent(id: id, job: job, model: model, pane: pane)
+            } else {
+                PaneGonePage()
+                    .task(id: id) { await letGo() }
+            }
         }
+        .onChange(of: job != nil, initial: true) { _, there in
+            if there { seen = true }
+        }
+    }
+
+    /// A save that is not in the queue (cancelled, dismissed, or a restored route for one that was never there) is never
+    /// running: the pane lets go of it, so no bar says "gone". A route restored at launch gets `Pane.confirmWindow` first,
+    /// because the queue's ledger puts a run back a moment after the scene starts.
+    private func letGo() async {
+        if !seen, UUID(uuidString: id) != nil { try? await Task.sleep(for: Pane.confirmWindow) }
+        guard !Task.isCancelled, job == nil else { return }
+        pane.itemGone(.save(id))
     }
 }
 

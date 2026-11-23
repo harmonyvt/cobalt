@@ -184,6 +184,7 @@ struct PanePeekPage: View {
                 EmptyView()
             }
             .allowsHitTesting(false)
+            .hiddenCover(whenHidden: row.isHidden || model.isHiddenPost(row.item))
         } else {
             PaneGonePage()
         }

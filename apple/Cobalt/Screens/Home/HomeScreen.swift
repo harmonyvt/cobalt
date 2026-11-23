@@ -426,7 +426,11 @@ struct HomeScreen: View {
             #endif
             if canInspect {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { inspectorOpen.toggle() } label: {
+                    Button {
+                        inspectorOpen.toggle()
+                        // the owner asking for the trim settings: opens over whatever is there (a running stream goes to the bar)
+                        if inspectorOpen, let id = model.queue.focusedID?.uuidString { pane?.open(.save(id)) }
+                    } label: {
                         Label(Copy.inspectorToggle, systemImage: Symbol.inspector)
                     }
                     .help(Copy.inspectorToggle)
@@ -1300,10 +1304,12 @@ private struct HomeSavePane: ViewModifier {
             .onChange(of: wanted) { old, new in
                 guard let pane else { return }
                 if let new {
-                    pane.open(.save(new))
-                } else if let old, pane.item == .save(old), pane.isVisible, !pane.isRunning {
-                    // the planet went home (or the owner turned the settings off): its page goes with it
-                    pane.close()
+                    // a page opening itself (a planet lifted, a paste focusing a run): never over a running stream, or a post
+                    // or link the owner opened and is looking at. The toolbar's button is the owner asking: it opens it itself.
+                    pane.openIfIdle(.save(new))
+                } else if let old, !pane.isRunning {
+                    // the planet went home (or the owner turned the settings off): its page goes with it, if it is what is shown
+                    pane.close(ifShowing: .save(old))
                 }
             }
             .onChange(of: pane?.route) { _, route in

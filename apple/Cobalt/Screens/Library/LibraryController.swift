@@ -67,8 +67,8 @@ struct SharePrepRow: Identifiable, Equatable {
     }
 }
 
-/// The library screen's state and what its menus do: what is opened (a push on the phone, the pane beside the tab
-/// elsewhere), what is lit, select mode for the posts on screen, the rename and delete in progress, and each
+/// The library screen's state and what its menus do: what is opened (in the screen pane everywhere: beside the tab, or the
+/// sheet on a one-screen layout), what is lit, select mode for the posts on screen, the rename and delete in progress, and each
 /// action of the context menu. One per screen; the views read the parts they draw, so a lit tile never re-evaluates
 /// the table.
 @MainActor @Observable
@@ -77,21 +77,6 @@ final class LibraryController {
     /// How far the top bar has folded with the scroll (its own object: it changes every scrolled frame, and only the
     /// bar reads it).
     let fold = LibraryBarFold()
-
-    /// The phone's pushed detail.
-    var opened: OpenedMedia? {
-        didSet {
-            guard opened?.id != oldValue?.id else { return }
-            if opened != nil {
-                Breadcrumbs.add("detail.open")
-                Analytics.screen("library.detail")
-            } else {
-                Breadcrumbs.add("detail.close")
-                if model.selectedTab == .library { Analytics.screen("library") }
-                checkStackSoon()
-            }
-        }
-    }
 
     // MARK: the stuck zoom back (owner, 2026-11-14)
 
@@ -120,7 +105,7 @@ final class LibraryController {
             for wait in [900, 1600] {
                 try? await Task.sleep(for: .milliseconds(wait))
                 guard !Task.isCancelled, let self else { return }
-                guard self.opened == nil, self.model.selectedTab == .library, let anchor = self.anchor else { return }
+                guard self.model.selectedTab == .library, let anchor = self.anchor else { return }
                 if !Self.gridReachable(anchor) {
                     self.unstick("check")
                     return
@@ -154,7 +139,7 @@ final class LibraryController {
     /// A tap landed on an empty view controller wrapper (`TouchProbe`): on the library, with no detail open, that is
     /// the stuck zoom back. One dead tap, then the grid is back.
     func emptyWrapperTapped() {
-        guard opened == nil, model.selectedTab == .library else { return }
+        guard model.selectedTab == .library else { return }
         if let anchor, Self.gridReachable(anchor) { return }
         unstick("tap")
     }
@@ -165,10 +150,13 @@ final class LibraryController {
     }
     #endif
 
-    /// The post the pane shows beside the library (a window with room for the pane): set by a tap or a click, mirrored
-    /// from the pane (`LibraryContent` opens `.post(selection)` when it is set and clears it when the pane shows
-    /// something else or is hidden), and what the mosaic lights.
+    /// The post the pane shows: set by a tap or a click, mirrored from the pane (`LibraryPaneBridge` opens `.post(selection)`
+    /// when it is set and clears it when the pane shows something else or is hidden), and what the mosaic lights (beside
+    /// the tab only: the sheet covers it).
     var selection: String?
+    /// `selection` was set by the screen itself (a search's best match), not by the owner: the pane opens it only when
+    /// nothing is in the way (`Pane.openIfIdle`).
+    @ObservationIgnored var selectionIsAutomatic = false
     /// The `showingHidden` this controller last acted on (nil before the screen first showed it): what `albumSeen`
     /// compares with, so a view built again does not start the album over.
     @ObservationIgnored var albumShown: Bool?
@@ -184,7 +172,8 @@ final class LibraryController {
     /// Where a shift-click range starts: the post last ticked by a plain click or a ⌘-click (Finder's anchor).
     @ObservationIgnored private var pickAnchor: String?
     /// The posts on screen in their order (the screen keeps it current): what a shift-click range runs through.
-    @ObservationIgnored var shownRows: [LibraryRow] = []
+    /// Observed on purpose: the select actions page (`PaneSelectionPage`) draws from it, and must follow the screen's rows.
+    var shownRows: [LibraryRow] = []
     /// The share chips: every post, not shared, shared, or one collection's.
     var shareFilter: LibraryShareFilter = .all
     /// The post a hold is showing full size (media only), while the finger stays down.
@@ -252,8 +241,9 @@ final class LibraryController {
     /// The system sheet was already asked for in this lock, so a return from the sheet does not ask again.
     @ObservationIgnored var lockPrompted = false
 
-    /// True while the window has no room for the pane beside the tab (the phone layout: the detail is pushed); false
-    /// where the detail opens in the pane. Set from the pane's placement.
+    /// True while the window has no room for the pane beside the tab (one narrow screen: the pane is a sheet over the
+    /// grid, which keeps the select pill and the overlay peek); false where the pane sits beside it. Set from the pane's
+    /// placement.
     @ObservationIgnored var compact = true
     /// The shell's status line (`ShellActions.showStatus`), set by the screen.
     @ObservationIgnored var showStatus: @MainActor (String) -> Void = { _ in }
@@ -266,20 +256,26 @@ final class LibraryController {
 
     // MARK: opening
 
-    /// A tap: the phone pushes the detail on the media's face; with room for the pane, the post opens there.
+    /// A tap: the post opens in the pane.
     func open(_ row: LibraryRow) {
         open(row.item, initial: row.item.face.id)
     }
 
-    /// Opens the detail of `item` on the tab `initial` (the phone pushes it; the iPad and Mac select it).
+    /// Opens `item` in the pane (the bridge does it: beside the tab, or as the sheet on one narrow screen).
     func open(_ item: MediaItem, initial: Rendition.ID?) {
-        if compact {
-            opened = OpenedMedia(item: item, initial: initial)
-        } else {
-            let id = item.post?.id ?? item.id
-            // the same post again (the pane was closed since): the library's watcher sees a change from nil
-            selection = id
-        }
+        selectionIsAutomatic = false
+        // the same post again (the pane was closed since): the library's watcher sees a change from nil
+        selection = item.post?.id ?? item.id
+    }
+
+    /// The screen opens a post by itself (a search's best match): the pane takes it only when nothing is in the way, and
+    /// never over a running stream or a post the owner opened.
+    func openAutomatically(_ item: MediaItem) {
+        let id = item.post?.id ?? item.id
+        // the same post is already selected: nothing would read the flag
+        guard selection != id else { return }
+        selectionIsAutomatic = true
+        selection = id
     }
 
     /// The media the pane shows: the loaded post whatever the filter says (else the post a search returned).

@@ -74,6 +74,7 @@ struct PanePostContent: View {
     @Environment(\.paneShape) private var shape
     @Environment(\.shell) private var shell
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.paneItem) private var paneItem
 
     private let localID: String?
     private let postID: String?
@@ -105,6 +106,15 @@ struct PanePostContent: View {
         return local.map { model.mediaItem(for: $0) }
     }
 
+    /// The video's player and playhead, kept by the pane while it holds this post: the page is built anew for each shape
+    /// (sheet, cover, column, tall, wide), and the clip must not start over each time. Nil where the pane does not hold the
+    /// post (a preview): the hero keeps its own then.
+    private var heroKept: HeroKept? {
+        let item = paneItem ?? .post(id)
+        guard pane.holds(item) else { return nil }
+        return pane.keepAlive("player", for: item) { HeroKept() }
+    }
+
     private func subtitlesShown(_ item: MediaItem, _ selected: Rendition) -> Bool {
         model.capabilities.transcripts && item.post != nil && item.detailShape == .classic && selected.kind == .video
     }
@@ -131,6 +141,9 @@ struct PanePostContent: View {
             }
         }
         .environment(\.subtitles, subtitlesShown(item, selected) ? subtitles : nil)
+        .environment(\.heroKept, heroKept)
+        // a hidden post is not in the app switcher's snapshot (the library's own cover does not reach the pane)
+        .hiddenCover(whenHidden: fromAlbum || model.isHiddenPost(item))
         .background { GalleryFileShare(fileURLs: $filesToShare) }
         .detailDialogs(controller: controller, item: item) { ask in run(ask, item) }
         .makeSheet(controller: controller, item: item, model: model)
@@ -379,6 +392,8 @@ struct PanePostContent: View {
 
     private func openInLibrary(_ item: MediaItem) {
         guard let post = item.post else { return }
+        // on one narrow screen the pane is a sheet over the tab: it goes, or the library would light the post behind it
+        if pane.placement == .compact { pane.close() }
         model.library.expandedPostID = post.id
         model.selectedTab = .library
     }

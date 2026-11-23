@@ -6,8 +6,8 @@ import SwiftUI
 /// The **mosaic** is a dense masonry of faces at their real aspect (`LibraryMosaic`); the **table** is a real
 /// sortable `Table` on the iPad and Mac and a dense two-line list on the iPhone (`LibraryTable`). Search, sort and
 /// show live in the toolbar; a search, a filter or a sort other than newest first loads the whole library first
-/// (the server pages by date only). Tapping opens the same media as the orbit: pushed as the tabbed `MediaDetail` on the
-/// phone (with the zoom from the tile), in the screen pane beside the tab (`PanePostPage`) wherever the window has room. The context menu, rename and
+/// (the server pages by date only). Tapping opens the same media as the orbit in the screen pane (`PanePostPage`): beside
+/// the tab wherever the window has room, the sheet (the cover, spanned) on one narrow screen. The context menu, rename and
 /// `delete everything` are the same in every view.
 ///
 /// iOS: this screen always brings its own navigation stack. Mac: a narrow window gets one; otherwise the window's
@@ -84,8 +84,8 @@ private struct LibraryContent: View {
 
     @Environment(\.shell) private var shell
     @Environment(Pane.self) private var pane: Pane?
-    /// The window has room for the screen pane beside the tab (not the one-screen phone layout): a post, a hold's peek and
-    /// the select actions open there instead of being pushed or drawn over the grid.
+    /// The window has room for the screen pane beside the tab (not the one-screen phone layout): a hold's peek and the select
+    /// actions open there instead of being drawn over the grid. A post opens in the pane everywhere (a sheet when compact).
     private var paneBeside: Bool { pane.map { $0.placement != .compact } ?? false }
     @Environment(\.hapticsEnabled) private var haptics
     /// The app's phase (`AppLifecycle`), not this window's scenePhase: the album relocks when the app goes away.
@@ -307,13 +307,12 @@ private struct LibraryContent: View {
             .onChange(of: library.searchState) { _, state in
                 guard paneBeside, !controller.selecting, case .results(let count, _) = state, count > 0,
                       let best = rows.first else { return }
-                controller.open(best.item, initial: nil)
+                controller.openAutomatically(best.item)
             }
             .motion(Motion.card, value: controller.peek?.id)
             .haptic(.impact(weight: .light), trigger: controller.peek?.id, enabled: haptics) { $0 != nil }
             .statusConfirm(controller: controller)
             .modifier(LibraryPaneBridge(controller: controller, pane: pane))
-            .modifier(LibraryPush(model: model, controller: controller, zoom: zoomSpace, enabled: !paneBeside))
             // the freeze hunt (owner, 2026-11-14): the grid is back on screen after a detail
             .onAppear {
                 Breadcrumbs.add("library.appear")
@@ -722,81 +721,78 @@ struct LibraryActivityBar: View {
     }
 }
 
-// MARK: - the pushed detail (phone) and the pane (everything with room beside the tab)
+// MARK: - the pane (a post opens there everywhere)
 
-/// The phone's detail: pushed on the media's face, with the zoom from the tile it was opened from.
-private struct LibraryPush: ViewModifier {
-    let model: AppModel
-    @Bindable var controller: LibraryController
-    let zoom: Namespace.ID
-    let enabled: Bool
-
-    func body(content: Content) -> some View {
-        content.navigationDestination(item: $controller.opened) { target in
-            detail(target)
-        }
-    }
-
-    @ViewBuilder
-    private func detail(_ target: OpenedMedia) -> some View {
-        let screen = MediaDetail(model: model, item: target.item, initial: target.initial)
-            .hiddenCover(controller)
-        #if os(iOS)
-        // A post with a video opens with the plain push: iOS 26/27's zoom back from a playing video leaves the grid out
-        // of the stack (taps die until LibraryController rebuilds it; 8.16 needed that on every back) and costs a 350-540
-        // ms frame on the way. Galleries and webps keep the zoom.
-        if target.item.video != nil {
-            screen
-        } else {
-            screen.navigationTransition(.zoom(sourceID: target.item.post?.id ?? target.item.id, in: zoom))
-        }
-        #else
-        screen
-        #endif
-    }
-}
-
-/// Where the library's detail goes. With room for the pane beside the tab (`PanePlacement` is not `.compact`) the post, the
-/// hold's peek and the select actions are the pane's pages; on the one-screen phone layout they are the push and the
-/// overlays the library always had. `selection` is the post the pane shows: set by a tap, a click or "open in library",
-/// cleared when the pane shows something else (or is hidden).
+/// Where the library's detail goes (apple/CONTRACT-PANE.md section 5; owner, 2026-11-23: pane everywhere). A post is the
+/// pane's `.post` page in every placement: beside the tab where the window has room, the sheet (the cover, spanned) on one
+/// narrow screen. The hold's peek and the select actions are beside-the-tab pages only: on one narrow screen the pane
+/// would cover the grid they work on, so there the hold shows the overlay peek and select mode keeps its pill.
+/// `selection` is the post the pane shows: set by a tap, a click or "open in library", cleared when the pane shows
+/// something else (or is hidden).
 private struct LibraryPaneBridge: ViewModifier {
     @Bindable var controller: LibraryController
     let pane: Pane?
 
+    /// The pane sits beside the tab (a column, or one of two screens), not over it as a sheet.
     private var beside: Bool { pane.map { $0.placement != .compact } ?? false }
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: beside, initial: true) { _, now in controller.compact = !now }
+            .onChange(of: beside, initial: true) { _, now in
+                controller.compact = !now
+                guard let pane else { return }
+                if now {
+                    // back beside the tab (unfolded, rotated) while selecting: the actions page comes back if nothing is in the way
+                    if controller.selecting { openActions(pane) }
+                } else {
+                    // the pane lost its side position (rotation to a narrow window, a fold): the actions are the pill's again,
+                    // and a peek in flight is the overlay's
+                    pane.close(ifShowing: .selection)
+                    if pane.isPeeking { pane.endPeek() }
+                }
+            }
             // the select actions page reads the controller from the pane
             .task { pane?.provide(controller) }
             .onChange(of: controller.selection) { old, new in
-                guard let pane, beside else { return }
+                guard let pane else { return }
                 if let new {
-                    if pane.item != .post(new) || !pane.isVisible { pane.open(.post(new)) }
+                    let automatic = controller.selectionIsAutomatic
+                    controller.selectionIsAutomatic = false
+                    guard pane.item != .post(new) || !pane.isVisible else { return }
+                    if automatic {
+                        // a search's best match: never over a running stream or a post the owner opened
+                        if !pane.openIfIdle(.post(new)) { controller.selection = nil }
+                    } else {
+                        pane.open(.post(new))
+                    }
                 } else if let old, pane.item == .post(old), !pane.isPeeking {
-                    pane.close()
+                    pane.close(ifShowing: .post(old))
                 }
             }
-            .onChange(of: pane?.route) { _, route in
-                guard let pane, beside, !pane.isPeeking else { return }
+            .onChange(of: pane?.route, initial: true) { _, route in
+                guard let pane, !pane.isPeeking else { return }
                 var shown: String?
                 if let route, route.isVisible, case .post(let id)? = route.item { shown = id }
+                // the actions page with no select mode behind it (a restored route, or select ended elsewhere) has nothing to do
+                if let route, route.isVisible, route.item == .selection, !controller.selecting { pane.close(ifShowing: .selection) }
                 if controller.selection != shown { controller.selection = shown }
             }
             .onChange(of: controller.selecting) { _, selecting in
                 guard let pane, beside else { return }
-                if selecting {
-                    pane.open(.selection)
-                } else if pane.item == .selection {
-                    pane.close()
-                }
+                if selecting { openActions(pane) } else { pane.close(ifShowing: .selection) }
             }
             .onChange(of: controller.peek?.id) { _, id in
                 guard let pane, beside else { return }
                 if let id { pane.peek(id) } else { pane.endPeek() }
             }
+    }
+
+    /// Select mode began: the actions page opens beside the tab. It never takes the place of a running stream, and the
+    /// owner pressing `select` replaces a post they had open; when a running item is in the way the pill's `N picked` capsule
+    /// brings the page back on a tap.
+    private func openActions(_ pane: Pane) {
+        if pane.openIfIdle(.selection) { return }
+        if !pane.isRunning, !pane.isPeeking { pane.open(.selection) }
     }
 }
 

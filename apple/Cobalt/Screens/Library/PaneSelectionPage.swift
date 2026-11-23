@@ -62,6 +62,8 @@ struct PaneSelectionContent: View {
             }
         }
         .motion(Motion.card, value: peeking?.id)
+        // the album's picks are not in the app switcher's snapshot (the pane is not under the library's own cover)
+        .hiddenCover(controller)
         .navigationDestination(isPresented: $pickingCollection) {
             CollectionPickerSheet(store: store, picks: picks, file: { target in
                 Task { await controller.makeLinkAndEnd(controller.shownRows, into: target) }
