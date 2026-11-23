@@ -22,8 +22,9 @@ import AppKit
 /// work happens on `Analytics`' queue (8.17).
 @MainActor
 enum FrameMonitor {
-    /// What started a stretch: a short touch, a drag mostly up or down, or one mostly sideways (swipe back, pager).
-    enum Kind: String { case tap, scroll, swipe }
+    /// What started a stretch: a short touch, a drag mostly up or down, or one mostly sideways (swipe back, pager);
+    /// `transition`: no finger at all, the screen pane changing by itself (a restore, a fold, an auto-open, a close from code).
+    enum Kind: String { case tap, scroll, swipe, transition }
 
     private static var stats = FrameStats()
     private static var touching = false
@@ -35,6 +36,13 @@ enum FrameMonitor {
     private static var dy: CGFloat = 0
     private static var scrolled = false
     private static var hangs = 0
+    /// A finger (or on the Mac a click or scroll) started or joined this stretch.
+    private static var touched = false
+    /// The last screen-pane change in this stretch (`Pane.change`), and how many there were.
+    private static var paneChange: [String: TelemetryValue]?
+    private static var paneChanges = 0
+    /// Screens that changed their layout tier during this stretch (`LayoutSwap`).
+    private static var layoutSwaps = 0
 
     private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
@@ -43,6 +51,7 @@ enum FrameMonitor {
     /// A finger came down at `point` (window coordinates).
     static func touchBegan(at point: CGPoint) {
         touching = true
+        touched = true
         if !running {
             start = point
             dx = 0; dy = 0
@@ -74,11 +83,59 @@ enum FrameMonitor {
         startScreen = Analytics.currentScreen
         scrolled = false
         hangs = 0
+        touched = touching
+        paneChange = nil
+        paneChanges = 0
+        layoutSwaps = 0
         quietAt = now + 1.6
         startLink()
     }
 
+    // MARK: the screen pane and layout changes
+
+    /// The screen pane changed (`Pane.change`): time its animation even with no finger down, and tag the stretch with the
+    /// change, so `frames` says how smooth opening, closing, peeking and spanning the pane is. `Motion.card` is a 0.5 s
+    /// spring; 0.8 s covers it and the layout that follows.
+    static func paneChanged(_ values: [String: TelemetryValue]) {
+        guard appActive else { return }
+        paneChange = values
+        if running {
+            paneChanges += 1
+            quietAt = max(quietAt, now + 0.8)
+        } else {
+            start = nil
+            dx = 0; dy = 0
+            begin()
+            paneChange = values
+            paneChanges = 1
+            quietAt = now + 0.8
+        }
+    }
+
+    /// A screen changed its layout tier while on screen (`LayoutSwap`): counted on the stretch it happened in.
+    static func layoutSwapped() {
+        if running { layoutSwaps += 1 }
+    }
+
+    /// The app left the screen (resign active, background): the link stops and the stretch is dropped, so the time away
+    /// is never measured as one long frame (8.40 sent 29 s, 89 s and 323 s "hangs" that were the app in the background).
+    static func appLeft() {
+        touching = false
+        guard running else { return }
+        stopLink()
+    }
+
+    private static var appActive: Bool {
+        #if os(iOS)
+        UIApplication.shared.applicationState == .active
+        #else
+        NSApp.isActive
+        #endif
+    }
+
     fileprivate static func tick(timestamp: CFTimeInterval, target: CFTimeInterval) {
+        // a tick after the app went away (a background snapshot) is not a frame anyone saw
+        guard appActive else { appLeft(); return }
         if let gap = stats.tick(timestamp: timestamp, refresh: target - timestamp), gap >= 250, hangs < 3 {
             hangs += 1
             let props: [String: TelemetryValue] = [
@@ -95,7 +152,8 @@ enum FrameMonitor {
         stopLink()
         guard stats.frames >= 10 else { return }
         let kind: Kind
-        if scrolled { kind = .scroll }
+        if !touched { kind = .transition }
+        else if scrolled { kind = .scroll }
         else if max(dx, dy) < 12 { kind = .tap }
         else { kind = dx > dy ? .swipe : .scroll }
         var data = stats.values
@@ -107,6 +165,11 @@ enum FrameMonitor {
         data["thermal"] = .string(thermal)
         if ProcessInfo.processInfo.isLowPowerModeEnabled { data["low_power"] = .bool(true) }
         if stats.worstMs >= 100 { data["breadcrumbs"] = .string(Breadcrumbs.recent()) }
+        if let paneChange {
+            for (key, value) in paneChange { data["pane_\(key)"] = value }
+            data["pane_changes"] = .int(paneChanges)
+        }
+        if layoutSwaps > 0 { data["layout_swaps"] = .int(layoutSwaps) }
         Analytics.event("frames", values: data)
         // the self-hosted log keeps only the rough ones
         if stats.hitchRatio >= 10 || stats.severe > 0 { Telemetry.log(.info, .ui, "frames", data: data) }
@@ -159,6 +222,7 @@ enum FrameMonitor {
                     dx = 0; dy = 0
                     begin()
                 }
+                touched = true
                 if isScroll {
                     scrolled = true
                     dy += abs(event.scrollingDeltaY)
@@ -190,5 +254,27 @@ private final class LinkTarget: NSObject {
         let timestamp = link.timestamp
         let target = link.targetTimestamp
         MainActor.assumeIsolated { FrameMonitor.tick(timestamp: timestamp, target: target) }
+    }
+}
+
+/// A screen changing its layout tier (compact / regular / wide) while it stays on screen: its toolbar, list or grid is
+/// rebuilt, which the owner sees as buttons disappearing and a flicker. One `layout.swap` event each, with the screen
+/// pane's state at the time, and a count on the `frames` stretch it happened in.
+@MainActor
+enum LayoutSwap {
+    static func report(screen: String, from: Tier, to: Tier, width: CGFloat, pane: Pane?) {
+        guard from != to else { return }
+        var values: [String: TelemetryValue] = [
+            "screen": .string(screen), "from": .string(from.name), "to": .string(to.name), "width": .int(Int(width.rounded())),
+        ]
+        if let pane {
+            values["pane_state"] = .string(pane.state.rawValue)
+            values["pane_kind"] = .string(pane.item?.kind ?? "none")
+            values["pane_placement"] = .string(pane.placement.name)
+            values["pane_peek"] = .bool(pane.isPeeking)
+        }
+        Breadcrumbs.add("layout.swap", ["screen": .string(screen), "to": .string(to.name)])
+        Analytics.event("layout.swap", values: values)
+        FrameMonitor.layoutSwapped()
     }
 }

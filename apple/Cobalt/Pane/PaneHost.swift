@@ -31,6 +31,7 @@ struct PaneHost<Content: View>: View {
 
     @Environment(Pane.self) private var pane
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @SceneStorage("pane") private var saved: Data?
     @State private var size: CGSize = .zero
     @State private var edgeTargeted = false
@@ -52,8 +53,14 @@ struct PaneHost<Content: View>: View {
     private var measured: Bool { size.width > 0 && size.height > 0 }
 
     /// Until iOS reports the Duo's hinge there is no display feature to pass (`PanePlacement.resolve` takes one).
+    ///
+    /// In the background iOS lays the window out again at other sizes for the app switcher's snapshots. The placement the
+    /// owner left stays meanwhile: a flip to `.compact` and back closed and reopened the pane (and the library's select
+    /// actions with it), a 0.5-1 s main-thread stall on every trip away in the 8.40 sessions. Back in front it is measured
+    /// again, so a fold made while away still lands.
     private var placement: PanePlacement {
-        measured ? PanePlacement.resolve(size: size, idiom: idiom, displayFeatureFrame: nil) : pane.placement
+        guard measured, scenePhase != .background else { return pane.placement }
+        return PanePlacement.resolve(size: size, idiom: idiom, displayFeatureFrame: nil)
     }
 
     /// The pane is drawn beside (or over) the tab, not in a sheet.
