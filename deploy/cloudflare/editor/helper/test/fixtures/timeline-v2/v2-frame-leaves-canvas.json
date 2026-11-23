@@ -1,0 +1,40 @@
+{
+  "name": "v2-frame-leaves-canvas",
+  "note": "x + w <= 0: nothing of the frame is on the canvas (69.7).",
+  "input": {
+    "version": 2,
+    "canvas": {
+      "w": 1080,
+      "h": 1920,
+      "fps": 30
+    },
+    "clips": [
+      {
+        "id": "b",
+        "item": "AAAAAAAAAAAAAAAA",
+        "lane": 0,
+        "at": 0,
+        "in": 0,
+        "out": 2
+      },
+      {
+        "id": "o",
+        "item": "BBBBBBBBBBBBBBBB",
+        "lane": 1,
+        "at": 0,
+        "in": 0,
+        "out": 2,
+        "frame": {
+          "x": -0.5,
+          "y": 0,
+          "w": 0.5
+        }
+      }
+    ]
+  },
+  "parse": {
+    "ok": false,
+    "code": "error.edit.range",
+    "path": "clips[1].frame.x"
+  }
+}
