@@ -337,6 +337,7 @@ struct BooruTile: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(post.tags.character.first ?? post.tags.general.prefix(3).joined(separator: ", "))
+        .accessibilityIdentifier("booru.tile")
     }
 }
 

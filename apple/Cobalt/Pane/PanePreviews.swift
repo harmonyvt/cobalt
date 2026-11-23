@@ -68,6 +68,8 @@ private struct ShapeHost<Content: View>: View {
 #Preview("page · wide", traits: .fixedLayout(width: 1000, height: 560)) {
     ShapeHost(shape: .wide, state: .span) { SamplePage() }
 }
+// `.split(.media)` and `.split(.details)` are the two halves of one spanned page: `PanePage` hands the hero `.split(.media)` and
+// the scrolling details `.split(.details)`, so these two previews draw both (a page is never given `.split(.details)` alone).
 #Preview("page · split, wide duo", traits: .fixedLayout(width: 1080, height: 800)) {
     ShapeHost(shape: .split(.media), hinge: PaneHinge(axis: .vertical, position: 540), state: .span) { SamplePage() }
 }

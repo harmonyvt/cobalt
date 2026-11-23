@@ -80,7 +80,17 @@ struct PaneHost<Content: View>: View {
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
         .onChange(of: placement, initial: true) { _, now in if measured { pane.place(now) } }
-        .onAppear { pane.restoreOnce(saved) }
+        .onAppear {
+            #if DEBUG
+            // `-paneReset YES` (UI tests): start with no saved pane, so one test's pane is not the next one's
+            if UserDefaults.standard.bool(forKey: "paneReset") {
+                saved = nil
+                pane.restoreOnce(nil)
+                return
+            }
+            #endif
+            pane.restoreOnce(saved)
+        }
         .onChange(of: pane.machine.saved) { _, now in saved = now.encoded() }
         .sheet(isPresented: sheetShown) { compactSheet }
         .overlay(alignment: edgeAlignment(placement)) { edgeStrip(placement) }

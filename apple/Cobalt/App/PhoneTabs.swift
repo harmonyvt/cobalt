@@ -96,22 +96,14 @@ struct PhoneTabs<Screen: View>: View {
 
     @ViewBuilder
     private func root(_ tab: AppTab) -> some View {
-        SpreadPaneColumn(active: selection == .tab(tab), queue: model.queue) {
-            if tab == .library {
-                screen(tab)
-            } else {
-                NavigationStack { screen(tab) }
-            }
+        if tab == .library {
+            screen(tab)
+        } else {
+            NavigationStack { screen(tab) }
         }
     }
 
     private var moreStack: some View {
-        SpreadPaneColumn(active: selection == .more, queue: model.queue) {
-            moreNavigation
-        }
-    }
-
-    private var moreNavigation: some View {
         NavigationStack(path: $path) {
             List(overflow, id: \.self) { tab in
                 NavigationLink(value: tab) {

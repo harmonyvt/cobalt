@@ -82,6 +82,7 @@ private struct TwitchChannelList: View {
                 .submitLabel(.go)
                 #endif
                 .onSubmit(openQuery)
+                .accessibilityIdentifier("twitch.search")
             if TwitchStore.login(from: query) != nil {
                 Button(Copy.Twitch.open, action: openQuery)
                     .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))

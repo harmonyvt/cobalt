@@ -185,6 +185,7 @@ struct SwarmRow: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("swarm.row")
     }
 }
 

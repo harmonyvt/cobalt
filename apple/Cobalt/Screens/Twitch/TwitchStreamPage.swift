@@ -250,18 +250,23 @@ private struct TwitchChatCard: View {
     let model: AppModel
     let delay: TimeInterval
 
-    @Environment(Pane.self) private var pane
     @Environment(\.paneShape) private var shape
+    /// "add to a set" from the chat: a standard sheet over the pane, so the stream page stays mounted (and playing) under it.
+    /// (A push inside the pane's `NavigationStack` would cover the pane's own header, which is the root page's overlay, and the
+    /// stack has no back button; opening `.emoteAddToSet` would replace the stream.)
+    @State private var addingToSet: SevenTvAddToSetModel?
 
     var body: some View {
         TwitchChatPane(model: model, delay: delay, showsLabel: false) { emote in
-            // 7tv's add-to-set flow takes the emote's id and finds the emote in its registry (this page is replaced in the pane)
             guard let hit = emote.asHit else { return }
             SevenTvEmoteHits.remember(hit)
-            pane.open(.emoteAddToSet(hit.id))
+            addingToSet = model.sevenTv.addToSetPicker(emote: hit)
         }
         .frame(height: height)
         .clipShape(.rect(cornerRadius: 14))
+        .sheet(item: $addingToSet) { picker in
+            SevenTvAddToSetSheet(picker: picker)
+        }
     }
 
     private var height: CGFloat {

@@ -33,6 +33,7 @@ struct PaneChrome: View {
         .background { keys }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Pane.container(pane.title ?? Copy.Pane.context(item)))
+        .accessibilityIdentifier("pane")
         .accessibilityAddTraits(pane.state == .span ? .isModal : [])
         .accessibilityAction(.escape) { pane.close() }
     }
@@ -91,6 +92,7 @@ struct PaneChrome: View {
         #endif
         .help(title)
         .accessibilityLabel(title)
+        .accessibilityIdentifier("pane.span")
     }
 
     @ViewBuilder
@@ -118,6 +120,7 @@ struct PaneChrome: View {
         }
         CloseButton { pane.close() }
             .help(Copy.Pane.close)
+            .accessibilityIdentifier("pane.close")
     }
 
     // MARK: keys
@@ -156,6 +159,7 @@ struct PaneBar: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(Copy.Pane.container(pane.title ?? Copy.Pane.context(item)))
                 .accessibilityAction(named: Copy.Pane.reopen) { pane.tapBar() }
+                .accessibilityIdentifier("pane.bar")
                 .help(Copy.Pane.reopen)
         }
     }
@@ -195,7 +199,7 @@ struct PaneBarAccessory: ViewModifier {
 }
 
 /// The line on the hinge (or the column's divider). While a save or make runs it is the job's progress light, a green
-/// bar filling along the line, so no banner covers either side (what `HingeSeam` did for the spreads).
+/// bar filling along the line, so no banner covers either side (the old spread seam did the same).
 struct PaneSeam: View {
     let queue: JobQueue
     let axis: PanePlacement.Axis

@@ -348,6 +348,7 @@ struct PaneIconButton: View {
         .opacity(off ? 0.45 : 1)
         .help(action.title)
         .accessibilityLabel(action.title)
+        .accessibilityIdentifier("pane.action.\(action.id)")
     }
 }
 

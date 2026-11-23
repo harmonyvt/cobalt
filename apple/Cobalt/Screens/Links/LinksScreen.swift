@@ -415,6 +415,7 @@ struct LinkRow: View {
                 .accessibilityAddTraits(open == nil ? [] : .isButton)
                 .accessibilityHint(open == nil ? "" : Copy.LinkEdit.openA11yHint)
                 .accessibilityAction { open?() }
+                .accessibilityIdentifier("links.row")
                 Spacer(minLength: 4)
                 buttons
             }

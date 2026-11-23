@@ -57,8 +57,6 @@ struct AppShell: View {
     /// Two or more links pasted or dropped: the review sheet (CONTRACT-PARALLEL 4.5).
     @State private var review: PasteReviewRequest?
     @State private var width: CGFloat = 0
-    /// The other screen of a spread (Duo building blocks): sheets, pickers and confirms open there.
-    @State private var spreadPane = SpreadPaneHost()
     /// The window's screen pane (apple/CONTRACT-PANE.md): one per scene, drawn by `PaneHost` around the tabs.
     @State private var pane = Pane()
     /// What a screen that has just popped left to say ("deleted."), drawn over the shell for a moment.
@@ -89,45 +87,21 @@ struct AppShell: View {
         #endif
     }
 
-    /// The tier of one column: half the window while the other screen holds a pane (a screen laid out for the whole width
-    /// in half of it opened the library's inspector over its own grid), else the window's.
+    /// The tier of one column: the room the tab keeps beside the screen pane (a screen laid out for the whole width in
+    /// half of it opened the library's inspector over its own grid), else the window's.
     private var columnTier: Tier {
-        // the screen pane beside the tab: the tab is laid out for the room it keeps
         if width > 0, let tabWidth = pane.tabWidth(of: width) { return Tier(width: tabWidth) }
-        #if os(iOS)
-        if isSpread, spreadPane.pane != nil { return Tier(width: width / 2) }
-        #endif
         return tier
     }
 
-    /// Two screens' width on iPhone and iPad (`Spread.minWidth`): the pane and the hinge notices are on. The Mac keeps
-    /// its sheets.
-    private var isSpread: Bool {
-        #if os(iOS)
-        return width >= Spread.minWidth
-        #else
-        return false
-        #endif
+    /// Where the status notice sits: on the hinge of two screens, between them, instead of over either; else at the bottom.
+    private var noticeAlignment: Alignment {
+        if case .twoScreens = pane.placement { return .center }
+        return .bottom
     }
 
-    private static let photosPaneID = "shell-photos"
-
-    /// The photo picker: on a spread it opens inline on the other screen, beside the screen that asked for it
-    /// (Duo building blocks); otherwise the system sheet.
+    /// The photo picker: the system sheet.
     private func choosePhotos() {
-        #if os(iOS)
-        if isSpread {
-            let picker = PhotosPicker(
-                selection: $pickedPhoto, matching: .any(of: [.videos, .images]), preferredItemEncoding: .current,
-                photoLibrary: .shared()
-            ) { EmptyView() }
-                .photosPickerStyle(.inline)
-                .photosPickerDisabledCapabilities([.selectionActions])
-                .ignoresSafeArea(edges: .bottom)
-            spreadPane.show(id: Self.photosPaneID, content: AnyView(picker)) {}
-            return
-        }
-        #endif
         showPhotos = true
     }
 
@@ -138,18 +112,13 @@ struct AppShell: View {
             .cobaltRoot(model: model)
             .environment(\.shell, actions)
             .environment(\.photoImport, photoImport)
-            .environment(\.spreadPane, spreadPane)
-            .environment(\.isSpread, isSpread)
             .environment(pane)
-            // the pane itself is a column inside the selected tab (`SpreadPaneColumn`), not an overlay
-            .onChange(of: isSpread) { _, spread in if !spread { spreadPane.close() } }
             .overlay { if dropTargeted { dropHighlight } }
             #if os(iOS)
             .background { KeyboardShelfPublisher(store: model.store) }
             .modifier(AlertsPromptPresenter(model: model, blocked: titleSheet != nil || review != nil))
             #endif
-            // on a spread the notice sits on the hinge, between the two screens, instead of over either
-            .overlay(alignment: isSpread ? .center : .bottom) {
+            .overlay(alignment: noticeAlignment) {
                 if let note {
                     StatusToast(text: note.text, detail: note.detail, actionTitle: note.actionTitle) {
                         let action = note.action
@@ -188,7 +157,6 @@ struct AppShell: View {
             .onChange(of: pickedPhoto) { _, item in
                 guard let item else { return }
                 pickedPhoto = nil
-                spreadPane.close(id: Self.photosPaneID)
                 // the picker's asset id rides with the file, so the upload joins the cobalt album as that asset
                 photoImport.load(item, into: model) { [id = item.itemIdentifier] in intake($0, photosAssetID: id) }
             }
@@ -445,9 +413,7 @@ struct AppShell: View {
                     // save, library, links and chat (apple/CONTRACT.md 12; `AppModel.showQueue()`)
                     ForEach(model.visibleTabs.filter { $0 != .queue }, id: \.self) { tab in
                         Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
-                            SpreadPaneColumn(active: tab == model.selectedTab, queue: model.queue) {
-                                tabRoot(tab)
-                            }
+                            tabRoot(tab)
                         }
                         .badge(tab == .swarms ? model.swarms.waitingCount : 0)
                     }

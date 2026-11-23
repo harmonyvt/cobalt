@@ -169,12 +169,6 @@ final class LibraryController {
     /// from the pane (`LibraryContent` opens `.post(selection)` when it is set and clears it when the pane shows
     /// something else or is hidden), and what the mosaic lights.
     var selection: String?
-    /// Kept for `openFromSkyMap` (Screens/SkyMap): turning it on shows the selected post in the pane, which is what
-    /// setting `selection` already does, so there is nothing more to keep here.
-    var inspectorOpen: Bool {
-        get { false }
-        set { _ = newValue }
-    }
     /// The `showingHidden` this controller last acted on (nil before the screen first showed it): what `albumSeen`
     /// compares with, so a view built again does not start the album over.
     @ObservationIgnored var albumShown: Bool?
