@@ -158,6 +158,13 @@ public final class AppModel {
     /// The queue tab (apple/CONTRACT.md section 12): the jobs, the server's line, downloads, the photos album and the
     /// search index in one list. Polls `GET /queue` only while the tab is on screen.
     public let unifiedQueue: UnifiedQueue
+    /// Everything cobalt is doing, once, with the one count every surface reads (apple 03-PHASE3 3.2): `activity.activeCount`,
+    /// `activity.attentionCount`, `activity.items`. Derived from the stores above; keeps no state of its own.
+    public let activity: ActivityModel
+    /// The one paced poller of the server's background work (apple 03-PHASE3 3.3). A stub until Phase 3 lane (c).
+    public let serverActivity: ServerActivityStore
+    /// What the System Health Inspector shows (apple 03-PHASE3 3.4.2). A stub until Phase 3 lane (d).
+    public let health: SystemHealth
     /// What the focus screens read: the focused job's pipeline, or an idle one when nothing is focused. A run started
     /// on it by hand becomes the focused job at once.
     public var pipeline: Pipeline { queue.focused?.pipeline ?? queue.idlePipeline }
@@ -268,7 +275,13 @@ public final class AppModel {
                 fileURL: context.store.root.deletingLastPathComponent().appendingPathComponent("job-ledger.json"),
                 now: { [clock = context.clock] in clock.now() }))
         self.queue = jobQueue
-        self.unifiedQueue = UnifiedQueue(context: context, jobs: jobQueue, offline: offline, photos: sync)
+        let unified = UnifiedQueue(context: context, jobs: jobQueue, offline: offline, photos: sync)
+        self.unifiedQueue = unified
+        let activityModel = ActivityModel(context: context, queue: jobQueue, offline: offline, unified: unified, photos: sync)
+        self.activity = activityModel
+        context.activitySummary = { [weak activityModel] in activityModel?.summary ?? .empty }
+        self.serverActivity = ServerActivityStore(context: context)
+        self.health = SystemHealth(context: context)
         self.makeClient = makeClient
         unifiedQueue.editRenders = { [weak self] in self?.editor.renders ?? [] }
         context.keyRejected = { [weak self] in self?.markKeyInvalid() }
@@ -496,7 +509,6 @@ public final class AppModel {
         queue.serverChanged()                    // first: every job's Live Activity ends against the server it belonged to
         savePull.serverChanged()                 // another library: a new baseline for the pull
         unifiedQueue.serverChanged()             // nothing from the old server's queue is kept
-        ctx.background.cancelAll()               // detached runs belonged to the old server too
         ctx.client = makeClient(settings)
         apply(.unknown)
         library.reset()
@@ -562,7 +574,7 @@ public final class AppModel {
         }
         guard url.host(percentEncoded: false)?.lowercased() == "job",
               let id = UUID(uuidString: url.lastPathComponent),
-              !ctx.background.owns(job: id),            // a detached or queued run of this process is still carrying it
+              !ctx.background.owns(job: id),            // a queued run of this process is still carrying it
               let job = jobs.all().first(where: { $0.id == id })
         else { return }
         // Mid-run (saving, reading, rendering, a picker, a trim in progress) the home pipeline is

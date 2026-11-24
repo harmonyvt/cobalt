@@ -35,6 +35,7 @@ struct PollPacer {
     private var lastStart: Date?
     private var lastReply: Reply?
     private var lastRender: RenderStatus?
+    private var lastMake: MakeStatus?
     private var unchanged = 0
 
     /// The gap the next poll must keep from the start of the last one.
@@ -63,6 +64,13 @@ struct PollPacer {
     mutating func observe(_ status: RenderStatus, clock: any PipelineClock) {
         note(same: status == lastRender, clock: clock)
         lastRender = status
+    }
+
+    /// The same pacing for `GET /studio/<sid>/make/<job>?wait=1` (a slideshow or a gallery image made from a saved gallery): a
+    /// quick unchanged answer never tight-loops either.
+    mutating func observe(_ status: MakeStatus, clock: any PipelineClock) {
+        note(same: status == lastMake, clock: clock)
+        lastMake = status
     }
 
     private mutating func note(same: Bool, clock: any PipelineClock) {

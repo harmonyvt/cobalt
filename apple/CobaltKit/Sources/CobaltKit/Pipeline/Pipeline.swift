@@ -162,8 +162,8 @@ public final class Pipeline: Identifiable {
     /// the run lives (released when the next run begins).
     @ObservationIgnored var pinnedStoreIDs: Set<String> = []
 
-    // In-flight server calls that outlive the flow that started them, so `detach()` can hand them
-    // to a background run instead of dropping them (see `PipelineDetach.swift`).
+    // In-flight server calls that outlive the flow that started them, so `detach()` can see work still going (`hasWorkInFlight`)
+    // and let the queue carry the run instead of dropping it (see `PipelineDetach.swift`).
     /// `POST /render`, until it answers with the job id.
     @ObservationIgnored var renderRequest: Task<String, Error>?
     /// `POST /studio/<id>/publish` (or the image publish) of "host original".
@@ -175,13 +175,8 @@ public final class Pipeline: Identifiable {
     /// The render this run sent (start, length, crop, quality, width): stored on the finished webp
     /// as its `clip`. Nil for a render this process did not start (a resumed job).
     @ObservationIgnored var lastRenderRequest: RenderRequest?
-    /// This pipeline is a hidden background run carried on after `detach()`; it never shows.
-    @ObservationIgnored var isDetached = false
-    @ObservationIgnored var detachedCoordinator: Task<Void, Never>?
-    @ObservationIgnored var detachedRendering = false
-    @ObservationIgnored var detachedSettled = false
 
-    // The job queue (Jobs/JobQueue.swift). A pipeline outside a queue (the share extension's, a hidden detached run)
+    // The job queue (Jobs/JobQueue.swift). A pipeline outside a queue (the share extension's)
     // never sets any of these.
     /// The queue's job id for this pipeline (stable across the runs it carries); the line's key.
     @ObservationIgnored var jobKey: UUID?

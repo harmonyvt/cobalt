@@ -58,10 +58,11 @@ enum OfflineWords {
         }
     }
 
-    /// 0...1 when the total is known and positive.
+    /// 0...1 when the total is known and positive: a download's own status fraction (`JobStatus(download:)`, the same number
+    /// the activity sheet and the queue row draw). The caller says how much of what: one rendition, or a media's sum.
     static func fraction(_ progress: TransferProgress) -> Double? {
-        guard let total = progress.total, total > 0 else { return nil }
-        return min(1, max(0, Double(progress.bytes) / Double(total)))
+        let row = OfflineDownloadRow(id: "", name: "", state: .downloading(progress), queuedAt: Date())
+        return JobStatus(download: row, now: Date()).fraction
     }
 
     /// The confirm of "remove offline copy": the server keeps its copy, or this is the only one.

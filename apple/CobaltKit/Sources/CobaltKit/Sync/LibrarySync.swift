@@ -113,6 +113,12 @@ final class LibrarySync {
         self.init(store: store, transport: http, sender: http)
     }
 
+    /// The edits waiting in the outbox, oldest first (the System Health Inspector's list). Read-only: it never sends or changes
+    /// anything. Empty when the store cannot be read.
+    func pendingEdits() async -> [PendingSyncEdit] {
+        ((try? await store.pendingOps()) ?? []).sorted { $0.createdAt < $1.createdAt }.map(PendingSyncEdit.init)
+    }
+
     /// Switches the engine off for good: a pass in flight drops its page, no timer or path change starts
     /// another, and nothing it still holds reaches the library. The edits waiting in the outbox get one last
     /// try first, so an owner who turns sync off does not strand them. The copy and the outbox stay on disk.

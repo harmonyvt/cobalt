@@ -967,7 +967,7 @@ private struct LibrarySharePrepCard: View {
                     .contentTransition(.numericText(value: Double(done)))
             }
             VStack(spacing: 10) {
-                ForEach(rows.prefix(Self.listed)) { row in SharePrepLine(row: row) }
+                ForEach(rows.prefix(Self.listed)) { row in SharePrepLine(row: row, fraction: fraction(of: row)) }
                 if rows.count > Self.listed {
                     Text(Copy.Library2.sharePrepMore(rows.count - Self.listed))
                         .font(Font.cobalt(12, relativeTo: .caption))
@@ -991,6 +991,13 @@ private struct LibrarySharePrepCard: View {
         .animation(Motion.rows, value: done)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
+    }
+
+    /// How far this post's copy is, from the downloads engine's row for it (the activity list's own status): nil while the copy
+    /// reports no bytes, or when the post is not downloading.
+    private func fraction(of row: SharePrepRow) -> Double? {
+        guard row.state == .downloading else { return nil }
+        return controller.model.activity.status("download:" + OfflineDownloads.shareKey(row.id))?.fraction
     }
 
     private var kinds: String {
@@ -1055,6 +1062,8 @@ private struct SharePrepThumb: View {
 /// One post on the share card: its picture, its title, `video · 0:12 · downloading…`, and a mark for where it stands.
 private struct SharePrepLine: View {
     let row: SharePrepRow
+    /// The copy's progress, when the engine knows it (`OfflineDownloads.transfer`).
+    var fraction: Double?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1112,7 +1121,11 @@ private struct SharePrepLine: View {
     private var mark: some View {
         switch row.state {
         case .downloading:
-            ProgressView().controlSize(.small)
+            if let fraction {
+                ProgressView(value: fraction).progressViewStyle(.circular).controlSize(.small)
+            } else {
+                ProgressView().controlSize(.small)
+            }
         case .waiting:
             Image(systemName: "circle.dotted").foregroundStyle(CobaltColor.caption)
         case .onDevice, .ready:

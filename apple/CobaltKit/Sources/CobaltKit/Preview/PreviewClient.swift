@@ -41,6 +41,7 @@ final class PreviewServer: Sendable {
         var line = PreviewLineState()
         var failMadeDownloads = false
         var queueFails = false
+        var queueLineOverride: ServerLineSnapshot?
     }
 
     private let state = Mutex(State())
@@ -49,6 +50,12 @@ final class PreviewServer: Sendable {
     var queueFails: Bool {
         get { state.withLock { $0.queueFails } }
         set { state.withLock { $0.queueFails = newValue } }
+    }
+
+    /// Tests: `GET /queue` answers this line instead of the preview's own.
+    var queueLineOverride: ServerLineSnapshot? {
+        get { state.withLock { $0.queueLineOverride } }
+        set { state.withLock { $0.queueLineOverride = newValue } }
     }
 
     /// Tests: a made file cannot be downloaded from the library (it stays on the "server"; the save is untouched).
@@ -891,7 +898,9 @@ public struct PreviewClient: CobaltClient {
         if server.queueFails { throw CobaltError.network(.timedOut) }
         let now = clock.now()
         let line: ServerLineSnapshot
-        if lineMode.hasLine {
+        if let override = server.queueLineOverride {
+            line = override
+        } else if lineMode.hasLine {
             line = server.withLine(at: now) { state in state.snapshot(now: now) }
         } else {
             line = PreviewData.queueLine

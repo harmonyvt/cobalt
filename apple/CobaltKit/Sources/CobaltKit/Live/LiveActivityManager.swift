@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import os
 import Synchronization
 
@@ -23,6 +24,13 @@ import Synchronization
 /// manager keeps building `LiveContentState` as before (it decides when to write); each write turns it into `JobLiveState`
 /// with the local builder `JobLive.job(save:...)`, which says what the server would say. The busy period writes
 /// `JobLive.many(...)`: one row per job, at most 3. Registrations say `"type": "job"`.
+///
+/// **The island's number is the one count** (apple 03-PHASE3 3.2): the period's "N going" (and its ring's denominator) is
+/// `AppModel.activity.activeCount` read through `ctx.activitySummary` at write time, so the pill, the sheet and the island
+/// say the same number. A period begins when a job is live and that count is 2 or more (a download onto the device or a save
+/// running on another device counts too); it ends, as it always did, when no job of the app is live any more. The rows are
+/// still the app's own jobs. Without a model behind the context (the share sheet, a bare test context) the count is the
+/// queue's live jobs, as before.
 @MainActor
 final class LiveActivityManager: JobLiveSink {
     // MARK: tunables (the contract's numbers)
@@ -148,6 +156,10 @@ final class LiveActivityManager: JobLiveSink {
     private var runs: [ObjectIdentifier: Run] = [:]
     private var runCounter = 0
     private var summary: Summary?
+    /// Bumped whenever a busy period begins or ends: the observation of the activity count belongs to one period.
+    private var periodGeneration = 0
+    /// The period whose activity count is being observed (one observation per period).
+    private var observedGeneration: Int?
     private var adopted: [String: Adopted] = [:]
     private var tasks: [Task<Void, Never>] = []
     private var latestStartToken: String?
@@ -293,12 +305,27 @@ final class LiveActivityManager: JobLiveSink {
     /// pipeline event is handled, so a second live job never asks ActivityKit for an activity of its own.
     private func syncPeriod(_ queue: JobQueue) {
         pruneRuns()
-        if summary == nil, queue.live.count >= 2, !periodNeedsForeground { beginPeriod(queue) }
+        if summary == nil, periodShouldBegin(queue), !periodNeedsForeground { beginPeriod(queue) }
         if summary != nil {
             refreshSummary()
         } else {
             retireIdleActivities(queue)
         }
+    }
+
+    /// What the island counts as going: the one count of the app's activity (`AppModel.activity.activeCount`), read now. The
+    /// queue's live jobs when nothing but the queue is known (no model behind the context), or while the model says none.
+    private func goingNow(_ queue: JobQueue) -> Int {
+        if let count = ctx?.activitySummary?().activeCount, count > 0 { return count }
+        return queue.live.count
+    }
+
+    /// A busy period begins when a job is live and the one count is 2 or more (downloads and other devices' work included), or
+    /// when two of the app's jobs are live (the rule before the count was shared).
+    private func periodShouldBegin(_ queue: JobQueue) -> Bool {
+        let live = queue.live.count
+        if live >= 2 { return true }
+        return live >= 1 && goingNow(queue) >= 2
     }
 
     /// The run whose activity a busy period would keep, if any (the oldest unfinished one, `beginPeriod`).
@@ -649,6 +676,7 @@ final class LiveActivityManager: JobLiveSink {
 
     /// Two jobs are live: from here one activity speaks for all of them, until nothing is live.
     private func beginPeriod(_ queue: JobQueue) {
+        periodGeneration += 1
         let s = Summary()
         s.since = now.timeIntervalSince1970.rounded(.down)
         summary = s
@@ -722,7 +750,11 @@ final class LiveActivityManager: JobLiveSink {
         // One row per job of the period (at most 3 are shown, newest first), "1 done, 2 going" (CONTRACT-JOBLIVE.md 2.1).
         let jobs = periodJobs(s, finishedOnly: false)
         guard !jobs.isEmpty else { return }
-        let many = JobLive.many(id: s.id ?? UUID().uuidString.lowercased(), jobs: jobs, since: s.since, open: JobLiveLinks.jobs)
+        // "N going" is the one count, as it stands at this write (nil without a model: the rows' own count)
+        let going = ctx?.activitySummary?().activeCount
+        let many = JobLive.many(
+            id: s.id ?? UUID().uuidString.lowercased(), jobs: jobs, since: s.since, open: JobLiveLinks.jobs,
+            going: going.flatMap { $0 > 0 ? $0 : nil })
         ensureSummaryActivity(s, many)
         writeSummary(s, many.state)
         let waiting = live.filter { $0.pipeline.line != nil }.count
@@ -731,7 +763,26 @@ final class LiveActivityManager: JobLiveSink {
             s.loggedWaiting = waiting
             Telemetry.logLiveSummary(jobs: s.loggedJobs, waiting: s.loggedWaiting, line: queue.lineMode)
         }
+        observeActivityCount()
         updateGrace()
+    }
+
+    /// A download or another device's save can start or end with no event of the app's own jobs: the period's number follows
+    /// the one count, so the summary is written again when anything the count reads changes (one write per main-actor turn;
+    /// `writeSummary` keeps its one-a-second rule). Armed while a period lasts.
+    private func observeActivityCount() {
+        guard observedGeneration != periodGeneration, let s = summary, !s.ended, let provider = ctx?.activitySummary else { return }
+        let generation = periodGeneration
+        observedGeneration = generation
+        withObservationTracking {
+            _ = provider()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.periodGeneration == generation, let s = self.summary, !s.ended else { return }
+                self.observedGeneration = nil                      // fired: armed again by the refresh below
+                self.refreshSummary()
+            }
+        }
     }
 
     /// The period's jobs, newest first by when they joined (the rows' order). `finishedOnly`: only those with an outcome
@@ -809,6 +860,7 @@ final class LiveActivityManager: JobLiveSink {
     /// Nothing is live: the activity says what came out of the period and the period is over.
     private func endPeriod(_ s: Summary) {
         guard !s.ended else { return }
+        periodGeneration += 1
         s.ended = true
         s.flushTask?.cancel()
         s.flushTask = nil

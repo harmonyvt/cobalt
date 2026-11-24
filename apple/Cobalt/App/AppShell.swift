@@ -381,7 +381,7 @@ struct AppShell: View {
                 ForEach(model.visibleTabs.filter { $0 != .settings }, id: \.self) { tab in
                     Label(Copy.tab(tab), systemImage: icon(for: tab))
                         .font(Font.cobalt(13, .regular, relativeTo: .body))
-                        .badge(tab == .queue ? model.unifiedQueue.badgeCount : tab == .swarms ? model.swarms.waitingCount : 0)
+                        .badge(tab == .queue ? model.activity.activeCount : tab == .swarms ? model.swarms.waitingCount : 0)
                         .tag(tab)
                 }
             }
@@ -479,10 +479,11 @@ struct AppShell: View {
     #endif
 
     #if os(iOS)
-    /// The queue on iPhone and iPad: the whole screen in a large sheet, closed with the x like the other sheets.
+    /// The activity and health sheet on iPhone and iPad (apple 03-PHASE3 3.4.2): the whole screen in a large sheet, closed with the
+    /// x like the other sheets. The activity segment is the queue (`model.activity`), the system segment the health inspector.
     private var queueSheet: some View {
         NavigationStack {
-            QueueScreen(model: model)
+            ActivityAndHealthSheet(model: model)
                 .sheetCorner()
                 .sheetClose { model.queueShown = false }
         }

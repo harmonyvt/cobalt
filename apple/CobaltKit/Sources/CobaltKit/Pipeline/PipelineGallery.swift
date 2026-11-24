@@ -540,9 +540,14 @@ extension Pipeline {
             makeJobID = accepted.job
             observeLine(queueAhead: accepted.queued ? max(1, accepted.queueAhead ?? 1) : nil)
             setGalleryRun { $0.make = accepted.queued ? .queued(m, ahead: max(1, accepted.queueAhead ?? 1)) : .making(m, .init(phase: .uploading)) }
+            // the same spacing as the save's and the render's poll: the server long-polls (`wait=1`), but its fallback while the
+            // container has a bad moment answers at once, and a loop with no gap would hammer it
+            var pacer = PollPacer()
             while true {
                 try Task.checkCancellation()
+                try await pacer.beforePoll(clock: ctx.clock)
                 let status = try await retrying { try await client.makeStatus(session: sid, job: accepted.job, wait: 1) }
+                pacer.observe(status, clock: ctx.clock)
                 try Task.checkCancellation()
                 guard token == runToken else { return }
                 switch status {

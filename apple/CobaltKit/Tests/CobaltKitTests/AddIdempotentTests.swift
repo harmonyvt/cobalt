@@ -168,7 +168,7 @@ struct AddIdempotentTests {
         #expect(orphans(store, root: root).isEmpty, "\(orphans(store, root: root))")
     }
 
-    @Test func detachDuringTheWebpDownloadStoresExactlyOneWebp() async throws {
+    @Test func closingDuringTheWebpDownloadStoresExactlyOneWebp() async throws {
         let r = DetachRig()
         let p = r.pipeline
         await r.toReady()
@@ -185,13 +185,13 @@ struct AddIdempotentTests {
         #expect(r.webps.isEmpty)
 
         p.detach()
-        #expect(r.ctx.background.count == 1)
+        #expect(r.job(of: p)?.isReleased == true)
         // the other path stores the same webp while the first download is still on the wire
         let rival = try await r.store.add(
             file: try makeTempFile("rival.webp", bytes: 64), kind: .webp, media: webpInfo,
             sessionID: nil, link: nil, remoteURL: PreviewData.short.webpURL, move: true)
         await gate.open()
-        await r.drive { r.ctx.background.isEmpty }
+        await r.drive { r.isGone(p) }
         #expect(r.webps.count == 1, "\(r.webps.count) webps")
         #expect(r.webps.first?.id == rival.id)
         #expect(r.webps.first?.sessionID != nil, "the pipeline's add merged its session into the entry")

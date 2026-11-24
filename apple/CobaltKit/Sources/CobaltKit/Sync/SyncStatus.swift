@@ -48,6 +48,66 @@ public struct SyncStatusSnapshot: Sendable, Equatable {
     }
 }
 
+/// One edit of the library waiting on this device to reach the server (a row of the sync outbox), as the System Health
+/// Inspector lists it: `rename "harbour.mov"`, `visibility -> public` (apple 03-PHASE3 3.4.2). Read-only: listing it never sends,
+/// rolls back or changes the outbox. Plain values, no words: the app words each kind.
+public struct PendingSyncEdit: Sendable, Equatable, Identifiable {
+    public enum Kind: Sendable, Equatable {
+        /// A new title; nil clears the custom one.
+        case rename(to: String?)
+        case delete
+        case hide
+        case unhide
+        /// A file made public or private.
+        case visibility(makePublic: Bool)
+    }
+
+    /// The outbox row's id.
+    public let id: String
+    /// The post the edit is on (`LibraryPost.id`).
+    public let postID: String
+    public let kind: Kind
+    public let createdAt: Date
+    /// How many times the engine tried to send it and was answered with a retryable failure.
+    public let tries: Int
+    /// The sender has it in flight right now.
+    public let isSending: Bool
+
+    public init(id: String, postID: String, kind: Kind, createdAt: Date, tries: Int = 0, isSending: Bool = false) {
+        self.id = id
+        self.postID = postID
+        self.kind = kind
+        self.createdAt = createdAt
+        self.tries = tries
+        self.isSending = isSending
+    }
+
+    init(_ op: SyncOp) {
+        let kind: Kind
+        switch op.kind {
+        case .title:
+            kind = .rename(to: op.payload.title.flatMap { $0.isEmpty ? nil : $0 })
+        case .delete:
+            kind = .delete
+        case .hide:
+            kind = op.payload.status == PostStatus.off.rawValue ? .unhide : .hide
+        case .visibility:
+            if let makePublic = op.payload.makePublic {
+                kind = .visibility(makePublic: makePublic)
+            } else {
+                switch op.payload.status {
+                case PostStatus.public.rawValue: kind = .visibility(makePublic: true)
+                case PostStatus.private.rawValue: kind = .visibility(makePublic: false)
+                case PostStatus.off.rawValue: kind = .unhide
+                default: kind = .hide
+                }
+            }
+        }
+        self.init(
+            id: op.opID, postID: op.target, kind: kind, createdAt: op.createdAt, tries: op.tries, isSending: op.sending)
+    }
+}
+
 /// The facts behind a `SyncStatusSnapshot`, and how each thing the engine reports moves them. A plain
 /// value with no clock and no main actor, so a test can walk it through a pass.
 struct SyncStatusReducer: Sendable {

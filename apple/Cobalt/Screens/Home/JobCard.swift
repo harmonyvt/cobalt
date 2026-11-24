@@ -117,9 +117,18 @@ struct JobCardFacts: Equatable {
     /// "try again" makes sense: the link or the file was fine, the run was not.
     var canRetry: Bool
 
+    /// What the card says for a job of the queue: the job's `JobStatus` decides which card it is and carries its stage, numbers,
+    /// fraction and whether "try again" makes sense; the words (`Copy`) and the few facts a status does not hold (the webp's
+    /// size, a gallery's make) come from the pipeline.
     @MainActor
     init(job: Job, lineMax: Int, lineMode: LineMode) {
-        let p = job.pipeline
+        self.init(
+            status: JobStatus(job: job, isFocused: false, now: Date()), pipeline: job.pipeline, lineMax: lineMax,
+            lineMode: lineMode)
+    }
+
+    @MainActor
+    init(status: JobStatus?, pipeline p: Pipeline, lineMax: Int, lineMode: LineMode) {
         title = p.trayTitle
         headline = ""
         stepText = ""
@@ -129,66 +138,83 @@ struct JobCardFacts: Equatable {
         failureOpens = false
         canRetry = false
         exit = nil
-        switch p.state {
-        case .fetching, .uploading, .saving, .reading, .rendering:
-            if let story = p.progressStory {
-                kind = story.waiting ? .waiting : .running
-                headline = story.headline
-                detail = story.detail
-                footnote = story.footnote
-                stepText = story.stepText
-                fraction = story.fraction
-                showsBar = true
+        if let status {
+            switch Self.card(of: status) {
+            case .running:
+                if let story = ProgressStory(status: status, context: p.progressContext) {
+                    kind = story.waiting ? .waiting : .running
+                    headline = story.headline
+                    detail = story.detail
+                    footnote = story.footnote
+                    stepText = story.stepText
+                    fraction = story.fraction
+                    showsBar = true
+                }
+                exit = Self.exit(for: p, lineMode: lineMode)
+            case .picker:
+                kind = .picker
+                headline = Copy.Jobs.pickerJob
+                detail = .text(TrayCopy.pickDetail)
+                stepText = Copy.stepsDone(0, max(1, p.rail.steps.count))
+                exit = .dismiss
+            case .saved:
+                kind = .saved
+                headline = TrayCopy.saved
+                detail = .text(TrayCopy.savedWhere)
+                if case .ready = p.state {
+                    stepText = Copy.stepsDone(min(p.rail.index, p.rail.steps.count), max(1, p.rail.steps.count))
+                } else {
+                    stepText = Copy.stepDone
+                }
+            case .webp:
+                kind = .webp
+                headline = TrayCopy.webpReady
+                if case .done(let result) = p.state {
+                    detail = .text([
+                        Format.size(result.width, result.height), Format.seconds(result.seconds), Format.bytes(result.bytes),
+                    ].joined(separator: " · "))
+                }
+                stepText = Copy.stepDone
+            case .failed(let failure, let retryable):
+                kind = .failed
+                headline = TrayCopy.failure(failure, lineMax: lineMax)
+                stepText = ""
+                failureOpens = failure.keepsTrim && p.media != nil && status.sessionID != nil
+                canRetry = retryable
+            case .gallery:
+                let g = GalleryCardParts(status: status, pipeline: p, title: title, lineMax: lineMax)
+                kind = g.kind
+                headline = g.headline
+                detail = g.detail
+                footnote = g.footnote
+                stepText = g.stepText
+                fraction = g.fraction
+                showsBar = g.showsBar
+                failureOpens = g.failureOpens
+                canRetry = g.canRetry
+                if g.isLive { exit = Self.exit(for: p, lineMode: lineMode) }
             }
-            exit = Self.exit(for: p, lineMode: lineMode)
-        case .picker:
-            kind = .picker
-            headline = Copy.Jobs.pickerJob
-            detail = .text(TrayCopy.pickDetail)
-            stepText = Copy.stepsDone(0, max(1, p.rail.steps.count))
-            exit = .dismiss
-        case .ready:
-            kind = .saved
-            headline = TrayCopy.saved
-            detail = .text(TrayCopy.savedWhere)
-            stepText = Copy.stepsDone(min(p.rail.index, p.rail.steps.count), max(1, p.rail.steps.count))
-        case .savedLocally, .image:
-            kind = .saved
-            headline = TrayCopy.saved
-            detail = .text(TrayCopy.savedWhere)
-            stepText = Copy.stepDone
-        case .done(let result):
-            kind = .webp
-            headline = TrayCopy.webpReady
-            detail = .text([
-                Format.size(result.width, result.height), Format.seconds(result.seconds), Format.bytes(result.bytes),
-            ].joined(separator: " · "))
-            stepText = Copy.stepDone
-        case .failed(let f):
-            kind = .failed
-            headline = TrayCopy.failure(f, lineMax: lineMax)
-            stepText = ""
-            failureOpens = f.keepsTrim && p.media != nil && p.sessionID != nil
-            canRetry = TrayCopy.isRetryable(f)
-        case .gallery:
-            let g = GalleryCardParts(pipeline: p, title: title, lineMax: lineMax)
-            kind = g.kind
-            headline = g.headline
-            detail = g.detail
-            footnote = g.footnote
-            stepText = g.stepText
-            fraction = g.fraction
-            showsBar = g.showsBar
-            failureOpens = g.failureOpens
-            canRetry = g.canRetry
-            if g.isLive { exit = Self.exit(for: p, lineMode: lineMode) }
-        case .idle:
-            break
         }
         // The library copy is what a saved card is about; a copy on this device that did not arrive is said on the card too
         // (never a bare "saved"), and the focus card has the reason and the retry (apple 02-PHASE2 2.2.4).
         if p.localCopyState.isFailed, kind == .saved || kind == .webp {
             footnote = Copy.Save.localCopyFailed
+        }
+    }
+
+    /// Which card a status is: what the words below are chosen by (a status has no words of its own).
+    enum Card: Equatable {
+        case running, picker, saved, webp, gallery
+        case failed(PipelineFailure, retryable: Bool)
+    }
+
+    static func card(of status: JobStatus) -> Card {
+        if status.kind == .gallery { return .gallery }
+        switch status.stage {
+        case .awaitingChoice: return .picker
+        case .failed(let failure, let retryable): return .failed(failure, retryable: retryable)
+        case .completed, .deviceCopy: return status.kind == .webpRender ? .webp : .saved
+        case .queued, .waking, .fetching, .downloading, .storing, .galleryProgress, .readingFrames, .rendering: return .running
         }
     }
 
@@ -424,8 +450,11 @@ struct GalleryCardParts {
     /// The x applies (something is still happening).
     var isLive = false
 
+    /// The gallery's card. The status carries the numbers (items saved of how many, the make's fraction, how many are ahead of
+    /// it, a run that failed and whether it may be tried again); which make it is, how many photos and videos, which items
+    /// were not fetched and what the server is busy with are the run's.
     @MainActor
-    init(pipeline p: Pipeline, title: String, lineMax: Int) {
+    init(status: JobStatus, pipeline p: Pipeline, title: String, lineMax: Int) {
         guard let run = p.galleryRun else {
             kind = .saved
             headline = TrayCopy.saved
@@ -450,12 +479,15 @@ struct GalleryCardParts {
             case nil: return nil
             }
         }
-        let saveFraction = run.total > 0 ? Double(run.done) / Double(run.total) : 0
+        // the save's fraction: the status's count (the run's own while a line hides it), an empty bar while no size is known
+        var (savedItems, savedOf) = (run.done, run.total)
+        if case .galleryProgress(let done, let total, _, _) = status.stage { (savedItems, savedOf) = (done, total) }
+        let saveFraction = savedOf > 0 ? Double(savedItems) / Double(savedOf) : 0
         switch run.phase {
         case .failed(let f):
             kind = .failed
             headline = TrayCopy.failure(f, lineMax: lineMax)
-            canRetry = TrayCopy.isRetryable(f)
+            if case .failed(_, let retryable) = status.stage { canRetry = retryable } else { canRetry = TrayCopy.isRetryable(f) }
         case .saving:
             isLive = true
             if case .waiting(let m) = run.make {
@@ -501,14 +533,16 @@ struct GalleryCardParts {
                 isLive = true
                 kind = .waiting
                 headline = "\(makeWord(m)) · \(Copy.Jobs.waiting)"
-                detail = .text(Copy.Jobs.lineDetail(place: ahead + 1))
+                var place = ahead + 1
+                if case .queued(let counted?) = status.stage { place = counted + 1 }
+                detail = .text(Copy.Jobs.lineDetail(place: place))
                 fraction = 0
                 showsBar = true
             case .making(let m, let progress):
                 isLive = true
                 headline = Copy.Gallery.making(makeWord(m), Int((progress.fraction * 100).rounded()))
                 detail = .text(count)
-                fraction = progress.fraction
+                fraction = status.fraction ?? progress.fraction
                 showsBar = true
             case .done(let m, let result):
                 kind = .saved

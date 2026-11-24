@@ -458,8 +458,9 @@ public final class LibraryModel {
 
     /// A file on disk with this item's bytes: the stored original when the device has it, else a
     /// download (keyed for a private copy, open for a public file).
-    public func localCopy(_ file: LibraryFile) async throws -> URL {
-        try await copy(file).0
+    /// `progress` hears the bytes of a download (the share sheet's rows turn it into a percentage); a stored original needs none.
+    public func localCopy(_ file: LibraryFile, progress: @escaping @Sendable (TransferProgress) -> Void = { _ in }) async throws -> URL {
+        try await copy(file, progress: progress).0
     }
 
     /// Private copy → public link (copied to the clipboard).
@@ -555,7 +556,7 @@ public final class LibraryModel {
 
     // MARK: -
 
-    func copy(_ file: LibraryFile) async throws -> (URL, Bool) {
+    func copy(_ file: LibraryFile, progress: @escaping @Sendable (TransferProgress) -> Void = { _ in }) async throws -> (URL, Bool) {
         let fm = FileManager.default
         let post = posts.first { $0.files.contains { $0.id == file.id } }
         // The device's own entry for this item, kept or evicted (CONTRACT-LIVE.md 4.2): the stored
@@ -590,7 +591,7 @@ public final class LibraryModel {
         }
         let downloaded: URL
         do {
-            downloaded = try await ctx.client.download(remote, to: ctx.store.inboxURL(for: name), progress: { _ in })
+            downloaded = try await ctx.client.download(remote, to: ctx.store.inboxURL(for: name), progress: progress)
         } catch {
             throw pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits) ?? error
         }

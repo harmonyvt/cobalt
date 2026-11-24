@@ -691,7 +691,7 @@ extension AppModel {
         func fetchingOriginal(_ p: Pipeline) -> Bool { p.sessionID == id && p.keepRequest != nil }
         if queue.jobs.contains(where: { ($0.isLive && $0.pipeline.sessionID == id) || fetchingOriginal($0.pipeline) }) { return true }
         if fetchingOriginal(queue.idlePipeline) { return true }
-        if ctx.background.detached.contains(where: { $0.sessionID == id }) { return true }
+        if ctx.background.runs.contains(where: { $0.sessionID == id }) { return true }
         return store.sessionIsHeld?(id) == true
     }
 

@@ -111,12 +111,12 @@ public final class JobQueue {
     public var live: [Job] { jobs.filter(\.isLive) }
 
     /// The tray: live + failed + finished less than 5 seconds ago (+ a multi-item post waiting for the owner), minus the
-    /// focused one. Ordered: running on the server, then network and local steps, then line order, then waiting for the
+    /// focused one and the ones the owner let go of (`letGo`: they stay in `activity.items` until their work settles). Ordered: running on the server, then network and local steps, then line order, then waiting for the
     /// owner, failed, finished.
     public var alongside: [Job] {
         let now = ctx.clock.now()
         var rows: [(job: Job, rank: Int, position: Int, order: Int)] = []
-        for (order, job) in jobs.enumerated() where job.id != focusedID {
+        for (order, job) in jobs.enumerated() where job.id != focusedID && !job.isReleased {
             let p = job.pipeline
             let rank: Int
             if job.isFailed {
@@ -336,6 +336,7 @@ public final class JobQueue {
     func focus(_ id: Job.ID, why: String) {
         guard let job = job(id), focusedID != id else { return }
         if let current = focused { loseFocus(current) }
+        if let i = jobs.firstIndex(where: { $0.id == id }) { jobs[i].isReleased = false }        // opened again: no longer let go
         focusedID = id
         scheduleRetire()
         ctx.liveRouter.unmute(job.pipeline)
@@ -394,7 +395,16 @@ public final class JobQueue {
             // the save is done; stop reading the frames
             notice = JobNotice(kind: .stoppedReading, title: title)
             answer = "reading"
-            p.detach()
+            if p.hasWorkInFlight {
+                // the copy onto this device is still landing: only the filmstrip stops (the run settles as saved), and the
+                // job stays listed, unfocused, until the copy is done (never a hidden run)
+                p.stopReadingFrames()
+                release(id)
+                Telemetry.log(.info, .pipeline, "job cancel", data: tele(["phase": "reading", "onServer": true, "answer": "kept"]))
+                changed()
+                return
+            }
+            p.reset()
         case .fetching, .uploading, .saving, .rendering, .gallery:
             if case .gallery = p.state, p.galleryRun?.make.isActive == true, p.makeJobID == nil {
                 // A make that has no job on the server yet (it waits for its save, or is on its way): only the make
@@ -443,7 +453,14 @@ public final class JobQueue {
                         if isMake { return }                       // the make started first: it is followed to its end
                         answer = "started"
                         notice = JobNotice(kind: .stoppedFollowing, title: title)
-                        p.detach()
+                        if release(id) {
+                            // a render that started first is the server's now and cannot be called back: the owner is told the
+                            // card is let go of, and the job goes on in the activity (rendering) until the webp is made
+                            Telemetry.log(.info, .pipeline, "job cancel", data: tele(["phase": .string(answer), "onServer": true, "answer": "kept"]))
+                            changed()
+                            return
+                        }
+                        p.reset()
                     }
                 } catch {
                     // offline: the job stays; the owner is told
@@ -452,10 +469,16 @@ public final class JobQueue {
                     return
                 }
             } else if p.sessionID != nil {
-                // running on the server: stop following; the server finishes what it started
+                // running on the server: stop following; the server finishes what it started. A render (and a copy onto the
+                // device, a publish) is followed on: the job is let go of, never hidden
                 answer = "started"
                 notice = JobNotice(kind: .stoppedFollowing, title: title)
-                p.detach()
+                if release(id) {
+                    Telemetry.log(.info, .pipeline, "job cancel", data: tele(["phase": .string(answer), "onServer": true, "answer": "kept"]))
+                    changed()
+                    return
+                }
+                p.reset()
             } else {
                 // checking the link, uploading, waiting in the device line: nothing was saved
                 notice = JobNotice(kind: .cancelled, title: title)
@@ -464,7 +487,7 @@ public final class JobQueue {
             }
         }
         Telemetry.log(.info, .pipeline, "job cancel", data: tele(["onServer": .bool(p.sessionID != nil), "answer": .string(answer)]))
-        // `reset`/`detach` told the queue (the pipeline went idle); a pipeline that never did is dropped here
+        // `reset` told the queue (the pipeline went idle); a pipeline that never did is dropped here
         if self.job(id) != nil { remove(id) }
         changed()
     }
@@ -514,13 +537,40 @@ public final class JobQueue {
         if wasFocused, let first = renewed.first, focusedID != first.id { focus(first.id) }
     }
 
-    /// Takes a finished or failed job off the tray. A job still carrying work the owner does not see (the original's
-    /// download) is handed to a background run first, the way closing the focus always did.
+    /// Takes a finished or failed job off the tray. A job that still has work of its own going on (the copy onto the
+    /// device, a publish, a render) is let go of instead (`letGo`): the tray drops it, `activity.items` keeps listing it until
+    /// that settles, and then the queue retires it. Nothing is ever handed to a hidden run.
     public func dismiss(_ id: Job.ID) {
         guard let job = job(id) else { return }
-        job.pipeline.detach()
+        if release(id) { changed(); return }
+        job.pipeline.reset()
         if self.job(id) != nil { remove(id) }
         changed()
+    }
+
+    /// `Pipeline.detach()`'s way into the queue: the run belongs to a job that still has work in flight, so the job is let go
+    /// of and stays listed. False when the pipeline is not a job of this queue or has nothing in flight (the caller resets).
+    @discardableResult
+    func letGo(_ p: Pipeline) -> Bool {
+        guard let job = jobs.first(where: { $0.pipeline === p }) else { return false }
+        guard release(job.id) else { return false }
+        changed()
+        return true
+    }
+
+    /// The owner lets go of a job (closes it, dismisses it, taps x on work the server already started) that still has work of
+    /// its own in flight: a render on the server, a publish, the copy onto the device. **The job stays in the queue**, so
+    /// `activity.items` lists it (`rendering` / `deviceCopy`, counted in `activeCount`, with its Live Activity and its
+    /// notification) and one tap re-focuses it; it only leaves the tray (`Job.isReleased`). When its work settles the queue
+    /// retires it (`retireLapsed`). False, and nothing changes, for a job with nothing in flight (the caller ends it).
+    @discardableResult
+    private func release(_ id: Job.ID) -> Bool {
+        guard let i = jobs.firstIndex(where: { $0.id == id }), jobs[i].pipeline.hasWorkInFlight else { return false }
+        ctx.notificationsNowUseful()                                       // work outlives the screen: the first moment a notification matters
+        jobs[i].isReleased = true
+        Telemetry.log(.info, .pipeline, "job released", data: tele(["job": .string(id.uuidString)]))
+        if focusedID == id { unfocus() } else { scheduleRetire() }
+        return true
     }
 
     /// Takes the finished jobs (saved, webp ready) off the tray. Failed ones stay until retried or dismissed.
@@ -541,7 +591,8 @@ public final class JobQueue {
         let now = ctx.clock.now()
         var wait: Double?
         for job in jobs where job.isFinished && job.id != focusedID {
-            let remaining = job.finishedAt.map { Self.finishedLinger - now.timeIntervalSince($0) } ?? Self.finishedLinger
+            // a job the owner let go of has no linger: it leaves as soon as its work is done
+            let remaining = job.isReleased ? 0 : (job.finishedAt.map { Self.finishedLinger - now.timeIntervalSince($0) } ?? Self.finishedLinger)
             wait = min(wait ?? remaining, max(remaining, 1))
         }
         guard let wait else { return }
@@ -556,20 +607,30 @@ public final class JobQueue {
 
     func retireLapsed() {
         let now = ctx.clock.now()
-        var released = false
+        var removed = false
         for job in jobs where job.isFinished && job.id != focusedID {
-            guard let at = job.finishedAt, now.timeIntervalSince(at) >= Self.finishedLinger else { continue }
+            let letGo = job.isReleased
+            guard letGo || (job.finishedAt.map { now.timeIntervalSince($0) >= Self.finishedLinger } ?? false) else { continue }
             // The keep-original download, a host or a "save to photos" still running belongs to this pipeline: it goes
-            // on, and the job is let go once they are done. The pipeline itself is not touched (no `detach`, no reset):
+            // on, and the job is let go once they are done. The pipeline itself is not touched (no reset):
             // whoever still holds it (a Shortcut waiting on it, a view mid-transition) keeps reading its final state.
             let p = job.pipeline
             if p.keepRequest != nil || p.hosting == .working || p.photos == .working { continue }
-            retiredFinished += 1
-            onRetireFinished?(job)
+            if letGo {
+                // the owner asked for this one to go, so it goes without a line under "recently finished" (as a dismiss does),
+                // unless its copy onto the device failed: that receipt stays in "recent", where it can be retried
+                if case .failed = p.localCopyState {
+                    retiredFinished += 1
+                    onRetireFinished?(job)
+                }
+            } else {
+                retiredFinished += 1
+                onRetireFinished?(job)
+            }
             remove(job.id)
-            released = true
+            removed = true
         }
-        if released { changed() }
+        if removed { changed() }
         scheduleRetire()                                                // the ones whose time has not come yet
     }
 
@@ -662,6 +723,8 @@ public final class JobQueue {
         }
         if case .rendering = p.state { meta[id]?.sawRender = true }
         if case .failed(let f) = p.state, meta[id]?.acceptance == nil { accept(p, .failed(f)) }
+        // A job the owner let go of that then failed needs them again (retry, dismiss): it comes back to the tray.
+        if jobs[i].isReleased, jobs[i].isFailed { jobs[i].isReleased = false }
         let live = jobs[i].isLive
         if live {
             if jobs[i].finishedAt != nil { jobs[i].finishedAt = nil; meta[id]?.settled = false }
@@ -780,9 +843,10 @@ public final class JobQueue {
         }
     }
 
-    /// Every change the outside cares about: Live, the grace, the Dock.
+    /// Every change the outside cares about: Live, the grace, the Dock. Work nobody is looking at holds the grace: a live job, and
+    /// a finished one whose copy onto the device (or publish) is still going (what a hidden run held it for).
     private func changed() {
-        ctx.background.queueBusyChanged(jobs.contains { $0.isLive && $0.id != focusedID })
+        ctx.background.queueBusyChanged(jobs.contains { ($0.isLive || $0.pipeline.hasWorkInFlight) && $0.id != focusedID })
         ctx.liveRouter.jobsChanged(self)
     }
 

@@ -89,7 +89,7 @@ struct PaneHost<Content: View>: View {
                         .transition(transition(placement))
                 }
                 if inline, showsSeam(placement, spanned: spanned) {
-                    PaneSeam(queue: model.queue, axis: seamAxis(placement), showingJobID: showingJobID)
+                    PaneSeam(queue: model.queue, activity: model.activity, axis: seamAxis(placement), showingJobID: showingJobID)
                         .layoutValue(key: PaneRoleKey.self, value: .seam)
                         .transition(.opacity)
                 }
@@ -134,7 +134,16 @@ struct PaneHost<Content: View>: View {
         #if os(macOS)
         .modifier(PaneBarAccessory(model: model))
         #endif
-        .environment(\.paneOffline, model.capabilities.kind == .unreachable)
+        .environment(\.paneOffline, Self.isOffline(model))
+    }
+
+    /// The server can't be reached. DEBUG: `-previewPaneOffline YES` says so over the preview data (simulator evidence of the
+    /// grid's offline words; the previews have no way to lose the network).
+    static func isOffline(_ model: AppModel) -> Bool {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "previewPaneOffline") { return true }
+        #endif
+        return model.capabilities.kind == .unreachable
     }
 
     // MARK: inline
@@ -195,7 +204,7 @@ struct PaneHost<Content: View>: View {
     private var compactSheet: some View {
         PaneCompactSheet(model: model)
             .environment(pane)
-            .environment(\.paneOffline, model.capabilities.kind == .unreachable)
+            .environment(\.paneOffline, Self.isOffline(model))
             .cobaltRoot(model: model)
     }
 

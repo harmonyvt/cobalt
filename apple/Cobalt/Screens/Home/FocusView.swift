@@ -31,6 +31,41 @@ enum HeroProgress: Equatable {
     case working
 }
 
+extension HeroProgress {
+    /// What the planet's edge shows for this run: read off its status (`Stage.rendering(.decode, done, total)` for a webp,
+    /// `galleryProgress` for a gallery's items landing).
+    @MainActor
+    static func of(_ pipeline: Pipeline) -> HeroProgress {
+        guard let status = JobStatus(pipeline: pipeline, now: Date()) else { return .none }
+        var sending = false
+        if case .sending? = pipeline.galleryRun?.make { sending = true }
+        return HeroProgress(status: status, sending: sending, waitsInLine: pipeline.line != nil)
+    }
+
+    /// `waitsInLine`: queued, not started: the planet does not breathe for work nobody is doing yet. `sending`: a gallery's
+    /// make is on its way to the server (a status calls that "queued" like any wait, and the planet breathes for it).
+    init(status: JobStatus, sending: Bool, waitsInLine: Bool) {
+        if waitsInLine { self = .none; return }
+        switch status.stage {
+        case .galleryProgress(let done, let total, _, _):
+            // the ticks along the planet's edge light up as the items land
+            self = .decoding(done: done, total: max(1, total))
+        case .rendering(let phase, let done, let total):
+            // a gallery's make in flight makes it breathe
+            if status.kind == .gallery { self = .working; return }
+            switch phase {
+            case .decode?: self = .decoding(done: done ?? 0, total: total ?? 0)
+            case .pack?: self = .packing
+            default: self = .working
+            }
+        case .queued:
+            self = status.kind == .gallery && sending ? .working : .none
+        default:
+            self = .none
+        }
+    }
+}
+
 // MARK: - the layer
 
 struct FocusLayer: View {
@@ -266,25 +301,7 @@ struct FocusLayer: View {
         return false
     }
 
-    private var heroProgress: HeroProgress {
-        // queued, not started: the planet does not breathe for work nobody is doing yet
-        if pipeline.line != nil { return .none }
-        if isGallery, let run = pipeline.galleryRun {
-            // the ticks along the planet's edge light up as the items land; a make in flight makes it breathe
-            if case .saving = run.phase { return .decoding(done: run.done, total: max(1, run.total)) }
-            if case .making = run.make { return .working }
-            if case .sending = run.make { return .working }
-            return .none
-        }
-        if case .rendering(let p) = pipeline.state {
-            switch p {
-            case .decoding(let done, let total): return .decoding(done: done, total: total)
-            case .packing: return .packing
-            case .working: return .working
-            }
-        }
-        return .none
-    }
+    private var heroProgress: HeroProgress { HeroProgress.of(pipeline) }
 
     private var isHosting: Bool { pipeline.hosting == .working }
 

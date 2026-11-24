@@ -400,12 +400,15 @@ struct PanePostContent: View {
     private func hideAction(_ item: MediaItem) -> PaneAction? {
         guard model.capabilities.hidden, item.post != nil else { return nil }
         if fromAlbum || model.isHiddenPost(item) {
+            // queuesOffline: `setStatus` -> `controller.setPostStatus` -> `LibraryModel.setStatus`, which enqueues in the sync outbox
             return PaneAction(
-                Copy.HiddenAlbum.menuUnhide, systemImage: Symbol.HiddenAlbum.unhide, needsServer: true, id: "unhide"
+                Copy.HiddenAlbum.menuUnhide, systemImage: Symbol.HiddenAlbum.unhide, needsServer: true,
+                queuesOffline: model.libraryQueuesEdits, id: "unhide"
             ) { statusAsk = .off }
         }
         return PaneAction(
-            Copy.HiddenAlbum.menuHide, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, id: "hide"
+            Copy.HiddenAlbum.menuHide, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true,
+            queuesOffline: model.libraryQueuesEdits, id: "hide"
         ) { statusAsk = .hidden }
     }
 

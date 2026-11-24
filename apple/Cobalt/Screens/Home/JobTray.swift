@@ -67,7 +67,9 @@ struct JobTray: View {
         let shown = (showsAll || all.count <= cap) ? all : Array(all.prefix(cap))
         let hidden = all.count - shown.count
         let message = noteText
-        let counts = Counts(all)
+        // the header reads the one count (`model.activity`): the focused job, the downloads and the server's rows included
+        let counts = ActivityHeaderCounts(model.activity.summary)
+        let lingering = all.contains { $0.isFinished }
         Group {
             if !all.isEmpty || message != nil {
                 GlassEffectContainer(spacing: 8) {
@@ -99,8 +101,8 @@ struct JobTray: View {
         }
         .onChange(of: all.isEmpty) { _, empty in if empty { pillOpen = false } }
         // a finished card lingers 5 s (JobQueue.finishedLinger): re-read the queue each second while one does
-        .task(id: counts.finished > 0) {
-            guard counts.finished > 0 else { return }
+        .task(id: lingering) {
+            guard lingering else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 tick += 1
@@ -117,7 +119,7 @@ struct JobTray: View {
 
     // MARK: the three shapes
 
-    private func above(_ shown: [Job], hidden: Int, all: [Job], counts: Counts, message: String?) -> some View {
+    private func above(_ shown: [Job], hidden: Int, all: [Job], counts: ActivityHeaderCounts, message: String?) -> some View {
         VStack(spacing: 6) {
             noteView(message)
             if !all.isEmpty {
@@ -129,7 +131,7 @@ struct JobTray: View {
         .frame(maxWidth: 460)
     }
 
-    private func panel(_ shown: [Job], hidden: Int, all: [Job], counts: Counts, message: String?) -> some View {
+    private func panel(_ shown: [Job], hidden: Int, all: [Job], counts: ActivityHeaderCounts, message: String?) -> some View {
         VStack(alignment: .trailing, spacing: 6) {
             noteView(message)
             if !all.isEmpty {
@@ -143,7 +145,7 @@ struct JobTray: View {
         .frame(width: 300)
     }
 
-    private func pill(_ all: [Job], counts: Counts, message: String?, centered: Bool) -> some View {
+    private func pill(_ all: [Job], counts: ActivityHeaderCounts, message: String?, centered: Bool) -> some View {
         VStack(alignment: centered ? .center : .trailing, spacing: 8) {
             if !all.isEmpty {
                 Button { pillOpen.toggle() } label: {
@@ -216,7 +218,7 @@ struct JobTray: View {
         }
     }
 
-    private func header(_ counts: Counts, folds: Bool) -> some View {
+    private func header(_ counts: ActivityHeaderCounts, folds: Bool) -> some View {
         HStack(spacing: 8) {
             // the counts are the way into the queue tab
             Button(action: openQueue) {
@@ -324,31 +326,6 @@ struct JobTray: View {
             default: text = TrayCopy.savedAnnouncement(title)
             }
             AccessibilityNotification.Announcement(text).post()
-        }
-    }
-
-    // MARK: counts
-
-    /// "2 running · 1 waiting" / "1 finished", from the cards the tray shows (the focused job is not one).
-    struct Counts: Equatable {
-        var running = 0
-        var waiting = 0
-        var finished = 0
-        var failed = 0
-        var picking = 0
-
-        @MainActor
-        init(_ jobs: [Job]) {
-            for job in jobs {
-                if job.isFailed { failed += 1 }
-                else if job.isLive { if job.pipeline.line != nil { waiting += 1 } else { running += 1 } }
-                else if job.isPicker { picking += 1 }
-                else if job.isFinished { finished += 1 }
-            }
-        }
-
-        var text: String {
-            TrayCopy.header(running: running, waiting: waiting, finished: finished, failed: failed, picking: picking)
         }
     }
 }

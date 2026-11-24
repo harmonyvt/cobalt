@@ -237,7 +237,10 @@ struct QueueScreen: View {
 
 // MARK: - a row that is not one of this device's jobs
 
-/// What a non-job row says, derived from the item; plain data so the words can be checked without a view.
+/// What a non-job row says, derived from the item; plain data so the words can be checked without a view. Each kind of row
+/// has a `JobStatus` (the same projection the activity count reads): the status decides whether the row is working, waiting,
+/// failed or done and carries its fraction and place in line; the words, and the counts a status does not hold (the photos
+/// album's "3 of 7", the index's posts), stay here.
 struct QueueRowFacts: Equatable {
     var symbol: String
     var title: String
@@ -261,22 +264,32 @@ struct QueueRowFacts: Equatable {
         switch item.kind {
         case .server(let w):
             symbol = Symbol.serverWork
+            let status = JobStatus(server: w, id: item.id, at: now)
+            // the status's place in line: `queued(ahead:)` is the place minus one (the running one is 1st)
+            var running = w.running
+            var place = w.position ?? 2
+            if let status {
+                running = !status.stage.isWaiting
+                if case .queued(let ahead?) = status.stage { place = ahead + 1 }
+            }
             title = Copy.Queue.serverTitle(kind: w.kind, share: w.isShare, keyName: w.keyName, mine: w.mine)
-            headline = w.running ? Copy.Queue.serverRunning : Copy.Queue.serverWaiting(w.position ?? 2)
+            headline = running ? Copy.Queue.serverRunning : Copy.Queue.serverWaiting(place)
             if let link = w.link, let info = LinkInfo(link) { detail = "\(info.service) · \(info.ref)" }
             footnote = Copy.Queue.serverNote
-            showsBar = w.running
+            showsBar = running
         case .download(let row):
             symbol = Symbol.keepOffline
             title = row.name
-            switch row.state {
-            case .downloading(let p):
-                headline = Copy.Offline.downloading(bytes: p.bytes, total: p.total ?? row.expectedBytes)
-                if let total = p.total ?? row.expectedBytes, total > 0 { fraction = Double(p.bytes) / Double(total) }
+            let status = JobStatus(download: row, now: now)
+            switch status.stage {
+            case .deviceCopy(let bytes, let total):
+                headline = Copy.Offline.downloading(bytes: bytes ?? 0, total: total)
+                fraction = status.fraction
                 showsBar = true
-            case .failed(let f):
+            case .failed:
+                // the words are the download's own failure (`OfflineFailure`); the status words it as one `PipelineFailure`
                 symbol = Symbol.offlineFailed
-                headline = Copy.Queue.downloadFailed(f)
+                if case .failed(let f) = row.state { headline = Copy.Queue.downloadFailed(f) }
                 isError = true
             default:
                 symbol = Symbol.offlineWaiting
@@ -286,7 +299,8 @@ struct QueueRowFacts: Equatable {
             symbol = Symbol.photosAlbum
             title = Copy.Queue.photosTitle
             headline = Copy.Queue.photosProgress(done: p.done, total: p.total)
-            fraction = p.total > 0 ? Double(p.done) / Double(p.total) : nil
+            // the album's own count is what the words say; the status holds the fraction (none while the total is unknown)
+            fraction = JobStatus(photos: p, now: now)?.fraction
             showsBar = true
         case .indexing(let s):
             symbol = Symbol.indexing
@@ -335,7 +349,8 @@ struct QueueRowFacts: Equatable {
             default:
                 headline = Copy.Editor.renderLine(render)
                 showsBar = true
-                fraction = render.status == .queued ? nil : render.progress
+                // the status holds the render's fraction (none while it waits in the line)
+                fraction = JobStatus(edit: render, now: now)?.fraction
             }
         case .job:
             break

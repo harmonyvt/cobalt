@@ -478,6 +478,7 @@ final class LibraryController {
         sharePrep = order.map { SharePrepRow($0, state: Self.shareState(of: $0.item.face)) }
         defer {
             preparingShare = false
+            model.offlineDownloads.dismissFailedTransfers()
             sharePrep = []
             sharePrepSummary = nil
             shareDecision = nil
@@ -541,7 +542,11 @@ final class LibraryController {
             return nil
         }
         do {
-            let copied = try await model.library.localCopy(file)
+            // the copy is a row of the downloads engine while it runs (`activity` lists it), landing nowhere: the share sheet takes the file
+            let library = model.library
+            let copied = try await model.offlineDownloads.transfer(
+                key: OfflineDownloads.shareKey(row.id), name: row.title, expectedBytes: file.bytes
+            ) { progress in try await library.localCopy(file, progress: progress) }
             guard copied.isFileURL else {
                 failShareRow(row.id, code: "error.app.no_file")
                 return nil

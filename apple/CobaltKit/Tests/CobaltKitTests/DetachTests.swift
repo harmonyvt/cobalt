@@ -95,18 +95,32 @@ struct DetachRig {
 
 private let hosted = URL(string: "https://media.capybaraharmony.com/DeTaChEd01.mp4")!
 
+extension DetachRig {
+    var queue: JobQueue { app.queue }
+    /// The queue's job that runs `p`, if it is still there.
+    func job(of p: Pipeline) -> Job? { queue.jobs.first { $0.pipeline === p } }
+    func isGone(_ p: Pipeline) -> Bool { job(of: p) == nil }
+    /// What `activity` says about the job that runs `p`.
+    func status(of p: Pipeline) -> JobStatus? {
+        guard let job = job(of: p) else { return nil }
+        return app.activity.status("job:\(job.id.uuidString)")
+    }
+}
+
+// Pipeline.detach() as of Phase 3: "close without throwing work away", with nothing hidden. The run stays a job of the queue,
+// released (off the tray), listed in `activity.items` until its work settles. Every run carried is a job of the queue.
+
 @MainActor
 @Suite(.serialized)
 struct DetachTests {
     // MARK: render
 
-    @Test func detachMidRenderFreesTheScreenAndTheWebpStillJoinsTheStore() async throws {
+    @Test func closingMidRenderFreesTheScreenAndKeepsTheJobListedUntilTheWebpIsStored() async throws {
         let r = DetachRig()
         let p = r.pipeline
         await r.toReady()
         p.makeWebp()
         await r.drive { isRendering(p) && p.renderJobID != nil }
-        let runBefore = p.runID
         let liveRun = p.liveRunID
         let webpsBefore = r.webps.count
         let record = try #require(r.ctx.jobs.all().first { $0.id == liveRun })
@@ -114,20 +128,25 @@ struct DetachTests {
         let handle = try #require(r.handle(forRun: liveRun))
 
         p.detach()
-        // the visible pipeline is free at once, with a new run
-        #expect(p.state == .idle)
-        #expect(p.runID != runBefore && p.liveRunID != liveRun)
-        #expect(p.result == nil && p.sessionID == nil && p.media == nil)
-        #expect(r.ctx.background.count == 1)
+        // the screen is free at once: the focus is closed, the idle pipeline is what the app shows
+        #expect(r.queue.focusedID == nil && r.pipeline !== p && r.pipeline.state == .idle)
+        // nothing is hidden: the run is still a job, let go of, and the activity lists it as a render in flight
+        let job = try #require(r.job(of: p))
+        #expect(job.isReleased)
+        #expect(r.queue.alongside.isEmpty, "the owner let it go: the tray does not show it")
+        let status = try #require(r.status(of: p))
+        #expect(status.isActive && status.kind == .webpRender, "\(status.stage)")
+        if case .rendering = status.stage {} else { Issue.record("expected a rendering stage, got \(status.stage)") }
+        #expect(r.app.activity.activeCount == 1)
         // the run's record and activity are still alive
         #expect(r.ctx.jobs.all().contains { $0.id == liveRun })
         #expect(!handle.ended)
 
-        await r.drive { r.ctx.background.isEmpty }
-        #expect(p.state == .idle && p.result == nil, "the detached run never shows")
+        await r.drive { r.isGone(p) }
         #expect(r.webps.count == webpsBefore + 1, "the webp joined the store exactly as .done does")
         #expect(r.ctx.jobs.all().isEmpty, "the SharedJob ended with the run")
         #expect(handle.ended && handle.end?.state.stage == .done, "the Live Activity ended done")
+        #expect(r.app.activity.items.isEmpty)
         await r.waitForPosts(1)
         #expect(r.notifier.posts.map(\.kind) == [.webpReady])
     }
@@ -136,16 +155,33 @@ struct DetachTests {
         let r = DetachRig()
         r.activity.isActive = true
         await r.toReady()
-        r.pipeline.makeWebp()
-        await r.drive { isRendering(r.pipeline) && r.pipeline.renderJobID != nil }
-        r.pipeline.detach()
-        await r.drive { r.ctx.background.isEmpty }
+        let p = r.pipeline
+        p.makeWebp()
+        await r.drive { isRendering(p) && p.renderJobID != nil }
+        p.detach()
+        await r.drive { r.isGone(p) }
         #expect(r.webps.count == 1)
         await r.waitForPosts(1)
         #expect(r.notifier.posts.isEmpty)
     }
 
-    @Test func detachWhileTheRenderRequestIsOnTheWireStartsOnlyOneRender() async throws {
+    @Test func aLetGoJobComesBackWithOneTap() async throws {
+        let r = DetachRig()
+        await r.toReady()
+        let p = r.pipeline
+        p.makeWebp()
+        await r.drive { isRendering(p) && p.renderJobID != nil }
+        p.detach()
+        let job = try #require(r.job(of: p))
+        #expect(job.isReleased)
+        await r.app.activity.perform(.focus, on: "job:\(job.id.uuidString)")
+        #expect(r.queue.focusedID == job.id && r.pipeline === p)
+        #expect(r.queue.job(job.id)?.isReleased == false, "opened again: no longer let go")
+        await r.drive { if case .done = p.state { true } else { false } }
+        #expect(r.webps.count == 1)
+    }
+
+    @Test func closingWhileTheRenderRequestIsOnTheWireStartsOnlyOneRender() async throws {
         let r = DetachRig()
         let p = r.pipeline
         await r.toReady()
@@ -164,18 +200,16 @@ struct DetachTests {
         #expect(p.renderJobID == nil && isRendering(p))
 
         p.detach()
-        #expect(p.state == .idle && r.ctx.background.count == 1)
+        #expect(r.job(of: p)?.isReleased == true)
         await gate.open()
-        await r.drive { r.ctx.background.isEmpty }
-        #expect(posts.withLock { $0 } == 1, "the handed-over POST is the only one")
+        await r.drive { r.isGone(p) }
+        #expect(posts.withLock { $0 } == 1, "the one POST is the only one")
         #expect(r.webps.count == 1)
-        #expect(p.state == .idle)
     }
 
-    /// Regression: a status poll already on the wire when `detach()` runs (focus closed during the pack
-    /// phase) came back with `.pending(.pack, ...)` and wrote `.rendering(.packing)` into the now-idle
-    /// visible pipeline, stranding home with no session. `runRender` must drop the stale poll.
-    @Test func aRenderPollThatLandsAfterDetachNeverWritesIntoTheVisiblePipeline() async throws {
+    /// A status poll already on the wire when the focus closes (the pack phase) answers into the job's own pipeline, never into
+    /// the idle pipeline the app shows now.
+    @Test func aRenderPollThatLandsAfterTheCloseNeverWritesIntoTheIdlePipeline() async throws {
         let r = DetachRig()
         let p = r.pipeline
         await r.toReady()
@@ -199,27 +233,25 @@ struct DetachTests {
         let webpsBefore = r.webps.count
 
         p.detach()
-        let runAfter = p.runID
-        #expect(p.state == .idle && r.ctx.background.count == 1)
+        let idle = r.pipeline
+        #expect(idle !== p && idle.state == .idle)
 
         await gate.open()                                 // the in-flight poll now returns .pending(.pack)
-        // drive the whole detached run; the visible pipeline must be idle at every step
         var spins = 0
-        while !r.ctx.background.isEmpty, spins < 2000 {
+        while !r.isGone(p), spins < 2000 {
             await r.h.settle()
             r.h.clock.advance()
-            #expect(p.state == .idle, "the stale poll wrote \(p.state) into the visible pipeline")
-            if p.state != .idle { break }
+            #expect(r.pipeline.state == .idle, "the stale poll wrote \(r.pipeline.state) into the idle pipeline")
+            if r.pipeline.state != .idle { break }
             spins += 1
         }
-        await r.drive { r.ctx.background.isEmpty }
-        #expect(p.state == .idle && p.runID == runAfter, "the visible pipeline is still the new, idle run")
-        #expect(p.result == nil && p.sessionID == nil)
-        #expect(polls.withLock { $0 } >= 2, "the detached run kept polling after the stale answer")
-        #expect(r.webps.count == webpsBefore + 1, "the detached run still completed and the webp joined the store once")
+        await r.drive { r.isGone(p) }
+        #expect(r.pipeline.state == .idle && r.pipeline.sessionID == nil && r.pipeline.result == nil)
+        #expect(polls.withLock { $0 } >= 2, "the job kept polling after the stale answer")
+        #expect(r.webps.count == webpsBefore + 1, "the webp joined the store once")
     }
 
-    @Test func aDetachedRenderThatFailsEndsItsActivityFailedAndPostsNothing() async throws {
+    @Test func aLetGoRenderThatFailsComesBackNeedingAttentionAndEndsItsActivityFailed() async throws {
         let r = DetachRig(.renderLost)
         let p = r.pipeline
         await r.toReady()
@@ -228,7 +260,12 @@ struct DetachTests {
         let liveRun = p.liveRunID
         let handle = try #require(r.handle(forRun: liveRun))
         p.detach()
-        await r.drive { r.ctx.background.isEmpty }
+        #expect(r.job(of: p)?.isReleased == true)
+        await r.drive { r.job(of: p)?.isFailed == true }
+        await r.manager.settle()
+        #expect(r.job(of: p)?.isReleased == false, "a failure needs the owner again: it is back on the tray")
+        #expect(r.queue.alongside.contains { $0.pipeline === p })
+        #expect(r.app.activity.attentionCount == 1 && r.app.activity.activeCount == 0)
         #expect(handle.ended && handle.end?.state.stage == .failed)
         #expect(r.webps.isEmpty && r.ctx.jobs.all().isEmpty)
         await r.waitForPosts(1)
@@ -237,7 +274,7 @@ struct DetachTests {
 
     // MARK: publish
 
-    @Test func detachMidPublishRecordsThePublicLinkOnTheStoredOriginal() async throws {
+    @Test func closingMidPublishKeepsTheJobAndRecordsThePublicLinkOnTheStoredOriginal() async throws {
         let r = DetachRig()
         let p = r.pipeline
         await r.toReady()
@@ -255,15 +292,14 @@ struct DetachTests {
         #expect(p.hosting == .working)
 
         p.detach()
-        #expect(p.state == .idle && p.hosting == .idle && p.hostedURL == nil)
-        #expect(r.ctx.background.count == 1)
+        #expect(r.job(of: p)?.isReleased == true, "the publish is still going: the job stays")
+        #expect(r.status(of: p) != nil)
         await gate.open()
-        await r.drive { r.ctx.background.isEmpty }
+        await r.drive { r.isGone(p) }
 
         let original = try #require(r.originals(session: sid).first)
         #expect(original.publicURL == hosted, "the orbit's link badge reads real storage")
         #expect(r.clipboard.copies.isEmpty, "a background completion never touches the pasteboard")
-        #expect(p.hostedURL == nil && p.state == .idle, "the finished publish is not the visible run's")
         // it was persisted: a fresh store over the same index sees it
         let reopened = OfflineStore(root: r.store.root, tools: r.ctx.tools)
         #expect(reopened.videos.first { $0.id == original.id }?.publicURL == hosted)
@@ -307,9 +343,9 @@ struct DetachTests {
         #expect(r.originals(session: sid).first?.publicURL == p.hostedURL)
     }
 
-    // MARK: keep original
+    // MARK: keep original (the copy onto this device)
 
-    @Test func detachMidKeepOriginalStillLandsTheFileInTheStore() async throws {
+    @Test func closingMidKeepOriginalKeepsTheJobAsADeviceCopyUntilTheFileLands() async throws {
         let r = DetachRig()
         let p = r.pipeline
         let gate = Gate()
@@ -328,21 +364,24 @@ struct DetachTests {
         #expect(p.keepRequest != nil && r.originals(session: sid).isEmpty)
 
         p.detach()
-        #expect(p.state == .idle && r.ctx.background.count == 1)
+        let status = try #require(r.status(of: p), "the copy is listed, not hidden")
+        if case .deviceCopy = status.stage {} else { Issue.record("expected a device copy, got \(status.stage)") }
+        #expect(status.isActive && r.app.activity.activeCount == 1)
+        #expect(r.job(of: p)?.isReleased == true && r.queue.alongside.isEmpty)
+
         await gate.open()
-        await r.drive { r.ctx.background.isEmpty }
+        await r.drive { r.isGone(p) }
         let original = try #require(r.originals(session: sid).first)
         let file = try #require(original.fileURL)
         #expect(FileManager.default.fileExists(atPath: file.path))
-        #expect(p.state == .idle && p.stored == nil)
         let handle = try #require(r.handle(forRun: liveRun))
         #expect(handle.ended, "the run's activity ended with its last piece of work")
-        #expect(r.ctx.jobs.all().isEmpty)
+        #expect(r.ctx.jobs.all().isEmpty && r.app.activity.items.isEmpty)
     }
 
     // MARK: nothing in flight
 
-    @Test func detachWithNothingInFlightIsReset() async throws {
+    @Test func closingWithNothingInFlightIsReset() async throws {
         let r = DetachRig()
         let p = r.pipeline
         await r.toReady()
@@ -351,7 +390,7 @@ struct DetachTests {
         let handle = try #require(r.handle(forRun: liveRun))
         p.detach()
         #expect(p.state == .idle && p.runID != runBefore && p.liveRunID != liveRun)
-        #expect(r.ctx.background.isEmpty)
+        #expect(r.isGone(p))
         await r.manager.settle()
         #expect(handle.ended, "reset's behaviour: the unfinished activity goes at once")
         #expect(r.ctx.jobs.all().isEmpty)
@@ -359,25 +398,26 @@ struct DetachTests {
         #expect(r.notifier.posts.isEmpty)
     }
 
-    @Test func detachOnAPreviewPipelineWithNothingToKeepIsReset() async throws {
+    @Test func closingAPreviewPipelineWithNothingToKeepIsReset() async throws {
         let h = Harness(.shortClip)
         h.pipeline.start(link: URL(string: shortLink)!)
         await h.driveToSettled()
         #expect(h.pipeline.state == .ready)
         let before = h.pipeline.runID
         h.pipeline.detach()
-        #expect(h.pipeline.state == .idle && h.pipeline.runID != before && h.ctx.background.isEmpty)
+        #expect(h.pipeline.state == .idle && h.pipeline.runID != before)
     }
 
-    @Test func detachInTheShareExtensionIsAlwaysReset() async throws {
+    @Test func closingInTheShareExtensionIsAlwaysReset() async throws {
         let r = DetachRig()
         r.ctx.background.allowsDetach = false
         await r.toReady()
-        r.pipeline.makeWebp()
-        await r.drive { isRendering(r.pipeline) && r.pipeline.renderJobID != nil }
-        r.pipeline.detach()
-        #expect(r.pipeline.state == .idle && r.ctx.background.isEmpty)
-        #expect(r.ctx.jobs.all().isEmpty)
+        let p = r.pipeline
+        p.makeWebp()
+        await r.drive { isRendering(p) && p.renderJobID != nil }
+        p.detach()
+        #expect(p.state == .idle)
+        #expect(r.isGone(p) && r.ctx.jobs.all().isEmpty)
     }
 
     // MARK: runID
@@ -405,7 +445,7 @@ struct DetachTests {
 
     // MARK: relaunch
 
-    @Test func aRelaunchResumesADetachedRenderFromItsRecord() async throws {
+    @Test func aRelaunchResumesALetGoRenderFromItsRecord() async throws {
         let first = DetachRig()
         let p = first.pipeline
         await first.toReady()
@@ -417,10 +457,10 @@ struct DetachTests {
 
         // while this process runs the render itself, the foreground pickup leaves its job alone
         await first.app.pickUpSharedJobs()
-        #expect(first.pipeline.state == .idle)
+        #expect(first.pipeline.state == .idle && first.job(of: p) != nil)
 
         // the process is killed: its work stops and the record it left is all that remains
-        first.ctx.background.cancelAll()
+        first.queue.serverChanged()
         first.ctx.jobs.upsert(saved)
         let webpsBefore = first.webps.count
 
@@ -435,17 +475,18 @@ struct DetachTests {
         #expect(second.ctx.jobs.all().isEmpty)
     }
 
-    @Test func aServerChangeCancelsDetachedRunsAndEndsTheirActivity() async throws {
+    @Test func aServerChangeEndsALetGoJobAndItsActivity() async throws {
         let r = DetachRig()
         await r.toReady()
-        r.pipeline.makeWebp()
-        await r.drive { isRendering(r.pipeline) && r.pipeline.renderJobID != nil }
-        let run = r.pipeline.liveRunID
+        let p = r.pipeline
+        p.makeWebp()
+        await r.drive { isRendering(p) && p.renderJobID != nil }
+        let run = p.liveRunID
         let handle = try #require(r.handle(forRun: run))
-        r.pipeline.detach()
-        #expect(r.ctx.background.count == 1)
+        p.detach()
+        #expect(r.job(of: p) != nil)
         r.app.serverChanged()
-        #expect(r.ctx.background.isEmpty)
+        #expect(r.queue.jobs.isEmpty && r.app.activity.items.isEmpty)
         await r.manager.settle()
         #expect(handle.ended)
         #expect(r.ctx.jobs.all().isEmpty)

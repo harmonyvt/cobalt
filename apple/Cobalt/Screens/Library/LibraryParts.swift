@@ -430,28 +430,19 @@ enum OfflineMark: Equatable {
     init(item: MediaItem, model: AppModel) {
         // each rendition's state once; the sums are `AppModel.offlineState(of: MediaItem)`'s, over the same states
         var running = false, waiting = false, failed = false
-        var bytes: Int64 = 0
-        var total: Int64? = 0
         for rendition in item.renditions {
             switch model.offlineState(of: rendition) {
-            case .downloading(let p):
-                running = true
-                bytes += p.bytes
-                total = total.flatMap { a in (p.total ?? rendition.bytes).map { a + $0 } }
-            case .waiting:
-                waiting = true
-                total = total.flatMap { a in rendition.bytes.map { a + $0 } }
-            case .failed:
-                failed = true
-            default:
-                break
+            case .downloading: running = true
+            case .waiting: waiting = true
+            case .failed: failed = true
+            default: break
             }
         }
         // the item's progress also counts renditions that only wait, so a download needs one that runs
         if running {
-            // `OfflineWords.fraction`: 0...1 when the total is known and positive
-            let fraction: Double? = total.flatMap { t -> Double? in t > 0 ? min(1, max(0, Double(bytes) / Double(t))) : nil }
-            self = .downloading(fraction)
+            // 0...1 when the total is known and positive: the media's summed progress (`offlineState(of: item)` sums the
+            // renditions that run and wait), through the download's status (`OfflineWords.fraction`)
+            self = .downloading(model.offlineState(of: item).downloading.flatMap(OfflineWords.fraction))
         } else if failed {
             self = .failed
         } else if waiting {

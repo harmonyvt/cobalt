@@ -163,6 +163,8 @@ public final class EditSession {
     /// Pins on the source cache for the files this session is playing. Released in `tearDown`.
     @ObservationIgnored private let cacheOwner = UUID()
     @ObservationIgnored private var renderPoll: Task<Void, Never>?
+    /// The render followed through `ServerActivityStore` (servers with `features.queue`): no loop of this session's own.
+    @ObservationIgnored private var renderWatch: ServerRenderWatch?
     /// Reads in a row that failed; 0 after one that worked. Two flip `renderPollState` to `.reconnecting`.
     @ObservationIgnored private var renderPollFailures = 0
     /// A poll that was cancelled and replaced must not clear its successor's handle when it ends.
@@ -1920,13 +1922,27 @@ public final class EditSession {
         onRender(r)
     }
 
-    /// Reads the render every 3 s while it runs, the editor is open and the app is in front.
+    /// Follows the running render while it runs and the editor is open.
+    ///
+    /// With `features.queue` the session subscribes to `ServerActivityStore` (apple 03-PHASE3 3.3): the app's one poller reads the
+    /// server's renders every 3 s while one is watched, whatever screen is up, and hands this session its render; a read that
+    /// did not list it is followed by one direct read. Without the feature the session reads the render itself every 3 s while the
+    /// app is in front (the old loop below).
     ///
     /// A read that fails is counted, never dropped: after `renderPollFailuresBeforeBanner` in a row `renderPollState` is
-    /// `.reconnecting(error:)` and the wait grows (6 s, 12 s, then 15 s). One read that works clears it. `immediate` reads
-    /// first and waits after (the reconnect button).
+    /// `.reconnecting(error:)` (the store waits longer between reads, the old loop grows 6 s, 12 s, then 15 s). One read that
+    /// works clears it. `immediate` reads first and waits after (the reconnect button).
     func startRenderPolling(immediate: Bool = false) {
         guard renderPoll == nil, let r = activeRender, r.isActive else { return }
+        if let watch = renderWatch {
+            if watch.renderID == r.id { return }
+            stopRenderWatch()                                       // another render took over
+        }
+        if ctx.capabilities.queue, let store = ServerActivityStore.current(for: ctx) {
+            watchRender(r.id, in: store)
+            if immediate { Task { await store.refresh() } }
+            return
+        }
         renderPollGeneration += 1
         let generation = renderPollGeneration
         renderPollFailures = 0
@@ -1951,13 +1967,7 @@ public final class EditSession {
                     guard !Task.isCancelled, !self.isClosed else { break }
                     let e = EditError.from(error)
                     if case .notFound = e { break }          // the render is gone; the queue's polling and `noteRender` say so
-                    self.renderPollFailures += 1
-                    Telemetry.log(.warn, .ui, "edit render poll failed", data: [
-                        "failures": .int(self.renderPollFailures), "error": .string(String(describing: e).prefix(80).description),
-                    ])
-                    if self.renderPollFailures >= Self.renderPollFailuresBeforeBanner {
-                        self.renderPollState = .reconnecting(error: e)
-                    }
+                    self.noteRenderReadFailed(e)
                 }
             }
             guard let self, self.renderPollGeneration == generation else { return }
@@ -1965,6 +1975,59 @@ public final class EditSession {
             self.renderPollFailures = 0
             self.renderPollState = .idle
         }
+    }
+
+    private func noteRenderReadFailed(_ e: EditError) {
+        renderPollFailures += 1
+        Telemetry.log(.warn, .ui, "edit render poll failed", data: [
+            "failures": .int(renderPollFailures), "error": .string(String(describing: e).prefix(80).description),
+        ])
+        if renderPollFailures >= Self.renderPollFailuresBeforeBanner { renderPollState = .reconnecting(error: e) }
+    }
+
+    /// The store's answers for this render (`startRenderPolling`).
+    private func watchRender(_ id: String, in store: ServerActivityStore) {
+        renderPollFailures = 0
+        renderPollState = .polling
+        renderWatch = store.watchRender(id: id) { [weak self] event in
+            guard let self, !self.isClosed else { return }
+            switch event {
+            case .render(let fresh):
+                self.renderPollFailures = 0
+                self.renderPollState = .polling
+                self.adoptRender(fresh)
+                if !fresh.isActive { self.stopRenderWatch() }
+            case .missing:
+                // `/queue` does not list it (an older server, or it aged out): read it once, as the old loop did every time
+                self.renderPollFailures = 0
+                self.renderPollState = .polling
+                Task { @MainActor [weak self] in await self?.readRenderDirectly(id) }
+            case .failed(let error):
+                self.noteRenderReadFailed(EditError.from(error))
+            }
+        }
+    }
+
+    private func readRenderDirectly(_ id: String) async {
+        guard !isClosed, activeRender?.id == id, activeRender?.isActive == true, let client = editorClient else { return }
+        do {
+            let fresh = try await client.editRender(id: id)
+            guard !isClosed else { return }
+            adoptRender(fresh)
+            if !fresh.isActive { stopRenderWatch() }
+        } catch {
+            guard !isClosed else { return }
+            let e = EditError.from(error)
+            if case .notFound = e { stopRenderWatch(); return }          // the render is gone; `noteRender` says so
+            noteRenderReadFailed(e)
+        }
+    }
+
+    private func stopRenderWatch() {
+        renderWatch?.cancel()
+        renderWatch = nil
+        renderPollFailures = 0
+        renderPollState = .idle
     }
 
     /// The wait before the next read: 3 s when the last one worked, then doubling per failure up to 15 s.
@@ -1978,6 +2041,13 @@ public final class EditSession {
         guard case .reconnecting = renderPollState else { return }
         renderPoll?.cancel()
         renderPoll = nil
+        if renderWatch != nil {
+            // the store's poller: forget the failures and read now
+            renderPollFailures = 0
+            renderPollState = .polling
+            Task { _ = await ServerActivityStore.current(for: ctx)?.refresh() }
+            return
+        }
         startRenderPolling(immediate: true)
     }
 
@@ -2264,6 +2334,7 @@ public final class EditSession {
         retryTask?.cancel(); retryTask = nil
         rebuildTask?.cancel(); rebuildTask = nil
         renderPoll?.cancel(); renderPoll = nil
+        renderWatch?.cancel(); renderWatch = nil
         renderPollState = .idle
         for task in loads.values { task.cancel() }
         loads = [:]

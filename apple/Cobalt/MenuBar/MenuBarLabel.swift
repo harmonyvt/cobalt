@@ -11,12 +11,14 @@ struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        let phases = MenuBarPhases.live(model.queue)
-        let failed = max(model.queue.summary.failed, model.unifiedQueue.summary.failed)
+        // the one count (apple 03-PHASE3 3.2): the ring, the red dot and the spoken label all read `model.activity`
+        let summary = model.activity.summary
+        let phases = MenuBarPhases.live(summary)
+        let failed = summary.attentionCount
         let state = MenuBarIcon.state(phases: phases, failed: failed > 0)
         Image(nsImage: MenuBarGlyphImage.make(state, dark: scheme == .dark))
             .renderingMode(.original)
-            .accessibilityLabel(Copy.MenuBar.iconLabel(live: model.queue.summary.live, failed: failed))
+            .accessibilityLabel(Copy.MenuBar.iconLabel(live: summary.activeCount, failed: failed))
             .onAppear { arm() }
     }
 
@@ -31,6 +33,37 @@ struct MenuBarLabel: View {
 enum MenuBarPhases {
     static func live(_ queue: JobQueue) -> [MenuBarIcon.Phase] {
         queue.live.map(phase(of:))
+    }
+
+    /// The ring's phases from the one count: every active status is one phase, so a ring shows exactly when `activeCount > 0`.
+    static func live(_ summary: ActivitySummary) -> [MenuBarIcon.Phase] {
+        summary.items.filter(\.isActive).map(phase(of:))
+    }
+
+    static func phase(of status: JobStatus) -> MenuBarIcon.Phase {
+        func ratio(_ done: Int64?, _ total: Int64?) -> Double? {
+            guard let done, let total, total > 0 else { return nil }
+            return Double(done) / Double(total)
+        }
+        switch status.stage {
+        case .queued, .awaitingChoice:
+            return .waiting
+        case .waking, .failed:
+            return .checking
+        case .fetching:
+            return status.fraction.map { .downloading($0) } ?? .checking
+        case .downloading(let bytes, let total):
+            return ratio(bytes, total).map { .downloading($0) } ?? .checking
+        case .storing(let bytes, let total), .deviceCopy(let bytes, let total):
+            return ratio(bytes, total).map { .saving($0) } ?? .checking
+        case .galleryProgress(let done, let total, _, _), .readingFrames(let done, let total):
+            return total > 0 ? .saving(Double(done) / Double(total)) : .checking
+        case .rendering(_, let done, let total):
+            guard let done, let total, total > 0 else { return .saving(0) }
+            return .saving(Double(done) / Double(total))
+        case .completed:
+            return .checking
+        }
     }
 
     static func phase(of job: Job) -> MenuBarIcon.Phase {

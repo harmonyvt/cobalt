@@ -122,6 +122,9 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
         self.store = store
         self.inboxRoot = store.root
         self.clock = clock
+        pending.install(.init(
+            cancel: { [weak self] id in Task { @MainActor in self?.cancel(session: id) } },
+            retry: { [weak self] id in Task { @MainActor in self?.retry(session: id) } }))
     }
 
     private func session(_ id: String) -> any BackgroundSession {
@@ -357,6 +360,35 @@ final class OriginalFetcher: BackgroundDownloadEvents, @unchecked Sendable {
 
     /// The server (or the owner) says the entry's session is over: nothing more to do.
     func forget(session id: String) { pending.remove(id) }
+
+    /// "stop" on the activity list: the entry goes first (the task's own cancel event then finds nothing), then the task, then
+    /// a file that already arrived. A task of the share extension's session is cancelled through that session's identifier.
+    @MainActor
+    func cancel(session id: String) {
+        guard let entry = pending.entry(id) else { return }
+        pending.remove(id)
+        switch entry.state {
+        case .downloading(let sessionID, let task, _):
+            session(sessionID).cancel(task: task)
+        case .arrived(let file):
+            try? FileManager.default.removeItem(at: file)
+        default:
+            break
+        }
+        Telemetry.log(.info, .sync, "original cancelled")
+    }
+
+    /// "try again" on an entry that gave up (`failed` for good): queued afresh and started from the foreground, where nothing
+    /// is rate-limited. A `gone` entry (the server will never serve it) and one still going are left alone.
+    @MainActor
+    func retry(session id: String) {
+        guard let entry = pending.entry(id), case .failed = entry.state, !entry.isLive else { return }
+        pending.update(id, now: clock.now()) { e in
+            e.state = .queued
+            e.backgroundStarts = 0
+        }
+        start(id, wait: entry.sourceWait || serverHoldsRequests(), background: false)
+    }
 }
 
 // MARK: - URLSession

@@ -74,8 +74,8 @@ public struct QueueSnapshot: Sendable, Equatable {
         self.now = now; self.line = line; self.search = search; self.posters = posters; self.edits = edits
     }
 
-    /// Something on the server is moving right now (a job running or waiting in the line, an index pass running):
-    /// the queue tab polls every 5 s instead of every 30 s.
+    /// Something on the server is moving right now (a job running or waiting in the line, an index pass running, a render going).
+    /// `ServerActivityStore` decides its own cadence from the part of this that nobody in the app follows (3 s, else 30 s).
     public var isActive: Bool {
         if let line, line.running != nil || !line.entries.isEmpty { return true }
         if search?.running == true { return true }

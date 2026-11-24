@@ -2,30 +2,23 @@ import Foundation
 
 /// The server's line, mirrored (CONTRACT-PARALLEL.md 3.3). It never decides anything: every position comes from a
 /// poll answer's `queue_ahead` (the jobs before this one, the running one included, so `queue_ahead + 1` is the
-/// place), and who is ahead comes from `GET /studio/line`, read every 3 s while any job of this app waits and the app
-/// is active: one request for all of them. A missed read only loses the labels.
+/// place), and who is ahead comes from the line `ServerActivityStore` last read (apple 03-PHASE3 3.3: the one paced
+/// poller of `GET /queue`, or `GET /studio/line` on a server without `features.queue`). This type reads nothing of its
+/// own any more: the store calls `apply(_:)` with each answer, and is told when a job joins or leaves the line so
+/// that it polls at once and, with nobody waiting, not at all (on a legacy server). A missed read only loses the labels.
 @MainActor
 final class ServerLine: JobLine {
-    static let pollSeconds: Double = 3
-
     private var ahead: [UUID: Int] = [:]
     /// The label of whoever holds position `n` when it is not this app's own work.
     private var labels: [Int: String] = [:]
-    private var poller: Task<Void, Never>?
-    private var pollGeneration = 0
-    private let client: () -> any CobaltClient
-    private let clock: any PipelineClock
-    private let isActive: () -> Bool
 
     var onChange: LineChange?
-    /// Reads of `GET /studio/line` so far (tests).
-    private(set) var reads = 0
+    /// The set of jobs waiting in the line changed: `joined` is true when a job came in (the store polls for its labels at
+    /// once), false when one left (the store may slow down or stop). Installed by `ServerActivityStore`.
+    var onWaitersChanged: (@MainActor (_ joined: Bool) -> Void)?
 
-    init(client: @escaping () -> any CobaltClient, clock: any PipelineClock, isActive: @escaping () -> Bool) {
-        self.client = client
-        self.clock = clock
-        self.isActive = isActive
-    }
+    /// `client`, `clock` and `isActive` are what the line read with before the store did; kept so `JobQueue`'s init is unchanged.
+    init(client: @escaping () -> any CobaltClient, clock: any PipelineClock, isActive: @escaping () -> Bool) {}
 
     /// Jobs of this app the server holds in its line right now.
     var queued: [UUID] { Array(ahead.keys) }
@@ -36,12 +29,13 @@ final class ServerLine: JobLine {
 
     func observe(_ job: UUID, queueAhead: Int?) {
         if let queueAhead {
+            let joined = ahead[job] == nil
             ahead[job] = max(0, queueAhead)
             publish(job)
-            ensurePolling()
+            if joined { onWaitersChanged?(true) }
         } else if ahead.removeValue(forKey: job) != nil {
             onChange?(job, nil)
-            stopIfIdle()
+            leftLine()
         }
     }
 
@@ -50,7 +44,7 @@ final class ServerLine: JobLine {
     func release(_ job: UUID) {
         guard ahead.removeValue(forKey: job) != nil else { return }
         onChange?(job, nil)
-        stopIfIdle()
+        leftLine()
     }
 
     func position(of job: UUID) -> LinePosition? {
@@ -63,47 +57,27 @@ final class ServerLine: JobLine {
         let jobs = Array(ahead.keys)
         ahead = [:]
         labels = [:]
-        poller?.cancel()
-        poller = nil
         for job in jobs { onChange?(job, nil) }
+        if !jobs.isEmpty { onWaitersChanged?(false) }
     }
 
     // MARK: Labels
 
+    /// The store's latest answer: who holds each place. `nil` is a read that failed (the positions stay, the labels go).
+    func apply(_ line: ServerLineSnapshot?) {
+        guard !ahead.isEmpty else { labels = [:]; return }            // nobody waits: nothing to label
+        let fresh = line.map(Self.labels(from:)) ?? [:]
+        guard fresh != labels else { return }
+        labels = fresh
+        publishAll()
+    }
+
     private func publish(_ job: UUID) { onChange?(job, position(of: job)) }
     private func publishAll() { for job in ahead.keys { publish(job) } }
 
-    private func stopIfIdle() {
-        guard ahead.isEmpty else { return }
-        poller?.cancel()
-        poller = nil
-        labels = [:]
-    }
-
-    private func ensurePolling() {
-        guard poller == nil else { return }
-        pollGeneration += 1
-        let generation = pollGeneration
-        poller = Task { [weak self] in
-            while let self, !Task.isCancelled, !self.ahead.isEmpty {
-                if self.isActive() { await self.read() }
-                try? await self.clock.sleep(seconds: Self.pollSeconds)
-            }
-            // a newer poller may already have taken the slot (stopped, then a job queued again)
-            if let self, self.pollGeneration == generation { self.poller = nil }
-        }
-    }
-
-    private func read() async {
-        reads += 1
-        do {
-            let snapshot = try await client().line()
-            guard !ahead.isEmpty else { return }
-            labels = Self.labels(from: snapshot)
-        } catch {
-            labels = [:]                       // positions stay, the labels go
-        }
-        publishAll()
+    private func leftLine() {
+        if ahead.isEmpty { labels = [:] }
+        onWaitersChanged?(false)
     }
 
     /// position -> label, for the work that is not this app's own: "a share from your iphone", "a save from your mac".

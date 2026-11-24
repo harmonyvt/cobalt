@@ -288,14 +288,19 @@ private struct PaneChromeBackground: ViewModifier {
 /// The line on the hinge (or the column's divider). While another save or make runs in the background (not the one
 /// already displayed in the pane), a quiet 2 pt progress bar fills along the line.
 struct PaneSeam: View {
+    /// The fraction on the line (`seamFraction`) is the queue's; whether there is any work to show is the one count's.
     let queue: JobQueue
+    let activity: ActivityModel
     let axis: PanePlacement.Axis
     /// The job already displayed in the pane, if any: no need to mirror its progress on the divider beside it.
     var showingJobID: UUID? = nil
 
     private var vertical: Bool { axis == .vertical }
+    /// Any work in motion but the one the pane shows (apple 03-PHASE3 3.2: the seam reads `activity`, so a download or a render
+    /// somewhere else lights it as well as a job of this device does).
     private var showsBackgroundProgress: Bool {
-        queue.live.contains { $0.id != showingJobID }
+        let showing = showingJobID.map(JobStatus.Ref.pipeline)
+        return activity.items.contains { $0.isActive && $0.ref != showing }
     }
 
     var body: some View {

@@ -902,7 +902,8 @@ struct HomeScreen: View {
         }
         if job.isLive {
             let title = job.pipeline.trayTitle
-            queue.unfocus()
+            // minimize, never hide: the job stays in `activity.items` (counted, with its stepper, one tap to focus, cancellable)
+            model.activity.minimize(job.id)
             trayNote = Copy.Jobs.keepsGoing(title)
         } else {
             queue.dismiss(job.id)

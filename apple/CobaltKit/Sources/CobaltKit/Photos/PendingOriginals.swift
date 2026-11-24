@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// One original the share sheet handed to a background download (CONTRACT-SYNC.md decision 6).
 struct PendingOriginal: Codable, Equatable, Sendable, Identifiable {
@@ -54,12 +55,53 @@ final class PendingOriginals: Sendable {
 
     private let file: CoordinatedFile<PendingOriginalsFile>
 
+    /// What the app's own `OriginalFetcher` can do for an entry that is going (Phase 3: the activity list offers "stop" and
+    /// "try again" on a row of this ledger). The task belongs to a `URLSession` only the fetcher holds, so the fetcher installs
+    /// these in its `init`. Not part of the ledger file.
+    struct Controls: Sendable {
+        var cancel: @Sendable (_ session: String) -> Void
+        var retry: @Sendable (_ session: String) -> Void
+    }
+    private let controls = Mutex<Controls?>(nil)
+    private let observers = Mutex<[UUID: @Sendable () -> Void]>([:])
+
     init(directory: URL) {
         file = CoordinatedFile(url: directory.appendingPathComponent("originals.json"), empty: PendingOriginalsFile())
     }
 
     private static let sharedInstance = PendingOriginals(directory: AppGroup.directory("Sync"))
     static func shared() -> PendingOriginals { sharedInstance }
+
+    /// Runs `body` (from any thread) after this process changes the ledger. A write by the other process (the share extension)
+    /// is not announced: it shows on the next read, and `OfflineDownloads.reconcile` asks again whenever the app is in front.
+    @discardableResult
+    func observe(_ body: @escaping @Sendable () -> Void) -> UUID {
+        let id = UUID()
+        observers.withLock { $0[id] = body }
+        return id
+    }
+
+    func stopObserving(_ id: UUID) { observers.withLock { _ = $0.removeValue(forKey: id) } }
+
+    private func changed() {
+        let all = observers.withLock { Array($0.values) }
+        for body in all { body() }
+    }
+
+    func install(_ controls: Controls) { self.controls.withLock { $0 = controls } }
+
+    /// "stop" on a pending original. The fetcher cancels the task and drops the entry; without one (no fetcher in this process)
+    /// only an entry nothing is going to bring any more is dropped.
+    func cancel(session id: String) {
+        if let controls = controls.withLock({ $0 }) {
+            controls.cancel(id)
+        } else if let entry = entry(id), !entry.isLive {
+            remove(id)
+        }
+    }
+
+    /// "try again" on a pending original that gave up. Needs the fetcher (it starts the task); nothing happens without one.
+    func retry(session id: String) { controls.withLock { $0 }?.retry(id) }
 
     func all() -> [PendingOriginal] { file.read().items }
     func entry(_ id: String) -> PendingOriginal? { file.read().items.first { $0.id == id } }
@@ -69,7 +111,8 @@ final class PendingOriginals: Sendable {
     /// session shared twice is one download. A dead entry (gone, failed for good) is replaced.
     @discardableResult
     func enqueue(_ new: PendingOriginal, now: Date) -> PendingOriginal {
-        file.mutate { f in
+        defer { changed() }
+        return file.mutate { f in
             f.items = Self.pruned(f.items, now: now)
             if let existing = f.items.first(where: { $0.id == new.id }) {
                 switch existing.state {
@@ -85,7 +128,8 @@ final class PendingOriginals: Sendable {
 
     @discardableResult
     func update(_ id: String, now: Date, _ body: (inout PendingOriginal) -> Void) -> PendingOriginal? {
-        file.mutate { f in
+        defer { changed() }
+        return file.mutate { f in
             guard let i = f.items.firstIndex(where: { $0.id == id }) else { return nil }
             body(&f.items[i])
             f.items[i].updatedAt = now
@@ -94,6 +138,7 @@ final class PendingOriginals: Sendable {
     }
 
     func remove(_ id: String) {
+        defer { changed() }
         file.mutate { f in f.items.removeAll { $0.id == id } }
     }
 

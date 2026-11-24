@@ -172,7 +172,10 @@ struct PaneSelectionContent: View {
     /// The four big buttons: in the album `unhide`; else make link, collection, share and edit (the ones the server offers).
     private func gridActions(_ rows: [LibraryRow], picks: [LibraryRow], ready: Bool) -> [PaneAction] {
         if inAlbum {
-            return [PaneAction(Copy.HiddenAlbum.unhide, systemImage: Symbol.HiddenAlbum.unhide, needsServer: true, disabled: picks.isEmpty || busy) {
+            // queuesOffline (here and in `statusActions`, `compactActions`): `controller.chooseStatus` -> `applyStatus` ->
+            // `LibraryModel.setStatus`, which enqueues in the sync outbox when the engine is on
+            return [PaneAction(Copy.HiddenAlbum.unhide, systemImage: Symbol.HiddenAlbum.unhide, needsServer: true,
+                               queuesOffline: model.libraryQueuesEdits, disabled: picks.isEmpty || busy) {
                 controller.chooseStatus(.off, posts: controller.pickedPosts(rows))
             }]
         }
@@ -239,18 +242,18 @@ struct PaneSelectionContent: View {
         let posts = controller.pickedPosts(rows)
         var out: [PaneAction] = []
         if includeHidden {
-            out.append(PaneAction(Copy.HiddenAlbum.statusHidden, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, disabled: disabled, id: "status-hidden") {
+            out.append(PaneAction(Copy.HiddenAlbum.statusHidden, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, queuesOffline: model.libraryQueuesEdits, disabled: disabled, id: "status-hidden") {
                 controller.chooseStatus(.hidden, posts: posts)
             })
         }
-        out.append(PaneAction(Copy.HiddenAlbum.statusOff, systemImage: Symbol.HiddenAlbum.off, needsServer: true, disabled: disabled, id: "status-off") {
+        out.append(PaneAction(Copy.HiddenAlbum.statusOff, systemImage: Symbol.HiddenAlbum.off, needsServer: true, queuesOffline: model.libraryQueuesEdits, disabled: disabled, id: "status-off") {
             controller.chooseStatus(.off, posts: posts)
         })
-        out.append(PaneAction(Copy.HiddenAlbum.statusPublic, systemImage: Symbol.HiddenAlbum.publicLink, needsServer: true, disabled: disabled, id: "status-public") {
+        out.append(PaneAction(Copy.HiddenAlbum.statusPublic, systemImage: Symbol.HiddenAlbum.publicLink, needsServer: true, queuesOffline: model.libraryQueuesEdits, disabled: disabled, id: "status-public") {
             controller.chooseStatus(.public, posts: posts)
         })
         if model.capabilities.privateLinks {
-            out.append(PaneAction(Copy.HiddenAlbum.statusPrivate, systemImage: Symbol.HiddenAlbum.privateLink, needsServer: true, disabled: disabled, id: "status-private") {
+            out.append(PaneAction(Copy.HiddenAlbum.statusPrivate, systemImage: Symbol.HiddenAlbum.privateLink, needsServer: true, queuesOffline: model.libraryQueuesEdits, disabled: disabled, id: "status-private") {
                 controller.chooseStatus(.private, posts: posts)
             })
         }
@@ -263,7 +266,8 @@ struct PaneSelectionContent: View {
         let disabled = picks.isEmpty || busy
         let posts = controller.pickedPosts(rows)
         let hide: PaneAction? = offersStatus ? PaneAction(
-            Copy.HiddenAlbum.menuHide, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, disabled: disabled, id: "hide"
+            Copy.HiddenAlbum.menuHide, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true,
+            queuesOffline: model.libraryQueuesEdits, disabled: disabled, id: "hide"
         ) { afterCollapse { controller.chooseStatus(.hidden, posts: posts) } } : nil
         let lead = [shareAction(picks), addToLinkAction(picks), hide].compactMap { $0 }
             + [makeLinkAction(ready: ready), collectionAction(ready: ready), editAction(picks)].compactMap { $0 }

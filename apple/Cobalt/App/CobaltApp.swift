@@ -119,7 +119,7 @@ struct CobaltApp: App {
         SwarmNotifier.registerCategory()
         SwarmNotifier.shared.start(model)
         #if os(macOS)
-        DockBadge.follow(model.queue)
+        DockBadge.follow(model)
         #endif
         #if DEBUG
         // Before any scene exists, like a notification tap that launches the app.
