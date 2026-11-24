@@ -97,20 +97,38 @@ extension Pipeline {
         if let line, let waiting = waitingStory(line, rail: rail) { return waiting }
         switch state {
         case .fetching(let since, let waking):
+            // "waking yt-dlp" when the server says which downloader is starting; the device's own guess (before the
+            // server has answered) only knows "the server"
             return story(
                 .fetching, Copy.fetching(from: linkService),
-                detail: .elapsed(prefix: waking ? Copy.waking : nil, since: since),
-                waking: waking, footnote: waking ? Copy.wakingNote : nil)
+                detail: .elapsed(prefix: waking ? Copy.Save.waking(saveStatus.wakingEngine) : nil, since: since),
+                waking: waking, footnote: engineFootnote(waking: waking))
         case .uploading(let progress):
             let detail = progress.total.map { ProgressStory.Detail.text(Copy.bytesOf(progress.bytes, $0)) }
                 ?? .text(Format.bytes(progress.bytes))
             return story(.uploading, Copy.uploading, detail: detail, fraction: ratio(progress.bytes, progress.total))
         case .saving(let bytes, let total, let since):
-            let headline = isPlainCobalt ? Copy.savingLocally : Copy.saving
-            guard let bytes else { return story(.saving, headline, detail: .elapsed(prefix: nil, since: since)) }
-            let detail = total.flatMap { $0 > 0 ? ProgressStory.Detail.text(Copy.bytesOf(bytes, $0)) : nil }
-                ?? .text(Format.bytes(bytes))
-            return story(.saving, headline, detail: detail, fraction: ratio(bytes, total))
+            // The server's two parts of a save are two different things to say (apple 02-PHASE2 2.2.2): reading the post
+            // from its site ("downloading from x.com · 18.1 of 37.6 MB") and writing it to the library ("storing in your
+            // library · 72%"). Anything else (an upload, plain cobalt, a server without steps) keeps its one line.
+            let phase = saveStatus.phase
+            let headline: String
+            switch phase {
+            case .downloading: headline = Copy.fetching(from: linkService)
+            case .storing: headline = Copy.Save.storing
+            case .unknown: headline = isPlainCobalt ? Copy.savingLocally : Copy.saving
+            }
+            let note = engineFootnote(waking: false)
+            guard let bytes else { return story(.saving, headline, detail: .elapsed(prefix: nil, since: since), footnote: note) }
+            let fraction = ratio(bytes, total)
+            let detail: ProgressStory.Detail
+            if phase == .storing, let fraction {
+                detail = .text(Copy.Save.percent(fraction))
+            } else {
+                detail = total.flatMap { $0 > 0 ? ProgressStory.Detail.text(Copy.bytesOf(bytes, $0)) : nil }
+                    ?? .text(Format.bytes(bytes))
+            }
+            return story(.saving, headline, detail: detail, fraction: fraction, footnote: note)
         case .reading(let developed, let total):
             return story(
                 .reading, Copy.reading, detail: .text(Copy.frameOf(developed, total)),
@@ -126,6 +144,17 @@ extension Pipeline {
         default:
             return nil
         }
+    }
+
+    /// The small line under a save: why it is slow to start ("it sleeps when idle.") and, once the save changed downloaders
+    /// on its own, which one took over and why ("switched to yt-dlp · cobalt couldn't download it"). Nil when neither.
+    func engineFootnote(waking: Bool) -> String? {
+        var parts: [String] = []
+        if let from = saveStatus.fallbackFrom {
+            parts.append(Copy.Save.switched(from: from, to: saveStatus.engine ?? (from == .cobalt ? .ytdlp : .cobalt), code: saveStatus.fallbackCode))
+        }
+        if waking { parts.append(Copy.wakingNote) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// "waiting for the server · 2nd in line · your webp goes next". Nil for a state that cannot wait.

@@ -241,6 +241,7 @@ public final class AppModel {
         offline.landed = { [sync] in await sync.refresh() }
         self.offlineDownloads = offline
         context.photosSync = sync
+        context.offlineDownloads = offline
         self.ctx = context
         self.settings = context.settings
         self.store = context.store
@@ -358,23 +359,7 @@ public final class AppModel {
                 let librarySync = try LibrarySync(databaseURL: SyncContract.databaseURL()) { @MainActor [unowned ctx] in
                     ctx.client as? HTTPCobaltClient
                 }
-                model.library.sync = librarySync
-                librarySync.onApply = { [weak model] snapshot, source in
-                    model?.library.replaceFromSync(snapshot, source: source)
-                }
-                librarySync.onLegacy = { [weak model] in
-                    await model?.library.refreshFromServer()
-                }
-                librarySync.onPullFailure = { [weak model] error in
-                    model?.library.syncPullFailed(error)
-                }
-                // A delete queued by an earlier launch: the device's copy of that post goes now.
-                librarySync.onDeleteConfirmed = { [weak model] post in
-                    guard let model else { return }
-                    await model.store.boot()
-                    guard let media = model.store.media(joining: post) else { return }
-                    await model.store.removeMedia(media.id)
-                }
+                model.library.attach(librarySync)
                 Task { await librarySync.start() }
             } catch {
                 Telemetry.log(.error, .sync, "sync store failed", data: ["error": .string(String(describing: error))])

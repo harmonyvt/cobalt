@@ -399,17 +399,63 @@ struct SyncStatusReducerTests {
         #expect(reducer.snapshot.pendingCount == 0)
     }
 
-    @Test func aRefusalIsAnErrorWithTheServersCodeUntilTheNextPassBegins() {
+    @Test func aRefusalIsAnErrorWithTheServersCodeUntilALaterPassSucceeds() {
         var reducer = SyncStatusReducer()
         reducer.passBegan()
         reducer.refused(pending: 1, code: "error.library.bad_title")
         reducer.pulled(cursor: 3, at: t1)
         reducer.passEnded(pending: 0, cursor: 3)
         #expect(reducer.snapshot.state == .error(code: "error.library.bad_title", pending: 0, nextRetryAt: nil))
+        // a later pass is running: it says so, and the error is not forgotten
         reducer.passBegan()
         #expect(reducer.snapshot.state == .syncing)
+        // a pass that ends without reaching the server does not answer the refusal
         reducer.passEnded(pending: 0, cursor: 3)
+        #expect(reducer.snapshot.state == .error(code: "error.library.bad_title", pending: 0, nextRetryAt: nil))
+        // a pass that pulls and has nothing refused does
+        reducer.passBegan()
+        reducer.pulled(cursor: 4, at: t1)
+        reducer.passEnded(pending: 0, cursor: 4)
         #expect(reducer.snapshot.state == .idle)
+    }
+
+    @Test func anErrorStaysUntilDismissedAndDismissingClearsIt() {
+        var reducer = SyncStatusReducer()
+        reducer.passBegan()
+        reducer.refused(pending: 0, code: "error.library.bad_title")
+        reducer.passEnded(pending: 0, cursor: 1)
+        #expect(reducer.snapshot.state == .error(code: "error.library.bad_title", pending: 0, nextRetryAt: nil))
+        // nothing but the owner (or a later success) moves it: not a retry timer, not a path change
+        reducer.retryScheduled(at: t1)
+        reducer.reachability(true, pending: 0)
+        #expect(reducer.snapshot.state == .error(code: "error.library.bad_title", pending: 0, nextRetryAt: nil))
+        reducer.dismiss()
+        #expect(reducer.snapshot.state == .idle)
+    }
+
+    @Test func aFailedPullShowsWhenTheNextTryIsDueAndTheDateGoesWhenThatPassBegins() {
+        var reducer = SyncStatusReducer()
+        reducer.passBegan()
+        reducer.pullFailed(offline: false, code: "error.api.generic", pending: 0)
+        reducer.passEnded(pending: 0, cursor: 0)
+        reducer.retryScheduled(at: t1)
+        #expect(reducer.snapshot.state == .error(code: "error.api.generic", pending: 0, nextRetryAt: t1))
+        #expect(reducer.snapshot.nextRetryAt == t1)
+        reducer.passBegan()
+        #expect(reducer.snapshot.state == .syncing)
+        #expect(reducer.snapshot.nextRetryAt == nil)
+        // the pull lands: the pull error is over
+        reducer.pulled(cursor: 5, at: t1)
+        reducer.passEnded(pending: 0, cursor: 5)
+        #expect(reducer.snapshot.state == .idle)
+        // going offline replaces a pull error, but not a refusal
+        reducer.passBegan()
+        reducer.pullFailed(offline: false, code: "error.api.generic", pending: 0)
+        reducer.passEnded(pending: 0, cursor: 5)
+        reducer.passBegan()
+        reducer.pullFailed(offline: true, code: nil, pending: 0)
+        reducer.passEnded(pending: 0, cursor: 5)
+        #expect(reducer.snapshot.state == .offline(pending: 0))
     }
 
     @Test func aPullTheServerWouldNotServeIsAnErrorAndAnEmptyCodeIsNoCode() {
@@ -865,17 +911,25 @@ struct SyncPullFailureTests {
         #expect(transport.calls == [50, 0, 2])
     }
 
-    @Test func aServerErrorWithNothingOnTheDeviceFallsBack() async throws {
+    /// A cold server answers 5xx while it wakes. That used to turn the engine off for the whole launch.
+    @Test func aServerErrorWithNothingOnTheDeviceKeepsTheEngineOnShowsPagesAndSchedulesARetry() async throws {
         let store = try SyncStore(fileURL: try tempDB())
         let transport = ScriptedSync { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 500) }
         let seen = Mutex<[SyncActivity]>([])
-        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []))
+        let degraded = Mutex(0)
+        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []), clock: { t0 }, retryDelays: [3600])
+        await engine.setCallbacks(
+            snapshot: { _ in }, fallback: { Issue.record("a 5xx must not fall back") }, acknowledged: { _, _ in }, refused: { _, _ in },
+            degraded: { degraded.withLock { $0 += 1 } })
         await engine.setActivity { event in seen.withLock { $0.append(event) } }
         await engine.syncNow()
-        #expect(await engine.fellBack)
+        #expect(!(await engine.fellBack))
+        #expect(degraded.withLock { $0 } == 1)
         let events = seen.withLock { $0 }
-        #expect(events.contains(.fellBack))
-        #expect(events.last == .passEnded(pending: 0))
+        #expect(!events.contains(.fellBack))
+        #expect(events.contains(.pullFailed(offline: false)))
+        #expect(events.contains(.retryScheduled(at: t0.addingTimeInterval(3600))))
+        #expect(await engine.nextRetryAt == t0.addingTimeInterval(3600))
     }
 
     @Test func aServerErrorWithACopyKeepsTheCopyAndSaysSo() async throws {
@@ -893,6 +947,7 @@ struct SyncPullFailureTests {
         #expect(!(await engine.fellBack))
         #expect(failures.withLock { $0 }.count == 1)
         #expect(seen.withLock { $0 }.contains(.pullFailed(offline: false)))
+        #expect(seen.withLock { $0 }.contains { if case .retryScheduled = $0 { return true } else { return false } })
         #expect(try await store.post(id: "kept")?.title == "kept")
         #expect(await store.cursor() == 7)
     }
@@ -928,13 +983,126 @@ struct SyncPullFailureTests {
         #expect(await store.cursor() == 7)
     }
 
-    /// The API deployed before its migration: 503 and nothing on the device. Today's pages are used.
-    @Test func a503WithNothingOnTheDeviceFallsBack() async throws {
+    /// The matrix's test 6: a cold-start 503 does not turn the engine off, and the next try, with the
+    /// server answering 200, fills the copy. Only `notDeployed` does.
+    @Test func aColdStart503DoesNotFallBackAndTheNextTryFillsTheCopy() async throws {
         let store = try SyncStore(fileURL: try tempDB())
-        let transport = ScriptedSync { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 503) }
-        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []))
+        let status = Mutex(503)
+        let transport = ScriptedSync { _ in
+            if status.withLock({ $0 }) != 200 { throw CobaltError.api(code: "error.api.generic", httpStatus: status.withLock { $0 }) }
+            return page(3, posts: [sample("a", title: "a")])
+        }
+        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []), retryDelays: [3600])
+        await engine.syncNow()
+        #expect(!(await engine.fellBack))
+        #expect(!(await store.hasReadyMarker()))
+
+        status.withLock { $0 = 200 }
+        await engine.syncNow()                          // foreground, reconnect, Retry: at once, not on the timer
+        #expect(!(await engine.fellBack))
+        #expect(try await store.post(id: "a")?.title == "a")
+        #expect(await store.hasReadyMarker())
+        #expect(await engine.nextRetryAt == nil)       // the pull landed: nothing is waiting
+    }
+
+    @Test func onlyAMissingRouteTurnsTheEngineOffAndNo5xxOrNetworkErrorDoes() async throws {
+        let failures: [any Error] = [
+            CobaltError.api(code: "error.api.generic", httpStatus: 500),
+            CobaltError.api(code: "error.api.generic", httpStatus: 502),
+            CobaltError.api(code: "error.api.generic", httpStatus: 503),
+            CobaltError.api(code: "error.api.generic", httpStatus: 504),
+            CobaltError.invalidResponse(httpStatus: 502),
+            CobaltError.network(.timedOut),
+            URLError(.notConnectedToInternet),
+        ]
+        for failure in failures {
+            let store = try SyncStore(fileURL: try tempDB())
+            let engine = SyncEngine(
+                store: store, transport: ScriptedSync { _ in throw failure }, sender: ScriptedSender(results: []), retryDelays: [3600])
+            await engine.syncNow()
+            #expect(!(await engine.fellBack), "\(failure)")
+            #expect(await engine.nextRetryAt != nil, "\(failure)")
+        }
+        let store = try SyncStore(fileURL: try tempDB())
+        let engine = SyncEngine(
+            store: store, transport: ScriptedSync { _ in throw SyncError.notDeployed }, sender: ScriptedSender(results: []), retryDelays: [3600])
         await engine.syncNow()
         #expect(await engine.fellBack)
+        #expect(await engine.nextRetryAt == nil)
+    }
+
+    @Test func theBackoffIs5Then15Then45ThenEvery120Seconds() async throws {
+        #expect((1...6).map { SyncEngine.retryDelay(afterFailures: $0) } == [5, 15, 45, 120, 120, 120])
+        let store = try SyncStore(fileURL: try tempDB())
+        let fail = Mutex(true)
+        let transport = ScriptedSync { _ in
+            if fail.withLock({ $0 }) { throw CobaltError.api(code: "error.api.generic", httpStatus: 503) }
+            return page(2, posts: [sample("a", title: "a")])
+        }
+        let seen = Mutex<[SyncActivity]>([])
+        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []), clock: { t0 })
+        await engine.setActivity { event in seen.withLock { $0.append(event) } }
+        // each failed pass (the owner's Retry, a foreground: no waiting for the timer) steps the wait up
+        for _ in 0..<5 { await engine.syncNow() }
+        func due() -> [TimeInterval] {
+            seen.withLock { $0 }.compactMap { event -> TimeInterval? in
+                if case .retryScheduled(let at) = event { return at.timeIntervalSince(t0) }
+                return nil
+            }
+        }
+        #expect(due() == [5, 15, 45, 120, 120])
+        // a pull that lands starts the steps over
+        fail.withLock { $0 = false }
+        await engine.syncNow()
+        fail.withLock { $0 = true }
+        await engine.syncNow()
+        #expect(due() == [5, 15, 45, 120, 120, 5])
+    }
+
+    @Test func theTimerStartsThePassOnItsOwnAndAForegroundPassMakesItUnnecessary() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let fail = Mutex(true)
+        let transport = ScriptedSync { _ in
+            if fail.withLock({ $0 }) { throw CobaltError.api(code: "error.api.generic", httpStatus: 503) }
+            return page(2, posts: [sample("a", title: "a")])
+        }
+        let seen = Mutex<[SyncActivity]>([])
+        let engine = SyncEngine(store: store, transport: transport, sender: ScriptedSender(results: []), retryDelays: [0.05])
+        await engine.setActivity { event in seen.withLock { $0.append(event) } }
+        await engine.syncNow()
+        #expect(!seen.withLock { $0 }.contains(.pulled))
+        fail.withLock { $0 = false }
+        // nobody asks again: the engine does
+        for _ in 0..<100 where !seen.withLock({ $0 }).contains(.pulled) { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(seen.withLock { $0 }.contains(.pulled))
+        #expect(try await store.post(id: "a")?.title == "a")
+        #expect(await engine.nextRetryAt == nil)
+
+        // and a pass someone else starts first takes the timer away
+        fail.withLock { $0 = true }
+        let slow = SyncEngine(store: try SyncStore(fileURL: try tempDB()), transport: transport, sender: ScriptedSender(results: []), retryDelays: [3600])
+        await slow.syncNow()
+        #expect(await slow.nextRetryAt != nil)
+        fail.withLock { $0 = false }
+        await slow.syncNow()
+        #expect(await slow.nextRetryAt == nil)
+    }
+
+    @Test func aKeyTheServerRefusesSchedulesNoRetryAndShowsNoPages() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let degraded = Mutex(0)
+        let seen = Mutex<[SyncActivity]>([])
+        let engine = SyncEngine(
+            store: store, transport: ScriptedSync { _ in throw CobaltError.api(code: "error.api.auth.key.invalid", httpStatus: 401) },
+            sender: ScriptedSender(results: []))
+        await engine.setCallbacks(
+            snapshot: { _ in }, fallback: {}, acknowledged: { _, _ in }, refused: { _, _ in }, degraded: { degraded.withLock { $0 += 1 } })
+        await engine.setActivity { event in seen.withLock { $0.append(event) } }
+        await engine.syncNow()
+        #expect(!(await engine.fellBack))
+        #expect(degraded.withLock { $0 } == 0)
+        #expect(await engine.nextRetryAt == nil)
+        #expect(seen.withLock { $0 }.contains(.pullFailed(offline: false)))
     }
 
     @Test func offlineOnTheFirstLaunchStaysOnAndSaysSoThenFillsWhenTheServerAnswers() async throws {
@@ -1033,7 +1201,7 @@ struct LibrarySyncAnswerTests {
             if down.withLock({ $0 }) { throw CobaltError.network(.notConnectedToInternet) }
             return page(2, posts: [sample("b", title: "b")])
         }
-        let sync = LibrarySync(store: store, transport: pulls, sender: ScriptedSender(results: []))
+        let sync = LibrarySync(store: store, transport: pulls, sender: ScriptedSender(results: []), retryDelays: [3600])
         let told = Mutex<[PipelineFailure?]>([])
         sync.onPullFailure = { error in told.withLock { $0.append(pipelineFailure(from: error, during: .saving)) } }
         await sync.kick(.foreground)
@@ -1058,7 +1226,7 @@ struct LibrarySyncAnswerTests {
             if down.withLock({ $0 }) { throw CobaltError.network(.notConnectedToInternet) }
             throw CobaltError.api(code: "error.api.generic", httpStatus: 500)
         }
-        let sync = LibrarySync(store: store, transport: pulls, sender: ScriptedSender(results: []))
+        let sync = LibrarySync(store: store, transport: pulls, sender: ScriptedSender(results: []), retryDelays: [3600])
         let told = Mutex(0)
         sync.onPullFailure = { _ in told.withLock { $0 += 1 } }
         await sync.kick(.foreground)
@@ -1067,7 +1235,12 @@ struct LibrarySyncAnswerTests {
         down.withLock { $0 = false }
         await sync.kick(.foreground)
         #expect(sync.isActive)
-        #expect(sync.status.snapshot.state == .error(code: "error.api.generic", pending: 0, nextRetryAt: nil))
+        guard case .error(let code, 0, let retry) = sync.status.snapshot.state else {
+            Issue.record("expected an error, got \(sync.status.snapshot.state)")
+            return
+        }
+        #expect(code == "error.api.generic")
+        #expect(retry != nil)                           // the engine is trying again on its own
         #expect(told.withLock { $0 } == 2)
     }
 
@@ -1077,30 +1250,224 @@ struct LibrarySyncAnswerTests {
         let sync = LibrarySync(
             store: store,
             transport: QuietPull { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 500) },
-            sender: ScriptedSender(results: []))
+            sender: ScriptedSender(results: []), retryDelays: [3600])
         let told = Mutex(0)
         sync.onPullFailure = { _ in told.withLock { $0 += 1 } }
         await sync.kick(.foreground)
         #expect(sync.isActive)
-        #expect(sync.status.snapshot.state == .error(code: "error.api.generic", pending: 0, nextRetryAt: nil))
+        guard case .error(let code, 0, let retry) = sync.status.snapshot.state else {
+            Issue.record("expected an error, got \(sync.status.snapshot.state)")
+            return
+        }
+        #expect(code == "error.api.generic")
+        #expect(retry != nil)
         #expect(told.withLock { $0 } == 1)
     }
 
-    @Test func aPullTheServerCannotServeWithNothingOnTheDeviceLoadsTheOldWayOnce() async throws {
+    @Test func aPullTheServerCannotServeWithNothingOnTheDeviceShowsTodaysPagesAndKeepsTrying() async throws {
         let store = try SyncStore(fileURL: try tempDB())
         let sync = LibrarySync(
             store: store,
-            transport: QuietPull { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 500) },
-            sender: ScriptedSender(results: []))
+            transport: QuietPull { _ in throw CobaltError.api(code: "error.api.generic", httpStatus: 503) },
+            sender: ScriptedSender(results: []), retryDelays: [3600])
         let loads = Mutex(0)
+        let applied = Mutex(0)
         sync.onLegacy = { loads.withLock { $0 += 1 } }
+        sync.onApply = { _, _ in applied.withLock { $0 += 1 } }
         await sync.kick(.foreground)
-        #expect(!sync.isActive)
-        #expect(sync.status.snapshot.state == .disabled)
+        #expect(sync.isActive)                          // not a fallback: the engine stays on
+        #expect(sync.isPagedFallback)
+        #expect(!sync.servesLibrary)
         #expect(loads.withLock { $0 } == 1)
+        #expect(applied.withLock { $0 } == 0)           // the empty copy never blanks the pages on screen
+        guard case .error(let code, _, let retry) = sync.status.snapshot.state else {
+            Issue.record("expected an error, got \(sync.status.snapshot.state)")
+            return
+        }
+        #expect(code == "error.api.generic")
+        #expect(retry != nil)
+        #expect(sync.status.snapshot.nextRetryAt == retry)
 
+        // a manual retry that fails again shows the pages again (the first load may have been lost)
         await sync.kick(.foreground)
-        #expect(loads.withLock { $0 } == 1)
+        #expect(loads.withLock { $0 } == 2)
+    }
+
+    @Test func theFirstPullThatLandsEndsThePagedFallbackAndTheError() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let down = Mutex(true)
+        let sync = LibrarySync(
+            store: store,
+            transport: QuietPull { _ in
+                if down.withLock({ $0 }) { throw CobaltError.api(code: "error.api.generic", httpStatus: 503) }
+                return page(4, posts: [sample("a", title: "a")])
+            },
+            sender: ScriptedSender(results: []), retryDelays: [3600])
+        let shown = Mutex<[[String]]>([])
+        sync.onApply = { snapshot, _ in shown.withLock { $0.append(snapshot.visible.map(\.id)) } }
+        await sync.kick(.launch)
+        #expect(sync.isPagedFallback)
+        down.withLock { $0 = false }
+        await sync.kick(.foreground)                    // Retry
+        #expect(!sync.isPagedFallback)
+        #expect(sync.servesLibrary)
+        #expect(sync.status.snapshot.state == .idle)
+        #expect(sync.status.snapshot.nextRetryAt == nil)
+        #expect(shown.withLock { $0 }.last == ["a"])
+    }
+
+    /// The matrix's test 7: an error is not on a timer. It was cleared back to "up to date" after 1.15 s.
+    @Test func anErrorDoesNotRevertOnItsOwnAndLeavesOnlyOnDismissOrALaterSuccess() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let original = sample("p", title: "old", custom: "old")
+        try await store.upsert(original)
+        let sync = LibrarySync(
+            store: store,
+            transport: QuietPull { _ in page(3, posts: [original]) },
+            sender: ScriptedSender(results: [.failure(SyncError.refused("error.library.bad_title"))]), retryDelays: [3600])
+        try await sync.enqueueTitle(before: original, after: renamed(original, "nope"), anchor: "p-f", title: "nope", undo: {})
+        let error = SyncHealthState.error(code: "error.library.bad_title", pending: 0, nextRetryAt: nil)
+        #expect(sync.status.snapshot.state == error)
+        try await Task.sleep(for: .milliseconds(1400))
+        #expect(sync.status.snapshot.state == error)
+
+        sync.dismissError()
+        #expect(sync.status.snapshot.state == .idle)
+
+        // a refusal that is not dismissed ends with the next pass that pulls and refuses nothing
+        let again = LibrarySync(
+            store: try SyncStore(fileURL: try tempDB()),
+            transport: QuietPull { _ in page(3, posts: [original]) },
+            sender: ScriptedSender(results: [.failure(SyncError.refused("error.library.bad_title"))]), retryDelays: [3600])
+        try await again.store.upsert(original)
+        try await again.enqueueTitle(before: original, after: renamed(original, "nope"), anchor: "p-f", title: "nope", undo: {})
+        #expect(again.status.snapshot.state == error)
+        await again.syncNow()
+        #expect(again.status.snapshot.state == .idle)
+    }
+
+    @Test func aFailedPullErrorStaysAcrossAFailingRetryAndGoesWhenOneLands() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        try await store.apply(page(1, posts: [sample("kept", title: "kept")]))
+        let status = Mutex(500)
+        let sync = LibrarySync(
+            store: store,
+            transport: QuietPull { _ in
+                let code = status.withLock { $0 }
+                if code != 200 { throw CobaltError.api(code: "error.api.generic", httpStatus: code) }
+                return page(2, posts: [sample("b", title: "b")])
+            },
+            sender: ScriptedSender(results: []), retryDelays: [3600])
+        await sync.kick(.foreground)
+        guard case .error(_, _, let first?) = sync.status.snapshot.state else {
+            Issue.record("expected an error with a retry date, got \(sync.status.snapshot.state)")
+            return
+        }
+        await sync.kick(.foreground)                    // Retry, and the server is still down
+        guard case .error(_, _, let second?) = sync.status.snapshot.state else {
+            Issue.record("expected an error with a retry date, got \(sync.status.snapshot.state)")
+            return
+        }
+        #expect(second >= first)
+        status.withLock { $0 = 200 }
+        await sync.kick(.foreground)
+        #expect(sync.status.snapshot.state == .idle)
+        #expect(sync.status.snapshot.nextRetryAt == nil)
+    }
+
+    @Test func stoppingTheEngineLeavesItOffAndItsCopyAndOutboxOnDisk() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        try await store.apply(page(1, posts: [sample("kept", title: "kept")]))
+        let pulls = QuietPull { _ in page(2) }
+        let sync = LibrarySync(store: store, transport: pulls, sender: ScriptedSender(results: []), retryDelays: [3600])
+        await sync.kick(.launch)
+        let calls = pulls.calls.count
+        await sync.stop()
+        #expect(!sync.isActive)
+        await sync.kick(.foreground)
+        #expect(pulls.calls.count == calls)
+        #expect(try await store.post(id: "kept")?.title == "kept")
+    }
+}
+
+@Suite("library model: the sync switch")
+@MainActor
+struct LibrarySyncSwitchTests {
+    private func model() -> (LibraryModel, PipelineContext) {
+        let ctx = AppModel.makePreview(.emptyOrbit, timeScale: 1, clock: SystemClock()).ctxForTests
+        let defaults = UserDefaults(suiteName: "cobaltkit.tests.\(UUID().uuidString)")!
+        return (LibraryModel(context: ctx, defaults: defaults), ctx)
+    }
+
+    @Test func turningItOnStartsTheEngineAtOnceAndOffStopsItWithNoRestart() async throws {
+        let (lib, ctx) = model()
+        let was = ctx.settings.syncEngine
+        defer { ctx.settings.syncEngine = was }
+        let made = Mutex(0)
+        let db = try tempDB()
+        lib.makeSync = {
+            made.withLock { $0 += 1 }
+            return LibrarySync(
+                store: try SyncStore(fileURL: db),
+                transport: QuietPull { _ in page(2, posts: [sample("a", title: "a")]) },
+                sender: ScriptedSender(results: []), retryDelays: [3600])
+        }
+        #expect(lib.syncStatus == nil)
+        lib.setSyncEnabled(true)
+        await lib.settleSyncSwitch()
+        #expect(ctx.settings.syncEngine)
+        #expect(lib.syncStatus != nil)
+        #expect(lib.sync?.isActive == true)
+        #expect(lib.posts.map(\.id) == ["a"])           // filled from the copy, not from today's pages
+        #expect(made.withLock { $0 } == 1)
+
+        lib.setSyncEnabled(true)                        // already on: no second engine
+        await lib.settleSyncSwitch()
+        #expect(made.withLock { $0 } == 1)
+
+        let engine = try #require(lib.sync)
+        lib.setSyncEnabled(false)
+        await lib.settleSyncSwitch()
+        #expect(!ctx.settings.syncEngine)
+        #expect(lib.syncStatus == nil)
+        #expect(lib.sync == nil)
+        #expect(!engine.isActive)
+
+        lib.setSyncEnabled(true)                        // and back on, from the copy on disk
+        await lib.settleSyncSwitch()
+        #expect(made.withLock { $0 } == 2)
+        #expect(lib.syncStatus != nil)
+    }
+
+    @Test func aQuickOnOffOnEndsOn() async throws {
+        let (lib, ctx) = model()
+        let was = ctx.settings.syncEngine
+        defer { ctx.settings.syncEngine = was }
+        let db = try tempDB()
+        lib.makeSync = {
+            LibrarySync(
+                store: try SyncStore(fileURL: db), transport: QuietPull { _ in page(2) },
+                sender: ScriptedSender(results: []), retryDelays: [3600])
+        }
+        lib.setSyncEnabled(true)
+        lib.setSyncEnabled(false)
+        lib.setSyncEnabled(true)
+        await lib.settleSyncSwitch()
+        #expect(ctx.settings.syncEngine)
+        #expect(lib.syncStatus != nil)
+    }
+
+    @Test func aPreviewOnlyKeepsTheChoice() async throws {
+        let (lib, ctx) = model()
+        let was = ctx.settings.syncEngine
+        defer { ctx.settings.syncEngine = was }
+        lib.setSyncEnabled(true)
+        await lib.settleSyncSwitch()
+        #expect(ctx.settings.syncEngine)
+        #expect(lib.syncStatus == nil)
+        lib.setSyncEnabled(false)
+        await lib.settleSyncSwitch()
+        #expect(!ctx.settings.syncEngine)
     }
 }
 

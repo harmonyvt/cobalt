@@ -26,6 +26,31 @@ public final class EditSession {
     }
     public enum Selection: Equatable, Sendable { case none, main(String), overlay(String) }     // clip ids
 
+    /// What the render poll can say about its link to the server while a render of this project runs. `.reconnecting` comes
+    /// after two reads in a row failed: the render itself keeps going on the server, only this screen lost sight of it.
+    public enum RenderPollState: Equatable, Sendable {
+        /// No render of this project is being followed.
+        case idle
+        /// Following a running render; the last read worked (or none has failed twice yet).
+        case polling
+        /// Two or more reads in a row failed. `error` is the latest. The poll keeps trying, slower each time (up to 15 s);
+        /// `reconnectRenderPoll()` tries now.
+        case reconnecting(error: EditError)
+    }
+
+    /// Something the owner asked for that did not apply, and why. A toast, never a sheet. The words are `Copy.Editor.notice`.
+    public enum Notice: Equatable, Sendable {
+        /// A video put on an overlay whose length could not be read, so it was not placed.
+        case overlayUnreadable
+        /// A video was measured, but the room it was dropped into was gone by then.
+        case overlayNoRoom
+        /// A cut-out or crop was made (it is in the library) but there is no room to place it.
+        case madeNotPlaced
+        /// The remove-background price could not be read.
+        case priceUnavailable(PriceReason)
+        public enum PriceReason: Equatable, Sendable { case offline, off, notFound, other }
+    }
+
     // MARK: state
 
     public private(set) var project: EditProject
@@ -48,6 +73,11 @@ public final class EditSession {
     /// The line on the effects card while a cut or a background-removal job is running.
     public var effectStatus: String?
     public private(set) var saveState: SaveState = .saved
+    /// Following the running render (`startRenderPolling`). `.reconnecting` is what the "connection lost" banner shows.
+    public private(set) var renderPollState: RenderPollState = .idle
+    /// The latest thing that did not apply (see `Notice`); `noticeNonce` bumps on every one, the same twice included.
+    public private(set) var notice: Notice?
+    public private(set) var noticeNonce = 0
     /// File id -> download progress (0...1) while a clip's file is being fetched.
     public private(set) var loadingSources: [String: Double] = [:]
     /// File id -> why a clip's file could not be fetched (`retrySource` tries again).
@@ -133,18 +163,27 @@ public final class EditSession {
     /// Pins on the source cache for the files this session is playing. Released in `tearDown`.
     @ObservationIgnored private let cacheOwner = UUID()
     @ObservationIgnored private var renderPoll: Task<Void, Never>?
+    /// Reads in a row that failed; 0 after one that worked. Two flip `renderPollState` to `.reconnecting`.
+    @ObservationIgnored private var renderPollFailures = 0
+    /// A poll that was cancelled and replaced must not clear its successor's handle when it ends.
+    @ObservationIgnored private var renderPollGeneration = 0
     @ObservationIgnored private(set) var builds = 0
 
     // pitch in the preview (31.16): pre-shifted copies of clips' sound, made by the cache after the edits settle
     @ObservationIgnored private(set) var pitchCopies: [EditPitchKey: URL] = [:]
     @ObservationIgnored private var pitchTasks: [EditPitchKey: Task<Void, Never>] = [:]
-    @ObservationIgnored private var pitchFailures: Set<EditPitchKey> = []
+    /// Observed (the "pitch preview" line reads it through `pitchPreviewFailures`).
+    private var pitchFailures: Set<EditPitchKey> = []
     @ObservationIgnored private var pitchDebounce: Task<Void, Never>?
 
     public static let saveDelay: Double = 1
     public static let rebuildDelay: Double = 0.15
     public static let retryDelays: [Double] = [2, 5, 10, 30]
     public static let renderPollSeconds: Double = 3
+    /// The longest wait between two render reads while they keep failing (3 s, then 6, 12, 15, 15 ...).
+    public static let renderPollMaxBackoff: Double = 15
+    /// Failed reads in a row before the "connection lost" banner.
+    public static let renderPollFailuresBeforeBanner = 2
     public static let undoLimit = 100
     static let coalesceWindow: TimeInterval = 0.6
     /// Quiet time after the last rebuild before a shifted copy of a clip's sound is made (a slider drag makes one, not twenty).
@@ -743,10 +782,30 @@ public final class EditSession {
         }
     }
 
-    /// The section 67 quote, or nil when this server has no remove-background route.
+    /// The section 67 quote, or nil when this server has no remove-background route or the price could not be read (then
+    /// `notice` says why: offline, the route is off, the video is gone).
     public func backgroundQuote(for id: String) async -> RmbgQuote? {
         guard let item = effectTarget(id)?.item, let client = ctx.client as? any RmbgClient else { return nil }
-        return try? await client.rmbgQuote(of: item)
+        do {
+            return try await client.rmbgQuote(of: item)
+        } catch {
+            guard !Task.isCancelled, !isClosed else { return nil }
+            let reason: Notice.PriceReason
+            switch error as? RmbgError {
+            case .offline?: reason = .offline
+            case .off?: reason = .off
+            case .notFound?: reason = .notFound
+            default: reason = .other
+            }
+            postNotice(.priceUnavailable(reason))
+            return nil
+        }
+    }
+
+    /// Tells the owner something did not apply (a toast; see `Notice`). Never throws, never blocks.
+    func postNotice(_ n: Notice) {
+        notice = n
+        noticeNonce += 1
     }
 
     /// Bria (section 67). Shows the quote's price on the card, then polls the job. The result is a ProRes alternate.
@@ -819,7 +878,7 @@ public final class EditSession {
     /// layer.
     ///
     /// A video whose length is not known is fetched and measured first (as `add`): true means it goes on once it is read (at
-    /// that frame, if there is still room then).
+    /// that frame, if there is still room then). When it cannot be placed after all (no length, no room left) `notice` says why.
     @discardableResult
     public func addOverlay(_ file: EditSource, atFrame k: Int?, track: Int? = nil) -> Bool {
         let known = withMeasured(file)
@@ -831,8 +890,13 @@ public final class EditSession {
                 await task.value
                 guard let self, !self.isClosed else { return }
                 let measured = self.withMeasured(known)
-                guard (measured.duration ?? 0) >= Self.minSeconds else { return }
-                _ = self.placeOverlay(measured, atFrame: start, track: track)
+                guard (measured.duration ?? 0) >= Self.minSeconds else {
+                    self.postNotice(.overlayUnreadable)                    // the file would not say how long it is
+                    return
+                }
+                if !self.placeOverlay(measured, atFrame: start, track: track) {
+                    self.postNotice(.overlayNoRoom)                        // the room it was dropped into went while it loaded
+                }
             }
             return true
         }
@@ -1169,7 +1233,7 @@ public final class EditSession {
         if let overlayID, clipExists(overlayID) {
             setOverlayItem(id: overlayID, made)
         } else if place {
-            addOverlay(made, atFrame: nil)
+            if !addOverlay(made, atFrame: nil) { postNotice(.madeNotPlaced) }
         }
         return made
     }
@@ -1202,7 +1266,7 @@ public final class EditSession {
         if let overlayID, clipExists(overlayID) {
             setOverlayItem(id: overlayID, made)
         } else if place {
-            addOverlay(made, atFrame: nil)
+            if !addOverlay(made, atFrame: nil) { postNotice(.madeNotPlaced) }
         }
         return made
     }
@@ -1857,20 +1921,64 @@ public final class EditSession {
     }
 
     /// Reads the render every 3 s while it runs, the editor is open and the app is in front.
-    func startRenderPolling() {
+    ///
+    /// A read that fails is counted, never dropped: after `renderPollFailuresBeforeBanner` in a row `renderPollState` is
+    /// `.reconnecting(error:)` and the wait grows (6 s, 12 s, then 15 s). One read that works clears it. `immediate` reads
+    /// first and waits after (the reconnect button).
+    func startRenderPolling(immediate: Bool = false) {
         guard renderPoll == nil, let r = activeRender, r.isActive else { return }
+        renderPollGeneration += 1
+        let generation = renderPollGeneration
+        renderPollFailures = 0
+        renderPollState = .polling
         renderPoll = Task { @MainActor [weak self] in
+            var readFirst = immediate
             while !Task.isCancelled {
-                guard let self, await self.nap(Self.renderPollSeconds) else { break }
+                guard let self else { break }
+                if !readFirst {
+                    guard await self.nap(Self.renderPollDelay(failures: self.renderPollFailures)) else { break }
+                }
+                readFirst = false
                 guard let id = self.activeRender?.id, self.activeRender?.isActive == true, let client = self.editorClient else { break }
                 guard self.ctx.background.activity.isActive else { continue }        // in the background the queue's polling follows it
-                if let fresh = try? await client.editRender(id: id) {
+                do {
+                    let fresh = try await client.editRender(id: id)
+                    self.renderPollFailures = 0
+                    self.renderPollState = .polling
                     self.adoptRender(fresh)
                     if !fresh.isActive { break }
+                } catch {
+                    guard !Task.isCancelled, !self.isClosed else { break }
+                    let e = EditError.from(error)
+                    if case .notFound = e { break }          // the render is gone; the queue's polling and `noteRender` say so
+                    self.renderPollFailures += 1
+                    Telemetry.log(.warn, .ui, "edit render poll failed", data: [
+                        "failures": .int(self.renderPollFailures), "error": .string(String(describing: e).prefix(80).description),
+                    ])
+                    if self.renderPollFailures >= Self.renderPollFailuresBeforeBanner {
+                        self.renderPollState = .reconnecting(error: e)
+                    }
                 }
             }
-            self?.renderPoll = nil
+            guard let self, self.renderPollGeneration == generation else { return }
+            self.renderPoll = nil
+            self.renderPollFailures = 0
+            self.renderPollState = .idle
         }
+    }
+
+    /// The wait before the next read: 3 s when the last one worked, then doubling per failure up to 15 s.
+    static func renderPollDelay(failures: Int) -> Double {
+        guard failures > 0 else { return renderPollSeconds }
+        return min(renderPollMaxBackoff, renderPollSeconds * pow(2, Double(min(failures, 8))))
+    }
+
+    /// "reconnect" on the banner: forgets the failures and reads the render now (then every 3 s again while it works).
+    public func reconnectRenderPoll() {
+        guard case .reconnecting = renderPollState else { return }
+        renderPoll?.cancel()
+        renderPoll = nil
+        startRenderPolling(immediate: true)
     }
 
     // MARK: - The player
@@ -2107,9 +2215,27 @@ public final class EditSession {
             } catch {
                 guard let self else { return }
                 self.pitchTasks[key] = nil
-                if !Task.isCancelled, !self.isClosed { self.pitchFailures.insert(key) }
+                if !Task.isCancelled, !self.isClosed {
+                    self.pitchFailures.insert(key)
+                    Telemetry.log(.warn, .ui, "edit pitch preview failed", data: [
+                        "error": .string(String(describing: error).prefix(80).description),
+                    ])
+                }
             }
         }
+    }
+
+    /// How many clips with a pitch play unshifted in the preview because their shifted copy could not be made. The render on
+    /// the server is not affected. Counts only clips still on the timeline.
+    public var pitchPreviewFailures: Int {
+        pitchFailures.isEmpty ? 0 : pitchFailures.intersection(pitchKeys(timeline)).count
+    }
+
+    /// "try again" on the pitch line: forgets the failures; the next rebuild makes the copies again.
+    public func retryPitchPreview() {
+        guard !pitchFailures.isEmpty else { return }
+        pitchFailures = []
+        scheduleRebuild(delay: 0)
     }
 
     /// The file of a clip that could not be fetched: try again.
@@ -2138,6 +2264,7 @@ public final class EditSession {
         retryTask?.cancel(); retryTask = nil
         rebuildTask?.cancel(); rebuildTask = nil
         renderPoll?.cancel(); renderPoll = nil
+        renderPollState = .idle
         for task in loads.values { task.cancel() }
         loads = [:]
         pitchDebounce?.cancel(); pitchDebounce = nil

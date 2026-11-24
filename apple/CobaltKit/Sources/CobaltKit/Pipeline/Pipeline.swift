@@ -54,6 +54,13 @@ public final class Pipeline: Identifiable {
     /// The original's download into the device (keep-on-device, or the share sheet's own copy for
     /// the filmstrip and "save to photos"), while it is under way.
     public internal(set) var keepProgress: TransferProgress?
+    /// What the server said last about the save of this run's link (apple 02-PHASE2 2.2.2): which part it is on
+    /// (downloading from the site, storing in the library), which downloader runs it and whether it switched. Empty
+    /// until the first answer of `GET /studio/<sid>`, and for runs that do not poll (an upload, plain cobalt).
+    public internal(set) var saveStatus = SaveStatus()
+    /// Where the copy of this run's original (or its webp) on this device stands. The run itself never fails because of
+    /// it: the library copy is what counts (apple 02-PHASE2 2.2.4).
+    public internal(set) var localCopyState: LocalCopyState = .notRequested
     /// The filmstrip could not be read at all, from the server or from a local copy. The run goes on
     /// without it; UI may say so instead of showing an empty strip.
     public internal(set) var framesFailed = false
@@ -114,6 +121,11 @@ public final class Pipeline: Identifiable {
     @ObservationIgnored var stateLog: [PipelineState] = [.idle]
     @ObservationIgnored var errorPhase: ErrorPhase = .saving
     @ObservationIgnored var runStart = Date()
+    /// The server has answered `GET /studio/<sid>` for this run. Until then "waking" is the device's 1.5 s guess on a
+    /// request that is still out (`watched`); from then on it is the server's word alone (`SaveStatus.isWaking`).
+    @ObservationIgnored var serverSpoke = false
+    /// What `retryLocalCopy()` does again; nil when nothing failed.
+    @ObservationIgnored var localCopyJob: LocalCopyJob?
     @ObservationIgnored var uploadedItemID: String?
     /// The library file the run's post is anchored on, once known: the upload's item, a reopened post's
     /// first file, or the item a resumed upload session names. `PATCH /library/items/<id>/post` goes here.
@@ -157,7 +169,7 @@ public final class Pipeline: Identifiable {
     /// `POST /studio/<id>/publish` (or the image publish) of "host original".
     @ObservationIgnored var hostRequest: Task<HostedFile, Error>?
     /// The keep-original download into the store.
-    @ObservationIgnored var keepRequest: Task<StoredVideo?, Never>?
+    @ObservationIgnored var keepRequest: Task<KeptOriginal, Never>?
     /// When the current render began (the work card's clock).
     @ObservationIgnored var renderStart: Date?
     /// The render this run sent (start, length, crop, quality, width): stored on the finished webp
@@ -246,10 +258,10 @@ public final class Pipeline: Identifiable {
 
     func setState(_ requested: PipelineState) {
         var new = requested
-        // "waking server" is sticky within one fetch: once shown (the server said so, or a request ran
-        // long), a later poll that says `waking: false` must not flip it back to "fetching from x".
-        // It ends when the state leaves `.fetching` (the step changed or the fetch completed).
-        if case .fetching(let since, false) = requested, case .fetching(let current, true) = state, current == since {
+        // The device's "waking server" guess (a request out for more than 1.5 s) stays on screen until the server
+        // answers: a second guess for the same fetch must not flip it back. Once the server has answered (`serverSpoke`),
+        // its `waking` is the only word and nothing here keeps a stale "waking" alive (apple 02-PHASE2 2.2.2).
+        if !serverSpoke, case .fetching(let since, false) = requested, case .fetching(let current, true) = state, current == since {
             new = .fetching(since: since, waking: true)
         }
         guard new != state else { return }
@@ -343,6 +355,7 @@ public final class Pipeline: Identifiable {
         if hosting == .working { hosting = .idle }
         if photos == .working { photos = .idle; photosStep = .idle }
         keepProgress = nil
+        if case .downloading = localCopyState { localCopyState = .notRequested }     // nothing is bringing it any more
         ctx.continued?.pipelineChanged(self)
     }
 
@@ -393,6 +406,10 @@ public final class Pipeline: Identifiable {
         photos = .idle
         photosStep = .idle
         keepProgress = nil
+        saveStatus = SaveStatus()
+        localCopyState = .notRequested
+        localCopyJob = nil
+        serverSpoke = false
         framesFailed = false
         hosting = .idle
         hostedURL = nil

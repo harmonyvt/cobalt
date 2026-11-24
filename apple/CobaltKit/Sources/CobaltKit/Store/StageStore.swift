@@ -9,8 +9,12 @@ import Observation
 ///   are awaited and throw `StageError`-classifiable errors (`StageError.from`); the ones with a switch to show are
 ///   optimistic and put the old value back when the write fails.
 /// - The sliders (`setDensity`, `setTileSeconds`, ...) are not awaited: they clamp, show the value at once, and send the
-///   latest values 300 ms after the last change (last write wins, one request for the burst). A failed write puts the
-///   server's values back and leaves a `notice`.
+///   latest values 300 ms after the last change (last write wins, one request for the burst). A failed write keeps what the
+///   owner set on show but says so: `saveState` is `.failed`, `failedPatch` holds the values that did not go, and `notice`
+///   says why. `retryFailedPatch()` sends them again; `revertUnsavedChanges()` puts `lastConfirmedStage` (only ever what the
+///   server said) back at once, offline or not, so a slider never stays on a value the server does not have.
+/// - `saveState` is the one word for the header: `.synced`, `.dirty` (a slider moved, not sent yet), `.saving`, `.failed`.
+///   `busyFields` names the controls with an awaited write in flight (a switch shows its own spinner).
 /// - The feed is read every 4 s only between `startPolling()` and `stopPolling()` (the screen being visible); a new
 ///   redemption also re-reads the stage, since a summon moves the spotlight.
 ///
@@ -39,7 +43,26 @@ public final class StageStore {
         public let error: StageError
     }
 
+    /// Whether what the screen shows is what the server has.
+    public enum SaveState: Equatable, Sendable {
+        /// Nothing waits to be sent and nothing failed.
+        case synced
+        /// A slider moved; the send is waiting for the burst to end.
+        case dirty(fields: Set<StageField>)
+        /// A write is on its way (a slider burst, or a switch or reward being awaited).
+        case saving(fields: Set<StageField>)
+        /// A slider write was refused or never arrived; the values stay shown until retried or reverted.
+        case failed(error: StageError, fields: Set<StageField>)
+    }
+
     public private(set) var stage: StageSettings?
+    /// The stage exactly as the server last said it (a read or the answer of a write). Never an optimistic edit.
+    public private(set) var lastConfirmedStage: StageSettings?
+    public private(set) var saveState: SaveState = .synced
+    /// The slider values the server did not take (nil when none). What `retryFailedPatch()` sends again.
+    public private(set) var failedPatch: StagePatch?
+    /// Controls with an awaited write in flight (`apply`, `updateReward`): each shows a spinner of its own.
+    public private(set) var busyFields: Set<StageField> = []
     /// The five rewards in the order summon, chaos, shuffle, pin, skip (empty until the first load).
     public private(set) var rewards: [StageReward] = []
     /// The feed, newest first (empty until the first poll).
@@ -62,6 +85,12 @@ public final class StageStore {
     @ObservationIgnored private var generation = 0
     /// Slider values shown but not yet answered by the server.
     @ObservationIgnored private var pending = StagePatch()
+    /// The slider values being sent right now.
+    @ObservationIgnored private var inFlight = StagePatch()
+    @ObservationIgnored private var failedError: StageError?
+    @ObservationIgnored private var busyCounts: [StageField: Int] = [:]
+    /// Bumped when the owner reverts: a write that was in flight then is no longer theirs to report as failed.
+    @ObservationIgnored private var saveEpoch = 0
     @ObservationIgnored private var debounce: Task<Void, Never>?
     @ObservationIgnored private var flushing = false
     @ObservationIgnored private var flushAgain = false
@@ -100,8 +129,68 @@ public final class StageStore {
 
     /// The stage and rewards as the server just said them. Slider values not yet sent stay on top of the stage.
     private func adopt(_ snapshot: StageSnapshot) {
-        stage = pending.isEmpty ? snapshot.stage : snapshot.stage.applying(pending)
+        show(snapshot.stage)
         rewards = Self.ordered(snapshot.rewards)
+    }
+
+    /// What the owner has changed that the server has not confirmed: slider values that failed, are on their way, or wait.
+    private var unsaved: StagePatch {
+        (failedPatch ?? StagePatch()).merging(inFlight).merging(pending)
+    }
+
+    /// The server just said this: it is the confirmed stage, and the unconfirmed values stay on top of it.
+    private func show(_ confirmed: StageSettings) {
+        lastConfirmedStage = confirmed
+        let waiting = unsaved
+        stage = waiting.isEmpty ? confirmed : confirmed.applying(waiting)
+    }
+
+    private func refreshSaveState() {
+        let saving = inFlight.fields.union(busyFields)
+        let next: SaveState
+        if !saving.isEmpty {
+            next = .saving(fields: saving)
+        } else if let failed = failedPatch, !failed.isEmpty {
+            next = .failed(error: failedError ?? .other, fields: failed.fields)
+        } else if !pending.isEmpty {
+            next = .dirty(fields: pending.fields)
+        } else {
+            next = .synced
+        }
+        if next != saveState { saveState = next }
+    }
+
+    private func setFailed(_ patch: StagePatch, error: StageError? = nil) {
+        if patch.isEmpty {
+            failedPatch = nil
+            failedError = nil
+            notice = nil
+        } else {
+            failedPatch = patch
+            if let error { failedError = error }
+        }
+    }
+
+    private func markBusy(_ fields: Set<StageField>) {
+        for field in fields { busyCounts[field, default: 0] += 1 }
+        busyFields = Set(busyCounts.keys)
+        refreshSaveState()
+    }
+
+    private func unmarkBusy(_ fields: Set<StageField>) {
+        for field in fields {
+            guard let n = busyCounts[field] else { continue }
+            if n <= 1 { busyCounts[field] = nil } else { busyCounts[field] = n - 1 }
+        }
+        busyFields = Set(busyCounts.keys)
+        refreshSaveState()
+    }
+
+    /// The feed's count of connected OBS canvases (30; `GET /stage/redemptions` carries it, so the 4 s poll keeps it live).
+    func noteConnectedCanvases(_ count: Int?) {
+        guard let count else { return }
+        if stage?.connectedCanvases != count { stage?.connectedCanvases = count }
+        if lastConfirmedStage?.connectedCanvases != count { lastConfirmedStage?.connectedCanvases = count }
     }
 
     private static func ordered(_ rewards: [StageReward]) -> [StageReward] {
@@ -128,11 +217,14 @@ public final class StageStore {
         let clamped = patch.clamped()
         let started = generation
         let before = stage
+        let fields = clamped.fields
+        markBusy(fields)
+        defer { if started == generation { unmarkBusy(fields) } }
         if let current = stage { stage = current.applying(clamped) }
         do {
             let answer = try await ctx.client.updateStage(clamped)
             guard started == generation else { return }
-            stage = pending.isEmpty ? answer : answer.applying(pending)
+            show(answer)
         } catch {
             if started == generation, let before, let current = stage {
                 stage = current.applying(clamped.values(in: before))
@@ -182,6 +274,9 @@ public final class StageStore {
         let clamped = patch.clamped()
         stage = current.applying(clamped)
         pending = pending.merging(clamped)
+        // a value that failed before and was moved again is the new value's to send
+        if let failed = failedPatch { setFailed(failed.removing(clamped)) }
+        refreshSaveState()
         debounce?.cancel()
         let started = generation
         debounce = Task { @MainActor [weak self] in
@@ -193,7 +288,8 @@ public final class StageStore {
         }
     }
 
-    /// Sends what the sliders hold. A burst is one request; a change made while one is in flight goes in the next.
+    /// Sends what the sliders hold. A burst is one request; a change made while one is in flight goes in the next. A write
+    /// that fails keeps its values in `failedPatch` (and on show); what was changed meanwhile is not touched.
     private func flush() async {
         if flushing {
             flushAgain = true
@@ -205,21 +301,57 @@ public final class StageStore {
         repeat {
             flushAgain = false
             let patch = pending
-            guard !patch.isEmpty else { return }
+            guard !patch.isEmpty else {
+                refreshSaveState()
+                return
+            }
             pending = StagePatch()
+            inFlight = patch
+            let epoch = saveEpoch
+            refreshSaveState()
             let client = ctx.client
             // an unstructured task: a slider moving again must not cancel a request that is already on its way
             let outcome = await Task { await Self.send(client, patch) }.value
             guard started == generation else { return }
+            inFlight = StagePatch()
             switch outcome {
             case .success(let answer):
-                stage = pending.isEmpty ? answer : answer.applying(pending)
+                if let failed = failedPatch { setFailed(failed.removing(patch)) }
+                show(answer)
             case .failure(let error):
-                pending = StagePatch()
-                post(error)
-                await refreshQuietly()
+                // reverted meanwhile: the owner gave those values up, so a refusal is not theirs to see
+                if saveEpoch == epoch {
+                    setFailed((failedPatch ?? StagePatch()).merging(patch), error: StageError.from(error))
+                    post(error)
+                }
             }
+            refreshSaveState()
         } while flushAgain || !pending.isEmpty
+    }
+
+    /// Sends the values that failed again, with whatever was moved since. Returns when everything has been answered.
+    public func retryFailedPatch() async {
+        guard let failed = failedPatch, !failed.isEmpty else { return }
+        pending = failed.merging(pending)
+        setFailed(StagePatch())
+        debounce?.cancel()
+        debounce = nil
+        refreshSaveState()
+        await flush()
+        await settle()
+    }
+
+    /// Gives the unsaved slider values up: the stage goes back to `lastConfirmedStage` now, with no request, so it works
+    /// offline too. A write already on its way is not cancelled; if the server took it, its answer shows.
+    public func revertUnsavedChanges() {
+        saveEpoch += 1
+        debounce?.cancel()
+        debounce = nil
+        pending = StagePatch()
+        flushAgain = false
+        setFailed(StagePatch())
+        if let confirmed = lastConfirmedStage { stage = confirmed }
+        refreshSaveState()
     }
 
     nonisolated private static func send(_ client: any CobaltClient, _ patch: StagePatch) async -> Result<StageSettings, Error> {
@@ -242,7 +374,7 @@ public final class StageStore {
         let started = generation
         let answer = try await ctx.client.rotateStage()
         guard started == generation else { return }
-        stage = pending.isEmpty ? answer : answer.applying(pending)
+        show(answer)
     }
 
     /// An owner action on the canvas: skip, pin, unpin, shuffle, chaos, or a pick from the pool. Throws
@@ -252,7 +384,7 @@ public final class StageStore {
         let started = generation
         let answer = try await ctx.client.stageAction(action)
         guard started == generation else { return }
-        stage = pending.isEmpty ? answer : answer.applying(pending)
+        show(answer)
         await refreshRedemptions()
     }
 
@@ -265,6 +397,9 @@ public final class StageStore {
         let before = reward(kind)
         let cleanCost = cost.map { StageRule.clamp($0, to: StageRule.costRange) }
         let cleanCooldown = cooldownSeconds.map { StageRule.clamp($0, to: StageRule.cooldownRange) }
+        let field: Set<StageField> = [.reward(kind)]
+        markBusy(field)
+        defer { if started == generation { unmarkBusy(field) } }
         replaceReward(kind) { r in
             if let cleanCost { r.cost = cleanCost }
             if let cleanCooldown { r.cooldownSeconds = cleanCooldown }
@@ -298,7 +433,7 @@ public final class StageStore {
         let started = generation
         let answer = try await ctx.client.disconnectStageTwitch()
         guard started == generation else { return }
-        stage = pending.isEmpty ? answer : answer.applying(pending)
+        show(answer)
         await refreshQuietly()                    // the rewards, no longer synced
     }
 
@@ -308,9 +443,11 @@ public final class StageStore {
     public func refreshRedemptions() async {
         let started = generation
         do {
-            let list = try await ctx.client.stageRedemptions(limit: StageRule.redemptionsLimit, before: nil)
+            let page = try await ctx.client.stageRedemptionsPage(limit: StageRule.redemptionsLimit, before: nil)
             guard started == generation else { return }
+            let list = page.redemptions
             pollFailures = 0
+            noteConnectedCanvases(page.connectedCanvases)
             // only on a change, so a quiet poll redraws nothing
             if feedProblem { feedProblem = false }
             let arrived = redemptionsLoaded && list.first?.id != redemptions.first?.id
@@ -400,9 +537,17 @@ public final class StageStore {
         debounce?.cancel()
         debounce = nil
         pending = StagePatch()
+        inFlight = StagePatch()
+        failedError = nil
+        busyCounts = [:]
+        saveEpoch += 1
         flushAgain = false
         stopPolling()
         stage = nil
+        lastConfirmedStage = nil
+        failedPatch = nil
+        busyFields = []
+        saveState = .synced
         rewards = []
         redemptions = []
         redemptionsLoaded = false

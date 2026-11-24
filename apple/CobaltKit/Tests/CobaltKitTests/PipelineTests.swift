@@ -227,7 +227,9 @@ struct PipelineStateMachineTests {
         #expect(p.state == .failed(.renderLost))
         #expect(PipelineFailure.renderLost.keepsTrim)
         let took = h.clock.elapsed - t0
-        #expect(took >= 4.7 * 0.55 - 0.05 && took <= 4.7 * 0.55 + 0.25, "failed after \(took) s")
+        // the render poll is paced now (PollPacer, spec 2.2.2): polls start at least 1 s apart, so the loss is noticed on the
+        // first poll after it happened, up to one floor interval late
+        #expect(took >= 4.7 * 0.55 - 0.05 && took <= 4.7 * 0.55 + PollPacer.floor + 0.1, "failed after \(took) s")
         #expect(p.trim == chosen)
         p.backToTrim()
         #expect(p.state == .ready)

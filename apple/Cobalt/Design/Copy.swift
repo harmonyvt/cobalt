@@ -233,7 +233,7 @@ enum Copy {
         switch failure {
         case .noLink: return "no link found in that text."
         case .tooLarge(let limit): return "that file is over the \(megabytes(limit)) limit."
-        case .fetchFailed: return "capystore couldn't fetch this link. the post may be private or removed."
+        case .fetchFailed(let code): return Save.fetchFailure(FetchProblem(code: code), code: code)        // one sentence per site answer (Copy+Pipeline)
         case .linkUnreadable: return "\(linkUnreadable) \(linkUnreadableHint)"
         case .unsupported: return "capystore can't save this kind of post yet."          // new
         case .serverBusy: return "capystore is busy with another video. try again in a minute."     // new
@@ -248,6 +248,7 @@ enum Copy {
             // never show the raw code.
             if code.hasPrefix(PipelineFailure.renderPhasePrefix) { return "capystore couldn't make the webp. your trim is kept." }
             if code == "error.app.file_unreadable" { return "couldn't read that file. if it's in icloud, check your connection and try again." }
+            if let line = Save.serverFailure(code) { return line }
             if let line = appFailure(code) { return line }
             return "something went wrong (\(code))."                                              // new
         }

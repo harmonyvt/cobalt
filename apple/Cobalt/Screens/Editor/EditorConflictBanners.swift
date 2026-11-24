@@ -73,3 +73,34 @@ struct EditorPhoneConflictBanner: View {
     }
 }
 #endif
+
+/// `renderLinkLost` with `reconnect`, under the top bar while two or more reads of the running render failed in a row
+/// (`EditSession.renderPollState`). The render is on the server and keeps going; this screen only lost sight of it. Phone and
+/// desktop share it (one line of text that wraps, one button).
+struct EditorReconnectBanner: View {
+    let session: EditSession
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: Symbol.Editor.missing)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(EditorColor.overlay)
+                .accessibilityHidden(true)
+            Text(Copy.Editor.renderLinkLost)
+                .font(CobaltType.captionSmall)
+                .foregroundStyle(CobaltColor.text)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button(Copy.Editor.reconnect) { session.reconnectRenderPoll() }
+                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                .fixedSize()
+        }
+        .padding(.horizontal, Metrics.gutter)
+        .padding(.vertical, 6)
+        .background(EditorColor.overlay.opacity(0.16))
+        .background(EditorColor.panel)
+        .overlay(alignment: .bottom) { Rectangle().fill(EditorColor.line).frame(height: 1) }
+        .accessibilityElement(children: .contain)
+    }
+}

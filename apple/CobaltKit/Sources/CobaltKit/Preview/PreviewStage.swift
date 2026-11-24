@@ -97,7 +97,8 @@ extension PreviewData {
                     status: .ok, lastEventAt: now.addingTimeInterval(-20))
                 : nil,
             spotlight: connected ? StageSpotlight(item: cat, by: "mochi", action: .summon, at: now.addingTimeInterval(-20)) : nil,
-            updatedAt: now.addingTimeInterval(-20))
+            updatedAt: now.addingTimeInterval(-20),
+            connectedCanvases: connected ? 1 : 0)
     }
 
     /// The feed, newest first.
@@ -349,6 +350,12 @@ extension PreviewClient {
         guard (1...100).contains(limit) else { throw StageError.badRequest }
         if stageState.loadFails { throw StageError.unavailable }
         return stageState.feed(limit: limit, before: before)
+    }
+
+    /// The same feed with the connected-canvas count: one while the stage is connected, none before.
+    public func stageRedemptionsPage(limit: Int, before: Date?) async throws -> StageRedemptionsPage {
+        let list = try await stageRedemptions(limit: limit, before: before)
+        return StageRedemptionsPage(redemptions: list, connectedCanvases: stageState.stage.connectedCanvases)
     }
 
     /// `PATCH /stage/rewards/<action>`: clamped; `synced` while Twitch is connected.

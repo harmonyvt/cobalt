@@ -599,6 +599,12 @@ struct FocusLayer: View {
             .padding(.vertical, 10)
             .padding(.horizontal, 14)
             .accessibilityElement(children: .combine)
+            if pipeline.localCopyState.isDisplayed {
+                // the copy on this device, only while it is coming or when it failed (apple 02-PHASE2 2.2.4)
+                cardDivider
+                LocalCopyRow(pipeline: pipeline)
+                    .transition(.opacity)
+            }
             if hasWebp, let result = pipeline.webpResult {
                 cardDivider
                 ResultRow(
@@ -630,6 +636,7 @@ struct FocusLayer: View {
         .animation(reduceMotion ? Motion.fade : FocusMotion.content.delay(lifted ? 0.2 : 0), value: lifted)
         .motion(Motion.rows, value: hasWebp)
         .motion(Motion.rows, value: hasLink)
+        .motion(Motion.rows, value: pipeline.localCopyState)
         .accessibilityElement(children: .contain)
     }
 

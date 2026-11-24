@@ -8,6 +8,7 @@ private final class SyncInbox: @unchecked Sendable {
     enum Item: Sendable {
         case snapshot(SyncLibrarySnapshot, String)
         case fallback
+        case degraded
         case acknowledged(SyncOp, SyncReceipt)
         case refused(SyncOp, String)
         case pullFailed(any Error)
@@ -60,14 +61,23 @@ final class LibrarySync {
     private let inbox = SyncInbox()
     /// The drain of the inbox that is running now, if any.
     private var flushing: Task<Void, Never>?
-    /// False after `GET /sync` answers 404, or fails (a 503, a 500) with nothing on the device to show.
-    /// Today's library loading takes over for this launch.
+    /// False after `GET /sync` answers 404/501 (`SyncError.notDeployed`), or after `stop()`. Today's
+    /// library loading takes over for this launch. A 5xx or a network error never turns it off.
     private(set) var isActive = true
+    /// The pull failed (a 5xx, the network) with no copy on the device, so the library is showing
+    /// today's `GET /library` pages for now. The engine is still on and retrying (5 s, 15 s, 45 s, then
+    /// 120 s); the first pull that lands ends this. Edits still go through the outbox.
+    private(set) var isPagedFallback = false
+    /// The engine fills the library screens: it is on, and the screens are not on the paged fallback.
+    var servesLibrary: Bool { isActive && !isPagedFallback }
+    /// `stop()` ran: nothing the engine still has in flight reaches the library.
+    private var stopped = false
     /// What the library sync is doing. Updated as passes start and end; it does not decide them.
     let status = SyncStatusTracker()
     var onApply: (@MainActor (SyncLibrarySnapshot, String) -> Void)?
-    /// The route is missing and the cache, if any, must not be the only copy the screen keeps.
-    /// Called once for every fallback, whichever pass it happened in.
+    /// Today's first `GET /library` page is wanted: the route is missing and the cache, if any, must
+    /// not be the only copy the screen keeps, or the pull failed with nothing on the device to show
+    /// (`isPagedFallback`). Called once for each, whichever pass it happened in.
     var onLegacy: (@MainActor () async -> Void)?
     /// A pass ended without a pull while the engine stays on: the library says why it is not fresh.
     var onPullFailure: (@MainActor (any Error) -> Void)?
@@ -81,9 +91,12 @@ final class LibrarySync {
         case partial([String])
     }
 
-    init(store: SyncStore, transport: any SyncTransport, sender: any SyncSender) {
+    init(
+        store: SyncStore, transport: any SyncTransport, sender: any SyncSender,
+        retryDelays: [TimeInterval] = SyncEngine.defaultRetryDelays
+    ) {
         self.store = store
-        self.engine = SyncEngine(store: store, transport: transport, sender: sender)
+        self.engine = SyncEngine(store: store, transport: transport, sender: sender, retryDelays: retryDelays)
         inbox.arm { [weak self] in
             Task { @MainActor [weak self] in
                 await self?.flushInbox()
@@ -98,6 +111,28 @@ final class LibrarySync {
         let store = try SyncStore(fileURL: databaseURL)
         let http = HTTPSyncClient(client: client)
         self.init(store: store, transport: http, sender: http)
+    }
+
+    /// Switches the engine off for good: a pass in flight drops its page, no timer or path change starts
+    /// another, and nothing it still holds reaches the library. The edits waiting in the outbox get one last
+    /// try first, so an owner who turns sync off does not strand them. The copy and the outbox stay on disk.
+    func stop() async {
+        guard !stopped else { return }
+        if isActive, ((try? await store.pendingOps().isEmpty) ?? true) == false { await kick(.outbox) }
+        stopped = true
+        isActive = false
+        isPagedFallback = false
+        owesLegacyLoad = false
+        paths.stop()
+        await engine.shutdown()
+        confirmations.removeAll()
+        undos.removeAll()
+        _ = inbox.drain()
+    }
+
+    /// The owner dismissed the error in the status. The engine's own retry carries on.
+    func dismissError() {
+        status.dismissed()
     }
 
     /// Launch. A copy from last time is shown before the pull, and the pull is the launch trigger.
@@ -125,7 +160,7 @@ final class LibrarySync {
     }
 
     func kick(_ trigger: SyncTrigger) async {
-        guard isActive else { return }
+        guard isActive, !stopped else { return }
         await connect()
         await engine.syncNow()
         await flushInbox()
@@ -150,6 +185,7 @@ final class LibrarySync {
 
     func invalidate() async {
         isActive = true
+        isPagedFallback = false
         owesLegacyLoad = false
         confirmations.removeAll()
         undos.removeAll()
@@ -242,6 +278,9 @@ final class LibrarySync {
             },
             pullFailed: { [inbox] error in
                 inbox.add(.pullFailed(error))
+            },
+            degraded: { [inbox] in
+                inbox.add(.degraded)
             })
         await engine.setActivity { [inbox] signal in
             inbox.add(.activity(signal))
@@ -249,7 +288,7 @@ final class LibrarySync {
     }
 
     /// Applies what the pass recorded. `kick` calls this before it returns, so the screen and the
-    /// glow match the pass with no extra hop. A retry the engine starts on its own has no `kick`,
+    /// status match the pass with no extra hop. A retry the engine starts on its own has no `kick`,
     /// so the callback also asks for a flush; draining twice is empty the second time.
     ///
     /// One drain at a time: applying an item can wait (the cursor is read from the store), so a second
@@ -272,6 +311,8 @@ final class LibrarySync {
                 apply(snapshot, source: source)
             case .fallback:
                 markFellBack()
+            case .degraded:
+                markPagedFallback()
             case .acknowledged(let op, let receipt):
                 await acknowledge(op, receipt)
             case .refused(let op, let reason):
@@ -299,7 +340,10 @@ final class LibrarySync {
         case .fellBack:
             status.routeFellBack()
         case .pulled:
+            isPagedFallback = false
             status.pulled(cursor: await store.cursor())
+        case .retryScheduled(let at):
+            status.retryScheduled(at: at)
         case .pullFailed(let offline):
             // Nothing reached the server: offline. The server answered and would not serve the pull: an error.
             status.pullFailed(offline: offline, code: takeFailureCode(), pending: status.pendingCount)
@@ -317,12 +361,27 @@ final class LibrarySync {
     }
 
     private func apply(_ snapshot: SyncLibrarySnapshot, source: String) {
+        guard !stopped else { return }
+        // An empty copy that is not whole says nothing: the engine publishes one before the first pull, and
+        // after a reset, and it must not blank the pages on screen. On the paged fallback the screen holds
+        // today's pages, so the first page of a pull that then failed must not replace them either: only
+        // a whole pull does.
+        if !snapshot.caughtUp, isPagedFallback || (snapshot.visible.isEmpty && snapshot.hidden.isEmpty) { return }
         onApply?(snapshot, source)
     }
 
     private func markFellBack() {
         guard isActive else { return }
         isActive = false
+        isPagedFallback = false
+        owesLegacyLoad = true
+    }
+
+    /// A pull failed with nothing on the device: today's first page is shown (once per failure) and the
+    /// engine, still on, keeps trying.
+    private func markPagedFallback() {
+        guard isActive, !stopped else { return }
+        isPagedFallback = true
         owesLegacyLoad = true
     }
 
@@ -343,6 +402,7 @@ final class LibrarySync {
     }
 
     private func deliver(_ snapshot: SyncLibrarySnapshot, source: String) {
+        guard !stopped else { return }
         onApply?(snapshot, source)
     }
 }
@@ -466,5 +526,10 @@ final class SyncPathWatch: @unchecked Sendable {
             if again { onReconnect() }
         }
         monitor.start(queue: queue)
+    }
+
+    func stop() {
+        guard started else { return }
+        monitor.cancel()
     }
 }

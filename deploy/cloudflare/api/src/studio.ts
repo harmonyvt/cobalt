@@ -76,6 +76,7 @@ export const SHARE_KICK_MS = 1200;
 // remembered this long, and at most this many are listed.
 export const SHARE_KEEP_MS = 24 * 60 * 60 * 1000;
 export const RECENT_MAX = 25;
+const ERROR_DETAIL_PREFIX = "errdetail:";
 const SHARE_PREFIX = "share:";
 type ShareRecord = { keyId: string; at: number };
 
@@ -235,7 +236,17 @@ export type SaveProgress = {
     // a save of several items (section 18): how many are done of how many (the helper's own count)
     itemsDone?: number | null;
     itemsTotal?: number | null;
+    // section 49 / 2.1 of the transparency spec: which downloader runs this save, which one it is waiting to start
+    // (only while `waking`), and the engine and code of the failure that made the save switch (both null = no switch)
+    engine?: SaveEngine;
+    wakingEngine?: SaveEngine | null;
+    fallbackFrom?: SaveEngine | null;
+    fallbackCode?: string | null;
 };
+
+// The two engines of a save that ended in an error after switching (the app tells "yt-dlp needs a login" apart from
+// "cobalt could not read the link"). `primary` is the engine that failed last, `prior` the one that failed first.
+export type ErrorDetail = { primary_code: string; primary_engine: SaveEngine; prior_code: string; prior_engine: SaveEngine };
 
 // `items` of a session row (section 18.2): [{i, type, status, code}] as written by a gallery save. Never throws.
 export type ItemRecord = { i: number; type: "photo" | "video" | "gif" | null; status: "ready" | "error"; code: string | null };
@@ -269,6 +280,8 @@ export function sessionBody(
     // jobs that run before this save, the one running now included (section 17.4); a number only
     // for a save waiting in the server's line, which then answers `step: "queued"`
     queueAhead?: number | null,
+    // a save that failed on both engines: what each said (only read for a session in error)
+    errorDetail?: ErrorDetail | null,
 ) {
     // progress only means something while the session is saving
     const queued = row.status === "saving" && typeof queueAhead === "number";
@@ -297,6 +310,16 @@ export function sessionBody(
         step_total: p?.total ?? null,
         waking: p?.waking ?? false,
         queue_ahead: queued ? queueAhead : null,
+        // which downloader runs the save, which one is starting, and the switch that happened (only while saving, so
+        // every other session reads byte for byte as before)
+        ...(row.status === "saving"
+            ? {
+                  engine: p?.engine ?? null,
+                  waking_engine: p?.waking ? (p.wakingEngine ?? null) : null,
+                  fallback_from: p?.fallbackFrom ?? null,
+                  fallback_code: p?.fallbackCode ?? null,
+              }
+            : {}),
         // photos and galleries (section 18.2): only a session that has items says so, so every other
         // session reads byte for byte as before
         ...(typeof row.item_count === "number" ? { item_count: row.item_count, items: parseItemRecords(row.items) } : {}),
@@ -304,6 +327,7 @@ export function sessionBody(
         created_at: row.created_at,
         expires_at: row.expires_at,
         error: row.error_code ? { code: row.error_code } : null,
+        ...(row.status === "error" && row.error_code && errorDetail ? { error_detail: errorDetail } : {}),
         renders: renders.map((r) => ({
             id: r.id,
             url: r.url,
@@ -846,6 +870,8 @@ export type YtDlpDeps = {
     helper: (path: string, init?: RequestInit) => Promise<Response>;
     // starts the box (and waits for its port); rejects when it cannot
     ensureRunning: () => Promise<void>;
+    // is the box's container running right now? Absent = never reported as waking (the start is awaited as before)
+    isRunning?: () => Promise<boolean>;
 };
 export const parseSaveEngineMode = (v: unknown): SaveEngineMode => (v === "first" ? "first" : "fallback");
 
@@ -981,11 +1007,24 @@ export class StudioService {
         return engine === "ytdlp" && this.d.ytdlp ? this.d.ytdlp.ensureRunning() : this.d.ensureRunning();
     }
 
+    // Is this engine asleep right now? The cobalt container says so in-process; the yt-dlp box is another object, asked
+    // through its own `isRunning` (an answer that fails reads as awake: the start is then awaited, as it always was).
+    private async engineCold(engine: SaveEngine): Promise<boolean> {
+        if (engine === "cobalt") return !!this.d.isRunning && !this.d.isRunning();
+        const box = this.d.ytdlp;
+        if (!box?.isRunning) return false;
+        try {
+            return !(await box.isRunning());
+        } catch {
+            return false;
+        }
+    }
+
     // The cobalt container sleeps after 45 s and takes about 6 s to accept a port. A save's first step used to wait
     // for that, and POST /studio waited with it. "up": it is accepting calls. "waking": the start is underway and this
     // step should come back later (the progress stays `waking`). "down": the start already failed.
-    private async wakeEngine(engine: SaveEngine): Promise<"up" | "waking" | "down"> {
-        const cold = engine === "cobalt" && !!this.d.isRunning && !this.d.isRunning();
+    private async wakeEngine(engine: SaveEngine, coldNow?: boolean): Promise<"up" | "waking" | "down"> {
+        const cold = coldNow ?? (await this.engineCold(engine));
         const p = this.ensureEngine(engine);
         if (!cold) {
             try {
@@ -1004,6 +1043,17 @@ export class StudioService {
         ]);
         if (quick === "waking") void p.catch(() => {});
         return quick;
+    }
+
+    // Which downloader a save runs on and the switch it made, from its record: every progress of the save carries it
+    // (the progress lives in memory, so it is rebuilt from the record at each step rather than remembered).
+    private saveIdentity(rec: SaveRecord): Pick<SaveProgress, "engine" | "fallbackFrom" | "fallbackCode"> {
+        const engine: SaveEngine = rec.engine === "ytdlp" && this.d.ytdlp ? "ytdlp" : "cobalt";
+        return {
+            engine,
+            fallbackFrom: rec.fellBack !== undefined ? (engine === "ytdlp" ? "cobalt" : "ytdlp") : null,
+            fallbackCode: rec.fellBack ?? null,
+        };
     }
 
     // What the container's helper says it can do (APP-API-CONTRACT.md 18.8): every answer carries it, and the last
@@ -2393,7 +2443,21 @@ export class StudioService {
             // turns out to have no video: a photo post, which only cobalt saves
             (!rec.pinned || (engine === "ytdlp" && rec.items !== undefined && code === "error.webp.no_video"));
         if (!canSwitch) {
-            const final = engine === "ytdlp" && rec.fellBack !== undefined && code !== "error.studio.too_large" ? rec.fellBack : code;
+            // The second engine failed after the first one did. cobalt's words are the ones the app knows, so they win
+            // over a generic yt-dlp failure; but what yt-dlp says about the post itself (a login, a private or age
+            // gated post, a file too large) is the cause, and cobalt's "could not fetch" must not hide it.
+            const preferCurrent = code === "error.studio.too_large" || code.startsWith("error.api.youtube.") || code.startsWith("error.api.content.");
+            const final = engine === "ytdlp" && rec.fellBack !== undefined && !preferCurrent ? rec.fellBack : code;
+            if (rec.fellBack !== undefined) {
+                // both engines' answers, kept for GET /studio/<sid> (`error_detail`) beside the one code in `error`
+                const detail: ErrorDetail = {
+                    primary_code: code,
+                    primary_engine: engine,
+                    prior_code: rec.fellBack,
+                    prior_engine: engine === "ytdlp" ? "cobalt" : "ytdlp",
+                };
+                await this.rememberErrorDetail(sid, detail);
+            }
             return await this.fail(sid, final);
         }
         const next: SaveEngine = engine === "cobalt" ? "ytdlp" : "cobalt";
@@ -2408,8 +2472,43 @@ export class StudioService {
             attempts: 0,
             startedAt: this.d.now(),
         } satisfies SaveRecord);
-        await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false });
+        // the app is told the switch (and which engine failed with what), not left to see the progress reset
+        await this.setProgress(sid, {
+            step: "fetching",
+            bytes: null,
+            total: null,
+            waking: false,
+            wakingEngine: null,
+            engine: next,
+            fallbackFrom: engine,
+            fallbackCode: code,
+        });
         return 0;
+    }
+
+    // `error_detail` of a failed save lives in the Durable Object's storage, not D1 (no migration): kept a day (SHARE_KEEP_MS),
+    // the older ones dropped whenever a new one is written. Never fails the save's end.
+    private async rememberErrorDetail(sid: string, detail: ErrorDetail): Promise<void> {
+        try {
+            const now = this.d.now();
+            for (const [k, rec] of await this.d.storage.list<{ at: number }>({ prefix: ERROR_DETAIL_PREFIX })) {
+                if (!rec || now - rec.at > SHARE_KEEP_MS) await this.d.storage.delete(k);
+            }
+            await this.d.storage.put(`${ERROR_DETAIL_PREFIX}${sid}`, { ...detail, at: now });
+        } catch (e) {
+            console.error("[studio] could not keep the error detail", String(e instanceof Error ? e.name : "error"));
+        }
+    }
+
+    private async errorDetailOf(sid: string): Promise<ErrorDetail | null> {
+        try {
+            const rec = await this.d.storage.get<ErrorDetail & { at: number }>(`${ERROR_DETAIL_PREFIX}${sid}`);
+            if (!rec) return null;
+            const { primary_code, primary_engine, prior_code, prior_engine } = rec;
+            return { primary_code, primary_engine, prior_code, prior_engine };
+        } catch {
+            return null;
+        }
     }
 
     private async fail(sid: string, code: string, records?: ItemRecord[]): Promise<number> {
@@ -2434,7 +2533,14 @@ export class StudioService {
             const ahead = row.status === "saving" ? await this.saveQueueAhead(row.id) : null;
             return {
                 status: 200,
-                body: sessionBody(row, renders, this.progress.get(row.id), await sessionItem(this.d.db, row.r2_key), ahead),
+                body: sessionBody(
+                    row,
+                    renders,
+                    this.progress.get(row.id),
+                    await sessionItem(this.d.db, row.r2_key),
+                    ahead,
+                    row.status === "error" ? await this.errorDetailOf(row.id) : null,
+                ),
             };
         } catch {
             return studioErr(503, "error.api.generic");
@@ -2567,20 +2673,24 @@ export class StudioService {
         // a yt-dlp save whose box is gone (the binding was removed) goes on with cobalt
         if (rec.engine === "ytdlp" && !this.d.ytdlp) rec = { ...rec, engine: undefined };
         const engine: SaveEngine = rec.engine ?? "cobalt";
-        // `waking`: this save is waiting for the container to start
+        const who = this.saveIdentity(rec);
+        // `waking`: this save is waiting for its engine's container to start (the cobalt container, or the yt-dlp box)
+        const cold = await this.engineCold(engine);
         await this.setProgress(sid, {
             step: "fetching",
             bytes: null,
             total: null,
-            waking: engine === "cobalt" && this.d.isRunning ? !this.d.isRunning() : false,
+            waking: cold,
+            wakingEngine: cold ? engine : null,
+            ...who,
         });
-        const woke = await this.wakeEngine(engine);
+        const woke = await this.wakeEngine(engine, cold);
         if (woke === "waking") return POLL_INTERVAL_MS;
         if (woke === "down") {
-            await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false });
+            await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false, wakingEngine: null, ...who });
             return await this.miss(sid, rec);
         }
-        await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false });
+        await this.setProgress(sid, { step: "fetching", bytes: null, total: null, waking: false, wakingEngine: null, ...who });
         let res: Response;
         try {
             res = await this.fetchCall(engine, "/fetch", {
@@ -2664,13 +2774,14 @@ export class StudioService {
             const total = finite(body.total);
             // a save of several items says how far it is (section 18.7); a single file says nothing
             const many = finite(body.items_total) !== null ? { itemsDone: finite(body.items_done) ?? 0, itemsTotal: finite(body.items_total) } : {};
+            const who = { wakingEngine: null, ...this.saveIdentity(rec) };
             await this.setProgress(
                 sid,
                 body.stage === "probing"
-                    ? { step: "reading", bytes, total: null, waking: false, ...many }
+                    ? { step: "reading", bytes, total: null, waking: false, ...who, ...many }
                     : body.stage === "downloading"
-                      ? { step: "fetching", bytes, total, waking: false, ...many }
-                      : { step: "fetching", bytes: null, total: null, waking: false, ...many },
+                      ? { step: "fetching", bytes, total, waking: false, ...who, ...many }
+                      : { step: "fetching", bytes: null, total: null, waking: false, ...who, ...many },
             );
             return POLL_INTERVAL_MS;
         }
@@ -2718,7 +2829,7 @@ export class StudioService {
                 return await this.fail(sid, "error.studio.storage");
             }
             // `storing`: bytes copied into R2 so far, out of the file's size
-            const progress: SaveProgress = { step: "storing", bytes: 0, total: bytes, waking: false };
+            const progress: SaveProgress = { step: "storing", bytes: 0, total: bytes, waking: false, wakingEngine: null, ...(rec ? this.saveIdentity(rec) : {}) };
             const clip = {
                 title: typeof done.title === "string" && done.title.trim() ? done.title.trim().slice(0, 200) : null,
                 duration: finite(done.duration),
@@ -2928,8 +3039,10 @@ export class StudioService {
                         bytes: 0,
                         total: bytes,
                         waking: false,
+                        wakingEngine: null,
                         itemsDone: kept.length + records.length,
                         itemsTotal: list.length,
+                        ...(rec ? this.saveIdentity(rec) : {}),
                     };
                     await this.setProgress(sid, progress);
                     const stored = await this.d.originals.put(

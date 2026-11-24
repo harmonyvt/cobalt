@@ -155,35 +155,104 @@ struct EditorShellTopBar: View {
     }
 }
 
-/// `saved · 4 clips · 0:26`, the first problem, `not saved · retrying` (tap to retry now).
+/// Under the title: the save pill (always there: `unsaved`, `saving…`, `saved · 4 clips · 0:26`, `not saved · retrying` with a
+/// tap to retry now, `changed on another device`, `update needed`) and, beside it, a separate badge when the timeline has a
+/// problem (a count; tap says what). What is wrong with the clips never replaces whether the edit is saved.
 private struct EditorShellSaveLine: View {
     let session: EditSession
 
+    @Environment(EditorHost.self) private var host
+
     var body: some View {
-        switch session.saveState {
-        case .failed:
-            Button { Task { await session.retrySave() } } label: { line(session.saveLine, error: true) }
-                .buttonStyle(.plain)
-                .accessibilityHint(Copy.Editor.tryAgain)
-        case .conflict, .needsUpdate:
-            line(session.saveLine, error: true)
-        case .saved, .saving, .unsaved:
-            if let problem = session.problemLine {
-                line(problem, error: true)
-            } else {
-                line(session.saveLine, error: false)
+        HStack(spacing: 6) {
+            pill
+                .layoutPriority(1)
+            if !session.problems.isEmpty {
+                problemBadge
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private enum Tone { case calm, busy, bad }
+
+    private var tone: Tone {
+        switch session.saveState {
+        case .saved: return .calm
+        case .saving, .unsaved: return .busy
+        case .failed, .conflict, .needsUpdate: return .bad
         }
     }
 
-    private func line(_ text: String, error: Bool) -> some View {
-        Text(text)
-            .font(Font.cobalt(10, .regular, relativeTo: .caption2))
-            .foregroundStyle(error ? CobaltColor.errorText : CobaltColor.caption)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .contentTransition(.opacity)
-            .accessibilityAddTraits(.updatesFrequently)
+    private var dot: Color {
+        switch tone {
+        case .calm: return CobaltColor.success
+        case .busy: return EditorColor.overlay
+        case .bad: return CobaltColor.errorText
+        }
+    }
+
+    @ViewBuilder
+    private var pill: some View {
+        if case .failed = session.saveState {
+            Button { Task { await session.retrySave() } } label: { pillFace }
+                .buttonStyle(.plain)
+                .accessibilityHint(Copy.Editor.tryAgain)
+        } else {
+            pillFace
+        }
+    }
+
+    private var pillFace: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(dot)
+                .frame(width: 6, height: 6)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(Font.cobalt(10, .regular, relativeTo: .caption2))
+                .foregroundStyle(tone == .bad ? CobaltColor.errorText : CobaltColor.caption)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .contentTransition(.opacity)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 1.5)
+        .background(dot.opacity(0.14), in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private var text: String {
+        if case .unsaved = session.saveState { return Copy.Editor.saveUnsaved }
+        return session.saveLine
+    }
+
+    /// `⚠ 2`: a count, so it fits beside the pill on a phone. Tap says the first problem (it is also what the render says).
+    private var problemBadge: some View {
+        let count = session.problems.count
+        let line = session.problemLine ?? Copy.Editor.problemBadge(count)
+        return Button { host.show(line, seconds: 5) } label: {
+            HStack(spacing: 3) {
+                Image(systemName: Symbol.Editor.missing)
+                    .font(.system(size: 9, weight: .semibold))
+                    .accessibilityHidden(true)
+                Text("\(count)")
+                    .font(Font.cobalt(10, .semibold, relativeTo: .caption2))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(CobaltColor.errorText)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1.5)
+            .background(CobaltColor.error.opacity(0.14), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityLabel(Copy.Editor.problemBadge(count))
+        .accessibilityValue(line)
+        .accessibilityHint(Copy.Editor.problemBadgeHint)
+        .iconName(Copy.Editor.problemBadge(count))
     }
 }
 
@@ -300,7 +369,7 @@ struct EditorTitleField: View {
                     .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
                     .frame(minWidth: 120, maxWidth: 240)
                     .padding(.horizontal, 8)
-                    .frame(minHeight: Platform.isMac ? 28 : 36)
+                    .frame(minHeight: Platform.isMac ? 28 : 32)
                     .background(EditorColor.field, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .focused($focused)
                     .onAppear { focused = true }
@@ -323,7 +392,7 @@ struct EditorTitleField: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: 240, alignment: .leading)
-                        .frame(minHeight: Platform.isMac ? 28 : 36)
+                        .frame(minHeight: Platform.isMac ? 28 : 32)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

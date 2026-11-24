@@ -31,7 +31,10 @@ extension Pipeline {
         return try await op()
     }
 
+    /// The device's guess, only until the server has answered for this run: from its first `GET /studio/<sid>` reply on,
+    /// "waking" is what the server says (`SaveStatus.isWaking`), never this timer.
     func markWaking(since: Date) {
+        guard !serverSpoke else { return }
         if case .fetching(let s, false) = state, s == since { setState(.fetching(since: s, waking: true)) }
     }
 
@@ -377,7 +380,7 @@ extension Pipeline {
         let fm = FileManager.default
         if let url = stored?.fileURL, fm.fileExists(atPath: url.path) { return url }
         if let url = localFile, fm.fileExists(atPath: url.path) { return url }
-        if let request = keepRequest, let video = await request.value, let url = video.fileURL, fm.fileExists(atPath: url.path) {
+        if let request = keepRequest, let video = await request.value.video, let url = video.fileURL, fm.fileExists(atPath: url.path) {
             return url
         }
         try Task.checkCancellation()
@@ -623,13 +626,13 @@ extension Pipeline {
     }
 
     func pollSaving(_ client: any CobaltClient, id: String) async throws -> StudioSession {
-        var wakingSeen = false
         var pacer = PollPacer()
         while true {
             try Task.checkCancellation()
             try await pacer.beforePoll(clock: ctx.clock)
             let s = try await retrying { try await client.session(id, wait: 1) }
             pacer.observe(s, clock: ctx.clock)
+            serverSpoke = true                                       // from here "waking" is the server's word alone
             switch s.status {
             case .ready:
                 notePostFrameSave(s)
@@ -637,20 +640,35 @@ extension Pipeline {
             case .error:
                 throw mapFailure(code: s.errorCode ?? "error.studio.unknown", during: .saving, limits: ctx.capabilities.limits)
             case .saving:
+                noteSaveStatus(s)
                 observeLine(queueAhead: s.step == .queued ? max(1, s.queueAhead ?? 1) : nil)
                 switch s.step {
                 case .queued:
                     setState(.fetching(since: runStart, waking: false))      // waiting: `line` says where
                 case .fetching:
-                    wakingSeen = wakingSeen || (s.waking ?? false)
-                    setState(.fetching(since: runStart, waking: s.waking ?? wakingSeen))
+                    setState(.fetching(since: runStart, waking: saveStatus.waking))
                 case .reading, .storing:
                     setState(.saving(bytes: s.stepBytes, total: s.stepTotal, since: runStart))
                 case nil:
-                    setState(.saving(bytes: nil, total: nil, since: runStart))
+                    // a server that says `waking` before it has a step is still starting up
+                    if saveStatus.waking { setState(.fetching(since: runStart, waking: true)) }
+                    else { setState(.saving(bytes: nil, total: nil, since: runStart)) }
                 }
             }
         }
+    }
+
+    /// What a reply says about the save, kept for the cards: the part the server is on, the downloader and a switch.
+    /// A switch is logged once per run.
+    func noteSaveStatus(_ s: StudioSession) {
+        let next = SaveStatus(session: s)
+        guard next != saveStatus else { return }
+        if next.fallbackFrom != nil, saveStatus.fallbackFrom == nil {
+            Telemetry.log(.info, .pipeline, "save switched engine", data: [
+                "from": .string(next.fallbackFrom?.rawValue ?? ""), "to": .string(next.engine?.rawValue ?? ""),
+                "code": .string(next.fallbackCode ?? "")])
+        }
+        saveStatus = next
     }
 
     /// Polls without touching the state (the upload flow shows the frames instead).
@@ -661,6 +679,7 @@ extension Pipeline {
             try await pacer.beforePoll(clock: ctx.clock)
             let s = try await retrying { try await client.session(id, wait: 1) }
             pacer.observe(s, clock: ctx.clock)
+            serverSpoke = true
             switch s.status {
             case .ready: return s
             case .error:
@@ -670,51 +689,6 @@ extension Pipeline {
                 continue
             }
         }
-    }
-
-    /// "keep videos on device": the original is downloaded in the background and never blocks `.ready`.
-    /// The download is its own task (not the side task's), so `detach()` can hand it to a background
-    /// run and it still lands in the store.
-    func keepOriginalInBackground(_ client: any CobaltClient, session id: String, media m: MediaInfo) {
-        guard ctx.settings.keepVideosOnDevice, !ctx.isPreview else { return }
-        // The sheet already handed this original to a background download (or the app's own is going):
-        // a second copy would only race it (CONTRACT-SYNC.md decision 6).
-        if ctx.originals?.pending.isLive(session: id) == true { return }
-        let linkURL: URL?
-        if case .link(let info) = input { linkURL = info.url } else { linkURL = nil }
-        let store = ctx.store
-        let token = runToken
-        let target = targetMediaID
-        let relay = MainActorRelay<TransferProgress> { [weak self] p in self?.keepDownloadProgress(p, token: token) }
-        let request = Task<StoredVideo?, Never> {
-            let dest = store.inboxURL(for: "\(m.name).mp4")
-            guard let file = try? await client.download(.studioSource(session: id), to: dest, progress: { relay.push($0) }) else { return nil }
-            guard !Task.isCancelled else { try? FileManager.default.removeItem(at: file); return nil }
-            return try? await store.add(
-                file: file, kind: .original, media: m, sessionID: id, link: linkURL, remoteURL: nil, move: true,
-                mediaID: target, keep: true)
-        }
-        keepRequest = request
-        ctx.continued?.pipelineChanged(self)
-        spawn { p in await p.finishKeepOriginal(request, session: id) }
-    }
-
-    /// The original arrived (or did not). The run may have been replaced while the file was moving
-    /// in: it keeps its own `stored`, and the entry stays in the store.
-    func finishKeepOriginal(_ request: Task<StoredVideo?, Never>, session id: String) async {
-        let token = runToken
-        let video = await request.value
-        guard token == runToken else { return }
-        keepRequest = nil
-        keepProgress = nil
-        defer { ctx.continued?.pipelineChanged(self) }
-        if video == nil { Telemetry.log(.warn, .store, "original not kept on device", data: ["session": .string(String(id.prefix(8)))]) }
-        guard let video else { return }
-        // "public share" finished before the original landed: the entry takes the link now.
-        if let url = hostedURL { ctx.store.setPublicURL(url, forSession: id, orEntry: video.id) }
-        stored = ctx.store.videos.first { $0.id == video.id } ?? video
-        pinStored(video.id)
-        syncStoreTitle()                            // the title typed before the original landed
     }
 
     // MARK: - Plain cobalt
@@ -885,6 +859,7 @@ extension Pipeline {
         guard ctx.settings.keepVideosOnDevice, !ctx.isPreview, stored == nil else { return }
         guard FileManager.default.fileExists(atPath: file.url.path) else {
             Telemetry.log(.warn, .store, "uploaded original not kept", data: ["reason": "file gone"])
+            localCopyState = .failed(code: "error.app.file_unreadable")
             return
         }
         var info = m
@@ -894,16 +869,18 @@ extension Pipeline {
         let sync = ctx.photosSync
         let assetID = file.photosAssetID
         let source = file.url
-        let request = Task<StoredVideo?, Never> {
+        localCopyJob = nil                                           // the upload's own file: nothing to fetch again
+        localCopyState = .downloading(TransferProgress(bytes: 0, total: file.bytes))
+        let request = Task<KeptOriginal, Never> {
             // Not cancellation-aware on purpose: the owner's upload is on the server already, and its
             // local original must not be lost because the card was closed a moment later.
             if let assetID { await sync?.adoptExistingAsset(localIdentifier: assetID, forSession: id) }
             do {
-                return try await store.add(
+                return KeptOriginal(video: try await store.add(
                     file: source, kind: .original, media: info, sessionID: id, link: nil, remoteURL: nil, move: true,
-                    mediaID: target, keep: true)
+                    mediaID: target, keep: true))
             } catch {
-                return nil                                        // `store.add` logged why
+                return KeptOriginal(failure: Pipeline.localCopyCode(error))      // `store.add` logged why
             }
         }
         keepRequest = request
@@ -928,6 +905,7 @@ extension Pipeline {
         let runLink: URL?
         if case .link(let info) = input { runLink = info.url } else { runLink = nil }
         spawn { p in
+            var keepFailure: String?
             do {
                 for item in items {
                     let ext = item.type == .photo ? "jpg" : (item.type == .gif ? "gif" : "mp4")
@@ -941,14 +919,21 @@ extension Pipeline {
                         let m = MediaInfo(
                             name: "\(base)-\(item.id)", duration: probed?.duration, width: probed?.width,
                             height: probed?.height, bytes: p.fileBytes(local), isImage: false)
-                        _ = try? await p.ctx.store.add(
-                            file: local, kind: .original, media: m, sessionID: nil, link: runLink, remoteURL: item.url, move: true,
-                            keep: true)
+                        do {
+                            _ = try await p.ctx.store.add(
+                                file: local, kind: .original, media: m, sessionID: nil, link: runLink, remoteURL: item.url, move: true,
+                                keep: true)
+                        } catch {
+                            // the photo is in Photos already: only the copy kept here failed, and it says so
+                            Telemetry.log(.warn, .store, "picker item not kept on device", data: Telemetry.errorData(error))
+                            keepFailure = Pipeline.localCopyCode(error)
+                        }
                     } else {
                         try? FileManager.default.removeItem(at: local)
                     }
                 }
                 guard p.runToken == token else { return }
+                if let keepFailure { p.localCopyState = .failed(code: keepFailure) }
                 p.photos = .done
             } catch {
                 Telemetry.log(.error, .photos, "save picker items failed", data: Telemetry.errorData(error))
@@ -1023,9 +1008,14 @@ extension Pipeline {
         renderJobID = jobID
         if existingJob == nil { recordJob(.rendering(job: jobID)) }
         var packSince: Date?
+        // the same spacing as the save's poll: a quick unchanged answer (the Worker's fallback while the container has a
+        // bad moment) must not become a tight loop
+        var pacer = PollPacer()
         while true {
             try Task.checkCancellation()
+            try await pacer.beforePoll(clock: ctx.clock)
             let status = try await retrying { try await client.renderStatus(session: sid, job: jobID, wait: 1) }
+            pacer.observe(status, clock: ctx.clock)
             // A poll that comes back after detach()/reset() must not write into the next run
             // (it stranded home in `.rendering` with no session when focus closed mid-pack).
             try Task.checkCancellation()
@@ -1072,40 +1062,46 @@ extension Pipeline {
         }
     }
 
-    /// The webp joins the orbit (downloaded into the store) before `.done`.
+    /// The webp joins the orbit (downloaded into the store) before `.done`. The hosted webp is what counts: when the copy on
+    /// this device fails, the run still ends `.done` and says so (`localCopyState`, with a retry), never silently.
     func finishRender(_ client: any CobaltClient, sid: String, result r: WebpResult) async throws {
-        let linkURL: URL?
-        if case .link(let info) = input { linkURL = info.url } else { linkURL = nil }
-        let base = media.map { ($0.name as NSString).deletingPathExtension } ?? r.job
         do {
-            // A render that was handed to a background run while its webp was coming in may already
-            // have been stored by the first attempt: one entry per webp.
-            let kept = ctx.store.videos.contains { $0.kind == .webp && $0.remoteURL == r.url && $0.sessionID == sid }
-            if !kept {
-                let dest = ctx.store.inboxURL(for: "\(r.job).webp")
-                let file = try await client.download(.open(r.url), to: dest, progress: { _ in })
-                let info = MediaInfo(name: "\(base).webp", duration: r.seconds, width: r.width, height: r.height, bytes: r.bytes, isImage: false)
-                let clip = lastRenderRequest.map {
-                    WebpClip(start: $0.start, length: $0.length, crop: $0.crop, quality: $0.quality, width: $0.width)
-                }
-                _ = try await ctx.store.add(
-                    file: file, kind: .webp, media: info, sessionID: sid, link: linkURL, remoteURL: r.url, move: true,
-                    mediaID: targetMediaID, clip: clip, keep: ctx.settings.keepVideosOnDevice,
-                    madeFrom: renderItem.map { [$0] })
-                syncStoreTitle()
-            }
+            try await storeWebpCopy(client, sid: sid, result: r)
         } catch is CancellationError {
             throw CancellationError()
         } catch let e as CobaltError where e == .cancelled || e == .network(.cancelled) {
             throw e
         } catch {
-            // the orbit copy is a nicety; the hosted webp is what counts
-            Telemetry.log(.warn, .store, "webp not kept on device", data: Telemetry.errorData(error))
+            let code = Pipeline.localCopyCode(error)
+            Telemetry.log(.warn, .store, "webp not kept on device", data: Telemetry.errorData(error).merging(["copy": .string(code)]) { a, _ in a })
+            localCopyJob = .webp(session: sid, result: r)
+            localCopyState = .failed(code: code)
         }
         try Task.checkCancellation()
         result = r
         renderJobID = nil
         setState(.done(r))
+    }
+
+    /// Downloads the hosted webp into the store (one entry per webp: a render that was handed to a background run while its
+    /// webp was coming in may already have been stored by the first attempt).
+    func storeWebpCopy(_ client: any CobaltClient, sid: String, result r: WebpResult) async throws {
+        let linkURL: URL?
+        if case .link(let info) = input { linkURL = info.url } else { linkURL = nil }
+        let base = media.map { ($0.name as NSString).deletingPathExtension } ?? r.job
+        let kept = ctx.store.videos.contains { $0.kind == .webp && $0.remoteURL == r.url && $0.sessionID == sid }
+        guard !kept else { return }
+        let dest = ctx.store.inboxURL(for: "\(r.job).webp")
+        let file = try await client.download(.open(r.url), to: dest, progress: { _ in })
+        let info = MediaInfo(name: "\(base).webp", duration: r.seconds, width: r.width, height: r.height, bytes: r.bytes, isImage: false)
+        let clip = lastRenderRequest.map {
+            WebpClip(start: $0.start, length: $0.length, crop: $0.crop, quality: $0.quality, width: $0.width)
+        }
+        _ = try await ctx.store.add(
+            file: file, kind: .webp, media: info, sessionID: sid, link: linkURL, remoteURL: r.url, move: true,
+            mediaID: targetMediaID, clip: clip, keep: ctx.settings.keepVideosOnDevice,
+            madeFrom: renderItem.map { [$0] })
+        syncStoreTitle()
     }
 
     // MARK: - Photos and hosting
@@ -1141,7 +1137,7 @@ extension Pipeline {
         guard let sid = sessionID else { throw PipelineFailure.server(code: "error.app.no_original") }
         photosStep = .downloading(keepProgress ?? TransferProgress(bytes: 0, total: media?.bytes))
         // The keep-on-device download is already bringing this very file: wait for it, never fetch twice.
-        if let request = keepRequest, let video = await request.value, let url = video.fileURL, fm.fileExists(atPath: url.path) {
+        if let request = keepRequest, let video = await request.value.video, let url = video.fileURL, fm.fileExists(atPath: url.path) {
             return (url, false)
         }
         try Task.checkCancellation()

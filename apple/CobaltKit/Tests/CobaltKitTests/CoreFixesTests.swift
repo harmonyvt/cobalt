@@ -274,7 +274,7 @@ struct ShortClipPosterTests {
     }
 }
 
-// MARK: - "waking server" is sticky
+// MARK: - "waking server": the device's guess is sticky, the server's word is not
 
 private func wakingSession(_ id: String, _ status: SessionStatus, waking: Bool?, step: SaveStep? = .fetching) -> StudioSession {
     StudioSession(
@@ -286,7 +286,9 @@ private func wakingSession(_ id: String, _ status: SessionStatus, waking: Bool?,
 
 @MainActor
 struct WakingStickyTests {
-    @Test func onceWakingAPollThatSaysNotWakingDoesNotFlipItBack() async throws {
+    /// Once the server has answered, its `waking` is the only word (apple 02-PHASE2 2.2.2): a reply that says not waking turns it
+    /// off at once and one that says waking turns it back on. The old "sticky" rule hid the server's own answers.
+    @Test func onceTheServerSpeaksItsWakingIsShownAsItIs() async throws {
         let h = Harness(.happy)
         let polls = Log<Int>()
         var stub = ScriptedClient(base: h.ctx.client)
@@ -295,9 +297,9 @@ struct WakingStickyTests {
             switch n {
             case 1: return wakingSession(id, .saving, waking: false)
             case 2, 3: return wakingSession(id, .saving, waking: true)
-            case 4, 5: return wakingSession(id, .saving, waking: false)     // the flicker
-            case 6: return wakingSession(id, .saving, waking: nil)
-            case 7: return wakingSession(id, .saving, waking: false, step: .storing)
+            case 4, 5: return wakingSession(id, .saving, waking: false)     // the server says it woke
+            case 6: return wakingSession(id, .saving, waking: nil)          // an older server never says it
+            case 7: return wakingSession(id, .saving, waking: true, step: .storing)   // storing is never waking
             default: return wakingSession(id, .ready, waking: nil)
             }
         }
@@ -309,8 +311,11 @@ struct WakingStickyTests {
         let fetching = h.pipeline.stateLog.compactMap { state -> Bool? in
             if case .fetching(_, let waking) = state { return waking } else { return nil }
         }
-        let firstWaking = try #require(fetching.firstIndex(of: true), "never showed waking: \(fetching)")
-        #expect(fetching[firstWaking...].allSatisfy { $0 }, "waking flickered back: \(fetching)")
+        // false (reply 1), true (2, 3), false (4, 5, 6): the log never repeats a state, so three entries
+        var collapsed: [Bool] = []
+        for flag in fetching where collapsed.last != flag { collapsed.append(flag) }
+        #expect(collapsed.suffix(3) == [false, true, false], "waking did not follow the server: \(fetching)")
+        #expect(!h.kinds.drop { $0 != "saving(degraded)" }.contains("fetching(waking)"), "waking came back while storing: \(h.kinds)")
     }
 
     @Test func theStickinessEndsWhenTheStepChangesAndIsPerRun() async throws {

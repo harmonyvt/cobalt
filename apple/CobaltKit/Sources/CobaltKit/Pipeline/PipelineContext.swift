@@ -55,6 +55,10 @@ final class PipelineContext {
     /// The background download of originals (CONTRACT-SYNC.md decision 6): the app's, or the sheet's
     /// own. Nil in previews and tests unless one is injected.
     var originals: OriginalFetcher?
+    /// The app's offline engine: this run's original is queued there when "keep videos on device" is on, so it is a background
+    /// transfer with byte progress, failure tracking and retry (apple 02-PHASE2 2.2.4). Set by `AppModel`; nil in the share
+    /// sheet, previews and tests, where the original is fetched in the foreground. Weak: `AppModel` owns it.
+    weak var offlineDownloads: OfflineDownloads?
     /// The photos ledger (shared by the app and the extension) and, in the app only, the sync.
     var photosLedger: PhotosLedger?
     var photosSync: PhotosSync?

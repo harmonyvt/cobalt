@@ -319,27 +319,42 @@ struct EditorLayersList: View {
     }
 }
 
-/// The note under the canvas when too many videos overlap. The render on the server is unaffected.
+/// The note about the preview when too many videos overlap (the render on the server is unaffected), and the clips the preview
+/// left out. `EditorShell` draws it on the picture's bottom edge (`onPicture`: its own dark pill, and the skipped-clips line
+/// stays the shell's, which sits next to a retry for failed files).
 struct EditorPreviewCrowdedNote: View {
     let session: EditSession
+    /// On the picture (a dark pill, white text) instead of under it.
+    var onPicture = false
+    /// The skipped-clips line too. Off where the caller draws its own.
+    var includeSkipped = true
 
     var body: some View {
         if session.previewCrowded {
-            Text(Copy.Editor.previewCrowded)
-                .font(CobaltType.captionSmall)
-                .foregroundStyle(CobaltColor.caption)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 8)
-                .accessibilityLabel(Copy.Editor.previewCrowded)
+            note(Copy.Editor.previewCrowded)
         }
-        if !session.previewSkips.isEmpty {
-            Text(Copy.Editor.previewSkipped(session.previewSkips.count))
-                .font(CobaltType.captionSmall)
+        if includeSkipped, !session.previewSkips.isEmpty {
+            note(Copy.Editor.previewSkipped(session.previewSkips.count))
+        }
+    }
+
+    @ViewBuilder
+    private func note(_ text: String) -> some View {
+        let label = Text(text)
+            .font(CobaltType.captionSmall)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(text)
+        if onPicture {
+            label
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        } else {
+            label
                 .foregroundStyle(CobaltColor.caption)
-                .multilineTextAlignment(.center)
                 .padding(.horizontal, 8)
-                .accessibilityLabel(Copy.Editor.previewSkipped(session.previewSkips.count))
         }
     }
 }

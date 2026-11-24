@@ -13,7 +13,7 @@ import { SwarmLiveService, handleSwarmLiveRoute, isSwarmLiveRoute } from "./swar
 import { ChatLiveService, handleChatLiveRoute, isChatLiveRoute } from "./chat-live";
 import { handleNotifyRoute, isNotifyRoute } from "./notify-off";
 import { handleStudioRoute, isStudioRoute, parseSaveEngineMode, StudioService, type YtDlpDeps } from "./studio";
-import { YTDLP_START_PATH } from "./ytdlp-path";
+import { YTDLP_START_PATH, YTDLP_STATE_PATH } from "./ytdlp-path";
 import { fetchWithStartRetry } from "./start-retry";
 import { runSweep, scheduleSweepSoon, type SweepLive, type SweepScheduler } from "./sweep";
 import { runTelemetryRetention } from "./telemetry";
@@ -96,6 +96,11 @@ function ytdlpDeps(ns: DurableObjectNamespace): YtDlpDeps {
             const res = await box().fetch(`http://ytdlp${YTDLP_START_PATH}`, { method: "POST" });
             await res.body?.cancel().catch(() => {});
             if (!res.ok) throw new Error(`ytdlp start answered ${res.status}`);
+        },
+        isRunning: async () => {
+            const res = await box().fetch(`http://ytdlp${YTDLP_STATE_PATH}`);
+            if (!res.ok) throw new Error(`ytdlp state answered ${res.status}`);
+            return ((await res.json()) as { running?: unknown }).running === true;
         },
     };
 }

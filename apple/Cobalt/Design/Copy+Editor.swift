@@ -45,6 +45,11 @@ extension Copy {
         }
         static let saveSaving = "saving…", saveRetrying = "not saved · retrying", saveConflict = "changed on another device"
         static let saveUpdate = "update needed"
+        /// Edited, not on its way to the server yet (the 1 s before the autosave goes out).
+        static let saveUnsaved = "unsaved"
+        /// The clip-problem badge beside the save pill: what is wrong never hides whether it is saved.
+        static func problemBadge(_ n: Int) -> String { n == 1 ? "1 problem" : "\(n) problems" }
+        static let problemBadgeHint = "shows what stops the render"
 
         // MARK: bin
 
@@ -487,6 +492,31 @@ extension Copy {
         static let layerHiddenNote = "this server doesn't hide layers yet · hidden here, still in the render"
         static let previewCrowded = "lots of videos at once — preview may stutter, render is fine"
         static func previewSkipped(_ n: Int) -> String { n == 1 ? "skipped a clip" : "skipped \(n) clips" }
+
+        // MARK: when the render poll loses the server, and what did not apply
+
+        /// The banner while two or more reads of the running render failed in a row.
+        static let renderLinkLost = "connection lost — render continues on server"
+        static let reconnect = "reconnect"
+        /// Pitch copies for the preview that could not be made: those clips play unshifted here, the render shifts them.
+        static func pitchPreviewFailed(_ n: Int) -> String {
+            n == 1 ? "pitch preview isn't ready for a clip · render is fine" : "pitch preview isn't ready for \(n) clips · render is fine"
+        }
+        /// The toast for something the owner asked for that did not apply (`EditSession.notice`).
+        static func notice(_ notice: EditSession.Notice) -> String {
+            switch notice {
+            case .overlayUnreadable: return "couldn't read that video's length, so it wasn't added"
+            case .overlayNoRoom: return "it loaded, but the room for it is gone"
+            case .madeNotPlaced: return "made it, but there's no room to place it · it's in your library"
+            case .priceUnavailable(let reason):
+                switch reason {
+                case .offline: return "you're offline · couldn't get the price"
+                case .off: return "this server can't remove a video background yet"
+                case .notFound: return "that video is gone from your library"
+                case .other: return "couldn't get the price · try again"
+                }
+            }
+        }
 
         // MARK: trim that scrubs
 

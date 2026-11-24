@@ -22,6 +22,9 @@ import Observation
 public final class OfflineDownloads {
     /// The background session's identifier; `AppModel.handleBackgroundDownloads` routes it here.
     public static let sessionIdentifier = BackgroundSessionID.prefix + "offline"
+    /// `OfflineJob.origin` of a pipeline's own original (the save the owner just made, not a "keep offline"): it lands with
+    /// `AddOrigin.save`, so the photos album copies it like any save made here, and it is not marked "not new".
+    static let saveOrigin = "save"
     /// The ledger's `session` for a foreground fetch (no system task to re-attach to).
     static let foregroundSession = "foreground"
     /// Network losses, 5xx answers and landings that did not work count against this; then `failed`.
@@ -460,9 +463,10 @@ public final class OfflineDownloads {
             start(key)
             return
         }
-        // before the file lands: nothing racing the album's pass sees a "new save"
-        await markNotNew?(entry.job.notNewKeys(store: store))
-        let origin: AddOrigin = entry.job.isPulled ? .pulled : .keepOffline
+        let isOwnSave = entry.job.origin == Self.saveOrigin
+        // before the file lands: nothing racing the album's pass sees a "new save" (a save made here is one)
+        if !isOwnSave { await markNotNew?(entry.job.notNewKeys(store: store)) }
+        let origin: AddOrigin = entry.job.isPulled ? .pulled : (isOwnSave ? .save : .keepOffline)
         do {
             switch entry.job.target {
             case .existing(let id):

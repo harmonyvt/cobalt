@@ -8,7 +8,7 @@ import { Container } from "@cloudflare/containers";
 
 export const YTDLP_PORT = 9300;
 // POST YTDLP_START_PATH: start the container (restarting it first when its env is stale) and answer 204 once the port is up
-import { YTDLP_START_PATH } from "./ytdlp-path";
+import { YTDLP_START_PATH, YTDLP_STATE_PATH } from "./ytdlp-path";
 
 export interface YtDlpEnv {
     // the internal key (a UUID): the image's YTDLP_INTERNAL_KEY
@@ -82,6 +82,9 @@ export class YtDlpBox extends Container<YtDlpEnv> {
             if (request.method !== "POST") return new Response(null, { status: 405 });
             await this.startFresh();
             return new Response(null, { status: 204 });
+        }
+        if (url.pathname === YTDLP_STATE_PATH && request.method === "GET") {
+            return new Response(JSON.stringify({ running: this.ctx.container?.running === true }), { headers: { "content-type": "application/json" } });
         }
         const headers = new Headers(request.headers);
         headers.set("x-internal-key", this.env.COBALT_API_KEY);

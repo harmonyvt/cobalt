@@ -609,7 +609,10 @@ public struct PreviewClient: CobaltClient {
         }
         var snap = renderSnapshot(r, at: clock.now())
         if wait > 0, case .pending = snap.status {
-            try await clock.sleep(seconds: max(0.001, min(Double(wait), 0.1, snap.nextChange)))
+            // a long poll holds until something changes (the next decoded frame; the pack phase and a render with no progress
+            // hold to the end), as the real route does: a reply that came back at once would only teach the
+            // poll's pacer to back off
+            try await clock.sleep(seconds: max(0.001, min(Double(wait), snap.nextChange)))
             snap = renderSnapshot(r, at: clock.now())
         }
         return snap.status
@@ -622,13 +625,18 @@ public struct PreviewClient: CobaltClient {
             return (.failed(code: "error.webp.job_lost"), 0)
         }
         if t >= total { return (.success(webpResult(r)), 0) }
-        guard hasProgress else { return (.pending(phase: nil, framesDone: nil, framesTotal: nil), total - t) }
+        // a render that will be lost is next different at the moment it is lost
+        let end = scenario == .renderLost ? min(total, total * PreviewData.renderLostShare) : total
+        guard hasProgress else { return (.pending(phase: nil, framesDone: nil, framesTotal: nil), end - t) }
         let decodeEnd = total * PreviewData.renderDecodeShare
         let frames = max(1, Int((r.request.length * 15).rounded()))
         if t < decodeEnd {
-            return (.pending(phase: .decode, framesDone: Int(Double(frames) * t / decodeEnd), framesTotal: frames), min(0.1, decodeEnd - t))
+            // the reply next differs when one more frame is done
+            let done = Int(Double(frames) * t / decodeEnd)
+            let nextFrame = decodeEnd * Double(done + 1) / Double(frames) - t + 0.001
+            return (.pending(phase: .decode, framesDone: done, framesTotal: frames), min(nextFrame, decodeEnd - t, end - t))
         }
-        return (.pending(phase: .pack, framesDone: frames, framesTotal: frames), min(0.1, total - t))
+        return (.pending(phase: .pack, framesDone: frames, framesTotal: frames), end - t)
     }
 
     private func webpResult(_ r: PreviewServer.Render) -> WebpResult {

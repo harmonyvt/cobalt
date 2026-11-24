@@ -43,6 +43,8 @@ struct StageCanvas: View {
                 offAir
             }
         }
+        // the canvas shows the owner's files: a solid block in session replays
+        .mediaMask()
     }
 
     private var offAir: some View {

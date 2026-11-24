@@ -597,21 +597,13 @@ public final class UnifiedQueue {
         var actions: [QueueAction] = []
         if case .failed(let f) = p.state {
             if f.keepsTrim && p.media != nil && p.sessionID != nil { actions.append(.open) }
-            if isRetryable(f) { actions.append(.retry) }
+            if f.isRetryable { actions.append(.retry) }
         } else {
             // a gallery: the save failed (try again), or a make failed (the focus has its own try again)
             if case .failed? = p.galleryRun?.phase { actions.append(.retry) } else { actions.append(.open) }
         }
         actions.append(.dismiss)
         return actions
-    }
-
-    /// "try again" cannot cure a failure of the input or of the key.
-    static func isRetryable(_ failure: PipelineFailure) -> Bool {
-        switch failure {
-        case .noLink, .tooLarge, .unsupported, .linkUnreadable, .keyMissing, .keyInvalid: return false
-        default: return true
-        }
     }
 
     static func summary(of items: [QueueItem]) -> QueueSummary {

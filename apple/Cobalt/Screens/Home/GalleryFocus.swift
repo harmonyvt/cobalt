@@ -159,9 +159,14 @@ struct GalleryFacts {
     let canMake: Bool
     /// This run was started by `try photo 7 again`: its failures are being fetched anew, not left over from a save.
     let isRetry: Bool
+    /// What the server says about the downloader (apple 02-PHASE2 2.2.2): which one is starting up, and the line for a switch.
+    let wakingEngine: SaveEngine?
+    let engineNote: String?
 
     init(model: AppModel, pipeline: Pipeline, title: String) {
         self.isRetry = GalleryRetry.isMarked(pipeline)
+        self.wakingEngine = pipeline.saveStatus.wakingEngine
+        self.engineNote = pipeline.engineFootnote(waking: false)
         let items = pipeline.galleryItems
         let run = pipeline.galleryRun ?? GalleryRun(total: max(items.count, 1))
         self.items = items
@@ -288,7 +293,9 @@ struct GalleryFacts {
                 let what = label.flatMap { $0.isEmpty ? nil : $0 } ?? "a save that isn't in this list"
                 out.append(.waiting(Copy.Jobs.waiting, "it's busy with \(what)"))
             } else {
-                out.append(.saving(Copy.Gallery.saving(savingStep, of: total), fraction: fraction))
+                // "waking yt-dlp" while the server's downloader starts; the switch of downloaders rides under the count
+                let text = run.waking ? Copy.Save.waking(wakingEngine) : Copy.Gallery.saving(savingStep, of: total)
+                out.append(.saving([text, engineNote].compactMap { $0 }.joined(separator: " · "), fraction: fraction))
             }
         case .saved:
             let l1 = place.map { Copy.Gallery.savedTo($0) } ?? GalleryFocusCopy.savedToCobalt

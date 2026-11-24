@@ -377,7 +377,7 @@ private struct LibraryContent: View {
                     ZStack {
                         Color.black.opacity(0.28).ignoresSafeArea()
                             .transition(.opacity)
-                        LibrarySharePrepCard(rows: controller.sharePrep) { controller.shareCancelled = true }
+                        LibrarySharePrepCard(controller: controller) { controller.shareCancelled = true }
                             .transition(.scale(scale: 0.94).combined(with: .opacity))
                     }
                 }
@@ -936,8 +936,10 @@ struct LibraryProblem: View {
 /// their pictures, a bar, and each post with its kind, where it stands and a mark. The share sheet opens once every row
 /// is done; `cancel` stops before the next post and opens nothing.
 private struct LibrarySharePrepCard: View {
-    let rows: [SharePrepRow]
+    let controller: LibraryController
     let cancel: () -> Void
+
+    private var rows: [SharePrepRow] { controller.sharePrep }
 
     /// Rows listed before `and n more`.
     private static let listed = 4
@@ -973,6 +975,8 @@ private struct LibrarySharePrepCard: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            // when the copying pass ended with failures: what failed and the two choices
+            SharePrepSummaryBar(controller: controller)
             Button(Copy.Library2.shareCancel, role: .cancel, action: cancel)
                 .buttonStyle(.cobaltSecondary(fullWidth: true, compact: true))
         }
@@ -1065,6 +1069,12 @@ private struct SharePrepLine: View {
                     .font(Font.cobalt(11.5, relativeTo: .caption))
                     .foregroundStyle(row.state == .skipped ? CobaltColor.errorText : CobaltColor.caption)
                     .lineLimit(1)
+                if row.state == .skipped, let failure = row.failure {
+                    Text(Copy.Save.sharePrepRowFailure(failure))
+                        .font(Font.cobalt(11, relativeTo: .caption))
+                        .foregroundStyle(CobaltColor.caption)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 0)
             mark

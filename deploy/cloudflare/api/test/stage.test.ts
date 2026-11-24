@@ -970,7 +970,7 @@ describe("the room port (the Worker's side of the Durable Object)", () => {
         };
         const room = roomPort(ns);
         await room.send({ type: "skip" });
-        expect(await room.state()).toEqual({ ...emptyRoom(), chaos_until: 9 });
+        expect(await room.state()).toEqual({ ...emptyRoom(), chaos_until: 9, viewers: null }); // a room that does not report its sockets: unknown
         await room.connect(new Request("https://studio.capybaraharmony.com/live/tok/ws", { headers: { upgrade: "websocket" } }));
         expect(seen.map((x) => [x.name, x.method, new URL(x.url).pathname])).toEqual([["main", "POST", "/event"], ["main", "GET", "/state"], ["main", "GET", "/ws"]]);
         expect(seen[0]!.body).toBe('{"type":"skip"}');

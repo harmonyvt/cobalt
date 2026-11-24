@@ -60,13 +60,9 @@ enum TrayCopy {
         return Copy.failure(failure)
     }
 
-    /// A failure that "try again" cannot cure: the input or the key is what is wrong.
-    static func isRetryable(_ failure: PipelineFailure) -> Bool {
-        switch failure {
-        case .noLink, .tooLarge, .unsupported, .linkUnreadable, .keyMissing, .keyInvalid: return false
-        default: return true
-        }
-    }
+    /// A failure that "try again" cannot cure: the input, the key, or a post the site refuses (private, an age limit, a
+    /// sign-in, removed) is what is wrong (`PipelineFailure.isRetryable`).
+    static func isRetryable(_ failure: PipelineFailure) -> Bool { failure.isRetryable }
 }
 
 // MARK: - what a pipeline is called
@@ -188,6 +184,11 @@ struct JobCardFacts: Equatable {
             if g.isLive { exit = Self.exit(for: p, lineMode: lineMode) }
         case .idle:
             break
+        }
+        // The library copy is what a saved card is about; a copy on this device that did not arrive is said on the card too
+        // (never a bare "saved"), and the focus card has the reason and the retry (apple 02-PHASE2 2.2.4).
+        if p.localCopyState.isFailed, kind == .saved || kind == .webp {
+            footnote = Copy.Save.localCopyFailed
         }
     }
 
@@ -469,10 +470,15 @@ struct GalleryCardParts {
                 fraction = 0
                 showsBar = true
             } else {
-                headline = Copy.Gallery.saving(min(run.total, run.done + 1), of: run.total)
+                // the server's own count ("saving 4 of 6"), "waking yt-dlp" while its downloader starts, and a switch of
+                // downloaders as the small line (apple 02-PHASE2 2.2.2)
+                headline = run.waking
+                    ? Copy.Save.waking(p.saveStatus.wakingEngine)
+                    : Copy.Gallery.saving(min(run.total, run.done + 1), of: run.total)
                 detail = .text(count)
                 fraction = run.done > 0 ? saveFraction : nil
                 showsBar = true
+                footnote = p.engineFootnote(waking: run.waking)
             }
         case .saved:
             switch run.make {
