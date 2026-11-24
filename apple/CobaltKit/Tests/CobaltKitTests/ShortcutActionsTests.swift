@@ -43,6 +43,8 @@ struct ForwardingClient: CobaltClient {
     var created = CreatedSaves()
     var renders = RenderLog()
     var reads = ReadLog()
+    /// `GET /studio/<sid>/make/<job>` polls, counted (Phase 3: the make's poll is paced).
+    var makeStatusCalls = CallCounter()
 
     var baseURL: URL { base.baseURL }
     func capabilities() async -> Capabilities {
@@ -88,7 +90,8 @@ struct ForwardingClient: CobaltClient {
         try await base.makeGalleryImage(session: session, plan: plan, focused: focused, notify: notify)
     }
     func makeStatus(session: String, job: String, wait: Int) async throws -> MakeStatus {
-        try await base.makeStatus(session: session, job: job, wait: wait)
+        makeStatusCalls.bump()
+        return try await base.makeStatus(session: session, job: job, wait: wait)
     }
     func retryItems(session: String, items: [Int]) async throws -> StudioCreated { try await base.retryItems(session: session, items: items) }
     func deleteItem(_ itemID: String) async throws { try await base.deleteItem(itemID) }

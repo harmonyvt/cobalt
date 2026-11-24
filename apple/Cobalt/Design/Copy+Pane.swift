@@ -25,8 +25,18 @@ extension Copy {
         static let gone = "this isn't here any more."
         /// The placeholder a loading page shows to VoiceOver.
         static let loading = "loading"
-        /// An action that needs the server while it can't be reached.
+        /// An action that needs the server while it can't be reached (VoiceOver hint).
         static let needsServer = "needs the server"
+        /// The note under a group of actions while the server can't be reached and some of them need it.
+        static let offlineNote = "offline. server actions pause until connected"
+        /// What a paused tile says after its title.
+        static let needsNetwork = "needs network"
+        /// A tap on a paused action: why nothing happened.
+        static func pausedReason(_ title: String) -> String { "\(title) needs network. try again once you're back online." }
+        /// The note under a group while some of its actions are held by the sync outbox.
+        static let queuesNote = "offline. changes here are saved on this device and sent when you're back online"
+        /// What a tile the outbox holds says after its title while offline.
+        static let queuedCaption = "queues until online"
         /// The placeholder page of an area that has not moved into the pane yet.
         static let notYet = "this opens here soon."
 
@@ -38,7 +48,7 @@ extension Copy {
             case .link: "link"
             case .collection: "collection"
             case .emote, .emoteAddToSet: "7tv"
-            case .reward, .poolVideo: "studio"
+            case .reward, .poolVideo: "live stage"
             case .stream: "twitch"
             case .booruPost, .booruFilters: "booru"
             case .swarm: "swarm"

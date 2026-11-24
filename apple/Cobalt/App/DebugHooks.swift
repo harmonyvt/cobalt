@@ -208,4 +208,33 @@ enum DetailDebug {
         }
     }
 }
+
+#if os(iOS)
+extension DebugHooks {
+    /// `-previewTab` on the iPhone's four tabs (apple 04-PHASE4 4.1). `AppTab` raw values already work through
+    /// `selectedTab` (`PhoneNavState.show`): `save` is capture, `library`, `stage`/`twitch`/`sevenTv` the live tab on that segment,
+    /// `links`/`chat`/`swarms`/`booru`/`names` the tools tab with that screen pushed, `settings` the settings sheet over capture,
+    /// `tools` the tools list. The words the four tabs go by that are not an `AppTab` are mapped here:
+    ///
+    ///   -previewTab capture     the capture tab
+    ///   -previewTab live        the live tab on the segment that was last open (`-previewTab stage|twitch|sevenTv` picks one)
+    ///   -previewTab editor      the tools tab with "video edits" pushed
+    ///   -previewTab assistants  the tools tab with "chat & swarms" pushed (on the half that was last open)
+    @MainActor
+    static func applyPhonePreviewTab(to nav: PhoneNavState) {
+        guard let raw = UserDefaults.standard.string(forKey: "previewTab") else { return }
+        switch raw {
+        case "capture": nav.show(.save)
+        case "live": nav.slot = .live
+        case "editor":
+            nav.slot = .tools
+            nav.path = [.editor]
+        case "assistants":
+            nav.slot = .tools
+            nav.path = [.assistants]
+        default: break
+        }
+    }
+}
+#endif
 #endif

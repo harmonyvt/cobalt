@@ -521,7 +521,7 @@ describe("GET /library/transcript (47.3)", () => {
     it("the capabilities flag follows about_sound", async () => {
         const w = world();
         const caps = async (about: boolean, sound: boolean) =>
-            ((await capabilities(w.d, "missing", undefined, false, false, false, false, false, false, true, false, false, false, false, false, about, sound)).body as any).features;
+            ((await capabilities(w.d, "missing", undefined, false, false, false, false, false, true, false, false, false, false, false, about, sound)).body as any).features;
         expect((await caps(true, true)).transcripts).toBe(true);
         expect((await caps(true, false)).transcripts).toBe(false);
     });

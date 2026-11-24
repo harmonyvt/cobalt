@@ -39,6 +39,7 @@ enum Copy {
         case .names: return Names.tabTitle
         case .queue: return "queue"
         case .settings: return "settings"
+        case .tools: return PhoneNav.tools
         }
     }
 
@@ -223,7 +224,7 @@ enum Copy {
         return "\(bytes / 1_000_000) MB"
     }
 
-    /// A link cobalt cannot read at all (`error.api.link.invalid` / `link.unsupported`): not a private or removed post.
+    /// A link capystore cannot read at all (`error.api.link.invalid` / `link.unsupported`): not a private or removed post.
     /// `failure` says both lines in one string, which every surface shows as it is (the tray card, the share sheet, a
     /// Shortcut, the widget).
     static let linkUnreadable = "capystore can't read this link."
@@ -233,13 +234,13 @@ enum Copy {
         switch failure {
         case .noLink: return "no link found in that text."
         case .tooLarge(let limit): return "that file is over the \(megabytes(limit)) limit."
-        case .fetchFailed: return "capystore couldn't fetch this link. the post may be private or removed."
+        case .fetchFailed(let code): return Save.fetchFailure(FetchProblem(code: code), code: code)        // one sentence per site answer (Copy+Pipeline)
         case .linkUnreadable: return "\(linkUnreadable) \(linkUnreadableHint)"
         case .unsupported: return "capystore can't save this kind of post yet."          // new
         case .serverBusy: return "capystore is busy with another video. try again in a minute."     // new
         case .renderBusy: return "another webp is being made right now."
         case .renderLost: return "the webp was lost while capystore was in the background. your trim is kept."
-        case .expired: return "this video's studio has expired."                                  // new
+        case .expired: return "this video's clip has expired."                                  // new
         case .keyMissing: return "add your api key in settings first."                            // new
         case .keyInvalid: return "this key was revoked"
         case .unreachable: return "can't reach the server."                                       // new
@@ -248,6 +249,7 @@ enum Copy {
             // never show the raw code.
             if code.hasPrefix(PipelineFailure.renderPhasePrefix) { return "capystore couldn't make the webp. your trim is kept." }
             if code == "error.app.file_unreadable" { return "couldn't read that file. if it's in icloud, check your connection and try again." }
+            if let line = Save.serverFailure(code) { return line }
             if let line = appFailure(code) { return line }
             return "something went wrong (\(code))."                                              // new
         }
@@ -262,7 +264,7 @@ enum Copy {
         case "error.app.photos_denied": return "allow capystore to add to photos in settings, then try again."
         case "error.app.no_original": return "capystore couldn't get the original video. try again."
         case "error.app.job_lost": return "capystore lost track of that video. save it again."
-        case "error.app.not_cobalt": return "that server doesn't look like cobalt."
+        case "error.app.not_cobalt": return "that server doesn't look like capystore."
         case PipelineFailure.fileUnsupportedCode: return "that file isn't a video or photo capystore can upload."
         case "error.app.photos", "error.app.photos_failed": return "couldn't save to photos. try again."
         default: return "something went wrong. try again."                                        // error.app.unknown and the rest
@@ -369,7 +371,7 @@ enum Copy {
         parts.append("saved \(Format.when(post.createdAt, now: now))")
         if let session = post.session, session.status == .ready {
             let days = Int((session.expiresAt.timeIntervalSince(now) / 86_400).rounded(.down))
-            if days >= 1 { parts.append("studio open \(days) more \(days == 1 ? "day" : "days")") }
+            if days >= 1 { parts.append("clip open \(days) more \(days == 1 ? "day" : "days")") }
         }
         return parts.joined(separator: " · ")
     }
@@ -413,7 +415,7 @@ enum Copy {
     static let pasteNewKey = "paste new key"
     static let noKey = "no key"                                   // new
     static let keyRevoked = "this key was revoked"
-    static let notAKey = "that isn't a cobalt api key."           // new
+    static let notAKey = "that isn't a capystore api key."           // new
     static var keyNotSaved: String { "couldn't save the key on this \(device). try again." }   // new
     static let notAURL = "that isn't a url."                      // new
     static let checking = "checking…"                             // new
@@ -424,7 +426,7 @@ enum Copy {
     static let haptics = "haptics"
     static let motion = "motion"
     static let motionFollows = "follows reduce motion"
-    static let settingsFooter = "on a plain cobalt server (no studio routes) the same circles still save through cobalt's normal api; webp, studio and library just hide. your two shortcuts keep working."
+    static let settingsFooter = "on a plain cobalt server (no capystore routes) the same circles still save through cobalt's normal api; webp, saves and library just hide. your two shortcuts keep working."
     static var removeVideosTitle: String { "remove saved videos?" }                       // new
     static var removeVideosMessage: String { "the videos stored on this \(device) are deleted. their posters stay." }   // new
     static let remove = "remove"                                                          // new
@@ -433,13 +435,15 @@ enum Copy {
         "\(count) \(count == 1 ? "video" : "videos") · \(storage(bytes))"
     }
 
-    /// "cobalt 11.7.1 · your server" (what it can do is the disclosure under it, `serverFeatures`).
+    /// "capystore · cobalt 11.7.1 · your server": the product, then the cobalt engine's version it runs (a plain cobalt server stays
+    /// "cobalt 11.7.1": it is a different product). What it can do is the disclosure under it, `serverFeatures`.
     static func serverKind(_ s: ServerSummary, checking: Bool) -> String {
         switch s.kind {
         case .unreachable: return checking ? Copy.checking : "can't reach this server"          // new
-        case .notCobalt: return "this isn't a cobalt server"                                    // new
+        case .notCobalt: return "this isn't a capystore server"                                    // new
         case .plainCobalt: return ["cobalt", s.version].compactMap { $0 }.joined(separator: " ")
-        case .legacyFork, .fork: return ["cobalt", s.version].compactMap { $0 }.joined(separator: " ") + " · your server"
+        case .legacyFork, .fork:
+            return (["capystore"] + [s.version.map { "cobalt \($0)" }].compactMap { $0 } + ["your server"]).joined(separator: " · ")
         }
     }
 
@@ -458,7 +462,7 @@ enum Copy {
     /// Every capability the server reported, on or off, in the order the owner meets them.
     static func serverFeatures(_ c: Capabilities) -> [ServerFeature] {
         [
-            ServerFeature(name: "studio", detail: "makes webps and hosts originals", on: c.studio),
+            ServerFeature(name: "saves", detail: "makes webps and hosts originals", on: c.studio),
             ServerFeature(name: "upload", detail: "takes files from this \(device)", on: c.upload),
             ServerFeature(name: "library", detail: "keeps every post you've made", on: c.library),
             ServerFeature(name: "progress", detail: "real numbers while it saves and makes", on: c.saveProgress || c.renderProgress),

@@ -10,6 +10,8 @@ enum PostStatusResult {
     case failed
     /// The post took the status.
     case changed
+    /// The post took the status here and the sync outbox holds it for the server (the server was away).
+    case queued
     /// The post took the status but a file could not be switched (hidden, but a public copy is still on).
     case filesFailed
 
@@ -18,6 +20,8 @@ enum PostStatusResult {
     /// What the shell's status line says for the new status.
     func words(for status: PostStatus) -> String {
         switch (self, status) {
+        case (.queued, .hidden): return Copy.Hidden.hiddenQueued
+        case (.queued, _): return Copy.Hidden.unhiddenQueued
         case (.filesFailed, .hidden): return Copy.Hidden.hiddenFileFailed
         case (.filesFailed, _): return Copy.Hidden.unhiddenFileFailed
         case (_, .hidden): return Copy.Hidden.hiddenStatus
@@ -37,7 +41,8 @@ extension DetailController {
             visibilityFailed[key] = status == .hidden ? Copy.Hidden.hideFailed : Copy.Hidden.unhideFailed
             return .failed
         }
-        return outcome.fileFailures.isEmpty ? .changed : .filesFailed
+        if !outcome.fileFailures.isEmpty { return .filesFailed }
+        return model.libraryHoldsEditsForServer ? .queued : .changed
     }
 }
 

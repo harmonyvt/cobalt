@@ -185,7 +185,12 @@ extension LibraryController {
             // posts the server refused, and (apart) posts that took it with a file the server could not switch
             let fileIDs = Set(outcome.fileFailures.map(\.id))
             let filePosts = posts.filter { fileIDs.contains($0.id) || $0.files.contains { fileIDs.contains($0.id) } }.count
-            if outcome.changed > 0 { parts.append(Copy.HiddenAlbum.done(status, count: outcome.changed, fromAlbum: fromAlbum)) }
+            if outcome.changed > 0 {
+                // the server is away: the sync outbox holds the change, so it is queued, not done
+                parts.append(model.libraryHoldsEditsForServer
+                    ? Copy.HiddenAlbum.queued(status, count: outcome.changed)
+                    : Copy.HiddenAlbum.done(status, count: outcome.changed, fromAlbum: fromAlbum))
+            }
             if !outcome.failed.isEmpty { parts.append(Copy.HiddenAlbum.failed(outcome.failed.count)) }
             if filePosts > 0 { parts.append(Copy.HiddenAlbum.filesFailed(filePosts)) }
             if !parts.isEmpty { showStatus(parts.joined(separator: " · ")) }

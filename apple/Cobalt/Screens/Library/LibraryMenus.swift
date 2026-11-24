@@ -441,43 +441,7 @@ struct LibrarySortMenu: View {
 
     var body: some View {
         Menu {
-            Section(Copy.Library2.sort) {
-                ForEach(Self.keys(offersOffline: offersOffline, offersKinds: offersKinds), id: \.self) { key in
-                    Button {
-                        library.sort = Self.pick(key, current: library.sort)
-                    } label: {
-                        if library.sort.key == key {
-                            Label(Copy.Library2.name(key), systemImage: library.sort.ascending ? Symbol.Library.ascending : Symbol.Library.descending)
-                        } else {
-                            Text(Copy.Library2.name(key))
-                        }
-                    }
-                    .accessibilityValue(library.sort.key == key ? Copy.Library2.direction(library.sort) : "")
-                }
-            }
-            Section(Copy.Library2.show) {
-                Picker(Copy.Library2.show, selection: $library.show) {
-                    ForEach(LibraryShow.allCases.filter { offersOffline || $0 != .offline }, id: \.self) { show in
-                        Text(Copy.Library2.name(show)).tag(show)
-                    }
-                }
-                .pickerStyle(.inline)
-            }
-            if offersKinds {
-                Section(Copy.Library2.kindFilter) {
-                    Picker(Copy.Library2.kindFilter, selection: $library.kindFilter) {
-                        ForEach(LibraryKindFilter.allCases, id: \.self) { kind in
-                            Text(Copy.Library2.name(kind)).tag(kind)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                }
-            }
-            if let openNames {
-                Section {
-                    Button(Copy.Names.menuItem, systemImage: Symbol.Names.menu, action: openNames)
-                }
-            }
+            LibrarySortItems(library: library, offersOffline: offersOffline, offersKinds: offersKinds, openNames: openNames)
         } label: {
             Label(Copy.Library2.sort, systemImage: Symbol.Library.sortMenu).labelStyle(.iconOnly)
         }
@@ -485,5 +449,54 @@ struct LibrarySortMenu: View {
         .help(Copy.Library2.sort)
         .accessibilityLabel(Copy.Library2.sort)
         .accessibilityValue("\(Copy.Library2.name(library.sort.key)), \(Copy.Library2.direction(library.sort))")
+    }
+}
+
+/// What the sort menu lists (`sort`, `show`, `kind`, `names`), so the iPhone's one "…" menu can hold the same lists
+/// as a submenu without a second copy.
+struct LibrarySortItems: View {
+    @Bindable var library: LibraryModel
+    var offersOffline = true
+    var offersKinds = true
+    var openNames: (@MainActor () -> Void)?
+
+    var body: some View {
+        Section(Copy.Library2.sort) {
+            ForEach(LibrarySortMenu.keys(offersOffline: offersOffline, offersKinds: offersKinds), id: \.self) { key in
+                Button {
+                    library.sort = LibrarySortMenu.pick(key, current: library.sort)
+                } label: {
+                    if library.sort.key == key {
+                        Label(Copy.Library2.name(key), systemImage: library.sort.ascending ? Symbol.Library.ascending : Symbol.Library.descending)
+                    } else {
+                        Text(Copy.Library2.name(key))
+                    }
+                }
+                .accessibilityValue(library.sort.key == key ? Copy.Library2.direction(library.sort) : "")
+            }
+        }
+        Section(Copy.Library2.show) {
+            Picker(Copy.Library2.show, selection: $library.show) {
+                ForEach(LibraryShow.allCases.filter { offersOffline || $0 != .offline }, id: \.self) { show in
+                    Text(Copy.Library2.name(show)).tag(show)
+                }
+            }
+            .pickerStyle(.inline)
+        }
+        if offersKinds {
+            Section(Copy.Library2.kindFilter) {
+                Picker(Copy.Library2.kindFilter, selection: $library.kindFilter) {
+                    ForEach(LibraryKindFilter.allCases, id: \.self) { kind in
+                        Text(Copy.Library2.name(kind)).tag(kind)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+        }
+        if let openNames {
+            Section {
+                Button(Copy.Names.menuItem, systemImage: Symbol.Names.menu, action: openNames)
+            }
+        }
     }
 }

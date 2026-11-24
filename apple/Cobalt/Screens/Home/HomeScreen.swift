@@ -33,19 +33,15 @@ struct HomeScreen: View {
     @State private var stackTop: CGFloat = 0
     /// The two circles with their captions (global space): a tap there is theirs, not a planet's.
     @State private var circlesFrame: CGRect = .zero
+    /// The recent saves strip (phone; zero when it is not drawn): a tap there is the strip's, not a planet's.
+    @State private var stripFrame: CGRect = .zero
     /// A finger is down on the orbit: it holds still so a planet can be tapped deliberately.
     @GestureState private var holding = false
-    #if DEBUG
-    @State private var openedFirst = false
-    @State private var anotherRequested = false
-    #endif
     @State private var failureToken = 0
     @State private var inspectorOpen = true
     /// The width the home column itself gets (the pane and the sidebar already taken out).
     @State private var contentWidth: CGFloat = 0
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-    /// The 7tv circle has opened into its card. Closed when a save starts.
-    @State private var emoteOpen = false
 
     // the orbit's eased state, and the focus state
     @State private var orbit = OrbitDynamics()
@@ -175,9 +171,7 @@ struct HomeScreen: View {
 
     private func orbitSpeed(lifted: Bool) -> Double {
         guard motionAllowed else { return 0 }
-        #if DEBUG
-        if UserDefaults.standard.bool(forKey: "previewOrbitPaused") { return 0 }
-        #endif
+        if DebugPreviewFlags.orbitPaused { return 0 }
         if holding, stage == .idle { return 0 }
         return lifted ? 0.3 : 1
     }
@@ -185,8 +179,7 @@ struct HomeScreen: View {
     /// How far the orbit dims behind the capsule or the focused planet (it dims rather than shrinks).
     private var orbitDim: Double {
         switch stage {
-        // the 7tv card's glass blurred full-light planets into grey smudges behind the search: dim them like the capsule
-        case .idle: return emoteOpen ? 0.35 : 1
+        case .idle: return 1
         case .capsule, .failure, .picker: return 0.55
         // the orbit brightens as the planet goes home, so it is at full light when the planet is handed back
         case .focus: return focusClosing ? 1 : (focusLifted ? 0.4 : 0.55)
@@ -221,26 +214,8 @@ struct HomeScreen: View {
         // hidden posts' offline copies are listed only in the hidden album (APP-API-CONTRACT 37.7)
         var real = Array(model.visibleStoredMedia.prefix(CurrentOrbitGeometry.maxItems))
         if focusReserved || stage == .capsule { real = real.filter { !isRunMedia($0) } }
-        #if DEBUG
-        // `-previewOrbitCount 30` stretches the preview data to that many planets (design review), with
-        // a spread of file types so the badges can be judged. 1...9 shows the newest media as they are.
-        let n = UserDefaults.standard.integer(forKey: "previewOrbitCount")
-        if n > 0, !real.isEmpty {
-            let types = ["mp4", "mp4", "mov", "gif", "png", "jpg", "mp4"]
-            return (0..<min(n, cap)).compactMap { i in
-                guard i >= real.count else { return real[i] }
-                let base = real[i % real.count]
-                var original = base.original
-                original?.id = "\(base.id)#\(i)"
-                if original != nil, base.webps.isEmpty {
-                    original?.fileURL = URL(fileURLWithPath: "/nonexistent/orbit-\(i).\(types[i % types.count])")
-                }
-                var webps = base.webps
-                for k in webps.indices { webps[k].id = "\(webps[k].id)#\(i)" }
-                return StoredMedia(id: "\(base.id)#\(i)", original: original, webps: webps)
-            }
-        }
-        #endif
+        // `-previewOrbitCount N` (debug builds): stretches the data to N planets
+        if let stretched = DebugPreviewFlags.stretchedOrbit(real, cap: cap) { return stretched }
         return Array(real.prefix(cap))
     }
 
@@ -254,13 +229,15 @@ struct HomeScreen: View {
         }
     }
 
-    /// The planet: midpoint of the circles, in the orbit layer's own coordinates.
+    /// The planet: midpoint of the circles, in the orbit layer's own coordinates. On the phone the intake is a row of labelled
+    /// capsules (about 52 pt high, 16 pt off the bottom), so the planet sits at their middle.
     private var orbitCenter: CGPoint {
         guard contentFrame != .zero, orbitFrame != .zero else {
             return CGPoint(x: orbitFrame.width / 2, y: orbitFrame.height * 0.8)
         }
-        // 16 pt bottom padding + 4 + caption + gap + the circle's radius
-        return CGPoint(x: contentFrame.midX - orbitFrame.minX, y: contentFrame.maxY - 80 - orbitFrame.minY)
+        // circles: 16 pt bottom padding + 4 + caption + gap + the circle's radius; capsules: 16 + half their height
+        let fromBottom: CGFloat = tier == .compact ? 42 : 80
+        return CGPoint(x: contentFrame.midX - orbitFrame.minX, y: contentFrame.maxY - fromBottom - orbitFrame.minY)
     }
 
     /// Everything the orbit and this screen both need to ask about where the planets are.
@@ -274,6 +251,7 @@ struct HomeScreen: View {
     /// Where a tap is chrome's, not the orbit's (the circles and their captions, with slack).
     private func isChrome(_ point: CGPoint) -> Bool {
         if !trayFrame.isEmpty, trayFrame.insetBy(dx: -6, dy: -6).contains(point) { return true }
+        if !stripFrame.isEmpty, stripFrame.insetBy(dx: -6, dy: -6).contains(point) { return true }
         return !circlesFrame.isEmpty && circlesFrame.insetBy(dx: -14, dy: -12).contains(point)
     }
 
@@ -505,74 +483,12 @@ struct HomeScreen: View {
             kick()
         }
         .task { await model.store.backfillPreviewFrames() }
-        #if DEBUG
-        // `-previewOrbitPaused YES` freezes the orbit at a fixed time, so a planet can be tapped at a
-        // known spot; `-previewOrbitDump YES` writes where every planet is to the app's Documents.
-        .task {
-            if UserDefaults.standard.bool(forKey: "previewOrbitPaused") { orbit.clock.freeze(at: 0, now: now) }
-        }
-        .task(id: orbitFrame.size) {
-            guard UserDefaults.standard.bool(forKey: "previewOrbitDump"), orbitFrame != .zero else { return }
-            try? await Task.sleep(for: .seconds(1.2))
-            dumpOrbit()
-        }
-        // `-previewOrbitAudit YES` logs (os_log, category orbit-audit) and writes Documents/orbit-audit.txt:
-        // band radii and gaps for 3 / 7 / 14 / 16 / 24 / 35 items at rest and in the capsule states.
-        .task(id: orbitFrame.size) {
-            guard UserDefaults.standard.bool(forKey: "previewOrbitAudit"), orbitFrame != .zero else { return }
-            try? await Task.sleep(for: .seconds(1.2))
-            scene.writeAudit()
-        }
-        // `-previewOrbitSelfTest YES` runs the orbit's deterministic self-test (OrbitSelfTest) and writes
-        // Documents/orbit-selftest.txt: the plan for 0-35 media in the reference's format, and the transitions.
-        .task {
-            guard UserDefaults.standard.bool(forKey: "previewOrbitSelfTest") else { return }
-            OrbitSelfTest.write()
-        }
-        // `-previewGalleryImages <dir>` gives a gallery's placeholder items real pictures (GalleryPreviewHooks).
-        .task { await GalleryPreviewImages.run(model) }
-        // `-previewOpenFirst YES` opens the newest planet's detail once (design review, no tap needed).
-        .task {
-            guard UserDefaults.standard.bool(forKey: "previewOpenFirst"), !openedFirst else { return }
-            openedFirst = true
-            try? await Task.sleep(for: .seconds(1.2))
-            if let first = orbitMedia.first { open(first) }
-            // `-previewOpenBack 3`: pop the detail again after 3 s (evidence of the way back)
-            let back = UserDefaults.standard.double(forKey: "previewOpenBack")
-            guard back > 0 else { return }
-            try? await Task.sleep(for: .seconds(back))
-            #if os(iOS)
-            openedID = nil
-            #endif
-        }
-        // `-previewAnotherWebp 2` makes "another webp" of the newest media 2 s after launch: the same call the
-        // detail's button makes (CONTRACT-MEDIA 1.11), so the focus flow can be recorded without a finger.
-        // With `-previewConvert 2 -previewMake 3` (FocusView) the webp is made and the planet comes home.
-        .task {
-            let after = UserDefaults.standard.double(forKey: "previewAnotherWebp")
-            guard after > 0, !anotherRequested else { return }
-            anotherRequested = true
-            try? await Task.sleep(for: .seconds(after))
-            guard let first = orbitMedia.first else { return }
-            await model.makeWebp(for: model.mediaItem(for: baseMedia(first)))
-        }
-        // `-previewTray 4` pastes that many links as a batch 1.5 s after launch (design review): the tray with real
-        // jobs. With `-previewTrayFocus YES` the first one is a single paste that takes the focus, the rest go alongside.
-        .task {
-            let n = UserDefaults.standard.integer(forKey: "previewTray")
-            guard n > 0 else { return }
-            try? await Task.sleep(for: .seconds(1.5))
-            let keys = ["Dd7P496wolG", "Dd8RkQ2xLpe", "De1Hj4tYm0Z", "De2Ab9cQwEr", "De3Zx7LkPoN", "De4Mn5BvCxS", "De5Qw8ErTyU"]
-            let links = keys.prefix(n).compactMap { URL(string: "https://www.instagram.com/reel/\($0)/") }
-            if UserDefaults.standard.bool(forKey: "previewTrayFocus"), let first = links.first {
-                model.queue.add([.link(first)], via: .paste)
-                model.queue.add(links.dropFirst().map { .link($0) }, via: .review)
-            } else {
-                model.queue.add(links.map { .link($0) }, via: .review)
-            }
-        }
-        #endif
+        // `-preview*` launch-argument automation (debug builds; Debug/PreviewAutomationModifiers.swift)
+        .debugHomeAutomation(automation)
         #if os(iOS)
+        // A planet's detail keeps its own push: the zoom out of the planet and the player lent to it belong to the orbit, so a
+        // `MediaDetailRoute` (a plain push) would lose both. The recent saves strip has no planet to zoom from: its thumbnails
+        // are links to the unified route, which `.mediaDetailDestination` shows (the same `MediaDetail` the library pushes).
         .navigationDestination(item: $openedID) { id in
             if let media = model.store.media(id: baseID(id)) {
                 MediaDetail(model: model, item: model.mediaItem(for: media))
@@ -580,6 +496,7 @@ struct HomeScreen: View {
                     .navigationTransition(.zoom(sourceID: id, in: zoom))
             }
         }
+        .mediaDetailDestination(model: model)
         #else
         .sheet(item: $openedSheet) { item in
             if let media = model.store.media(id: baseID(item.id)) {
@@ -645,16 +562,18 @@ struct HomeScreen: View {
         return VStack(spacing: 12) {
             Spacer(minLength: 0)
             if trayStyle == .above { tray }
+            if tier == .compact, isIdle, !recentMedia.isEmpty {
+                RecentSavesStrip(model: model, media: recentMedia)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { stripFrame = $0 }
+                    .onDisappear { stripFrame = .zero }
+                    .transition(.opacity)
+            }
             GlassEffectContainer(spacing: 2) {
                 VStack(spacing: 12) {
                     if let kind = cardKind {
                         WorkCard(kind: kind, glassID: glassID, glass: glass, failureToken: failureToken) { cardContent }
-                    } else if isIdle, emoteOpen {
-                        WorkCard(kind: .emote, glassID: "seventv", glass: glass, failureToken: failureToken) {
-                            EmoteSearchCard(model: model) { emoteOpen = false }
-                        }
                     }
-                    if isIdle, !emoteOpen { circles }
+                    if isIdle { circles }
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { stackTop = $0 }
@@ -670,10 +589,6 @@ struct HomeScreen: View {
                 .simultaneousGesture(DragGesture(minimumDistance: 0).updating($holding) { _, state, _ in state = true })
         }
         .motion(Motion.morph, value: stage, reduced: .fade)
-        .motion(Motion.morph, value: emoteOpen, reduced: .fade)
-        .onChange(of: stage) { _, next in
-            if next != .idle { emoteOpen = false }
-        }
     }
 
     // MARK: pieces
@@ -682,29 +597,37 @@ struct HomeScreen: View {
     /// never over a planet).
     private var subtitle: String {
         let usage = model.store.usage
-        #if DEBUG
         // `-previewOrbitCount N` (design review): the line counts the planets that are drawn
-        if UserDefaults.standard.integer(forKey: "previewOrbitCount") > 0 {
+        if DebugPreviewFlags.orbitCount > 0 {
             return Copy.offline(count: orbitMedia.count, bytes: usage.bytes)
         }
-        #endif
         return usage.mediaCount == 0 && model.store.media.isEmpty
             ? Copy.emptyOrbit : Copy.offline(count: usage.mediaCount, bytes: usage.bytes)
     }
 
+    /// The newest saves for the phone's strip (hidden posts stay out, like the orbit).
+    private var recentMedia: [StoredMedia] { Array(model.visibleStoredMedia.prefix(10)) }
+
+    /// Paste and the file source. On the phone: labelled capsules (paste, photos, files). Elsewhere: the glass circles with their
+    /// captions. 7tv search is not here: it lives with the live tools.
+    @ViewBuilder
     private var circles: some View {
-        HStack(alignment: .top, spacing: 28) {
-            CircleLabel(id: "paste", glass: glass, title: Copy.paste, systemImage: Symbol.paste, a11y: Copy.pasteA11y) { shell.paste() }
-            if model.capabilities.showsFileButton {
-                CircleLabel(id: "file", glass: glass, title: Copy.file, systemImage: Symbol.file, a11y: Copy.fileA11y, menu: true) {}
+        if tier == .compact {
+            CaptureControls(model: model, glass: glass)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { circlesFrame = $0 }
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 4)
+        } else {
+            HStack(alignment: .top, spacing: 28) {
+                CircleLabel(id: "paste", glass: glass, title: Copy.paste, systemImage: Symbol.paste, a11y: Copy.pasteA11y) { shell.paste() }
+                if model.capabilities.showsFileButton {
+                    CircleLabel(id: "file", glass: glass, title: Copy.file, systemImage: Symbol.file, a11y: Copy.fileA11y, menu: true) {}
+                }
             }
-            CircleLabel(id: "seventv", glass: glass, title: Copy.seventv, systemImage: Symbol.seventv, a11y: Copy.seventvA11y) {
-                emoteOpen = true
-            }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { circlesFrame = $0 }
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 4)
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { circlesFrame = $0 }
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, 4)
     }
 
     @ViewBuilder
@@ -713,7 +636,14 @@ struct HomeScreen: View {
         case .idle:
             if let photoImport { photoImportCard(photoImport) }
         case .fetching, .uploading, .saving, .reading:
-            if let story = pipeline.progressStory { ProgressCard(story: story) }
+            if let story = pipeline.progressStory {
+                // the phone's card is the one stepper (`JobStepperView`); the card's own dots stay for the wider tiers
+                if tier == .compact, let status = JobStatus(pipeline: pipeline, now: Date()) {
+                    CaptureJobCard(story: story, status: status)
+                } else {
+                    ProgressCard(story: story)
+                }
+            }
         case .failed(let f) where !keepsFocus(f) && !isBlocking(f):
             InlineStatus(message: TrayCopy.failure(f, lineMax: model.capabilities.limits.lineMax)) {
                 Button { pipeline.reset() } label: { Label(Copy.ok, systemImage: Symbol.checkmark) }.buttonStyle(.cobaltIcon(.small))
@@ -993,7 +923,8 @@ struct HomeScreen: View {
         }
         if job.isLive {
             let title = job.pipeline.trayTitle
-            queue.unfocus()
+            // minimize, never hide: the job stays in `activity.items` (counted, with its stepper, one tap to focus, cancellable)
+            model.activity.minimize(job.id)
             trayNote = Copy.Jobs.keepsGoing(title)
         } else {
             queue.dismiss(job.id)
@@ -1130,6 +1061,24 @@ struct HomeScreen: View {
         return (media.id, OrbitCaption(title: title, detail: parts.joined(separator: " · ")))
     }
 
+    /// What the `-preview*` launch-argument automation reads and drives (`.debugHomeAutomation`; nothing in release).
+    private var automation: HomeAutomationHooks {
+        HomeAutomationHooks(
+            model: model,
+            orbitSize: orbitFrame.size,
+            orbitFrame: { orbitFrame },
+            orbitMedia: { orbitMedia },
+            scene: { scene },
+            freezeOrbit: { orbit.clock.freeze(at: 0, now: now) },
+            openMedia: { open($0) },
+            closeDetail: {
+                #if os(iOS)
+                openedID = nil
+                #endif
+            },
+            baseMedia: { baseMedia($0) })
+    }
+
     /// A tap on the empty page opens whichever planet is under the finger: the same slots the orbit view
     /// draws, evaluated at the moment of the tap (so a moving planet is hit where it is).
     private func openPlanet(atGlobal point: CGPoint) {
@@ -1145,36 +1094,6 @@ struct HomeScreen: View {
             open(tapped)
         }
     }
-
-    #if DEBUG
-    /// Writes where every planet is (in screen points) to Documents/orbit-slots.json.
-    private func dumpOrbit() {
-        let media = orbitMedia
-        let t = now
-        let sc = scene
-        let layout = sc.geometry(at: t)
-        let slots = sc.slots(at: t, geometry: layout, orbitTime: sc.orbitTime(at: t))
-        let rows: [[String: Any]] = slots.compactMap { slot in
-            guard let m = media.first(where: { $0.id == slot.entry }) else { return nil }
-            let box = slot.box
-            return [
-                "index": slot.index, "id": m.id, "name": m.title, "ring": slot.ring, "face": m.face.kind == .webp ? "webp" : "video",
-                "webps": m.webps.count,
-                "cx": Double(orbitFrame.minX + slot.position.x), "cy": Double(orbitFrame.minY + slot.position.y),
-                "w": Double(box.width * slot.scale), "h": Double(box.height * slot.scale), "opacity": slot.opacity,
-            ]
-        }
-        let root: [String: Any] = [
-            "orbitFrame": [Double(orbitFrame.minX), Double(orbitFrame.minY), Double(orbitFrame.width), Double(orbitFrame.height)],
-            "center": [Double(orbitFrame.minX + sc.center.x), Double(orbitFrame.minY + sc.center.y)],
-            "topInset": Double(sc.topInset), "unit": Double(layout.unit), "rings": layout.plan.rings,
-            "counts": layout.plan.counts, "r0": Double(layout.r0), "top": Double(layout.top), "planets": rows,
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]),
-              let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        try? data.write(to: docs.appendingPathComponent("orbit-slots.json"))
-    }
-    #endif
 }
 
 /// A glass circle with its caption underneath. The circle carries a `glassEffectID` so the card it

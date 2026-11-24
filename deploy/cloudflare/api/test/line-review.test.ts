@@ -2,7 +2,7 @@
 // for the job the pump starts last, concurrent creates cannot all skip the line, an eviction between
 // the helper taking a queued render and the entry's removal does not strand it, the line's busy
 // wait really ends at 10 minutes, a transient start failure is not final, a refusal re-arms the
-// sweep, and the notification / cancel / expiry details.
+// sweep, and the cancel / expiry details.
 import { describe, expect, it, vi } from "vitest";
 import { LINE_BUSY_WAIT_MS } from "../src/line";
 import { runSweep } from "../src/sweep";
@@ -11,8 +11,6 @@ import { lineWorld, type LW } from "./line-world";
 
 const link = (n: number | string) => `${LINK}?n=${n}`;
 const create = (L: LW, body: Record<string, unknown>) => L.studio.create(KEY_ID, json({ url: LINK, ...body }));
-const lineRecord = (L: LW) => L.kv.m.get(`notify:line:${KEY_ID}`) as any;
-const putLine = (L: LW) => L.keyed("/studio/line/notify", "PUT");
 
 // The real re-arm rule: runSweep schedules the next pass only while the pass reports something pending.
 async function drive(L: LW, maxPasses = 30) {
@@ -45,8 +43,6 @@ describe("the sweep keeps running after the pump starts the last queued job", ()
         await drive(L);
         expect(L.session(B.id).status).toBe("ready");
         expect(L.keys("save:")).toEqual([]);
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toContain("is saved");
     });
     it("an adopted upload queued last is stepped (probed) by the re-armed sweep", async () => {
         const L = await lineWorld({ posters: false });
@@ -216,7 +212,7 @@ describe("an eviction between the helper taking a queued render and the entry's 
         expect(L.kv.m.has(`job:${q.job}`)).toBe(true);
         expect(L.entries().map((e) => e.job ?? e.sid)).toContain(q.job);
         // a poll now answers the running render, not "queued"
-        const fresh = L.make({ notify: L.notify, live: L.live });
+        const fresh = L.make({ live: L.live });
         expect(asBody(await fresh.renderStatus(S.sid, q.job, 0)).phase).not.toBe("queued");
         const uploads = () => L.helper.calls.filter((c) => c === "POST /jobs/upload").length;
         const before = uploads();
@@ -369,7 +365,7 @@ describe("a poster still running is not forgotten when a later pass ends", () =>
         const L = await lineWorld();
         L.seed();
         L.helper.posterGate = new Promise(() => {});
-        const one = L.make({ notify: L.notify });
+        const one = L.make({});
         await one.kickPosters();
         void one.sweep();
         await vi.waitFor(() => expect(L.helper.posterIds).toHaveLength(1));
@@ -382,67 +378,20 @@ describe("a poster still running is not forgotten when a later pass ends", () =>
     });
 });
 
-describe("the line summary", () => {
-    it("the last member's state is stored before the message is sent", async () => {
-        const L = await lineWorld();
-        const sid = asBody(await create(L, {})).id as string;
-        await putLine(L);
-        const seen: unknown[] = [];
-        L.hark.onCall = () => seen.push({ ...lineRecord(L).members });
-        await L.settle(sid);
-        expect(seen).toEqual([{ [sid]: "saved" }]);
-    });
-    it("a restart between the send and the record's removal neither resends nor strands the round", async () => {
-        const L = await lineWorld();
-        const sid = asBody(await create(L, {})).id as string;
-        await putLine(L);
-        const del = L.kv.delete.bind(L.kv);
-        let armed = true;
-        (L.kv as any).delete = async (k: string) => {
-            if (armed && k === `notify:line:${KEY_ID}`) {
-                armed = false;
-                throw new Error("evicted");
-            }
-            return del(k);
-        };
-        await L.settle(sid).catch(() => {});
-        expect(L.hark.calls).toHaveLength(1);
-        expect(lineRecord(L)).toBeDefined();
-        await L.notify.retryDue(L.clock.t);
-        expect(L.hark.calls).toHaveLength(1);
-        expect(lineRecord(L)).toBeUndefined();
-    });
-    it("a restart before the send leaves a settled round that the sweep's notify pass sends", async () => {
-        const L = await lineWorld();
-        const sid = asBody(await create(L, {})).id as string;
-        await putLine(L);
-        // the state was stored, the object died before sending
-        L.kv.m.set(`notify:line:${KEY_ID}`, { ...lineRecord(L), members: { [sid]: "saved" } });
-        L.db.raw.prepare("UPDATE studio_sessions SET status = 'ready' WHERE id = ?").run(sid);
-        expect(L.hark.calls).toEqual([]);
-        await L.notify.retryDue(L.clock.t);
-        expect(L.hark.calls).toHaveLength(1);
-        expect(lineRecord(L)).toBeUndefined();
-    });
-    it("a post deleted while its save waits: the row ends, the member is dropped, and the summary is not stuck", async () => {
+describe("a post deleted while its work waits", () => {
+    it("a post deleted while its save waits: the row ends error.studio.expired", async () => {
         const L = await lineWorld();
         L.helper.fetchPolls = 1e9;
         const R = asBody(await create(L, { url: link("run") }));
         const A = asBody(await create(L, { url: link("a"), queue: true }));
-        await putLine(L);
-        expect(Object.keys(lineRecord(L).members).sort()).toEqual([R.id, A.id].sort());
         L.db.raw.prepare("UPDATE studio_sessions SET expires_at = ? WHERE id = ?").run(L.clock.t, A.id);
         L.clock.t += 1;
         L.helper.fetchPolls = 0;
         await L.sweeps(3);
         expect(L.session(A.id)).toMatchObject({ status: "error", error_code: "error.studio.expired" });
-        // no "couldn't save" for a post the owner deleted: R alone is announced
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]).toMatchObject({ url: `cobalt-apple://session/${R.id}` });
-        expect(L.hark.calls[0]!.title).toBe("capystore");
-        expect(lineRecord(L)).toBeUndefined();
+        expect(L.session(R.id).status).toBe("ready");
     });
-    it("a post deleted while its render waits: no \"couldn't make the webp\"", async () => {
+    it("a post deleted while its render waits: the render ends error.studio.expired", async () => {
         const L = await lineWorld();
         const S = L.seed({}, { row: false });
         L.helper.fetchPolls = 1e9;
@@ -455,31 +404,5 @@ describe("the line summary", () => {
         expect(L.rows("SELECT status, error_code FROM studio_renders WHERE id = ?", r.job)).toEqual([
             { status: "error", error_code: "error.studio.expired" },
         ]);
-        expect(L.hark.calls).toEqual([]);
-    });
-});
-
-describe("the line lock is never held across a notification", () => {
-    it("a slow webhook while stale entries end does not block a new create", async () => {
-        const L = await lineWorld();
-        L.helper.fetchPolls = 1e9;
-        const R = asBody(await create(L, { url: link("run") }));
-        const A = asBody(await create(L, { url: link("a"), queue: true, notify: { on: ["failed"] } }));
-        L.clock.t += 31 * 60_000;
-        L.kv.m.set(`save:${R.id}`, { ...(L.kv.m.get(`save:${R.id}`) as object), startedAt: L.clock.t, lastAdvance: L.clock.t });
-        let release!: () => void;
-        L.hark.gate = new Promise<void>((r) => (release = r));
-        const sweep = L.studio.sweep();
-        await vi.waitFor(() => expect(L.hark.calls).toHaveLength(1)); // A's failure is being announced, slowly
-        expect(L.session(A.id).status).toBe("error");
-        // while that send hangs, the line is usable
-        const b = await Promise.race([
-            create(L, { url: link("b"), queue: true }),
-            new Promise<"blocked">((r) => setTimeout(() => r("blocked"), 1500)),
-        ]);
-        expect(b).not.toBe("blocked");
-        expect(asBody(b as { body: unknown }).queued).toBe(true);
-        release();
-        await sweep;
     });
 });

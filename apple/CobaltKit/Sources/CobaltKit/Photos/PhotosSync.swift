@@ -47,7 +47,8 @@ public final class PhotosSync {
     }
     public enum EnableOutcome: Sendable, Equatable { case on(existing: Int), refused }
 
-    /// The title of the album (CONTRACT-SYNC.md decision 7).
+    /// The title of the album (CONTRACT-SYNC.md decision 7). It stays "cobalt" although the product is "capystore" now: albums are
+    /// found by saved id, then by title, so renaming would make every existing user's next sync create a second album.
     static let albumTitle = "cobalt"
 
     // MARK: State

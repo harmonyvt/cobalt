@@ -208,7 +208,7 @@ struct SavePullModelTests {
         #expect(!t.app.holdsSession(sid), "and once the run has nothing more to do it is let go")
 
         // finished, but the original is still coming into the store (the library lists the post before the record lands)
-        let fetching = Task<StoredVideo?, Never> { try? await Task.sleep(for: .seconds(30)); return nil }
+        let fetching = Task<KeptOriginal, Never> { try? await Task.sleep(for: .seconds(30)); return KeptOriginal() }
         p.keepRequest = fetching
         #expect(t.app.holdsSession(sid), "the run's own copy is on its way: not the pull's to fetch")
         #expect(!t.app.holdsSession("someone-elses-session"))

@@ -1,23 +1,23 @@
 import CobaltKit
 import Foundation
 
-/// Copy for the studio tab (APP-API-CONTRACT section 30; all new, lowercase): the header, the preview, the spotlight bar and
+/// Copy for the live stage (the OBS canvas, a segment of the live tab) (APP-API-CONTRACT section 30; all new, lowercase): the header, the preview, the spotlight bar and
 /// its pool sheet, the pool picker, the sliders, Twitch, the rewards, the redemptions feed and the links with the store lock.
-/// The code says "stage"; only the words on screen say "studio". Plain values only (counts, dates, CobaltKit types), since
+/// The code says "stage"; the words on screen say "live stage". Plain values only (counts, dates, CobaltKit types), since
 /// `Cobalt/Design` is compiled into the extensions too.
 extension Copy {
     enum Stage {
-        static let title = "studio"
+        static let title = "live stage"
 
         // MARK: loading
 
-        static let loading = "loading the studio…"
-        static let failedTitle = "can't load the studio"
+        static let loading = "loading the live stage…"
+        static let failedTitle = "can't load the live stage"
         static let retry = "try again"
         static let refresh = "refresh"
         static func failedBody(_ error: StageError) -> String {
             switch error {
-            case .off: return "the studio is off on this server"
+            case .off: return "the live stage is off on this server"
             case .unavailable: return "the server can't do that right now"
             case .offline: return "can't reach the server"
             default: return "something went wrong"
@@ -40,6 +40,36 @@ extension Copy {
         static let previewOffBody = "obs shows an empty, see-through canvas until you go live."
         static let previewA11y = "preview of the stream canvas"
         static func airA11y(onAir: Bool) -> String { onAir ? "the canvas is on air" : "the canvas is off air" }
+
+        // MARK: save state and obs presence
+
+        /// The header pill while on air, by what the server says of the obs canvas pages connected to it.
+        static func onAirObs(_ count: Int) -> String { "on air · \(count) obs" }
+        static let onAirNoObs = "on air · no obs connected"
+        static func obsA11y(_ count: Int) -> String {
+            count == 1 ? "the canvas is on air, one obs connected" : "the canvas is on air, \(count) obs connected"
+        }
+        static let noObsA11y = "the canvas is on air, but no obs is connected"
+        /// Beside the air pill while a change has not reached the server.
+        static let unsaved = "unsaved"
+        static let saving = "saving…"
+        static let saveFailed = "save failed"
+        static let saveRetry = "retry"
+        static let saveRevert = "revert"
+        static let saveRetryHint = "sends the values that didn't save again"
+        static let saveRevertHint = "puts the live stage back to what the server has"
+        /// The bar under the header after a write failed: why, and that the values on screen are not saved.
+        static func saveFailedBar(_ error: StageError) -> String {
+            "these changes didn't save · \(reasonLine(error))"
+        }
+        private static func reasonLine(_ error: StageError) -> String {
+            switch error {
+            case .unavailable: return "the server can't do that right now"
+            case .offline: return "can't reach the server"
+            case .off: return "the live stage is off on this server"
+            default: return "something went wrong"
+            }
+        }
 
         // MARK: the spotlight bar
 
@@ -104,6 +134,11 @@ extension Copy {
         static let chooseSet = "choose a set"
         static let noCollections = "no collections yet · make one in the links tab"
         static let noSets = "no sets yet · make one in the links tab"
+        static let collectionsLoading = "loading collections…"
+        static let setsLoading = "loading sets…"
+        static let collectionsFailed = "couldn't load collections"
+        static let setsFailed = "couldn't load sets"
+        static let loadRetry = "retry"
         static let change = "change"
         static let searchPlaceholder = "words to search for"
         static let searchUse = "use these words"
@@ -195,6 +230,8 @@ extension Copy {
         static let editHint = "edit cost and cooldown"
         /// The reward page's switch: whether the reward is on twitch.
         static let saved = "saved"
+        /// Instead of "saved" while twitch has not taken the values yet (`synced` is false): they are kept here and retried.
+        static let savedLocally = "saved locally · twitch sync pending"
         static let rewardOnTwitch = "on twitch"
         static let rewardNotThere = "twitch hasn't made this reward"
         static let editCost = "cost"
@@ -315,15 +352,15 @@ extension Copy {
 
         static let wallpaper = "wallpaper on this mac"
         static let wallpaperNote = "the canvas behind your desktop icons on every display, silent. it keeps going while the stream is off."
-        static let wallpaperMenu = "studio wallpaper"
+        static let wallpaperMenu = "live stage wallpaper"
 
         // MARK: refusals
 
-        /// The status line for a refused or failed studio call.
+        /// The status line for a refused or failed live stage call.
         static func message(for error: Error) -> String {
             switch StageError.from(error) {
             case .badRequest: return "that didn't work · check what you typed"
-            case .off: return "the studio is off on this server"
+            case .off: return "the live stage is off on this server"
             case .notFound: return "that file isn't in the pool any more"
             case .twitchOff: return "twitch isn't set up on this server"
             case .offAir: return "go live first"

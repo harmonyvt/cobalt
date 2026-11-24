@@ -4,8 +4,9 @@ import CobaltKit
 import Foundation
 
 /// Simulator evidence for the Live Activity views (debug builds only). The widget's own previews
-/// need Xcode; this starts real activities from the fixture states of CONTRACT-LIVE.md 2.4 so the
-/// island and the Lock Screen can be screenshotted with `simctl`.
+/// need Xcode; this starts real job activities (CONTRACT-JOBLIVE.md) from the fixture states of CONTRACT-LIVE.md 2.4, turned
+/// into the job island's words by the same local builder the app uses, so the island and the Lock Screen can be
+/// screenshotted with `simctl`.
 ///
 ///   -previewLive done                       one activity at that fixture state
 ///   -previewLive fetching_waking,decoding   two activities (the minimal island, two at once)
@@ -21,7 +22,7 @@ enum DebugLive {
         "failed_render_lost", "failed_fetch",
     ]
 
-    private static var started: [Activity<CobaltActivityAttributes>] = []
+    private static var started: [Activity<CobaltJobActivityAttributes>] = []
 
     static func runIfRequested() {
         let defaults = UserDefaults.standard
@@ -30,25 +31,29 @@ enum DebugLive {
         Task {
             // Activity.request needs an active scene: wait for the first one.
             try? await Task.sleep(for: .seconds(2))
-            for activity in Activity<CobaltActivityAttributes>.activities {
+            for activity in Activity<CobaltJobActivityAttributes>.activities {
                 await activity.end(nil, dismissalPolicy: .immediate)
             }
             guard raw != "none" else { return }
             let input = defaults.string(forKey: "previewLiveInput") ?? "link"
             let origin = defaults.string(forKey: "previewLiveOrigin") ?? "app"
             let names = raw.split(separator: ",").map(String.init)
+            var first: LiveRunAttributes?
             for (i, name) in names.enumerated() {
                 guard let state = state(name) else { continue }
-                let attributes = CobaltActivityAttributes(LiveRunAttributes(
+                let run = LiveRunAttributes(
                     run: UUID(),
                     input: input,
                     service: input == "file" ? "file" : (i == 0 ? "instagram" : "x"),
                     ref: input == "file" ? "IMG_0412.mov" : (i == 0 ? "Dd7P496wolG" : "2105435404002562056"),
-                    origin: origin))
+                    origin: origin)
+                if first == nil { first = run }
+                let job = JobLive.job(save: state, attributes: run)
                 let stale = defaults.bool(forKey: "previewLiveStale") ? Date().addingTimeInterval(4) : nil
                 do {
                     let activity = try Activity.request(
-                        attributes: attributes, content: .init(state: state, staleDate: stale), pushType: nil)
+                        attributes: CobaltJobActivityAttributes(job.attributes),
+                        content: .init(state: job.state, staleDate: stale), pushType: nil)
                     started.append(activity)
                     NSLog("[debuglive] started %@ (%@)", name, activity.id)
                 } catch {
@@ -56,19 +61,20 @@ enum DebugLive {
                 }
             }
             guard defaults.bool(forKey: "previewLiveCycle") else { return }
-            guard let run = started.first?.attributes.run else { return }
+            guard let run = first else { return }
             for name in order {
                 try? await Task.sleep(for: .seconds(5))
                 guard let state = state(name) else { continue }
-                await Self.update(run: run, to: state)
+                await Self.update(run, to: state)
             }
         }
     }
 
     /// Looks the activity up again by run id: ActivityKit's handle is not `Sendable`.
-    private nonisolated static func update(run: String, to state: LiveContentState) async {
-        for activity in Activity<CobaltActivityAttributes>.activities where activity.attributes.run == run {
-            await activity.update(.init(state: state, staleDate: nil))
+    private nonisolated static func update(_ run: LiveRunAttributes, to state: LiveContentState) async {
+        let job = JobLive.job(save: state, attributes: run)
+        for activity in Activity<CobaltJobActivityAttributes>.activities where activity.attributes.id == job.attributes.id {
+            await activity.update(.init(state: job.state, staleDate: nil))
         }
     }
 

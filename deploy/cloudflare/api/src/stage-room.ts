@@ -31,11 +31,15 @@ export class StageRoom extends DurableObject {
             return new Response(null, { status: 101, webSocket: pair[0] });
         }
         if (pathname === "/state" && request.method === "GET") {
-            return new Response(JSON.stringify(await this.load()), { headers: { "content-type": "application/json" } });
+            // `viewers`: the canvases connected right now (hibernating sockets count: they are still open)
+            const viewers = this.ctx.getWebSockets().length;
+            return new Response(JSON.stringify({ ...(await this.load()), viewers }), { headers: { "content-type": "application/json" } });
         }
         if (pathname === "/event" && request.method === "POST") {
             const event = (await request.json()) as CanvasEvent;
-            await this.ctx.storage.put(KEY, reduceRoom(await this.load(), event, Date.now()));
+            // the socket count is live, never stored
+            const { viewers: _live, ...kept } = await this.load();
+            await this.ctx.storage.put(KEY, reduceRoom(kept as RoomState, event, Date.now()));
             const text = JSON.stringify(event);
             for (const ws of this.ctx.getWebSockets()) {
                 try {

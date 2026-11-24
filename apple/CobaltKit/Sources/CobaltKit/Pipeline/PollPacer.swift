@@ -12,7 +12,8 @@ struct PollPacer {
     static let floor: Double = 1
     static let ceiling: Double = 10
 
-    /// What counts as "the reply changed".
+    /// What counts as "the reply changed". The engine, the switch and the gallery's own count are part of it: a reply that
+    /// only moved one of those is news, not a repeat.
     private struct Reply: Equatable {
         var status: SessionStatus
         var step: SaveStep?
@@ -21,6 +22,11 @@ struct PollPacer {
         var waking: Bool?
         var title: String?
         var duration: Double?
+        var engine: SaveEngine?
+        var wakingEngine: SaveEngine?
+        var fallbackFrom: SaveEngine?
+        var itemsDone: Int?
+        var itemsTotal: Int?
     }
 
     /// A reply faster than this (seconds) did not come from a long poll that actually waited.
@@ -28,6 +34,8 @@ struct PollPacer {
 
     private var lastStart: Date?
     private var lastReply: Reply?
+    private var lastRender: RenderStatus?
+    private var lastMake: MakeStatus?
     private var unchanged = 0
 
     /// The gap the next poll must keep from the start of the last one.
@@ -45,9 +53,28 @@ struct PollPacer {
     mutating func observe(_ s: StudioSession, clock: any PipelineClock) {
         let reply = Reply(
             status: s.status, step: s.step, stepBytes: s.stepBytes, stepTotal: s.stepTotal, waking: s.waking,
-            title: s.title, duration: s.duration)
-        let took = lastStart.map { clock.now().timeIntervalSince($0) } ?? 0
-        unchanged = (reply == lastReply && took < PollPacer.heldReply) ? unchanged + 1 : 0
+            title: s.title, duration: s.duration, engine: s.engine, wakingEngine: s.wakingEngine,
+            fallbackFrom: s.fallbackFrom, itemsDone: s.itemsDone, itemsTotal: s.itemsTotal)
+        note(same: reply == lastReply, clock: clock)
         lastReply = reply
+    }
+
+    /// The same pacing for `GET /studio/<sid>/render/<job>?wait=1`: a quick unchanged answer (the Worker's fallback while
+    /// the container has a bad moment) never tight-loops.
+    mutating func observe(_ status: RenderStatus, clock: any PipelineClock) {
+        note(same: status == lastRender, clock: clock)
+        lastRender = status
+    }
+
+    /// The same pacing for `GET /studio/<sid>/make/<job>?wait=1` (a slideshow or a gallery image made from a saved gallery): a
+    /// quick unchanged answer never tight-loops either.
+    mutating func observe(_ status: MakeStatus, clock: any PipelineClock) {
+        note(same: status == lastMake, clock: clock)
+        lastMake = status
+    }
+
+    private mutating func note(same: Bool, clock: any PipelineClock) {
+        let took = lastStart.map { clock.now().timeIntervalSince($0) } ?? 0
+        unchanged = (same && took < PollPacer.heldReply) ? unchanged + 1 : 0
     }
 }

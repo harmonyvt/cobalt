@@ -45,6 +45,11 @@ extension Copy {
         }
         static let saveSaving = "saving…", saveRetrying = "not saved · retrying", saveConflict = "changed on another device"
         static let saveUpdate = "update needed"
+        /// Edited, not on its way to the server yet (the 1 s before the autosave goes out).
+        static let saveUnsaved = "unsaved"
+        /// The clip-problem badge beside the save pill: what is wrong never hides whether it is saved.
+        static func problemBadge(_ n: Int) -> String { n == 1 ? "1 problem" : "\(n) problems" }
+        static let problemBadgeHint = "shows what stops the render"
 
         // MARK: bin
 
@@ -57,7 +62,6 @@ extension Copy {
         // MARK: preview and transport
 
         static let backOneFrame = "back one frame", forwardOneFrame = "forward one frame", play = "play", pause = "pause"
-        static let pinchToZoom = "pinch to zoom"
         static func loadingSources(_ pct: Int) -> String { "getting your clips · \(pct)%" }
         static let missingClip = "this clip was deleted from your library"
         static let sourceFailed = "couldn't get this clip", tryAgain = "try again"
@@ -66,13 +70,10 @@ extension Copy {
 
         // MARK: inspector
 
-        static func clipN(_ n: Int) -> String { "clip \(n)" }
-        static func fileLine(_ name: String, _ w: Int, _ h: Int) -> String { "\(name) · \(w)×\(h)" }
         static let trim = "trim", trimIn = "in", trimOut = "out", speed = "speed", crop = "crop", fit = "fit", volume = "volume"
         static let cropFull = "full", cropFree = "free", fitFill = "fill", fitFit = "fit", editCrop = "edit crop"
         static func speedValue(_ s: Double) -> String { "\(trimmedNumber(s))×" }                  // "1.5×", "0.25×", "2×"
         static func becomes(_ seconds: Double) -> String { "clip becomes \(trimmedNumber(seconds, places: 1))s" }   // "clip becomes 4.5s"
-        static let pitchKept = "pitch kept"
         static let pitch = "pitch", pitchHint = "changes the voice, not the speed", pitchReset = "reset"
         /// "+3", "-2.5", "0" (semitones, steps of a half).
         static func pitchValue(_ p: Double) -> String {
@@ -81,7 +82,7 @@ extension Copy {
         }
         static func pitchChip(_ p: Double) -> String { "pitch \(pitchValue(p))" }              // "pitch +3"
         static let mute = "mute", unmute = "unmute", muted = "muted", noSound = "no sound"
-        static let splitAtPlayhead = "split at playhead", deleteClip = "delete clip", deleteOverlay = "delete overlay"
+        static let splitAtPlayhead = "split at playhead", deleteClip = "delete clip"
         static let overlay = "overlay", start = "start", length = "length", position = "position", size = "size", opacity = "opacity"
         static let nothingSelected = "select a clip to change it"
         static func summary(canvas: String, quality: String, duration: String, clips: Int) -> String {
@@ -108,9 +109,7 @@ extension Copy {
 
         // MARK: iPhone tools and sheets
 
-        static let toolTrim = "trim", toolSplit = "split", toolSpeed = "speed", toolOverlay = "overlay", toolVolume = "volume"
-        static let nothingToSplit = "move the playhead into a clip to split it"
-        static let pinchAndDrag = "pinch and drag the frame"
+        static let toolTrim = "trim", toolSplit = "split", toolSpeed = "speed"
         static func sheetTitle(_ name: String, _ n: Int) -> String { "\(name) · clip \(n)" }    // "surf · clip 2"
         static func inAt(_ t: String) -> String { "in \(t)" }
         static func outAt(_ t: String) -> String { "out \(t)" }
@@ -451,9 +450,6 @@ extension Copy {
         // MARK: effects and layers (section 66, 67; overlay stacking)
 
         static let effects = "effects"
-        static let effectsNeedVideo = "pick a video"
-        static let effectsBackClip = "‹ clip"
-        static let effectsBack = "‹ overlay"
         static let effectsPick = "pick a method"
         static let effectGreenscreen = "greenscreen"
         static let effectDepth = "depth cutout"
@@ -497,9 +493,30 @@ extension Copy {
         static let previewCrowded = "lots of videos at once — preview may stutter, render is fine"
         static func previewSkipped(_ n: Int) -> String { n == 1 ? "skipped a clip" : "skipped \(n) clips" }
 
-        // MARK: icon names (added for the icon-first controls: what a long press shows and VoiceOver reads)
+        // MARK: when the render poll loses the server, and what did not apply
 
-        static let lengthShorter = "a tenth shorter", lengthLonger = "a tenth longer"
+        /// The banner while two or more reads of the running render failed in a row.
+        static let renderLinkLost = "connection lost — render continues on server"
+        static let reconnect = "reconnect"
+        /// Pitch copies for the preview that could not be made: those clips play unshifted here, the render shifts them.
+        static func pitchPreviewFailed(_ n: Int) -> String {
+            n == 1 ? "pitch preview isn't ready for a clip · render is fine" : "pitch preview isn't ready for \(n) clips · render is fine"
+        }
+        /// The toast for something the owner asked for that did not apply (`EditSession.notice`).
+        static func notice(_ notice: EditSession.Notice) -> String {
+            switch notice {
+            case .overlayUnreadable: return "couldn't read that video's length, so it wasn't added"
+            case .overlayNoRoom: return "it loaded, but the room for it is gone"
+            case .madeNotPlaced: return "made it, but there's no room to place it · it's in your library"
+            case .priceUnavailable(let reason):
+                switch reason {
+                case .offline: return "you're offline · couldn't get the price"
+                case .off: return "this server can't remove a video background yet"
+                case .notFound: return "that video is gone from your library"
+                case .other: return "couldn't get the price · try again"
+                }
+            }
+        }
 
         // MARK: trim that scrubs
 

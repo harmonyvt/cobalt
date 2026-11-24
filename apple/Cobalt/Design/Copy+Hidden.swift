@@ -43,6 +43,9 @@ extension Copy {
         static let unhideFailed = "couldn't unhide it. try again."
         static let hiddenStatus = "hidden"
         static let unhiddenStatus = "back in the library"
+        /// Said once the change is in the sync outbox with the server away (hide / unhide of one post).
+        static let hiddenQueued = "queued. it hides when you're back online"
+        static let unhiddenQueued = "queued. it comes back when you're back online"
 
         // MARK: settings › hidden
 

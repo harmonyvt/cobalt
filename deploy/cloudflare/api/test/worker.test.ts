@@ -336,7 +336,7 @@ describe("GET /capabilities features.live_activity_push", () => {
     });
 });
 
-// ---- Hark notification bridge (APP-API-CONTRACT.md section 9) ---------------------------------
+// ---- the retired Hark opt-in routes (APP-API-CONTRACT.md section 9): the Worker still forwards them ----------
 
 describe("PUT|DELETE /studio/<sid>/notify (Worker side)", () => {
     const SID = "aB3dE6gH9jK2mN5pQ8sTuV";
@@ -391,7 +391,7 @@ describe("PUT|DELETE /studio/<sid>/notify (Worker side)", () => {
 
 describe("GET /capabilities features.source_wait", () => {
     it("is always true (the hold needs no secret or binding), with or without a key", async () => {
-        for (const e of [env(), env({ HARK_WEBHOOK_URL: "" })]) {
+        for (const e of [env()]) {
             const res = (await (await call("/capabilities", {}, e)).json()) as any;
             expect(res.features.source_wait).toBe(true);
         }
@@ -400,7 +400,7 @@ describe("GET /capabilities features.source_wait", () => {
 
 describe("GET /capabilities features.delete_post", () => {
     it("is always true (D1 + R2 only, no secret or binding beyond the two buckets), with or without a key", async () => {
-        for (const e of [env(), env({ HARK_WEBHOOK_URL: "" })]) {
+        for (const e of [env()]) {
             const res = (await (await call("/capabilities", {}, e)).json()) as any;
             expect(res.features.delete_post).toBe(true);
         }
@@ -408,30 +408,9 @@ describe("GET /capabilities features.delete_post", () => {
 });
 
 describe("GET /capabilities features.notify_bridge", () => {
-    const flag = async (e: WorkerEnv) => ((await (await call("/capabilities", {}, e)).json()) as any).features.notify_bridge;
-    const HOOK = "https://hark.example/api/webhook/T0pS3cretHookToken";
-
-    it("false without the secret, or with it empty, blank, not a URL or not https", async () => {
-        expect(await flag(env())).toBe(false);
-        for (const v of ["", "   ", "not a url", "http://hark.example/x"]) {
-            expect(await flag(env({ HARK_WEBHOOK_URL: v, HARK_NOTIFY: "1" })), v).toBe(false);
-        }
-    });
-    it("false with an https webhook URL while HARK_NOTIFY is not \"1\" (the deployed \"0\")", async () => {
-        for (const v of [undefined, "0"]) {
-            const res = await (await call("/capabilities", {}, env({ HARK_WEBHOOK_URL: HOOK, HARK_NOTIFY: v }))).json();
-            expect((res as any).features.notify_bridge, String(v)).toBe(false);
-        }
-    });
-    it("true with an https webhook URL and HARK_NOTIFY \"1\", independent of the APNs flag", async () => {
-        const res = await (await call("/capabilities", {}, env({ HARK_WEBHOOK_URL: HOOK, HARK_NOTIFY: "1" }))).json();
-        expect((res as any).features.notify_bridge).toBe(true);
-        expect((res as any).features.live_activity_push).toBe(false);
-    });
-    it("is a plain boolean, and the answer never contains the secret", async () => {
-        const text = await (await call("/capabilities", {}, env({ HARK_WEBHOOK_URL: HOOK, HARK_NOTIFY: "1" }))).text();
-        expect(typeof JSON.parse(text).features.notify_bridge).toBe("boolean");
-        expect(text).not.toContain("T0pS3cretHookToken");
-        expect(text).not.toContain("hark.example");
+    it("is always false: the Hark bridge is retired, but the key stays on the wire for older clients", async () => {
+        const res = (await (await call("/capabilities", {}, env())).json()) as any;
+        expect(res.features.notify_bridge).toBe(false);
+        expect(res.features.live_activity_push).toBe(false);
     });
 });

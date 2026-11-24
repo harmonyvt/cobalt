@@ -141,7 +141,7 @@ struct ContinuedNeedsProcessTests {
 
     @Test func theOriginalArrivingIsAlwaysThisDevicesWork() {
         let p = pipeline(.ready, session: "S")
-        p.keepRequest = Task { nil }
+        p.keepRequest = Task { KeptOriginal() }
         #expect(ContinuedProcessing.needsProcess(p, serverMode: true))
         p.keepRequest?.cancel()
         p.keepRequest = nil

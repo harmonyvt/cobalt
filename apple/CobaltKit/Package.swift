@@ -7,11 +7,8 @@ let package = Package(
     products: [
         .library(name: "CobaltKit", targets: ["CobaltKit"]),
     ],
-    dependencies: [
-        .package(path: "../SyncGlowKit"),
-    ],
     targets: [
-        .target(name: "CobaltKit", dependencies: ["SyncGlowKit"], linkerSettings: [.linkedLibrary("sqlite3")]),
+        .target(name: "CobaltKit", linkerSettings: [.linkedLibrary("sqlite3")]),
         .testTarget(
             name: "CobaltKitTests", dependencies: ["CobaltKit"],
             // live-states.json: the parity fixture, byte-identical to the API's copy (CONTRACT-LIVE.md 2.4)

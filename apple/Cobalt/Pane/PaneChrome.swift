@@ -139,7 +139,22 @@ struct PaneChrome: View {
         }
     }
 
+    /// Spanning is the iPad's and the Mac's (a pane beside the tab that can take the window). The iPhone's pane is one
+    /// sheet: span there was a full-screen cover stacked over it, so the iPhone has no span button (and no ⌘⇧F).
+    private var spanAllowed: Bool {
+        #if os(iOS)
+        return pane.placement != .compact
+        #else
+        return true
+        #endif
+    }
+
+    @ViewBuilder
     private var spanButton: some View {
+        if spanAllowed { spanControl }
+    }
+
+    private var spanControl: some View {
         let spanned = pane.state == .span
         let title = spanned ? Copy.Pane.unspan : Copy.Pane.span
         return Button { pane.toggleSpan() } label: {
@@ -160,17 +175,7 @@ struct PaneChrome: View {
     private func trailing(_ more: [PaneAction]) -> some View {
         if !more.isEmpty {
             Menu {
-                ForEach(more) { action in
-                    if action.choices.isEmpty {
-                        Button(role: action.role) { action.perform() } label: {
-                            Label(action.title, systemImage: action.systemImage)
-                        }
-                        .disabled(action.off(offline: offline))
-                    } else {
-                        Menu(action.title, systemImage: action.systemImage) { PaneChoiceItems(choices: action.choices) }
-                            .disabled(action.off(offline: offline))
-                    }
-                }
+                PaneActionMenuItems(actions: more, offline: offline)
             } label: {
                 Image(systemName: Symbol.Pane.more)
                     .font(.system(size: Platform.isMac ? 13 : 14, weight: .semibold))
@@ -203,7 +208,7 @@ struct PaneChrome: View {
                 pane.requestClose()
             } label: { EmptyView() }
                 .keyboardShortcut(.escape, modifiers: [])
-            Button { pane.toggleSpan() } label: { EmptyView() }
+            Button { if spanAllowed { pane.toggleSpan() } } label: { EmptyView() }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
             Button { pane.shelfBack() } label: { EmptyView() }
                 .keyboardShortcut("[", modifiers: .command)
@@ -288,14 +293,19 @@ private struct PaneChromeBackground: ViewModifier {
 /// The line on the hinge (or the column's divider). While another save or make runs in the background (not the one
 /// already displayed in the pane), a quiet 2 pt progress bar fills along the line.
 struct PaneSeam: View {
+    /// The fraction on the line (`seamFraction`) is the queue's; whether there is any work to show is the one count's.
     let queue: JobQueue
+    let activity: ActivityModel
     let axis: PanePlacement.Axis
     /// The job already displayed in the pane, if any: no need to mirror its progress on the divider beside it.
     var showingJobID: UUID? = nil
 
     private var vertical: Bool { axis == .vertical }
+    /// Any work in motion but the one the pane shows (apple 03-PHASE3 3.2: the seam reads `activity`, so a download or a render
+    /// somewhere else lights it as well as a job of this device does).
     private var showsBackgroundProgress: Bool {
-        queue.live.contains { $0.id != showingJobID }
+        let showing = showingJobID.map(JobStatus.Ref.pipeline)
+        return activity.items.contains { $0.isActive && $0.ref != showing }
     }
 
     var body: some View {

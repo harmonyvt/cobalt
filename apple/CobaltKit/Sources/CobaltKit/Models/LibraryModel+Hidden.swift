@@ -9,7 +9,7 @@ extension LibraryModel {
 
     /// The first page of the hidden album (`GET /library?hidden=1`), replacing what was loaded.
     public func loadHidden() async {
-        if let sync, sync.isActive {
+        if let sync, sync.servesLibrary {
             await sync.syncNow()
             return
         }
@@ -29,7 +29,7 @@ extension LibraryModel {
 
     /// The next page of the album.
     public func loadMoreHidden() async {
-        if sync?.isActive == true { return }
+        if sync?.servesLibrary == true { return }
         guard !hiddenLoading, hiddenHasMore, let cursor = hiddenCursor else { return }
         hiddenLoading = true
         defer { hiddenLoading = false }
@@ -44,7 +44,7 @@ extension LibraryModel {
 
     /// Every hidden post up to `cap`, pages of 50 (a sort, a filter or a search in the album needs them all).
     func loadAllHidden(cap: Int) async {
-        if let sync, sync.isActive {
+        if let sync, sync.servesLibrary {
             await sync.syncNow()
             return
         }

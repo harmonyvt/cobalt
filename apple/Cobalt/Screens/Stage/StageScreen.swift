@@ -154,6 +154,7 @@ private struct StageBody: View {
                 ScrollView {
                     VStack(spacing: 14) {
                         stale
+                        StageSaveBar(store: store)
                         controls
                     }
                     .padding(.bottom, 20)
@@ -181,6 +182,7 @@ private struct StageBody: View {
             VStack(spacing: 14) {
                 StageHeader(stage: stage, controller: controller, showsCopy: false)
                 stale
+                StageSaveBar(store: store)
                 controls
                 panels
             }
@@ -242,7 +244,8 @@ private struct StageBody: View {
 
 // MARK: - the header
 
-/// "on air" / "off air", "copy obs link" (wide only: compact has it in the links panel) and "go live" / "stop".
+/// "on air" / "off air" (while on air, with how many obs canvases are connected), a save pill while a change has not reached
+/// the server, "copy obs link" (wide only: compact has it in the links panel) and "go live" / "stop".
 private struct StageHeader: View {
     let stage: StageSettings
     let controller: StageController
@@ -250,10 +253,35 @@ private struct StageHeader: View {
 
     @Environment(\.shell) private var shell
 
+    private var store: StageStore { controller.store }
+
     var body: some View {
+        // one row; a narrow one with both pills (on air, no obs, saving) drops the buttons to a second row
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                pills
+                Spacer(minLength: 8)
+                buttons
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                pills
+                HStack(spacing: 10) {
+                    Spacer(minLength: 8)
+                    buttons
+                }
+            }
+        }
+    }
+
+    private var pills: some View {
+        HStack(spacing: 8) {
+            AirPill(onAir: stage.onAir, presence: stage.obsPresence)
+            SavePill(state: store.saveState)
+        }
+    }
+
+    private var buttons: some View {
         HStack(spacing: 10) {
-            AirPill(onAir: stage.onAir)
-            Spacer(minLength: 8)
             if showsCopy { copyButton }
             airButton
         }
@@ -272,38 +300,157 @@ private struct StageHeader: View {
         .accessibilityValue(copied ? Copy.Stage.copied : "")
     }
 
+    /// The switch is awaited: its own spinner shows in the button while the write is on its way.
     @ViewBuilder
     private var airButton: some View {
+        let working = store.busyFields.contains(.onAir)
         if stage.onAir {
-            Button(Copy.Stage.stop, systemImage: Symbol.stageStop) { controller.toggleAir(shell: shell) }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                .disabled(controller.isBusy("air"))
+            Button {
+                controller.toggleAir(shell: shell)
+            } label: {
+                Label {
+                    Text(Copy.Stage.stop)
+                } icon: {
+                    if working { ProgressView().controlSize(.small) } else { Image(systemName: Symbol.stageStop) }
+                }
+            }
+            .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+            .disabled(controller.isBusy("air"))
         } else {
-            Button(Copy.Stage.goLive, systemImage: Symbol.stageGoLive) { controller.toggleAir(shell: shell) }
-                .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
-                .disabled(controller.isBusy("air"))
+            Button {
+                controller.toggleAir(shell: shell)
+            } label: {
+                Label {
+                    Text(Copy.Stage.goLive)
+                } icon: {
+                    if working { ProgressView().controlSize(.small) } else { Image(systemName: Symbol.stageGoLive) }
+                }
+            }
+            .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
+            .disabled(controller.isBusy("air"))
         }
     }
 }
 
-/// A dot and two words: red and "on air", grey and "off air".
+/// A dot and two words: red and "on air", grey and "off air". On air it also says whether an obs canvas is connected: "on air ·
+/// 1 obs" (red dot), or amber "on air · no obs connected" when the server says none is (an older server that does not say
+/// shows plain "on air": unknown is never warned about).
 private struct AirPill: View {
     let onAir: Bool
+    let presence: StageObsPresence
+
+    private var warns: Bool { onAir && presence == .disconnected }
+
+    private var title: String {
+        guard onAir else { return Copy.Stage.offAir }
+        switch presence {
+        case .unknown: return Copy.Stage.onAir
+        case .disconnected: return Copy.Stage.onAirNoObs
+        case .connected(let count): return Copy.Stage.onAirObs(count)
+        }
+    }
+
+    private var a11y: String {
+        guard onAir else { return Copy.Stage.airA11y(onAir: false) }
+        switch presence {
+        case .unknown: return Copy.Stage.airA11y(onAir: true)
+        case .disconnected: return Copy.Stage.noObsA11y
+        case .connected(let count): return Copy.Stage.obsA11y(count)
+        }
+    }
 
     var body: some View {
         HStack(spacing: 7) {
             Circle()
-                .fill(onAir ? CobaltColor.error : CobaltColor.caption)
+                .fill(warns ? CobaltColor.amber : (onAir ? CobaltColor.error : CobaltColor.caption))
                 .frame(width: 8, height: 8)
-            Text(onAir ? Copy.Stage.onAir : Copy.Stage.offAir)
+            Text(title)
                 .font(CobaltType.pill)
-                .foregroundStyle(CobaltColor.text)
+                .foregroundStyle(warns ? CobaltColor.amber : CobaltColor.text)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 30)
+        .background(warns ? CobaltColor.amberBack : CobaltColor.elevated, in: Capsule())
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(a11y)
+    }
+}
+
+/// Beside the air pill while a change is on its way: "unsaved" (a slider moved, not sent yet), "saving…", or a red "save
+/// failed". Nothing when everything the screen shows is what the server has.
+private struct SavePill: View {
+    let state: StageStore.SaveState
+
+    var body: some View {
+        switch state {
+        case .synced:
+            EmptyView()
+        case .dirty:
+            pill(Copy.Stage.unsaved, color: CobaltColor.caption) {
+                Circle().fill(CobaltColor.caption).frame(width: 8, height: 8)
+            }
+        case .saving:
+            pill(Copy.Stage.saving, color: CobaltColor.caption) {
+                ProgressView().controlSize(.mini)
+            }
+        case .failed:
+            pill(Copy.Stage.saveFailed, color: CobaltColor.errorText) {
+                Image(systemName: Symbol.error).font(.system(size: 11, weight: .semibold)).foregroundStyle(CobaltColor.errorText)
+            }
+        }
+    }
+
+    private func pill<Icon: View>(_ title: String, color: Color, @ViewBuilder icon: () -> Icon) -> some View {
+        HStack(spacing: 6) {
+            icon()
+            Text(title)
+                .font(CobaltType.pill)
+                .foregroundStyle(color)
+                .lineLimit(1)
         }
         .padding(.horizontal, 12)
         .frame(minHeight: 30)
         .background(CobaltColor.elevated, in: Capsule())
+        .fixedSize(horizontal: true, vertical: false)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Copy.Stage.airA11y(onAir: onAir))
+        .accessibilityLabel(title)
+        .transition(.opacity)
+    }
+}
+
+/// Under the header after a slider write failed: why, with "retry" (send the values again) and "revert" (back to what the
+/// server has, at once, offline too). The values on screen are not saved until one of them is tapped.
+struct StageSaveBar: View {
+    let store: StageStore
+
+    var body: some View {
+        if case .failed(let failure, _) = store.saveState {
+            VStack(alignment: .leading, spacing: 10) {
+                Label {
+                    Text(Copy.Stage.saveFailedBar(store.notice?.error ?? failure))
+                        .font(CobaltType.caption)
+                        .foregroundStyle(CobaltColor.errorText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: Symbol.error).foregroundStyle(CobaltColor.errorText)
+                }
+                HStack(spacing: 10) {
+                    Button(Copy.Stage.saveRetry, systemImage: Symbol.retry) { Task { await store.retryFailedPatch() } }
+                        .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
+                        .accessibilityHint(Copy.Stage.saveRetryHint)
+                    Button(Copy.Stage.saveRevert, systemImage: Symbol.reset) { store.revertUnsavedChanges() }
+                        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+                        .accessibilityHint(Copy.Stage.saveRevertHint)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .accessibilityElement(children: .contain)
+            .accessibilityAddTraits(.updatesFrequently)
+        }
     }
 }
 
@@ -352,6 +499,7 @@ struct StageThumb: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: Metrics.radius, style: .continuous))
+        .mediaMask()
         .accessibilityHidden(true)
     }
 }

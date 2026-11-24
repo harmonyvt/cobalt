@@ -6,7 +6,6 @@
 
 import { Container } from "@cloudflare/containers";
 import { EditRenderCore } from "./edit-render-core";
-import { harkConfigFrom } from "./notify";
 
 // The binding names this class reads (a subset of src/index.ts's Env; declared here so this file does not import index.ts).
 export interface EditRendererEnv {
@@ -19,8 +18,6 @@ export interface EditRendererEnv {
     // the internal key (a UUID): the render image's EDIT_INTERNAL_KEY
     COBALT_API_KEY: string;
     VERSION?: { id: string; tag?: string; timestamp?: string };
-    HARK_WEBHOOK_URL?: string;
-    HARK_NOTIFY?: string;
     // the main CobaltContainer namespace: an editor render's Live Activity is pushed from there (section 32)
     COBALT?: DurableObjectNamespace;
 }
@@ -82,7 +79,6 @@ export class EditRenderer extends Container<EditRendererEnv> {
             renew: () => this.renewActivityTimeout(),
             schedule: (seconds) => this.schedule(seconds, "tick"),
             beforeClaim: () => this.restartOnEnvChange(),
-            hark: harkConfigFrom(env),
             liveEdit: env.COBALT
                 ? async (rid) => {
                       const ns = env.COBALT!;

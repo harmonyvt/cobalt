@@ -111,7 +111,7 @@ struct PhotosSectionEvidence: View {
 }
 #Preview("settings · album on, adding") {
     PreviewHost(.happy, tab: .settings) { model in
-        SettingsScreen(model: model)
+        NavigationStack { SettingsScreen(model: model) }
             .onAppear { PhotosPreviewState.adding.apply(to: model, access: .album) }
     }
 }

@@ -10,8 +10,6 @@ protocol LiveActivityAdapter: AnyObject, Sendable {
     var isAvailable: Bool { get }
     /// The job activities of saves, uploads, makes and the busy period.
     var activities: [any JobActivityHandle] { get }
-    /// Activities of the old type (`CobaltActivityAttributes`) still on screen from an older build: ended, never written.
-    var oldActivities: [any OldLiveActivity] { get }
     func request(_ job: JobLiveJob, staleDate: Date, push: Bool) throws -> any JobActivityHandle
     /// The job type's `pushToStartTokenUpdates`, lowercase hex.
     func startTokens() -> AsyncStream<String>
@@ -19,8 +17,6 @@ protocol LiveActivityAdapter: AnyObject, Sendable {
     var currentStartToken: String? { get }
     /// The job type's `activityUpdates`: activities the system (a push-to-start) created, of the kinds above.
     func newActivities() -> AsyncStream<any JobActivityHandle>
-    /// The old type's `activityUpdates` (changeover release, `OldLiveActivity`).
-    func newOldActivities() -> AsyncStream<any OldLiveActivity>
 }
 
 extension Data {

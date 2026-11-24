@@ -525,53 +525,60 @@ struct RefusingNotifyClient: CobaltClient {
     }
 }
 
-// MARK: - detach() and the bridge
+// MARK: - closing a run (`detach()`) and the bridge
+
+// Phase 3: a run closed with work in flight stays a job of the queue (no hidden run), so the server needs no standing opt-in
+// for it ("source .detached" is gone from the app): leaving the screen registers every job still going, as it does for any job.
 
 @MainActor
 @Suite(.serialized)
 struct DetachNotifyTests {
-    @Test func detachMidRenderRegistersTheOptInWhenTheBridgeIsOn() async throws {
-        let h = Harness(.shortClip)
-        let ctx = makeContext(h, notifyBridge: true)
-        let p = Pipeline(context: ctx)
-        p.start(link: URL(string: shortLink)!)
-        await h.drive { p.state == .ready }
+    @Test func closingMidRenderKeepsTheJobAndTheBridgeHearsOfItWhenTheAppLeaves() async throws {
+        let r = DetachRig()
+        r.ctx.capabilities.notifyBridge = true
+        let p = r.pipeline
+        await r.toReady()
         p.makeWebp()
-        await h.drive { p.renderJobID != nil }
+        await r.drive { p.renderJobID != nil }
         let sid = try #require(p.sessionID)
         p.detach()
-        await ctx.notify.settled()
-        #expect(Set(previewServer(ctx).notifications[sid]?.on ?? []) == [.rendered, .failed])
-        #expect(ctx.notify.registered[sid] == .detached)
-        // the run finishes here: the server need not say it too
-        await h.drive { ctx.background.isEmpty }
-        await ctx.notify.settled()
-        #expect(previewServer(ctx).notifications[sid] == nil && previewServer(ctx).notifyCalls == ["PUT \(sid)", "DELETE \(sid)"])
+        await r.ctx.notify.settled()
+        #expect(r.ctx.notify.registered[sid] == nil, "closing the focus registers nothing: the job is still followed here")
+        #expect(r.job(of: p)?.isReleased == true)
+
+        // the app leaves while the render goes on: the server will speak for it
+        r.queue.appLeft()
+        await r.ctx.notify.settled()
+        #expect(Set(previewServer(r.ctx).notifications[sid]?.on ?? []) == [.rendered, .failed])
+        #expect(r.ctx.notify.registered[sid] == .background)
+
+        await r.drive { r.isGone(p) }
+        #expect(r.webps.count == 1, "the render finished in the queue and joined the store")
     }
 
     @Test func noBridgeNoCalls() async throws {
-        let h = Harness(.shortClip)
-        let ctx = makeContext(h, notifyBridge: false)
-        let p = Pipeline(context: ctx)
-        p.start(link: URL(string: shortLink)!)
-        await h.drive { p.state == .ready }
+        let r = DetachRig()
+        r.ctx.capabilities.notifyBridge = false
+        let p = r.pipeline
+        await r.toReady()
         p.makeWebp()
-        await h.drive { p.renderJobID != nil }
+        await r.drive { p.renderJobID != nil }
         p.detach()
-        await h.drive { ctx.background.isEmpty }
+        r.queue.appLeft()
+        await r.drive { r.isGone(p) }
         try? await Task.sleep(for: .milliseconds(30))
-        #expect(previewServer(ctx).notifyCalls.isEmpty)
+        #expect(previewServer(r.ctx).notifyCalls.isEmpty)
     }
 
-    @Test func detachingWithNothingOnTheServerRegistersNothing() async throws {
-        let h = Harness(.shortClip)
-        let ctx = makeContext(h, notifyBridge: true)
-        let p = Pipeline(context: ctx)
-        p.start(link: URL(string: shortLink)!)
-        await h.drive { p.state == .ready }
+    @Test func closingWithNothingOnTheServerRegistersNothing() async throws {
+        let r = DetachRig()
+        r.ctx.capabilities.notifyBridge = true
+        let p = r.pipeline
+        await r.toReady()
         p.detach()
+        r.queue.appLeft()
         try? await Task.sleep(for: .milliseconds(30))
-        #expect(previewServer(ctx).notifyCalls.isEmpty)
+        #expect(previewServer(r.ctx).notifyCalls.isEmpty)
     }
 }
 

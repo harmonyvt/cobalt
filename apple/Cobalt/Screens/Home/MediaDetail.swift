@@ -1,5 +1,8 @@
 import CobaltKit
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// The one detail screen app-wide (CONTRACT-MEDIA 1.8): the orbit, the library (phone, iPad, Mac), the
 /// inspector and the debug hooks all open it, over a `MediaItem`. One media is one screen; its renditions are
@@ -27,6 +30,9 @@ struct MediaDetail: View {
     @State private var renaming: Bool
     /// The post's timed subtitles (APP-API-CONTRACT 47), handed to the video tab's hero, the strip and the "heard" list.
     @State private var subtitles = SubtitleSession()
+    /// What the shared post actions put on screen (the share sheet, the link picker, the hide confirm).
+    @State private var actionState = PostActionState()
+    @Environment(Pane.self) private var pane: Pane?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.shell) private var shell
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -116,6 +122,24 @@ struct MediaDetail: View {
     /// `service · ref`; a file's name without its extension; `cobalt`), through `MediaTitle.resolve`.
     private func title(_ item: MediaItem) -> String { item.titleText }
 
+    /// The iPhone's detail: its controls are the pane's grid, over the actions it shares with `PanePostPage`.
+    private var isPhone: Bool {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        return false
+        #endif
+    }
+
+    /// The logic this screen shares with the pane's post page (`PostActionKit`); the detail pops where the pane closes.
+    private var kit: PostActionKit {
+        let pane = pane
+        return PostActionKit(
+            model: model, controller: controller, state: actionState, shell: shell, leave: { dismiss() },
+            compactGrid: true, leavesForLibrary: true, fromAlbum: fromAlbum,
+            isGone: { resolved == nil }, finishGone: finishGone, openLink: { pane?.open(.link($0)) })
+    }
+
     // MARK: body
 
     var body: some View {
@@ -123,13 +147,14 @@ struct MediaDetail: View {
         let current = resolved
         let item = current ?? lastShown
         let selected = controller.selected(in: item)
+        let kit = kit
         let context = DetailContext(
             controller: controller, item: item, rendition: selected,
             // the selected tab: a rendition's id, or `items` for a gallery's or a photo's pager
             selection: Binding(
                 get: { controller.tabID(in: item) },
                 set: { id in withAnimation(Motion.card) { controller.selectTab(id, in: item) } }),
-            leave: { dismiss() })
+            leave: { dismiss() }, kit: isPhone ? kit : nil)
         Group {
             if gone {
                 Text(Copy.Media.deleted)
@@ -142,6 +167,9 @@ struct MediaDetail: View {
             }
         }
         .environment(\.subtitles, subtitlesShown(item, selected) ? subtitles : nil)
+        // the UI tests (apple/CobaltUITests) tell the pushed detail by this
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("media.detail")
         // the freeze hunt (owner, 2026-11-14): when the detail is really on screen and really gone
         .onAppear { Breadcrumbs.add("detail.appear") }
         .onDisappear { Breadcrumbs.add("detail.disappear") }
@@ -190,11 +218,14 @@ struct MediaDetail: View {
             #endif
             // a Mac sheet draws toolbar items at the bottom: there the menu sits in the sheet's top-right corner instead
             if !gone, !inMacSheet {
-                ToolbarItem(placement: .primaryAction) { menu(item, selected) }
+                ToolbarItem(placement: .primaryAction) { menu(context, kit: kit) }
             }
         }
-        .sheetCorner { if !gone, inMacSheet { menu(item, selected) } }
-        .detailDialogs(controller: controller, item: item) { ask in run(ask, item) }
+        .sheetCorner { if !gone, inMacSheet { menu(context, kit: kit) } }
+        .postActionPresenters(kit: kit, item: item)
+        // the pane's offline words (`needs network`, `queued`) wherever this screen is pushed or presented
+        .environment(\.paneOffline, model.serverIsAway)
+        .detailDialogs(controller: controller, item: item) { ask in kit.run(ask, item) }
         .makeSheet(controller: controller, item: item, model: model)
         .postFrameSheet(controller: controller, model: model)
         .renameAlert(item: item, isPresented: $renaming, model: model) { controller.notice = $0 }
@@ -242,42 +273,21 @@ struct MediaDetail: View {
 
     // MARK: actions
 
-    /// `rename` (`pencil`): the title menu's one item; the `more` menu has the same one, first.
-    private func menu(_ item: MediaItem, _ selected: Rendition) -> some View {
-        DetailMenu(
-            controller: controller, item: item, rendition: selected,
-            openInLibrary: { openInLibrary(item) }, askAbout: { askAbout(item) }, rename: { renaming = true })
+    /// `rename` (`pencil`): the title menu's one item; the `more` menu has the same one, first. After the entries it always
+    /// had, the pane's own post actions (`PostActionKit.menuExtras`): add to link, edit, hide / unhide, `this is…`.
+    private func menu(_ c: DetailContext, kit: PostActionKit) -> some View {
+        let item = c.item
+        let phone = c.kit != nil
+        return DetailMenu(
+            controller: controller, item: item, rendition: c.rendition,
+            openInLibrary: { kit.openInLibrary(item) }, askAbout: { kit.askAbout(item) }, rename: { renaming = true },
+            extra: kit.menuExtras(c, grid: phone),
+            // the iPhone's icon row has `this is…` as a circle; wide layouts keep it in this menu
+            namesPostKey: !phone && model.capabilities.names && !(fromAlbum || model.isHiddenPost(item)) ? item.post?.id : nil)
     }
 
     private var renameButton: some View {
         Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) { renaming = true }
-    }
-
-    private func run(_ ask: DetailController.Confirm, _ item: MediaItem) {
-        Task {
-            switch ask {
-            case .deleteWebp(let id), .removeWebp(let id):
-                guard let r = item.rendition(id: id) else { return }
-                if case .deleteWebp = ask { await controller.deleteWebp(r, of: item, onServer: true) }
-                else { await controller.deleteWebp(r, of: item, onServer: false) }
-            case .deletePhoto(let index):
-                await controller.deletePhotos([index], of: item)
-            case .deletePhotos(let indices):
-                await controller.deletePhotos(indices, of: item)
-            case .deleteMade(let id):
-                guard let r = item.rendition(id: id) else { return }
-                await controller.deleteMade(r, of: item)
-            case .removeMedia:
-                if await controller.removeFromDevice(item) {
-                    if resolved == nil { finishGone() } else { dismiss() }
-                }
-            case .deleteEverything:
-                if case .popWithStatus(let message) = await controller.deleteEverything(item) {
-                    shell.showStatus(message)
-                    dismiss()
-                }
-            }
-        }
     }
 
     /// Nothing of the media is left: the screen underneath says `deleted.` (when it was deleted) and this pops.
@@ -285,26 +295,6 @@ struct MediaDetail: View {
         guard live, !gone else { return }
         gone = true
         if let status = controller.exitStatus { shell.showStatus(status) }
-        dismiss()
-    }
-
-    /// "ask about this": a new chat with this post attached, the chat tab open on it.
-    private func askAbout(_ item: MediaItem) {
-        guard let post = item.post else { return }
-        Task {
-            do {
-                try await model.askAbout([post])
-                dismiss()
-            } catch {
-                shell.showStatus(Copy.Chat.message(for: error))
-            }
-        }
-    }
-
-    private func openInLibrary(_ item: MediaItem) {
-        guard let post = item.post else { return }
-        model.library.expandedPostID = post.id
-        model.selectedTab = .library
         dismiss()
     }
 

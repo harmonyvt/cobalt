@@ -405,8 +405,9 @@ struct PaneIconButton: View {
         #endif
         .disabled(off)
         .opacity(off ? 0.45 : 1)
-        .help(action.title)
+        .help(action.pausedOffline(offline) ? "\(action.title) · \(Copy.Pane.needsNetwork)" : action.title)
         .accessibilityLabel(action.title)
+        .accessibilityHint(action.pausedOffline(offline) ? Copy.Pane.needsNetwork : "")
         .accessibilityIdentifier("pane.action.\(action.id)")
     }
 

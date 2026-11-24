@@ -1741,12 +1741,30 @@ describe("live hooks (what the studio tells the live service)", () => {
             seen.length = 0;
             await st.advance(id, 0); // pollFetch: downloading
             expect(kinds(seen)).toEqual(["save:progress:fetching"]);
-            expect(saves(seen)[0].progress).toEqual({ step: "fetching", bytes: 5000, total: 20000, waking: false });
+            expect(saves(seen)[0].progress).toEqual({
+                step: "fetching",
+                bytes: 5000,
+                total: 20000,
+                waking: false,
+                wakingEngine: null,
+                engine: "cobalt",
+                fallbackFrom: null,
+                fallbackCode: null,
+            });
 
             seen.length = 0;
             s.helper.fetchPendingFields = { stage: "probing", bytes: 20000, total: null };
             await st.advance(id, 0); // pollFetch: probing is `reading` on the wire
-            expect(saves(seen)[0].progress).toEqual({ step: "reading", bytes: 20000, total: null, waking: false });
+            expect(saves(seen)[0].progress).toEqual({
+                step: "reading",
+                bytes: 20000,
+                total: null,
+                waking: false,
+                wakingEngine: null,
+                engine: "cobalt",
+                fallbackFrom: null,
+                fallbackCode: null,
+            });
 
             seen.length = 0;
             expect(asBody(await st.advance(id, 0)).status).toBe("ready"); // finalize

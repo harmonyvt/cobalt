@@ -10,7 +10,7 @@ import { Clock, FakeHelper, MemoryKV, MemoryMedia, MemoryOriginals, fixedLength 
 const LINK = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 const KEY_ID = "key-row-1";
 
-function setup(o: { box?: boolean; mode?: SaveEngineMode } = {}) {
+function setup(o: { box?: boolean; mode?: SaveEngineMode; boxAsleep?: boolean } = {}) {
     const db = createFakeD1();
     const clock = new Clock();
     const kv = new MemoryKV();
@@ -22,6 +22,13 @@ function setup(o: { box?: boolean; mode?: SaveEngineMode } = {}) {
     box.videoBytes = new Uint8Array(3000).fill(5);
     box.fetchDone = { title: "Me at the zoo", service: "youtube", duration: 19, width: 320, height: 240 };
     const starts: string[] = [];
+    // the box's container: `boxAsleep` keeps it down, and its start pending, until `wakeBox()`
+    let boxUp = o.boxAsleep !== true;
+    const boxGates: (() => void)[] = [];
+    const wakeBox = () => {
+        boxUp = true;
+        for (const open of boxGates.splice(0)) open();
+    };
     const webp = new WebpService({
         storage: kv,
         bucket: media,
@@ -51,14 +58,16 @@ function setup(o: { box?: boolean; mode?: SaveEngineMode } = {}) {
                       helper: box.helper,
                       ensureRunning: async () => {
                           starts.push("ytdlp");
+                          if (!boxUp) await new Promise<void>((open) => boxGates.push(open));
                       },
+                      isRunning: async () => boxUp,
                   },
               }),
         saveEngine: o.mode ?? "fallback",
     });
     const row = (sid: string) => db.raw.prepare("SELECT * FROM studio_sessions WHERE id = ?").get(sid) as any;
     const items = () => db.raw.prepare("SELECT * FROM media_items").all() as any[];
-    return { db, clock, kv, originals, helper, box, studio, starts, row, items };
+    return { db, clock, kv, originals, helper, box, studio, starts, row, items, wakeBox };
 }
 
 const create = async (s: ReturnType<typeof setup>, extra: Record<string, unknown> = {}) => {
@@ -306,5 +315,117 @@ describe("link saves the app sends with items \"all\" (every app link save)", ()
         const id = idOf(await create(s, { items: "all", engine: "ytdlp" }));
         expect(body(await s.studio.advance(id, 30))).toMatchObject({ status: "ready" });
         expect(s.helper.fetchBodies[0]).toMatchObject({ id, items: "all" });
+    });
+});
+
+describe("what GET /studio/<sid> says while a save runs (engine, waking_engine, fallback_*, error_detail)", () => {
+    it("a yt-dlp save whose box is asleep says waking: true with waking_engine \"ytdlp\", then clears it once the box is up", async () => {
+        const s = setup({ boxAsleep: true });
+        const id = idOf(await create(s, { engine: "ytdlp" }));
+        let b = body(await s.studio.advance(id, 0));
+        expect(b).toMatchObject({ status: "saving", step: "fetching", waking: true, waking_engine: "ytdlp", engine: "ytdlp", fallback_from: null, fallback_code: null });
+        // no fetch was sent to a box that is not up
+        expect(s.box.calls).toEqual([]);
+        s.wakeBox();
+        b = body(await s.studio.advance(id, 0));
+        expect(b).toMatchObject({ status: "saving", waking: false, waking_engine: null, engine: "ytdlp" });
+        expect(s.box.calls[0]).toBe("POST /fetch");
+    });
+
+    it("a box that is already up, and a cobalt save, never say waking", async () => {
+        const s = setup();
+        s.box.fetchPolls = 1;
+        const id = idOf(await create(s, { engine: "ytdlp" }));
+        expect(body(await s.studio.advance(id, 0))).toMatchObject({ waking: false, waking_engine: null, engine: "ytdlp" });
+        const c = setup();
+        c.helper.fetchPolls = 1;
+        const cid = idOf(await create(c));
+        expect(body(await c.studio.advance(cid, 0))).toMatchObject({ waking: false, waking_engine: null, engine: "cobalt", fallback_from: null });
+    });
+
+    it("a cobalt failure that hands the save to yt-dlp is told: engine, fallback_from and fallback_code, kept through every step", async () => {
+        const s = setup();
+        s.helper.fetchError = "error.api.fetch.fail";
+        s.box.fetchPolls = 2;
+        s.box.fetchPendingFields = { stage: "downloading", bytes: 1000, total: 3000 };
+        const id = idOf(await create(s));
+        const switched = body(await s.studio.advance(id, 0));
+        expect(switched).toMatchObject({ status: "saving", step: "fetching", waking: false, waking_engine: null, engine: "ytdlp", fallback_from: "cobalt", fallback_code: "error.api.fetch.fail" });
+        expect(switched.step_bytes).toBeNull();
+        await s.studio.advance(id, 0); // the fetch is accepted by the box
+        const downloading = body(await s.studio.advance(id, 0));
+        expect(downloading).toMatchObject({ step: "fetching", step_bytes: 1000, step_total: 3000, engine: "ytdlp", fallback_from: "cobalt", fallback_code: "error.api.fetch.fail" });
+        let done = body(await s.studio.advance(id, 0));
+        expect(done).toMatchObject({ status: "saving", engine: "ytdlp", fallback_from: "cobalt" });
+        done = body(await s.studio.advance(id, 0));
+        expect(done.status).toBe("ready");
+        expect(done).not.toHaveProperty("engine"); // a finished session reads as before
+    });
+
+    it("a switch with the box asleep says so: waking for the box, with the fallback fields", async () => {
+        const s = setup({ boxAsleep: true });
+        s.helper.fetchError = "error.api.fetch.fail";
+        const id = idOf(await create(s));
+        await s.studio.advance(id, 0); // cobalt fails, the save switches
+        const b = body(await s.studio.advance(id, 0)); // the box's turn: asleep
+        expect(b).toMatchObject({ waking: true, waking_engine: "ytdlp", engine: "ytdlp", fallback_from: "cobalt", fallback_code: "error.api.fetch.fail" });
+    });
+
+    it("yt-dlp failing with a login ends with error.api.youtube.login, not cobalt's earlier code; error_detail carries both", async () => {
+        const s = setup();
+        s.helper.fetchError = "error.api.fetch.fail";
+        s.box.fetchError = "error.api.youtube.login";
+        const id = idOf(await create(s));
+        const b = body(await s.studio.advance(id, 30));
+        expect(b).toMatchObject({
+            status: "error",
+            error: { code: "error.api.youtube.login" },
+            error_detail: { primary_code: "error.api.youtube.login", primary_engine: "ytdlp", prior_code: "error.api.fetch.fail", prior_engine: "cobalt" },
+        });
+        expect(s.row(id)).toMatchObject({ status: "error", error_code: "error.api.youtube.login" });
+    });
+
+    it("the other actionable codes of yt-dlp win too (a private or age-gated post, a file too large)", async () => {
+        for (const code of ["error.api.content.post.private", "error.api.content.post.age", "error.studio.too_large"]) {
+            const s = setup();
+            s.helper.fetchError = "error.api.fetch.fail";
+            s.box.fetchError = code;
+            const id = idOf(await create(s));
+            expect(body(await s.studio.advance(id, 30)), code).toMatchObject({ status: "error", error: { code }, error_detail: { primary_code: code, prior_code: "error.api.fetch.fail" } });
+        }
+    });
+
+    it("a generic yt-dlp failure still ends with cobalt's code (the words the app knows), the detail keeps what yt-dlp said", async () => {
+        const s = setup();
+        s.helper.fetchError = "error.api.link.unsupported";
+        s.box.fetchError = "error.api.fetch.fail";
+        const id = idOf(await create(s));
+        expect(body(await s.studio.advance(id, 30))).toMatchObject({
+            status: "error",
+            error: { code: "error.api.link.unsupported" },
+            error_detail: { primary_code: "error.api.fetch.fail", primary_engine: "ytdlp", prior_code: "error.api.link.unsupported", prior_engine: "cobalt" },
+        });
+    });
+
+    it("\"first\" mode: cobalt failing after yt-dlp keeps cobalt's own code, the detail names yt-dlp as the prior engine", async () => {
+        const s = setup({ mode: "first" });
+        s.box.fetchError = "error.api.fetch.fail";
+        s.helper.fetchError = "error.api.link.unsupported";
+        const id = idOf(await create(s));
+        expect(body(await s.studio.advance(id, 30))).toMatchObject({
+            status: "error",
+            error: { code: "error.api.link.unsupported" },
+            error_detail: { primary_code: "error.api.link.unsupported", primary_engine: "cobalt", prior_code: "error.api.fetch.fail", prior_engine: "ytdlp" },
+        });
+    });
+
+    it("a save that failed on one engine has no error_detail and no fallback fields", async () => {
+        const s = setup();
+        s.helper.fetchError = "error.studio.too_large";
+        const id = idOf(await create(s));
+        const b = body(await s.studio.advance(id, 30));
+        expect(b).toMatchObject({ status: "error", error: { code: "error.studio.too_large" } });
+        expect(b).not.toHaveProperty("error_detail");
+        expect(b).not.toHaveProperty("fallback_from");
     });
 });

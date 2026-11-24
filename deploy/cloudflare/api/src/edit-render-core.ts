@@ -23,8 +23,6 @@ import {
 } from "./edits";
 import { randomBase62 } from "./ids";
 import { insertMediaItem } from "./library";
-import { formatBytes } from "./live";
-import { HARK_MAX_BODY, JOBS_URL, plainReason } from "./notify";
 import { MAX_POSTER_BYTES } from "./poster";
 import { postSpecInputs, postStartSpec, type PostSpec } from "./post-frame";
 import type { PublishBucket } from "./publish";
@@ -48,7 +46,6 @@ export const CALL_MS = 15_000;
 export const START_CALL_MS = 30_000;
 export const FILE_HEAD_MS = 60_000;
 export const POSTER_MS = 60_000;
-export const HARK_MS = 3_000;
 export const LIVE_EDIT_MS = 3_000;
 export const R2_GET_MS = 30_000;
 // the slowest copy we plan for: a stream through a tick moves at least this much per second
@@ -61,7 +58,6 @@ export const STEP_TRIES = 3;
 export const BUSY_TRIES = 6;
 export const POLL_FAILS = 6;
 export const COLLECT_TRIES = 2;
-export const NOTIFY_TRIES = 3;
 export const CLEAN_TRIES = 3;
 export const TICK_FAILS = 8;
 
@@ -102,6 +98,7 @@ export function editFile(timeline: string | null | undefined): { ext: "mp4" | "w
 // ---- records ----------------------------------------------------------------------------------------------------
 
 export type InputRef = { n: number; item: string; bucket: "media" | "originals"; key: string; bytes: number; kind: "video" | "gif" | "photo" };
+// "notify" is the retired Hark step: a record written by an older deploy and still in storage is finished as "cleanup".
 export type StepName = "inputs" | "start" | "wait" | "collect" | "poster" | "record" | "notify" | "cleanup";
 export type RenderResult = { bytes: number; width: number; height: number; duration: number };
 
@@ -137,9 +134,8 @@ export type StepRecord = {
     posterUrl?: string | null;
     posterDone?: boolean;
     collectTries?: number;
-    // how the render ended; notify and cleanup read it
+    // how the render ended; cleanup reads it
     ended?: { status: "done" | "error" | "cancelled"; code: string | null };
-    notifyTries?: number;
     cleanTries?: number;
     // a chat video (section 45): the inputs come from the frozen spec; one that is gone is skipped (listed here)
     chat?: boolean;
@@ -178,63 +174,6 @@ export function chatSpecInputs(text: string): InputRef[] | null {
     return out;
 }
 
-// ---- messages (31.11) -----------------------------------------------------------------------------------------------
-
-const clip = (s: string, max: number): string => {
-    const chars = [...s];
-    return chars.length <= max ? s : `${chars.slice(0, max - 1).join("")}…`;
-};
-
-const mss = (seconds: number): string => {
-    const s = Math.max(0, Math.round(seconds));
-    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-};
-
-// done: `<title> · video ready · <w>×<h> · <m:ss> · <size>`; private, so no link line. Taps open the queue.
-export function editDoneMessage(title: string, r: RenderResult): { title: string; body: string; url: string } {
-    const body = `${title} · video ready · ${r.width}×${r.height} · ${mss(r.duration)} · ${formatBytes(r.bytes)}`;
-    return { title: "capystore", body: clip(body, HARK_MAX_BODY), url: JOBS_URL };
-}
-
-export function editFailedMessage(title: string, code: string): { title: string; body: string; url: string } {
-    return { title: "capystore", body: clip(`couldn't render ${title} — ${plainReason(code)}`, HARK_MAX_BODY), url: JOBS_URL };
-}
-
-// Sends the failure message of an errored render that asked for one and has not had it (`notified_at` is the marker),
-// once, 3 s cap, no retries. For the paths with no step record: the cron's `lost` and a restarted instance's own `lost`.
-export async function notifyEndedRow(
-    d: { db: D1Database; hark: string | null | undefined; harkFetch?: (url: string, init: RequestInit) => Promise<Response>; now: () => number },
-    rid: string,
-): Promise<void> {
-    if (!d.hark) return;
-    const row = await d.db
-        .prepare("SELECT title, status, error_code, notify, notified_at FROM edit_renders WHERE id = ?1")
-        .bind(rid)
-        .first<{ title: string; status: string; error_code: string | null; notify: number; notified_at: number | null }>();
-    if (!row || row.status !== "error" || row.notify !== 1 || row.notified_at !== null) return;
-    const msg = editFailedMessage(row.title, row.error_code ?? "error.edit.lost");
-    const ac = new AbortController();
-    try {
-        const res = await raceCeiling(
-            (d.harkFetch ?? ((u, i) => fetch(u, i)))(d.hark, {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify(msg),
-                redirect: "manual",
-                signal: ac.signal,
-            }),
-            HARK_MS,
-            "hark",
-        );
-        await res.body?.cancel().catch(() => {});
-        if (res.status >= 200 && res.status < 300) {
-            await d.db.prepare("UPDATE edit_renders SET notified_at = ?1 WHERE id = ?2 AND notified_at IS NULL").bind(d.now(), rid).run();
-        }
-    } catch {
-        ac.abort();
-    }
-}
-
 // ---- dependencies -----------------------------------------------------------------------------------------------------
 
 export type EditCoreDeps = {
@@ -260,9 +199,6 @@ export type EditCoreDeps = {
     schedule: (seconds: number) => Promise<unknown>;
     // Before a claim, while this instance holds no render: restart a container that runs with an old env (31.8).
     beforeClaim?: () => Promise<void>;
-    // The Hark webhook URL (harkConfigFrom), or null: the bridge is off and nothing is sent.
-    hark: string | null;
-    harkFetch?: (url: string, init: RequestInit) => Promise<Response>;
     // After a tick that held a render: let its Live Activity catch up (section 32; the main Durable Object decides whether
     // anything is pushed). Raced against LIVE_EDIT_MS, errors swallowed: a push never holds up or fails a render.
     liveEdit?: (rid: string) => Promise<void>;
@@ -387,7 +323,7 @@ export class EditRenderCore {
                     return null;
                 }
             }
-            // notify / cleanup keep failing: give them up and release the instance
+            // cleanup keeps failing: give it up and release the instance
             await this.deleteLeftovers(rec).catch(() => {});
             await this.d.storage.delete(RENDER_KEY);
             return STEP_NOW_S;
@@ -401,8 +337,7 @@ export class EditRenderCore {
     private async step(): Promise<Outcome> {
         const rec = await this.d.storage.get<StepRecord>(RENDER_KEY);
         if (!rec) return await this.claimNext();
-        if (rec.step === "notify") return await this.stepNotify(rec);
-        if (rec.step === "cleanup") return await this.stepCleanup(rec);
+        if (rec.step === "notify" || rec.step === "cleanup") return await this.stepCleanup(rec);
 
         // The row is the truth: ours, still claimed, and not asked to stop.
         const row = await this.loadRow(rec.rid);
@@ -491,13 +426,12 @@ export class EditRenderCore {
                     .bind(now, r.id, this.d.instance)
                     .run();
             } else {
-                const res = await this.d.db
+                await this.d.db
                     .prepare(
                         "UPDATE edit_renders SET status = 'error', error_code = 'error.edit.lost', finished_at = ?1, updated_at = ?1 WHERE id = ?2 AND instance = ?3 AND status IN ('preparing', 'rendering', 'finishing')",
                     )
                     .bind(now, r.id, this.d.instance)
                     .run();
-                if (Number(res.meta?.changes ?? 0) > 0) await this.notifyEnded(r.id).catch(() => {});
             }
         }
     }
@@ -1061,7 +995,7 @@ export class EditRenderCore {
             this.log(`${rec.rid} finished but its row was no longer ours`);
         }
         rec.ended = { status: "done", code: null };
-        rec.step = "notify";
+        rec.step = "cleanup";
         rec.tries = 0;
         await this.d.storage.put(RENDER_KEY, rec);
         return STEP_NEXT_S;
@@ -1088,7 +1022,7 @@ export class EditRenderCore {
     }
 
     // UPDATE status 'error' | 'cancelled', error_code, finished_at; delete `edits/<rid>.mp4` and an unrecorded poster;
-    // then the message (notify) and the container's copy (cleanup).
+    // then the container's copy (cleanup).
     private async end(rec: StepRecord, status: "error" | "cancelled", code: string): Promise<Outcome> {
         const now = this.d.now();
         this.log(`${rec.rid} ends ${status} ${code}`);
@@ -1100,81 +1034,13 @@ export class EditRenderCore {
             .run();
         await this.deleteLeftovers(rec);
         rec.ended = { status, code };
-        rec.step = "notify";
+        rec.step = "cleanup";
         rec.tries = 0;
         await this.d.storage.put(RENDER_KEY, rec);
         return STEP_NEXT_S;
     }
 
-    // ---- 8. notify (31.11) ------------------------------------------------------------------------------------------------
-
-    // Exactly one Hark message when a render asked for it ends (`notified_at` is the marker): done and error; a cancel sends
-    // nothing; the bridge off sends nothing. 3 s cap, retried by the next two ticks, then given up and logged.
-    private async stepNotify(rec: StepRecord): Promise<Outcome> {
-        const toCleanup = async (): Promise<Outcome> => {
-            rec.step = "cleanup";
-            rec.tries = 0;
-            await this.d.storage.put(RENDER_KEY, rec);
-            return STEP_NOW_S;
-        };
-        const ended = rec.ended;
-        if (!ended || ended.status === "cancelled" || !this.d.hark) return await toCleanup();
-        const row = await this.loadRow(rec.rid);
-        if (!row || row.notify !== 1 || row.notified_at !== null) return await toCleanup();
-        const msg =
-            ended.status === "done" && rec.result
-                ? editDoneMessage(row.title, rec.result)
-                : editFailedMessage(row.title, ended.code ?? "error.edit.render_failed");
-
-        rec.notifyTries = (rec.notifyTries ?? 0) + 1;
-        // written BEFORE the send, so a tick that dies mid-send still counts it and the retries stay bounded
-        await this.d.storage.put(RENDER_KEY, rec);
-        const outcome = await this.postHark(msg);
-        if (outcome === "ok") {
-            await this.d.db.prepare("UPDATE edit_renders SET notified_at = ?1 WHERE id = ?2 AND notified_at IS NULL").bind(this.d.now(), rec.rid).run();
-            this.log(`${rec.rid} hark sent`);
-            return await toCleanup();
-        }
-        if (outcome === "rejected" || rec.notifyTries >= NOTIFY_TRIES) {
-            this.log(`${rec.rid} hark given up (${outcome}, ${rec.notifyTries} tries)`);
-            return await toCleanup();
-        }
-        return STEP_NEXT_S;
-    }
-
-    // A render that ended with no step record to carry it (lost on a restart): one best-effort message, same marker.
-    private async notifyEnded(rid: string): Promise<void> {
-        if (!this.d.hark) return;
-        await notifyEndedRow({ db: this.d.db, hark: this.d.hark, harkFetch: this.d.harkFetch, now: this.d.now }, rid);
-    }
-
-    private async postHark(msg: { title: string; body: string; url: string }): Promise<"ok" | "retry" | "rejected"> {
-        const hook = this.d.hark;
-        if (!hook) return "rejected";
-        const ac = new AbortController();
-        try {
-            const res = await raceCeiling(
-                (this.d.harkFetch ?? ((u, i) => fetch(u, i)))(hook, {
-                    method: "POST",
-                    headers: { "content-type": "application/json" },
-                    body: JSON.stringify(msg),
-                    redirect: "manual",
-                    signal: ac.signal,
-                }),
-                HARK_MS,
-                "hark",
-            );
-            await res.body?.cancel().catch(() => {});
-            if (res.status >= 200 && res.status < 300) return "ok";
-            return res.status >= 500 ? "retry" : "rejected";
-        } catch {
-            ac.abort();
-            // the error text is never logged: a fetch error can carry the URL
-            return "retry";
-        }
-    }
-
-    // ---- 9. cleanup ------------------------------------------------------------------------------------------------------
+    // ---- 8. cleanup ------------------------------------------------------------------------------------------------------
 
     // DELETE the container's copy (best effort, idempotent; only when this render touched the container and it runs),
     // delete the record, and claim the next render in the same tick.

@@ -31,7 +31,8 @@ extension EnvironmentValues {
     @Entry var paneShape: PaneShape = .tall
     /// The hinge of a spanned pane on two screens (nil otherwise).
     @Entry var paneHinge: PaneHinge? = nil
-    /// The server can't be reached: pane actions that need it (`PaneAction.needsServer`) are dimmed.
+    /// The server can't be reached: pane actions that need it (`PaneAction.needsServer`) are paused and say so (a caption on the
+    /// group, "needs network" on the tile), except the ones the sync outbox holds (`PaneAction.queuesOffline`).
     @Entry var paneOffline = false
     /// The height of the header when a page opts into a floating overlay header (0 when the pane draws its dedicated top bar).
     @Entry var paneHeaderHeight: CGFloat = 0
@@ -44,27 +45,56 @@ struct PaneAction: Identifiable {
     let title: String
     let systemImage: String
     var role: ButtonRole?
-    /// Dimmed and disabled while the server can't be reached (`\.paneOffline`).
+    /// Paused while the server can't be reached (`\.paneOffline`): the tile says "needs network" and a tap says why.
     var needsServer: Bool
+    /// The sync outbox holds this change while the server is away, so the action stays enabled offline and says "queued".
+    /// Only for a call that lands in `LibrarySync`'s outbox when `sync.engine` is on (`AppModel.libraryQueuesEdits` is the
+    /// engine check): hide, unhide and the status choices through `LibraryModel.setStatus`. A call site passes it with
+    /// `needsServer: true`; with the engine off it is false and the action is paused like any other.
+    var queuesOffline: Bool
     var isDisabled: Bool
     /// Not empty: the action opens these as a menu instead of running `perform` (`share`: file, share link, direct link).
     var choices: [PaneAction]
     let perform: @MainActor () -> Void
 
-    init(_ title: String, systemImage: String, role: ButtonRole? = nil, needsServer: Bool = false, disabled: Bool = false,
-         id: String? = nil, choices: [PaneAction] = [], perform: @escaping @MainActor () -> Void) {
+    init(_ title: String, systemImage: String, role: ButtonRole? = nil, needsServer: Bool = false, queuesOffline: Bool = false,
+         disabled: Bool = false, id: String? = nil, choices: [PaneAction] = [], perform: @escaping @MainActor () -> Void) {
         self.id = id ?? title
         self.title = title
         self.systemImage = systemImage
         self.role = role
         self.needsServer = needsServer
+        self.queuesOffline = queuesOffline
         self.isDisabled = disabled
         self.choices = choices
         self.perform = perform
     }
 
-    /// Off: disabled, or needs the server while it is away.
-    func off(offline: Bool) -> Bool { isDisabled || (needsServer && offline) }
+    /// Off: disabled, or needs the server while it is away (and the outbox cannot hold it).
+    func off(offline: Bool) -> Bool { isDisabled || pausedOffline(offline) }
+
+    /// Needs the server and it is away, and nothing holds the change meanwhile: the tile says "needs network".
+    func pausedOffline(_ offline: Bool) -> Bool { needsServer && offline && !queuesOffline }
+
+    /// The server is away and the outbox holds this change: the tile stays enabled and says it is queued.
+    func queuedOffline(_ offline: Bool) -> Bool { needsServer && offline && queuesOffline && !isDisabled }
+}
+
+extension AppModel {
+    /// The library's sync engine is on and serving edits (`syncStatus` is nil while `sync.engine` is off and `.disabled` after
+    /// `GET /sync` answered 404), so a status change made offline lands in the outbox (`LibraryModel.setStatus`) instead of
+    /// failing. The `queuesOffline:` of the actions whose call goes through it.
+    var libraryQueuesEdits: Bool {
+        guard let status = library.syncStatus else { return false }
+        return status.state != .disabled
+    }
+
+    /// The sync engine says the server is away (`.offline`): a change just made is in its outbox, not yet on the server. Read
+    /// after the change, so the receipt says "queued" instead of "done".
+    var libraryHoldsEditsForServer: Bool {
+        if case .offline? = library.syncStatus?.state { return true }
+        return false
+    }
 }
 
 /// The more-menu actions a page hands the header (`PanePage(more:)`).

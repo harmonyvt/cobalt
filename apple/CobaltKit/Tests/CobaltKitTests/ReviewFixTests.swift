@@ -808,20 +808,22 @@ struct NotificationPermissionTests {
         #expect(r.notifier.authorizationRequests == 0)
 
         await r.toReady()
-        p.makeWebp()
-        await r.drive { p.renderJobID != nil }
-        p.detach()                                                   // a render outlives the screen
+        let second = r.pipeline
+        second.makeWebp()
+        await r.drive { second.renderJobID != nil }
+        second.detach()                                              // a render outlives the screen
         await settleRequests(r.notifier, expecting: 1)
         #expect(r.notifier.authorizationRequests == 1)
-        await r.drive { r.ctx.background.isEmpty }
+        await r.drive { r.isGone(second) }
 
         await r.toReady()
-        p.makeWebp()
-        await r.drive { p.renderJobID != nil }
-        p.detach()                                                   // the system asks once; so do we
+        let third = r.pipeline
+        third.makeWebp()
+        await r.drive { third.renderJobID != nil }
+        third.detach()                                               // the system asks once; so do we
         await settleRequests(r.notifier, expecting: 2)
         #expect(r.notifier.authorizationRequests == 1)
-        await r.drive { r.ctx.background.isEmpty }
+        await r.drive { r.isGone(third) }
     }
 
     @Test func theShareSheetAsksOnlyWhenItClosesMidRender() async throws {

@@ -1,12 +1,11 @@
 // The render step machine (APP-API-CONTRACT.md section 31.8-31.11) against a fake container that speaks the helper's HTTP
-// contract (31.9): claim, inputs, start, wait, collect, poster, record, notify, cleanup; a lost container; the deadline;
+// contract (31.9): claim, inputs, start, wait, collect, poster, record, cleanup; a lost container; the deadline;
 // cancel; a deleted source; a poster that fails; the library row and title exactly as 31.10; two instances racing the claim.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatBytes } from "../src/live";
 import { deadlineMs, renderErrorCode, RENDER_KEY, TICK_KEY, type StepRecord } from "../src/edit-render-core";
 import { editsRecover } from "../src/edits";
 import { MemoryKV } from "./studio-fakes";
-import { HARK, KEY_ID, MEDIA_BASE, coreWorld, ids, mainClip, overlayClip, timeline, type CoreWorld } from "./edits-world";
+import { KEY_ID, MEDIA_BASE, coreWorld, ids, mainClip, overlayClip, timeline, type CoreWorld } from "./edits-world";
 
 let cw: CoreWorld;
 beforeEach(async () => {
@@ -336,77 +335,24 @@ describe("the claim", () => {
         const other = cw.makeCore("r1");
         await other.tick();
         expect(cw.row(b)).toMatchObject({ status: "error", error_code: "error.edit.lost" });
-        // 31.11: it ended in error, so it is announced once
-        expect(cw.harkCalls.map((c) => c.body.body)).toEqual(["couldn't render Gone — the server restarted"]);
-        expect(cw.row(b).notified_at).not.toBeNull();
-    });
-
-    it("the cron's error.edit.lost notifies too (once), and not a render that did not ask", async () => {
-        const asked = cw.queueRender({ status: "rendering", instance: "r0", attempts: 2, notify: 1, title: "Cron lost", updated_at: 1 });
-        const quiet = cw.queueRender({ status: "rendering", instance: "r1", attempts: 2, notify: 0, updated_at: 1 });
-        cw.clock.t += 11 * 60_000;
-        const { notifyEndedRow } = await import("../src/edit-render-core");
-        const onLost = (rid: string) =>
-            notifyEndedRow(
-                {
-                    db: cw.db,
-                    hark: HARK,
-                    now: cw.clock.now,
-                    harkFetch: async (url, init) => {
-                        cw.harkCalls.push({ url, body: JSON.parse(String(init.body)) });
-                        return new Response(null, { status: 200 });
-                    },
-                },
-                rid,
-            );
-        const r = await editsRecover({ db: cw.db, now: cw.clock.now, kick: async () => {}, onLost });
-        expect(r.lost).toBe(2);
-        expect(cw.row(asked)).toMatchObject({ status: "error", error_code: "error.edit.lost" });
-        expect(cw.row(quiet).status).toBe("error");
-        expect(cw.harkCalls.map((c) => c.body.body)).toEqual(["couldn't render Cron lost — the server restarted"]);
-        await onLost(asked);
-        expect(cw.harkCalls).toHaveLength(1);
     });
 });
 
-describe("notify (31.11)", () => {
-    it("done: exactly one Hark message `<title> · video ready · <w>×<h> · <m:ss> · <size>`, url cobalt-apple://jobs, notified_at set", async () => {
-        const id = cw.queueRender({ notify: 1, title: "Beach day" });
+describe("the Hark message is retired (31.11)", () => {
+    it("a render that asked for a message ends done or error exactly like one that did not: nothing is sent, notified_at stays empty", async () => {
+        const done = cw.queueRender({ notify: 1, title: "Beach day" });
         await cw.run(cw.makeCore("r0"));
-        expect(cw.harkCalls).toEqual([
-            {
-                url: HARK,
-                body: { title: "capystore", body: `Beach day · video ready · 1080×1920 · 0:09 · ${formatBytes(4096)}`, url: "cobalt-apple://jobs" },
-            },
-        ]);
-        expect(cw.row(id).notified_at).toBeGreaterThanOrEqual(cw.row(id).finished_at);
-    });
+        expect(cw.row(done)).toMatchObject({ status: "done", notified_at: null });
+        expect(cw.container.calls.at(-1)).toBe("DELETE /renders/<rid>");
 
-    it("the duration is m:ss", async () => {
-        cw.container.result = { bytes: 4096, width: 1080, height: 1920, duration: 125.4 };
-        cw.queueRender({ notify: 1 });
+        cw.container.helperError = "error.edit.render_failed";
+        const failed = cw.queueRender({ notify: 1, title: "My edit" });
         await cw.run(cw.makeCore("r0"));
-        expect(cw.harkCalls[0]!.body.body).toContain(" · 2:05 · ");
+        expect(cw.row(failed)).toMatchObject({ status: "error", error_code: "error.edit.render_failed", notified_at: null });
     });
 
-    it("error: `couldn't render <title> — <reason>` with the plain reason of the code", async () => {
-        const cases: [string, string][] = [
-            ["error.edit.render_failed", "the video couldn't be made"],
-            ["error.edit.too_large", "the video was too big"],
-        ];
-        for (const [code, reason] of cases) {
-            cw = coreWorld();
-            await cw.addKey();
-            cw.seedLibrary();
-            cw.container.helperError = code;
-            cw.queueRender({ notify: 1, title: "My edit" });
-            await cw.run(cw.makeCore("r0"));
-            expect(cw.harkCalls.map((c) => c.body)).toEqual([{ title: "capystore", body: `couldn't render My edit — ${reason}`, url: "cobalt-apple://jobs" }]);
-        }
-    });
-
-    it("the reasons for timeout, source_missing, lost and storage", async () => {
-        const { plainReason } = await import("../src/notify");
+    it("the reasons for timeout, source_missing, lost and storage (the Live Activity's lock-screen words)", async () => {
+        const { plainReason } = await import("../src/edit-live");
         expect(plainReason("error.edit.timeout")).toBe("it took too long");
         expect(plainReason("error.edit.source_missing")).toBe("a clip was deleted from the library");
         expect(plainReason("error.edit.lost")).toBe("the server restarted");
@@ -416,81 +362,15 @@ describe("notify (31.11)", () => {
         expect(plainReason("error.edit.unknown")).toBe("something went wrong on the server");
     });
 
-    it("sends nothing when the render did not ask, when the bridge is off, and for a cancel", async () => {
-        const quiet = cw.queueRender({ notify: 0 });
-        await cw.run(cw.makeCore("r0"));
-        expect(cw.harkCalls).toEqual([]);
-        expect(cw.row(quiet).notified_at).toBeNull();
-
-        const off = cw.queueRender({ notify: 1 });
-        await cw.run(cw.makeCore("r0", { hark: null }));
-        expect(cw.harkCalls).toEqual([]);
-        expect(cw.row(off)).toMatchObject({ status: "done", notified_at: null });
-
-        const cancelled = cw.queueRender({ notify: 1 });
-        cw.container.onCall = (m) => {
-            if (m === "PUT") cw.db.raw.prepare("UPDATE edit_renders SET cancel_requested = 1 WHERE id = ?").run(cancelled);
-        };
-        await cw.run(cw.makeCore("r0"));
-        expect(cw.row(cancelled).status).toBe("cancelled");
-        expect(cw.harkCalls).toEqual([]);
-        expect(cw.row(cancelled).notified_at).toBeNull();
-    });
-
-    it("a failed send is retried by the next two ticks, then given up; a send that works stops the retries (notified_at is the marker)", async () => {
-        const a = cw.queueRender({ notify: 1 });
-        cw.setHark(500);
-        await cw.run(cw.makeCore("r0"));
-        expect(cw.harkCalls).toHaveLength(3);
-        expect(cw.row(a)).toMatchObject({ status: "done", notified_at: null });
-
-        cw.harkCalls.length = 0;
-        const b = cw.queueRender({ notify: 1 });
-        cw.setHark(200);
-        cw.harkScript(503, 200);
-        await cw.run(cw.makeCore("r0"));
-        expect(cw.harkCalls).toHaveLength(2);
-        expect(cw.row(b).notified_at).toBeGreaterThan(0);
-    });
-
-    it("a rejection (4xx) is not retried; a network error or a hang is retried and bounded at 3 s", async () => {
-        const a = cw.queueRender({ notify: 1 });
-        cw.setHark(404);
-        await cw.run(cw.makeCore("r0"));
-        expect(cw.harkCalls).toHaveLength(1);
-        expect(cw.row(a).notified_at).toBeNull();
-
-        cw.harkCalls.length = 0;
-        cw.setHark(200, true);
-        const b = cw.queueRender({ notify: 1 });
-        await cw.run(cw.makeCore("r0"));
-        expect(cw.row(b).status).toBe("done");
-        expect(cw.row(b).notified_at).toBeNull();
-
-        vi.useFakeTimers();
-        const c = cw.queueRender({ notify: 1 });
-        let calls = 0;
-        const core = cw.makeCore("r0", {
-            harkFetch: () => {
-                calls++;
-                return new Promise<Response>(() => {});
-            },
-        });
-        const p = cw.run(core);
-        for (let i = 0; i < 40; i++) await vi.advanceTimersByTimeAsync(1000);
-        await p;
-        expect(calls).toBe(3);
-        expect(cw.row(c)).toMatchObject({ status: "done", notified_at: null });
-    });
-
-    it("is exactly once: a record that replays the notify step after the marker is set sends nothing", async () => {
+    it("a record an older deploy left in the `notify` step is finished as cleanup: the container's copy is deleted and the next render is claimed", async () => {
         const id = cw.queueRender({ notify: 1 });
         const core = cw.makeCore("r0");
         await cw.run(core);
-        expect(cw.harkCalls).toHaveLength(1);
-        core.storage.m.set(RENDER_KEY, { rid: id, step: "notify", n: 0, inputs: [], startedAt: 0, deadline: 0, retried: false, ended: { status: "done", code: null }, result: { bytes: 4096, width: 1080, height: 1920, duration: 9 } });
+        const next = cw.queueRender({});
+        core.storage.m.set(RENDER_KEY, { rid: id, step: "notify", n: 0, inputs: [], startedAt: 0, deadline: 0, retried: false, ended: { status: "done", code: null }, container: false });
         await cw.run(core);
-        expect(cw.harkCalls).toHaveLength(1);
+        expect(cw.row(next).status).toBe("done");
+        expect(core.storage.m.has(RENDER_KEY)).toBe(false);
     });
 });
 
@@ -507,7 +387,6 @@ describe("a container that loses the render (31.9)", () => {
         expect(cw.row(id)).toMatchObject({ status: "error", error_code: "error.edit.lost", attempts: 1 });
         expect(cw.originals.objects.has(`edits/${id}.mp4`)).toBe(false);
         expect(items()).toHaveLength(0);
-        expect(cw.harkCalls.map((c) => c.body.body)).toEqual(["couldn't render My edit — the server restarted"]);
     });
 
     it("the restart works: lost once, then the render finishes (status back to preparing, sent_bytes recounted)", async () => {
@@ -667,7 +546,6 @@ describe("the deadline (31.8 step 3)", () => {
         expect(cw.container.calls.at(-1)).toBe("DELETE /renders/<rid>");
         expect(items()).toHaveLength(0);
         expect(cw.originals.objects.has(`edits/${id}.mp4`)).toBe(false);
-        expect(cw.harkCalls[0]!.body.body).toBe("couldn't render My edit — it took too long");
     });
 
     it("progress reaches D1 on every poll (seconds_done) while it waits", async () => {
@@ -698,7 +576,6 @@ describe("cancel (31.9 step 4)", () => {
         expect(polls).toBe(2);
         expect(cw.container.calls.at(-1)).toBe("DELETE /renders/<rid>");
         expect(items()).toHaveLength(0);
-        expect(cw.harkCalls).toEqual([]);
     });
 
     it("while preparing (before the start), and while finishing (the mp4 already in R2 is deleted again)", async () => {
@@ -755,7 +632,6 @@ describe("sources", () => {
         expect(cw.row(id)).toMatchObject({ status: "error", error_code: "error.edit.source_missing" });
         expect(cw.container.calls).toEqual([]);
         expect(core.ensured).toBe(0);
-        expect(cw.harkCalls[0]!.body.body).toBe("couldn't render My edit — a clip was deleted from the library");
     });
 
     it("an object gone from R2: source_missing at that input, and the container's copy is deleted", async () => {
@@ -841,7 +717,6 @@ describe("collect and poster", () => {
         await cw.run(cw.makeCore("r0"));
         expect(cw.row(b)).toMatchObject({ status: "error", error_code: "error.edit.storage" });
         expect(cw.originals.objects.has(`edits/${b}.mp4`)).toBe(false);
-        expect(cw.harkCalls.at(-1)!.body.body).toBe("couldn't render My edit — the server couldn't store it");
     });
 
     it("a declared length that is not what arrives fails the put like R2 would (FixedLengthStream), twice, then storage", async () => {
@@ -870,7 +745,7 @@ describe("collect and poster", () => {
         expect(cw.row(id).error_code).toBe("error.edit.storage");
     });
 
-    it("a poster that cannot be made keeps the render: done, the row has no poster, no poster object, still notified", async () => {
+    it("a poster that cannot be made keeps the render: done, the row has no poster, no poster object", async () => {
         for (const how of ["500", "not a jpeg", "r2", "empty"]) {
             cw = coreWorld();
             await cw.addKey();
@@ -885,7 +760,6 @@ describe("collect and poster", () => {
             expect(items(), how).toHaveLength(1);
             expect(items()[0].poster, how).toBeNull();
             expect([...cw.media.objects.keys()].filter((k) => k.endsWith(".jpg")), how).toEqual([]);
-            expect(cw.harkCalls, how).toHaveLength(1);
             // the existing poster sweep's backlog finds it: a private video original without a poster
             const backlog = cw.db.raw.prepare("SELECT COUNT(*) AS n FROM media_items WHERE deleted_at IS NULL AND bucket = 'originals' AND poster IS NULL AND content_type LIKE 'video/%' AND id = ?").get(items()[0].id);
             expect(backlog, how).toEqual({ n: 1 });

@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// SF Symbols for the studio tab (APP-API-CONTRACT section 30): the tab, the spotlight bar, the pool, Twitch, the rewards, the
+/// SF Symbols for the live stage (APP-API-CONTRACT section 30): the tab, the spotlight bar, the pool, Twitch, the rewards, the
 /// links. An extension of `Symbol` in its own file, compiled into the extensions too (`Cobalt/Design`). Every name exists since
 /// SF Symbols 4, so it resolves on iOS 26 and macOS 26.
 extension Symbol {
-    /// The studio tab and its sidebar row.
+    /// The live stage tab and its sidebar row.
     static let stage = "dot.radiowaves.left.and.right"
     /// "go live".
     static let stageGoLive = "play.fill"

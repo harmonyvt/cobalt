@@ -44,13 +44,16 @@ extension HTTPCobaltClient {
 
     /// `GET /stage/redemptions?limit=&before=` (keyed): newest first; `before` is ms since the epoch.
     public func stageRedemptions(limit: Int, before: Date?) async throws -> [StageRedemption] {
+        try await stageRedemptionsPage(limit: limit, before: before).redemptions
+    }
+
+    /// The same route with its top-level `connected_canvases` count.
+    public func stageRedemptionsPage(limit: Int, before: Date?) async throws -> StageRedemptionsPage {
         var query = [("limit", String(min(100, max(1, limit))))]
         if let before { query.append(("before", String(Int((before.timeIntervalSince1970 * 1000).rounded())))) }
         let req = try makeRequest("GET", "/stage/redemptions", query: query, keyed: true, timeout: 15)
         let (data, http) = try await send(req)
-        struct Wire: Decodable { var redemptions: [Lossy<StageRedemption>] }
-        let wire = try stageAnswer(Wire.self, data, http)
-        return wire.redemptions.compactMap(\.value)
+        return try stageAnswer(StageRedemptionsPage.self, data, http)
     }
 
     /// `PATCH /stage/rewards/<action>` `{cost?, cooldown_seconds?, enabled?}` (keyed): only what is given is sent, numbers

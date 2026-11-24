@@ -35,6 +35,8 @@ struct PaneSelectionContent: View {
     @Bindable var controller: LibraryController
 
     @Environment(\.paneShape) private var shape
+    /// Work that waits for this page's sheet to finish going down (`PaneHost` owns the queue).
+    @Environment(\.paneAfterDismiss) private var afterDismiss
     @State private var pickingCollection = false
     @State private var deleting = false
     @State private var editNote: String?
@@ -172,7 +174,10 @@ struct PaneSelectionContent: View {
     /// The four big buttons: in the album `unhide`; else make link, collection, share and edit (the ones the server offers).
     private func gridActions(_ rows: [LibraryRow], picks: [LibraryRow], ready: Bool) -> [PaneAction] {
         if inAlbum {
-            return [PaneAction(Copy.HiddenAlbum.unhide, systemImage: Symbol.HiddenAlbum.unhide, needsServer: true, disabled: picks.isEmpty || busy) {
+            // queuesOffline (here and in `statusActions`, `compactActions`): `controller.chooseStatus` -> `applyStatus` ->
+            // `LibraryModel.setStatus`, which enqueues in the sync outbox when the engine is on
+            return [PaneAction(Copy.HiddenAlbum.unhide, systemImage: Symbol.HiddenAlbum.unhide, needsServer: true,
+                               queuesOffline: model.libraryQueuesEdits, disabled: picks.isEmpty || busy) {
                 controller.chooseStatus(.off, posts: controller.pickedPosts(rows))
             }]
         }
@@ -239,18 +244,18 @@ struct PaneSelectionContent: View {
         let posts = controller.pickedPosts(rows)
         var out: [PaneAction] = []
         if includeHidden {
-            out.append(PaneAction(Copy.HiddenAlbum.statusHidden, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, disabled: disabled, id: "status-hidden") {
+            out.append(PaneAction(Copy.HiddenAlbum.statusHidden, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, queuesOffline: model.libraryQueuesEdits, disabled: disabled, id: "status-hidden") {
                 controller.chooseStatus(.hidden, posts: posts)
             })
         }
-        out.append(PaneAction(Copy.HiddenAlbum.statusOff, systemImage: Symbol.HiddenAlbum.off, needsServer: true, disabled: disabled, id: "status-off") {
+        out.append(PaneAction(Copy.HiddenAlbum.statusOff, systemImage: Symbol.HiddenAlbum.off, needsServer: true, queuesOffline: model.libraryQueuesEdits, disabled: disabled, id: "status-off") {
             controller.chooseStatus(.off, posts: posts)
         })
-        out.append(PaneAction(Copy.HiddenAlbum.statusPublic, systemImage: Symbol.HiddenAlbum.publicLink, needsServer: true, disabled: disabled, id: "status-public") {
+        out.append(PaneAction(Copy.HiddenAlbum.statusPublic, systemImage: Symbol.HiddenAlbum.publicLink, needsServer: true, queuesOffline: model.libraryQueuesEdits, disabled: disabled, id: "status-public") {
             controller.chooseStatus(.public, posts: posts)
         })
         if model.capabilities.privateLinks {
-            out.append(PaneAction(Copy.HiddenAlbum.statusPrivate, systemImage: Symbol.HiddenAlbum.privateLink, needsServer: true, disabled: disabled, id: "status-private") {
+            out.append(PaneAction(Copy.HiddenAlbum.statusPrivate, systemImage: Symbol.HiddenAlbum.privateLink, needsServer: true, queuesOffline: model.libraryQueuesEdits, disabled: disabled, id: "status-private") {
                 controller.chooseStatus(.private, posts: posts)
             })
         }
@@ -263,7 +268,8 @@ struct PaneSelectionContent: View {
         let disabled = picks.isEmpty || busy
         let posts = controller.pickedPosts(rows)
         let hide: PaneAction? = offersStatus ? PaneAction(
-            Copy.HiddenAlbum.menuHide, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true, disabled: disabled, id: "hide"
+            Copy.HiddenAlbum.menuHide, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true,
+            queuesOffline: model.libraryQueuesEdits, disabled: disabled, id: "hide"
         ) { afterCollapse { controller.chooseStatus(.hidden, posts: posts) } } : nil
         let lead = [shareAction(picks), addToLinkAction(picks), hide].compactMap { $0 }
             + [makeLinkAction(ready: ready), collectionAction(ready: ready), editAction(picks)].compactMap { $0 }
@@ -275,14 +281,12 @@ struct PaneSelectionContent: View {
     }
 
     /// On the iPhone's sheet the library presents some things itself (the share sheet, the link picker, the confirm of
-    /// hiding): the sheet goes down first and the action runs once it is gone. Select mode and the ticks stay.
+    /// hiding): the sheet goes down first and the action runs once it is gone (queued in `PaneHost`, which promotes it from
+    /// its sheet's `onDismiss`: no guessed delay). Select mode and the ticks stay.
     private func afterCollapse(_ run: @escaping @MainActor () -> Void) {
-        guard compact else { run(); return }
+        guard compact, pane.item == .selection, pane.isVisible else { run(); return }
+        if let afterDismiss { afterDismiss.run(run) } else { run() }
         pane.close(ifShowing: .selection)
-        Task {
-            try? await Task.sleep(for: .milliseconds(450))
-            run()
-        }
     }
 
     /// What does not fit the grid: add to a link, the status choices, the trash.

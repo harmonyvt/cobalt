@@ -306,7 +306,7 @@ struct LiveSummaryTests {
         #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 120) < 1, "all done, one with a link: 120 s")
     }
 
-    @Test func aJobDismissedWhileItsWebpRendersEndsThePeriodAsSaved() async throws {
+    @Test func aJobDismissedWhileItsWebpRendersKeepsThePeriodGoingUntilTheWebpIsMade() async throws {
         let rig = SummaryRig()
         let jobs = rig.queue.add([.link(linkA), .link(linkB), .link(linkC)], via: .review)
         let first = jobs[0]
@@ -314,15 +314,20 @@ struct LiveSummaryTests {
         #expect(rig.manager.inBusyPeriod)
         first.pipeline.makeWebp()
         await rig.drive { if case .rendering = first.pipeline.state { true } else { false } }
-        // off the tray mid-render: its save stands, the render goes on unseen
+        // off the tray mid-render: Phase 3 never hides it, the render is let go of and goes on in the queue (listed), so the
+        // period waits for it
         rig.queue.dismiss(first.id)
-        await rig.drive { jobs.dropFirst().allSatisfy { rig.isSaved($0) } }
+        #expect(rig.queue.job(first.id)?.isReleased == true && rig.manager.inBusyPeriod)
+        await rig.drive { rig.queue.job(first.id) == nil && jobs.dropFirst().allSatisfy { rig.isSaved($0) } }
         await rig.settle()
         let end = try #require(rig.handle?.end)
         #expect(end.state.isFinishedPeriod, "\(end.state)")
         #expect(end.state.count("going") == 0 && end.state.headline == "3 done", "\(end.state.headline)")
         #expect(end.state.rows?.allSatisfy { $0.phase == .done } == true, "\(end.state.rows ?? [])")
-        #expect(abs(try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now()) - 60) < 1)
+        #expect(end.state.rows?.contains { $0.status == "webp ready" } == true, "the render was followed to its end")
+        // the webp has a link to copy: 120 s from the end (a little of it has passed since the period ended)
+        let stays = try #require(end.dismissAt).timeIntervalSince(rig.line.clock.now())
+        #expect(stays > 100 && stays <= 120, "all done, one with a link: 120 s (\(stays) s left)")
     }
 
     @Test func cancellingEveryJobEndsTheActivityQuietly() async throws {

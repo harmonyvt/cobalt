@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import SyncGlowKit
 import UniformTypeIdentifiers
 
 @MainActor @Observable
@@ -120,37 +119,99 @@ public final class LibraryModel {
     @ObservationIgnored var hiddenSyncing = false
     /// The on-device library, when `sync.engine` is on. Nil leaves every load on `GET /library`.
     @ObservationIgnored var sync: LibrarySync?
-    #if DEBUG
-    /// A glow status with no engine behind it, so a debug build can force a state for a screenshot
-    /// while `sync.engine` is off.
-    public var debugStatus: SyncGlowStatus?
-    #endif
+    /// Bumped when `sync` is created or dropped (`setSyncEnabled`): `sync` itself is not observed, and a
+    /// screen that reads `syncStatus` has to redraw when the engine appears or goes.
+    var syncVersion = 0
+    /// What the on-device sync is doing right now. Nil while `sync.engine` is off.
+    public var syncStatus: SyncStatusSnapshot? {
+        _ = syncVersion
+        return sync?.status.snapshot
+    }
+    /// Starts and stops are queued one behind the other, so a quick on, off, on ends on.
+    @ObservationIgnored var syncSwitch: Task<Void, Never>?
+    /// Tests: builds the engine `setSyncEnabled(true)` starts, in place of the real one (the real database
+    /// and `GET /sync`). Previews have no server: without this they only keep the choice.
+    @ObservationIgnored var makeSync: (@MainActor () throws -> LibrarySync)?
 
-    /// The sync glow. Nil while the flag is off and nothing has forced a preview.
-    public var syncStatus: SyncGlowStatus? {
-        #if DEBUG
-        sync?.status ?? debugStatus
-        #else
-        sync?.status
-        #endif
+    /// Turns the on-device library on or off now, with no restart: the settings switch calls this. The
+    /// choice is stored (`Settings.syncEngine`, what the next launch reads) and the engine starts or stops
+    /// to match. Off: the edits still waiting get one last try, the library goes back to `GET /library`
+    /// pages, and the copy stays on disk. On: the copy is shown at once and a pull starts.
+    public func setSyncEnabled(_ on: Bool) {
+        ctx.settings.syncEngine = on
+        let earlier = syncSwitch
+        syncSwitch = Task { @MainActor [weak self] in
+            await earlier?.value
+            guard let self else { return }
+            if on { await self.startSync() } else { await self.stopSync() }
+        }
     }
 
-    #if DEBUG
-    /// Holds the glow on one state. `nil` follows the engine again (and hides the band when there is no engine).
-    public func debugSyncGlow(_ state: SyncGlowState?, pending: Int) {
-        if state == nil {
-            sync?.status.debugForce(nil, pending: 0)
-            debugStatus = nil
-            return
-        }
-        if let status = sync?.status {
-            status.debugForce(state, pending: pending)
-            return
-        }
-        if debugStatus == nil { debugStatus = SyncGlowStatus() }
-        debugStatus?.debugForce(state, pending: pending)
+    /// Runs a pass at once (the status's Retry). A pull that fails again backs off from where it was.
+    public func retrySync() async {
+        await sync?.syncNow()
     }
-    #endif
+
+    /// Hides the status's error until the next failure. The engine's own retry carries on.
+    public func dismissSyncError() {
+        sync?.dismissError()
+    }
+
+    /// Waits for a `setSyncEnabled` that is still starting or stopping.
+    func settleSyncSwitch() async {
+        await syncSwitch?.value
+    }
+
+    /// Connects an engine to this model's lists. The launch path in `AppModel` and `setSyncEnabled` both use it.
+    func attach(_ engine: LibrarySync) {
+        sync = engine
+        syncVersion += 1
+        engine.onApply = { [weak self] snapshot, source in
+            self?.replaceFromSync(snapshot, source: source)
+        }
+        engine.onLegacy = { [weak self] in
+            await self?.refreshFromServer()
+        }
+        engine.onPullFailure = { [weak self] error in
+            self?.syncPullFailed(error)
+        }
+        // A delete queued by an earlier launch: the device's copy of that post goes now.
+        engine.onDeleteConfirmed = { [weak self] post in
+            guard let store = self?.ctx.store else { return }
+            await store.boot()
+            guard let media = store.media(joining: post) else { return }
+            await store.removeMedia(media.id)
+        }
+    }
+
+    private func startSync() async {
+        if let sync, sync.isActive { return }
+        if ctx.isPreview, makeSync == nil { return }
+        let engine: LibrarySync
+        do {
+            if let makeSync {
+                engine = try makeSync()
+            } else {
+                engine = try LibrarySync(databaseURL: SyncContract.databaseURL()) { @MainActor [weak self] in
+                    self?.ctx.client as? HTTPCobaltClient
+                }
+            }
+        } catch {
+            Telemetry.log(.error, .sync, "sync store failed", data: ["error": .string(String(describing: error))])
+            return
+        }
+        attach(engine)
+        await engine.start()
+    }
+
+    private func stopSync() async {
+        guard let engine = sync else { return }
+        await engine.stop()
+        sync = nil
+        syncVersion += 1
+        // The lists were the copy's, and so were the cursor and `hasMore`: today's pages take over.
+        if !ctx.isPreview || makeSync != nil { await refreshFromServer() }
+    }
 
     // 50 (the client's cap), not 20: each page that lands rebuilds the whole library screen, and a small page lands
     // mid-scroll (8.15)
@@ -262,7 +323,7 @@ public final class LibraryModel {
     }
 
     public func loadMore() async {
-        if sync?.isActive == true { return }
+        if sync?.servesLibrary == true { return }
         guard !isLoading, hasMore, let cursor else { return }
         isLoading = true
         defer { isLoading = false }
@@ -280,7 +341,7 @@ public final class LibraryModel {
     /// Everything on device: pages of 50 until the server has no more or `cap` posts are in. A quiet
     /// `loadingAll` reports the count while it runs. A failure stops it and lands in `failure`.
     public func loadAll(cap: Int = 1000) async {
-        if let sync, sync.isActive {
+        if let sync, sync.servesLibrary {
             await sync.syncNow()
             return
         }
@@ -296,7 +357,7 @@ public final class LibraryModel {
     /// Loads pages until the post is in `posts` (or the server has no more, or the cap of 1000 posts):
     /// true when it is loaded.
     public func locate(postID: String) async -> Bool {
-        if let sync, sync.isActive {
+        if let sync, sync.servesLibrary {
             await sync.syncNow()
             return posts.contains { $0.id == postID } || hiddenPosts.contains { $0.id == postID }
         }
@@ -397,8 +458,9 @@ public final class LibraryModel {
 
     /// A file on disk with this item's bytes: the stored original when the device has it, else a
     /// download (keyed for a private copy, open for a public file).
-    public func localCopy(_ file: LibraryFile) async throws -> URL {
-        try await copy(file).0
+    /// `progress` hears the bytes of a download (the share sheet's rows turn it into a percentage); a stored original needs none.
+    public func localCopy(_ file: LibraryFile, progress: @escaping @Sendable (TransferProgress) -> Void = { _ in }) async throws -> URL {
+        try await copy(file, progress: progress).0
     }
 
     /// Private copy → public link (copied to the clipboard).
@@ -494,7 +556,7 @@ public final class LibraryModel {
 
     // MARK: -
 
-    func copy(_ file: LibraryFile) async throws -> (URL, Bool) {
+    func copy(_ file: LibraryFile, progress: @escaping @Sendable (TransferProgress) -> Void = { _ in }) async throws -> (URL, Bool) {
         let fm = FileManager.default
         let post = posts.first { $0.files.contains { $0.id == file.id } }
         // The device's own entry for this item, kept or evicted (CONTRACT-LIVE.md 4.2): the stored
@@ -529,7 +591,7 @@ public final class LibraryModel {
         }
         let downloaded: URL
         do {
-            downloaded = try await ctx.client.download(remote, to: ctx.store.inboxURL(for: name), progress: { _ in })
+            downloaded = try await ctx.client.download(remote, to: ctx.store.inboxURL(for: name), progress: progress)
         } catch {
             throw pipelineFailure(from: error, during: .saving, limits: ctx.capabilities.limits) ?? error
         }

@@ -178,9 +178,17 @@ private struct StageRewardForm: View {
                     .disabled(!canSave)
                     .keyboardShortcut(.defaultAction)
                 if saved && !changed {
-                    Label(Copy.Stage.saved, systemImage: Symbol.checkmark)
-                        .font(CobaltType.caption)
-                        .foregroundStyle(CobaltColor.success)
+                    // green only once twitch has the values too; until then they are kept here and the server tries again
+                    if reward.synced {
+                        Label(Copy.Stage.saved, systemImage: Symbol.checkmark)
+                            .font(CobaltType.caption)
+                            .foregroundStyle(CobaltColor.success)
+                    } else {
+                        Label(Copy.Stage.savedLocally, systemImage: Symbol.error)
+                            .font(CobaltType.caption)
+                            .foregroundStyle(CobaltColor.amber)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
         }

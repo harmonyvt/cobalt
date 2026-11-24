@@ -22,6 +22,14 @@ struct DetailMenu: View {
     var symbol: String = Symbol.Media.more
     /// Renders the trigger as a 50 pt glass circle matching `.cobaltIcon()` buttons in an `IconRow`.
     var iconCircle = false
+    /// The post actions the pane has that this menu did not (`PostActionKit.menuExtras`): `add to link…`, `edit`, `hide…`
+    /// / `unhide`, what the iPhone's grid left. Rows are off while the server is away.
+    var extra: [PaneAction] = []
+    /// `this is…` (a search name's example) as a submenu: the pages whose icon row has no circle for it.
+    var namesPostKey: String?
+
+    @Environment(\.paneOffline) private var offline
+    @Environment(\.shell) private var shell
 
     /// `crop…` and `repost frame…` (lane A7, `Screens/Tools`): the tool sheet that is up.
     @State private var tool: ToolSheet?
@@ -138,6 +146,14 @@ struct DetailMenu: View {
                 if showsAskAbout {
                     Button(Copy.Chat.askAbout, systemImage: Symbol.chatAsk, action: askAbout)
                 }
+            }
+            PaneActionMenuItems(actions: extra.map { action in
+                var action = action
+                action.isDisabled = action.isDisabled || deleting
+                return action
+            }, offline: offline)
+            if let key = namesPostKey {
+                NamesPostMenu(model: model, postKey: key, showStatus: { shell.showStatus($0) })
             }
             if item.detailShape != .classic { galleryItems(deleting: deleting) }
             if let picture = croppablePicture {

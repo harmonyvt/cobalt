@@ -470,12 +470,16 @@ public struct StageSettings: Sendable, Equatable {
     public var twitch: StageTwitch?
     public var spotlight: StageSpotlight?
     public var updatedAt: Date?
+    /// OBS canvas pages connected to the stage right now (`connected_canvases`, APP-API-CONTRACT section 30; the server counts
+    /// the `StageRoom` WebSockets). Nil: an older server does not say, which is "unknown", never "none".
+    public var connectedCanvases: Int?
 
     public init(
         onAir: Bool = false, pool: StagePool = StagePool(), density: Int = 30, tileSeconds: Int = 10, tileScale: Double = 1,
         spotlightAuto: Bool = true, spotlightSeconds: Int = 20, sound: Bool = true, soundAll: Bool = false,
         playThrough: Bool = false, videoMax: Int = 12, storeOpen: Bool = false, storeHint: Bool = true, liveURL: URL,
-        storeURL: URL, twitch: StageTwitch? = nil, spotlight: StageSpotlight? = nil, updatedAt: Date? = nil
+        storeURL: URL, twitch: StageTwitch? = nil, spotlight: StageSpotlight? = nil, updatedAt: Date? = nil,
+        connectedCanvases: Int? = nil
     ) {
         self.onAir = onAir
         self.pool = pool
@@ -495,6 +499,13 @@ public struct StageSettings: Sendable, Equatable {
         self.twitch = twitch
         self.spotlight = spotlight
         self.updatedAt = updatedAt
+        self.connectedCanvases = connectedCanvases
+    }
+
+    /// Whether an OBS canvas is connected, as far as the server says (`connectedCanvases`).
+    public var obsPresence: StageObsPresence {
+        guard let count = connectedCanvases else { return .unknown }
+        return count > 0 ? .connected(count) : .disconnected
     }
 
     /// The canvas inside the app: the page with `?preview=1` (always muted, no store hint).
@@ -544,7 +555,7 @@ public struct StageSettings: Sendable, Equatable {
 extension StageSettings: Decodable {
     enum CodingKeys: String, CodingKey {
         case onAir, pool, density, tileSeconds, tileScale, spotlightAuto, spotlightSeconds, sound, soundAll, playThrough
-        case videoMax, storeOpen, storeHint, twitch, spotlight, updatedAt
+        case videoMax, storeOpen, storeHint, twitch, spotlight, updatedAt, connectedCanvases
         case liveURL = "liveUrl"              // `live_url` after convertFromSnakeCase
         case storeURL = "storeUrl"            // `store_url`
     }
@@ -570,6 +581,38 @@ extension StageSettings: Decodable {
         twitch = try? c.decodeIfPresent(StageTwitch.self, forKey: .twitch)
         spotlight = try? c.decodeIfPresent(StageSpotlight.self, forKey: .spotlight)
         updatedAt = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
+        // additive (an older server leaves it out): never below 0
+        connectedCanvases = (try? c.decodeIfPresent(Int.self, forKey: .connectedCanvases)).map { max(0, $0) }
+    }
+}
+
+/// Whether an OBS canvas page is connected to the stage (`StageSettings.obsPresence`).
+public enum StageObsPresence: Equatable, Sendable {
+    /// The server does not say (an older one). Never warned about.
+    case unknown
+    /// Nothing is connected: on air, nobody is looking.
+    case disconnected
+    case connected(Int)
+}
+
+/// `GET /stage/redemptions`: the feed, and (additive, 05-API-WIRE-SCHEMAS section 3) how many OBS canvases are connected, so
+/// the existing 4 s poll keeps the presence live.
+public struct StageRedemptionsPage: Sendable, Equatable, Decodable {
+    public var redemptions: [StageRedemption]
+    /// Nil from an older server.
+    public var connectedCanvases: Int?
+
+    public init(redemptions: [StageRedemption] = [], connectedCanvases: Int? = nil) {
+        self.redemptions = redemptions
+        self.connectedCanvases = connectedCanvases
+    }
+
+    enum CodingKeys: String, CodingKey { case redemptions, connectedCanvases }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        redemptions = ((try? c.decodeIfPresent([Lossy<StageRedemption>].self, forKey: .redemptions)) ?? []).compactMap(\.value)
+        connectedCanvases = (try? c.decodeIfPresent(Int.self, forKey: .connectedCanvases)).map { max(0, $0) }
     }
 }
 
@@ -593,6 +636,14 @@ public struct StageSnapshot: Sendable, Equatable, Decodable {
 }
 
 // MARK: - what the app sends
+
+/// One thing on the stage the owner can change; the store's save state and busy set name these.
+public enum StageField: Hashable, Sendable {
+    case onAir, pool, density, tileSeconds, tileScale, spotlightAuto, spotlightSeconds
+    case sound, soundAll, playThrough, videoMax, storeOpen, storeHint
+    /// A reward's cost, cooldown or switch (`PATCH /stage/rewards/<action>`).
+    case reward(StageRewardKind)
+}
 
 /// `PATCH /stage`: any of the fields. Out-of-range numbers are clamped by the server and by `clamped()` here.
 public struct StagePatch: Sendable, Equatable {
@@ -659,6 +710,44 @@ public struct StagePatch: Sendable, Equatable {
         if videoMax != nil { out.videoMax = settings.videoMax }
         if storeOpen != nil { out.storeOpen = settings.storeOpen }
         if storeHint != nil { out.storeHint = settings.storeHint }
+        return out
+    }
+
+    /// The fields this patch sets (what the store's save state names).
+    public var fields: Set<StageField> {
+        var out: Set<StageField> = []
+        if onAir != nil { out.insert(.onAir) }
+        if pool != nil { out.insert(.pool) }
+        if density != nil { out.insert(.density) }
+        if tileSeconds != nil { out.insert(.tileSeconds) }
+        if tileScale != nil { out.insert(.tileScale) }
+        if spotlightAuto != nil { out.insert(.spotlightAuto) }
+        if spotlightSeconds != nil { out.insert(.spotlightSeconds) }
+        if sound != nil { out.insert(.sound) }
+        if soundAll != nil { out.insert(.soundAll) }
+        if playThrough != nil { out.insert(.playThrough) }
+        if videoMax != nil { out.insert(.videoMax) }
+        if storeOpen != nil { out.insert(.storeOpen) }
+        if storeHint != nil { out.insert(.storeHint) }
+        return out
+    }
+
+    /// This patch without `other`'s fields (what is left to send after those were superseded or confirmed).
+    public func removing(_ other: StagePatch) -> StagePatch {
+        var out = self
+        if other.onAir != nil { out.onAir = nil }
+        if other.pool != nil { out.pool = nil }
+        if other.density != nil { out.density = nil }
+        if other.tileSeconds != nil { out.tileSeconds = nil }
+        if other.tileScale != nil { out.tileScale = nil }
+        if other.spotlightAuto != nil { out.spotlightAuto = nil }
+        if other.spotlightSeconds != nil { out.spotlightSeconds = nil }
+        if other.sound != nil { out.sound = nil }
+        if other.soundAll != nil { out.soundAll = nil }
+        if other.playThrough != nil { out.playThrough = nil }
+        if other.videoMax != nil { out.videoMax = nil }
+        if other.storeOpen != nil { out.storeOpen = nil }
+        if other.storeHint != nil { out.storeHint = nil }
         return out
     }
 

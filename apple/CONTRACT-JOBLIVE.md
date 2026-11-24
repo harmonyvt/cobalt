@@ -91,5 +91,9 @@ pushes never send `rows`.
   with `type: "job"`; the start token observer watches the new type (and stops registering the old one).
 - `CobaltWidgetsBundle` keeps the three old widgets one release (activities already on screen), then they are deleted with
   `LiveViews.swift`, `LiveLockScreen.swift`, `LiveSummaryViews.swift` and the rail copy in a follow-up.
+- **2026-11-24 (Phase 1 de-slop):** that follow-up is done. `CobaltLiveActivity.swift`, `EditLiveActivity.swift`,
+  `ChatLiveActivity.swift`, `LiveViews.swift`, `LiveLockScreen.swift` and `LiveSummaryViews.swift` are deleted, the bundle
+  registers only `JobLiveActivity`, and the legacy attributes types and their start-token plumbing are gone from `CobaltKit/Live/`.
+  The shared card pieces that stayed live in `CobaltWidgets/LiveChrome.swift`. The text above is kept as written.
 - Tests: fixture parity, every phase per kind renders within 160 pt at `.xLarge` (the existing harness), `isStale` shows
   quiet, done shows result + actions, `rows` draws at most 3.

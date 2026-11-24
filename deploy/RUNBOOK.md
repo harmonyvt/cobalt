@@ -17,7 +17,7 @@ carry the date they were read.
   (R2 `cobalt-media`, public), private originals in R2 `cobalt-originals`, D1 database id
   `42f18bb0-837a-47f7-b1e2-606eb705ab6c`.
 - Secrets live in `~/.config/cobalt/` (chmod 600, never committed, never printed, never pasted in chat):
-  `secrets.json` (keys: `COBALT_API_KEY`, `HARK_WEBHOOK_URL`, `APNS_KEY_ID`, `APNS_KEY_P8`, `APNS_TEAM_ID`,
+  `secrets.json` (keys: `COBALT_API_KEY`, `APNS_KEY_ID`, `APNS_KEY_P8`, `APNS_TEAM_ID`,
   `MEDIA_PURGE_TOKEN`), `feather.json` (`token`, `bucket`, `baseUrl`), `sim-key.json` (an API key for scripts; field `key`),
   `shortcut-key.json`. Read a value into a shell variable with `jq`; never `echo` it.
 - Docker: only touch containers you created with an explicit unique name. Never `docker system prune`.

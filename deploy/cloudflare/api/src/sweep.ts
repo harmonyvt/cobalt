@@ -11,7 +11,6 @@
 
 import { CeilingError, raceCeiling } from "./ceiling";
 import { LIVE_PUSH_MS, LIVE_SWEEP_DELAY_S } from "./live";
-import type { SweepNotify } from "./notify";
 import type { KV } from "./webp";
 
 export { LIVE_SWEEP_DELAY_S };
@@ -66,9 +65,6 @@ export type SweepLive = {
 };
 export const SWEEP_QUIET_MAX_S = 60;
 
-// A whole round of Hark notification retries is abandoned after this long.
-export const SWEEP_NOTIFY_MS = 12_000;
-
 // One scheduled sweep: forget the due time (this schedule has fired), run the
 // pass, and re-arm while anything is still pending. A pass that throws counts
 // as nothing pending (the budgets inside sweep() bound everything else; the
@@ -83,7 +79,6 @@ export async function runSweep(
     sweep: () => Promise<{ pending: number }>,
     passMs: number = SWEEP_PASS_MS,
     live?: SweepLive,
-    notify?: SweepNotify,
 ): Promise<number> {
     await d.storage.delete(SWEEP_KEY);
     let pending = 0;
@@ -126,19 +121,6 @@ export async function runSweep(
             }
         }
     }
-    // Hark notification retries (section 9): sent when due, and the next one re-arms the sweep
-    // just like a pending end push.
-    let notifyInMs: number | null = null;
-    if (notify) {
-        try {
-            notifyInMs = (await raceCeiling(notify.retryDue(d.now()), SWEEP_NOTIFY_MS, "notify retries")).nextInMs;
-        } catch (e) {
-            // not re-armed: a pass that keeps failing must not keep the sweep (and so the
-            // container) going for ever; the next job or poll arms it again
-            console.error("[cobalt-do] notify retries failed", e instanceof Error ? e.name : "error");
-        }
-    }
-    if (notifyInMs !== null) endsInMs = endsInMs === null ? notifyInMs : Math.min(endsInMs, notifyInMs);
     // A pending end retry re-arms the sweep for when it is due (at least 1 s, at most the
     // usual cadence) even when no job or save is pending.
     if (endsInMs !== null) {

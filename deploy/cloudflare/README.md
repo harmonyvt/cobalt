@@ -672,10 +672,7 @@ No D1 migration: a queued job's rows are the ordinary `studio_sessions` / `studi
 - **Cancel** what has not started: `DELETE /studio/<sid>/line`, `DELETE /studio/<sid>/render/<job>` (key; the key that created
   the session, else 404). `200 {cancelled: true}` (idempotent) or `409 error.studio.started`. The session / render row ends
   `error.studio.cancelled` / `error.webp.cancelled`, no Hark message.
-- **Hark summary**: `PUT /studio/line/notify` (key, empty body or `{}`) snapshots the caller's work in flight, minus sessions and
-  jobs with their own opt-in, as `notify:line:<keyId>`; one message (`cobalt-apple://jobs`) when every member has settled, the
-  single-job wording of section 9.4 when only one member is left. `DELETE` removes it. A cancelled member is dropped; a record
-  whose members were all cancelled sends nothing.
+- **Hark summary** (retired): `PUT|DELETE /studio/line/notify` still answer (`bridge: false`, nothing stored or sent); see "Hark notifications".
 - `GET /capabilities`: `features.line`, `limits.line_max` (50), `limits.line_wait_ms` (1 800 000).
 
 Where the build differs from section 17 (all small): `queued` / `queue_ahead` are on the create, render, adopt and upload answers only
@@ -858,27 +855,22 @@ Add the three APNs secrets to `~/.config/cobalt/secrets.json`, then the API depl
 change ships in the image (the deploy id restarts the container once). Then `GET /live/selftest` with the device's key and read the
 answer as above.
 
-## Hark notifications (stand-in for APNs, `APP-API-CONTRACT.md` section 9)
+## Hark notifications (retired, `APP-API-CONTRACT.md` section 9)
 
-**Off since 2026-10-23**: `HARK_NOTIFY` is `"0"` in `api/cloudflare.config.ts`, so nothing is sent even with the secret
-set. Set it to `"1"` and redeploy the API to bring Hark back.
+**Removed (Phase 1 de-slop).** The Hark webhook bridge was off since 2026-10-23 and its code is gone: `api/src/notify.ts`
+(the `NotifyService`, its exactly-once records and retries), the `notifyCall` hooks in `studio.ts`, the Hark step of the
+editor's render machine (`edit-render-core.ts`) and the retry pass in `sweep.ts`. `GALLERY_LOOPS` (moving previews, off since
+2026-10-20) lost its Worker wiring too: no env var, no cron kick, no link-creation kick.
 
-Until there is an APNs key, a job the owner walked away from (typically a share-sheet run) is announced through their Hark
-webhook: `POST <HARK_WEBHOOK_URL>` with `{"title","body"}`. Code: `api/src/notify.ts` (the opt-in, the exactly-once record, the
-send, the retries, the route inside the DO), hooks in `studio.ts`, retry re-arming in `sweep.ts`.
-
-- **Secret**: `HARK_WEBHOOK_URL` in `~/.config/cobalt/secrets.json`, declared in `api/cloudflare.config.ts` as `bindings.secret()`.
-  Missing, empty or not https = the bridge is off, `features.notify_bridge` is `false`, nothing is stored or sent. The URL is
-  never in `envVars`, never logged, never returned. `cf deploy --dry-run --secrets-file` accepts it (checked 2026-10-04).
-- **Opt-in** (nothing fires without one): `PUT|DELETE /studio/<sid>/notify` (key, the session's owner only) with
-  `{"on":["saved","rendered","failed"],"label"?}`, valid 24 h; or `"notify": true` on one `POST /studio/<sid>/render`.
-- **Fired from** the save becoming ready, a render finishing and either failing, by the poll or the sweep, whichever sees it first;
-  each event once (a record in DO storage). 3 s ceiling per send; 5xx/network/timeout retried twice by the sweep (5 s, 20 s); a
-  4xx is final. Logs: `[notify] hark sent|failed <status> sid=<8>` only.
-- **Verified**: `npm test` (`test/notify.test.ts`: opt-in auth and validation, TTL, every event once under a poll/sweep race, no
-  fire without opt-in, bridge off, payload limits, timeout and retry bounds, no secret in logs) and the dry run. **Not verified**:
-  the real Hark endpoint's behaviour, and a `fetch` from the DO to it, until deployed.
-- **Deploy**: API only, as for Live Activities; no migration, no web deploy.
+- **`HARK_WEBHOOK_URL` is no longer bound** in `api/cloudflare.config.ts` (nor `HARK_NOTIFY` / `GALLERY_LOOPS`), so `cf deploy`
+  no longer requires the key in `~/.config/cobalt/secrets.json`. You can delete it from that file. If a deploy complains about the
+  extra key instead, remove it there. The secret already stored on the deployed Worker is not read by any code; delete it with
+  `cf secret delete` when convenient.
+- **Wire shape kept**: `GET /capabilities` still answers `features.notify_bridge: false`. `PUT|DELETE /studio/<sid>/notify`,
+  `PUT|DELETE /studio/line/notify` and the `notify` field on `POST /studio`, `POST /studio/<sid>/render` and the editor/chat/post
+  renders are still accepted and validated (`api/src/notify-off.ts`), then answer `bridge: false`; nothing is stored or sent.
+  Apps only call them when the capability says true, so they are there for older builds only.
+- A render record that an older deploy left in the `notify` step is finished as `cleanup`.
 
 ## Crop (`APP-API-CONTRACT.md` section 10)
 
@@ -1124,7 +1116,7 @@ Cloudflare imports) and `api/src/edit-renderer.ts` (the `EditRenderer` Container
   idle instance claims the oldest queued row with one atomic `UPDATE ... RETURNING`, streams the sources from R2 into the
   container (`cobalt-originals` or `cobalt-media`), starts the render, polls it every 5 s, copies the MP4 into
   `cobalt-originals/edits/<render id>.mp4` and a poster into `cobalt-media`, files a private `media_items` row (source `studio`,
-  `made_spec.kind` `edit`) with the project's name as its title, sends one Hark message if asked, deletes the container's copy
+  `made_spec.kind` `edit`) with the project's name as its title, deletes the container's copy
   and claims the next. Everything is poll-driven (Containers `schedule`, de-duplicated under `tick:at`); nothing relies on work
   after a response.
 - **Failure.** A container that lost the render (404 for its id, a start that takes over 60 s) restarts it once from the first

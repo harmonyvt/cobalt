@@ -1,7 +1,4 @@
 import Foundation
-#if os(iOS) && canImport(ActivityKit)
-import ActivityKit
-#endif
 
 // Live Activities for editor renders (APP-API-CONTRACT.md section 32, apple/CONTRACT-EDITOR.md section 11): a render this
 // device sees running gets its own activity on the Dynamic Island and the Lock Screen (status, a progress bar, the result
@@ -9,7 +6,7 @@ import ActivityKit
 // closed, from the renderer's ticks. Kept apart from the run activities (`LiveActivityManager`): a render is not a pipeline
 // run, has no rail, and is never folded into the busy period's summary. What ActivityKit shows is the job island
 // (CONTRACT-JOBLIVE.md 5): `EditLiveContentState` stays the manager's own record, turned into `JobLiveState` by
-// `JobLive.job(edit:...)` on every write; `CobaltEditActivityAttributes` below is the old type, kept for the old widget.
+// `JobLive.job(edit:...)` on every write.
 
 /// What an editor render's activity shows, and what the server pushes. Like `LiveContentState`, the JSON keys are the Swift
 /// property names (ActivityKit decodes a pushed `content-state` with a default `JSONDecoder`), absent optionals are omitted,
@@ -66,7 +63,7 @@ public struct EditLiveContentState: Codable, Hashable, Sendable {
         if status == .failed { code = r.error }
     }
 
-    /// Fixture states by name, for the widget's previews and the tests.
+    /// Fixture states by name, for the tests.
     public static let samples: [String: EditLiveContentState] = {
         func make(_ status: Status, _ fill: (inout EditLiveContentState) -> Void = { _ in }) -> EditLiveContentState {
             var s = EditLiveContentState(status: status, since: 1_790_000_000, title: "beach day")
@@ -87,7 +84,7 @@ public struct EditLiveContentState: Codable, Hashable, Sendable {
     }()
 }
 
-/// The fixed attributes of a render's activity; `CobaltEditActivityAttributes` (iOS only) mirrors it.
+/// The fixed attributes of a render's activity (`JobLive.job(edit:...)` turns them into the job activity's).
 public struct EditLiveAttributes: Codable, Hashable, Sendable {
     public var render: String
     public var project: String
@@ -98,34 +95,6 @@ public struct EditLiveAttributes: Codable, Hashable, Sendable {
     }
 }
 
-/// The plain words for a render's failure code (the server's `plainReason` for `error.edit.*`).
-public enum EditLiveCopy {
-    public static func reason(_ code: String?) -> String {
-        switch code {
-        case "error.edit.render_failed": return "the video couldn't be made"
-        case "error.edit.timeout": return "it took too long"
-        case "error.edit.source_missing": return "a clip was deleted from the library"
-        case "error.edit.lost": return "the server restarted"
-        case "error.edit.too_large": return "the video was too big"
-        case "error.edit.storage": return "the server couldn't store it"
-        default: return "something went wrong"
-        }
-    }
-}
-
-#if os(iOS) && canImport(ActivityKit)
-public struct CobaltEditActivityAttributes: ActivityAttributes, Hashable, Sendable {
-    public typealias ContentState = EditLiveContentState
-    public var render: String
-    public var project: String
-
-    public init(_ a: EditLiveAttributes) {
-        render = a.render
-        project = a.project
-    }
-}
-#endif
-
 // MARK: - the seam
 
 /// The part of ActivityKit `EditLiveManager` uses. The real one is `ActivityKitJobAdapter.edits()` (`JobActivity.swift`):
@@ -135,8 +104,6 @@ protocol EditLiveAdapter: AnyObject {
     var isAvailable: Bool { get }
     /// The job activities of renders (kind "edit"); `attributes.id` is the render id.
     var activities: [any JobActivityHandle] { get }
-    /// Activities of the old type (`CobaltEditActivityAttributes`) from an older build: ended, never written.
-    var oldActivities: [any OldLiveActivity] { get }
     func request(_ job: JobLiveJob, staleDate: Date, push: Bool) throws -> any JobActivityHandle
 }
 
@@ -226,11 +193,6 @@ final class EditLiveManager {
         guard r.isActive, !finished.contains(r.id), adapter.isAvailable,
               now().timeIntervalSince(r.createdAt) < Self.freshFor
         else { return }
-        // an old-type activity of this render (from an older build) gives way: one island per render
-        await OldLiveActivities.end(adapter.oldActivities, now: now(), showing: r.id)
-        // Ending it suspended: another copy of this render (the editor's feed and the queue's each call in) may have
-        // started its activity meanwhile. That one carries on; this copy is not news.
-        guard entry(for: r.id) == nil, !finished.contains(r.id) else { return }
         // ActivityKit refuses a request while the app is in the background: it throws, and the next copy seen in front tries again
         guard let h = try? adapter.request(
             Self.island(next, r), staleDate: now().addingTimeInterval(Self.staleAfter), push: pushAvailable)
@@ -269,9 +231,8 @@ final class EditLiveManager {
     }
 
     /// In front again: activities whose render this app no longer has a copy of (the app was closed when it ended and no push
-    /// reached it) are read once and brought up to date, or ended. Old-type activities nobody writes any more are ended.
+    /// reached it) are read once and brought up to date, or ended.
     func foreground() async {
-        await OldLiveActivities.end(adapter.oldActivities, now: now())
         guard capabilities().editor, let client = client() else { return }
         for h in adapter.activities where !h.isEnded && entries[h.attributes.id] == nil {
             let render = h.attributes.id
@@ -289,7 +250,6 @@ final class EditLiveManager {
     func capabilitiesChanged() async {
         guard !capabilities().editor else { return }
         for h in adapter.activities where !h.isEnded { await h.end(nil, dismissAt: nil) }
-        for a in adapter.oldActivities where !a.isEnded { await a.endNow() }
         entries.removeAll()
         for t in tokenTasks.values { t.cancel() }
         tokenTasks.removeAll()

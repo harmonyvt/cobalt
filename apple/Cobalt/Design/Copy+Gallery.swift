@@ -96,8 +96,8 @@ extension Copy {
         }
         static let saveNow = "save now", checkingLink = "checking the link", sentToCobalt = "sent to capystore"
         static func wakingServer(_ s: Int) -> String { "waking the server · \(s) s" }
-        /// "saving 10 photos to cobalt" / "saving 4 items to cobalt".
-        static func savingItems(_ n: Int, photosOnly: Bool) -> String { "saving \(n) \(photosOnly ? (n == 1 ? "photo" : "photos") : (n == 1 ? "item" : "items")) to cobalt" }
+        /// "saving 10 photos to capystore" / "saving 4 items to capystore".
+        static func savingItems(_ n: Int, photosOnly: Bool) -> String { "saving \(n) \(photosOnly ? (n == 1 ? "photo" : "photos") : (n == 1 ? "item" : "items")) to capystore" }
         static let andMakingWebp = " · making a slideshow webp", andMakingImage = " · making a gallery image"
         static let savingEverything = "saving everything to capystore", makeLater = "open capystore to make something from it"
         static let serverNoGallery = "this server can't save photo posts yet"

@@ -96,8 +96,10 @@ export type Toast = { by: string; action: StageAction; cost: number; detail: str
 
 // What the room keeps between events (30.6: "the last spotlight and chaos until").
 // `pinned_at` is when the pin event arrived: a pin only holds the spotlight that was still up then.
-export type RoomState = { spotlight: Spotlight | null; pinned_until: number; pinned_at: number; chaos_until: number; chaos_by: string | null };
-export const emptyRoom = (): RoomState => ({ spotlight: null, pinned_until: 0, pinned_at: 0, chaos_until: 0, chaos_by: null });
+// `viewers` is not kept: the room fills it in from its open WebSockets when it answers `/state` (how many canvases, OBS
+// browser sources, are connected right now). `null` = not known (the room could not be asked, or an older room that does not say).
+export type RoomState = { spotlight: Spotlight | null; pinned_until: number; pinned_at: number; chaos_until: number; chaos_by: string | null; viewers?: number | null };
+export const emptyRoom = (): RoomState => ({ spotlight: null, pinned_until: 0, pinned_at: 0, chaos_until: 0, chaos_by: null, viewers: 0 });
 
 export function reduceRoom(s: RoomState, e: CanvasEvent, now: number): RoomState {
     switch (e.type) {
@@ -151,7 +153,8 @@ export function roomPort(ns: RoomNamespace): RoomPort {
         },
         async state() {
             const res = await stub().fetch(new Request("https://stage-room.internal/state"));
-            return { ...emptyRoom(), ...((await res.json()) as Partial<RoomState>) };
+            const state = (await res.json()) as Partial<RoomState>;
+            return { ...emptyRoom(), ...state, viewers: typeof state.viewers === "number" ? state.viewers : null };
         },
         connect: (request) => stub().fetch(new Request("https://stage-room.internal/ws", request)),
     };
@@ -983,6 +986,8 @@ async function stageShape(d: StageDeps, s: SettingsRow, tw: TwitchRow | null, ro
             : null,
         spotlight: await liveSpotlight(d, room, s.spotlight_seconds),
         updated_at: s.updated_at,
+        // canvases (OBS browser sources) holding a socket to the room right now; null when the room could not be asked
+        connected_canvases: room.viewers ?? null,
     };
 }
 
@@ -1002,7 +1007,8 @@ async function roomState(d: StageDeps): Promise<RoomState> {
         return await d.room.state();
     } catch (e) {
         log("room state failed", e);
-        return emptyRoom();
+        // the other uses of the room (spotlight, chaos) read it as empty; the canvas count says "not known"
+        return { ...emptyRoom(), viewers: null };
     }
 }
 
@@ -1243,6 +1249,8 @@ async function ownerRedemptions(d: StageDeps, q: URLSearchParams): Promise<Studi
     const ids = [...new Set(results.map((r) => r.item_id).filter((x): x is string => !!x))];
     const items = new Map((await canvasItems(d, ids)).map((i) => [i.id, i]));
     return ok({
+        // the feed is polled every few seconds while the studio screen is open: it carries the canvas count too
+        connected_canvases: (await roomState(d)).viewers ?? null,
         redemptions: results.map((r) => ({
             id: r.id,
             action: r.action,

@@ -24,8 +24,9 @@ final class PipelineContext {
     /// flight, so a relaunch can pick it up (`AppModel.pickUpSharedJobs`).
     var recordsJobs = false
 
-    /// Runs the owner closed with `Pipeline.detach()` while work was in flight: they finish here,
-    /// not in any view.
+    /// What carries on without the screen. Phase 3: nothing is hidden here any more (`Pipeline.detach()` keeps a run with work in
+    /// flight in the queue, `JobQueue.letGo`); this holds the queue's unfocused pipelines for continued processing, the grace
+    /// period after the app leaves, and the share extension's `allowsDetach = false`.
     let background = BackgroundRuns()
 
     /// Mirrors the pipeline's run into a Live Activity (the app) or a relay (the share sheet);
@@ -37,6 +38,11 @@ final class PipelineContext {
         set { liveRouter.sink = newValue }
     }
     let liveRouter = LiveRouter()
+
+    /// The one count of what cobalt is doing (`AppModel.activity.summary`), for code that has the context and not the model (the
+    /// Live Activity's busy period, apple 03-PHASE3 3.2). Set by `AppModel`; nil in the share extension and in contexts a test builds
+    /// without a model.
+    var activitySummary: (@MainActor () -> ActivitySummary)?
 
     /// The app's job queue (nil in the share extension): the device line and the server line live there.
     weak var jobQueue: JobQueue?
@@ -55,6 +61,10 @@ final class PipelineContext {
     /// The background download of originals (CONTRACT-SYNC.md decision 6): the app's, or the sheet's
     /// own. Nil in previews and tests unless one is injected.
     var originals: OriginalFetcher?
+    /// The app's offline engine: this run's original is queued there when "keep videos on device" is on, so it is a background
+    /// transfer with byte progress, failure tracking and retry (apple 02-PHASE2 2.2.4). Set by `AppModel`; nil in the share
+    /// sheet, previews and tests, where the original is fetched in the foreground. Weak: `AppModel` owns it.
+    weak var offlineDownloads: OfflineDownloads?
     /// The photos ledger (shared by the app and the extension) and, in the app only, the sync.
     var photosLedger: PhotosLedger?
     var photosSync: PhotosSync?
@@ -100,13 +110,13 @@ final class PipelineContext {
     var frameEdge: CGFloat = 360
 
     /// Who may be asked for notification permission, once, at the first moment a notification has a
-    /// reason to exist: the owner closes a run that still has work in flight (`Pipeline.detach()`), or
+    /// reason to exist: the owner lets go of a run that still has work in flight (`Pipeline.detach()`, `JobQueue.letGo`), or
     /// the share sheet closes mid-render. Never on a plain run. Nil in previews and tests that do not
     /// care. The app sets it live; `ShareCore` sets it for the extension.
     var notifier: (any NotificationPosting)?
     private var askedForNotifications = false
 
-    /// Work is about to carry on without the screen (a detached run): "your webp is ready" now has a
+    /// Work is about to carry on without the screen (a run let go of): "your webp is ready" now has a
     /// reason to exist, and the app is active, so the system permission prompt belongs here. Not at
     /// launch and not when a run merely starts (it would cover the focus card).
     func notificationsNowUseful() {

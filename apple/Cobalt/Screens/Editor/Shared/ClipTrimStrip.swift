@@ -536,26 +536,3 @@ private struct ClipTrimScrollZoom: ViewModifier {
     }
 }
 #endif
-
-/// The Mac and iPad bar under the composition preview: the source picture and the strip for the selected clip.
-struct ClipTrimBar: View {
-    let session: EditSession
-    let clip: EditClip
-    let preview: ClipTrimPreview
-
-    private var aspect: CGFloat {
-        guard let display = session.source(for: clip.item)?.display, display.h > 0 else { return 16.0 / 9.0 }
-        return CGFloat(display.w) / CGFloat(display.h)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ClipTrimPicture(session: session, clip: clip, preview: preview)
-                .aspectRatio(aspect, contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: 112)
-            ClipTrimStrip(session: session, clip: clip, preview: preview)
-        }
-        .modifier(ClipTrimSync(session: session, clip: clip, preview: preview))
-        .accessibilityElement(children: .contain)
-    }
-}

@@ -81,7 +81,7 @@ extension Copy {
         }
 
         /// What the system asks the owner when an action must continue in the foreground: a server with no line (an old
-        /// one) holds nothing for cobalt, so this device keeps the line and cobalt has to stay open.
+        /// one) holds nothing for capystore, so this device keeps the line and capystore has to stay open.
         static let continueForOldServer = "this server can't keep a line, so capystore has to stay open to save."
 
         static let noSaves = "nothing saved yet."

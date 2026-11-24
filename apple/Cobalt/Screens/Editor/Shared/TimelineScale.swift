@@ -119,11 +119,12 @@ extension EditSession {
         return loadingSources.values.reduce(0, +) / Double(loadingSources.count)
     }
 
-    /// The save line of the top bar (`saved · 4 clips · 0:26`, `saving…`, `not saved · retrying`, `changed on another device`).
+    /// The save line of the top bar (`saved · 4 clips · 0:26`, `unsaved`, `saving…`, `not saved · retrying`, `changed on another device`).
     var saveLine: String {
         switch saveState {
         case .saved: return Copy.Editor.saveSaved(clips: timeline.main.count, duration: Copy.Editor.clock(timing.seconds))
-        case .saving, .unsaved: return Copy.Editor.saveSaving
+        case .saving: return Copy.Editor.saveSaving
+        case .unsaved: return Copy.Editor.saveUnsaved
         case .failed: return Copy.Editor.saveRetrying
         case .conflict: return Copy.Editor.saveConflict
         case .needsUpdate: return Copy.Editor.saveUpdate
@@ -135,9 +136,6 @@ extension EditSession {
         guard let first = problems.first else { return nil }
         return Copy.Editor.problem(first, duration: timing.seconds)
     }
-
-    /// `1080p · 30` for the timeline's canvas.
-    var qualityLine: String { Copy.Editor.qualityLabel(timeline.canvas.resolution.rawValue, timeline.canvas.fps) }
 }
 
 /// What buttons need to know of the playhead: the main clip under it and whether a split there works.

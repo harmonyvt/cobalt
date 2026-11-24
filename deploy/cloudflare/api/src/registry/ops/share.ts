@@ -9,7 +9,6 @@ import * as z from "zod";
 import { POST_KEY_SQL } from "../../app-routes";
 import { loadPosts } from "../../chat-tools";
 import { createGroup, deleteGroup, GROUP_ID_REGEX, listGroups, updateGroup, type GroupDeps } from "../../collection-groups";
-import { KEY_ID_HEADER } from "../../headers";
 import { captionerFrom } from "../../roast";
 import {
     COLLECTION_ID_REGEX,
@@ -35,7 +34,7 @@ import { ShareCollectionsListShape } from "../shapes";
 const shareOff = () => new OpError(404, "error.share.off", "share links are off on this server");
 
 // Gallery links: D1 only. The captioner writes the link's roast caption as the link is made (section 25); a new link's videos
-// get moving previews while GALLERY_LOOPS is "1" (section 29).
+// do not get moving previews (section 29): the loop kick is off since 2026-10-20, Discord plays the real video.
 export function shareSetDeps(ctx: OpContext, o: { captions?: boolean } = {}): ShareSetDeps | null {
     const { env, edge, container } = ctx;
     if (!ctx.shareBaseUrl) return null;
@@ -47,24 +46,6 @@ export function shareSetDeps(ctx: OpContext, o: { captions?: boolean } = {}): Sh
         captioner: o.captions === false ? null : (edge.captioner ?? captionerFrom(env, edge.modelFetch)),
         // the caption is written after the answer (captionSoon in share-sets.ts)
         waitUntil: edge.waitUntil,
-        kickLoops:
-            env.GALLERY_LOOPS !== "1"
-                ? undefined
-                : async () => {
-                      const p = container
-                          .fetch(
-                              new Request("https://do.internal/loops/kick", {
-                                  method: "POST",
-                                  headers: { [KEY_ID_HEADER]: "worker:loops" },
-                              }),
-                          )
-                          .then(
-                              (res) => void res.body?.cancel().catch(() => {}),
-                              (e) => console.error("[loops] kick failed", e instanceof Error ? e.name : "error"),
-                          );
-                      if (edge.waitUntil) edge.waitUntil(p);
-                      else await p;
-                  },
     };
 }
 

@@ -10,6 +10,9 @@ struct DetailContext {
     let selection: Binding<Rendition.ID>
     /// Pops the screen (the zoom back into the planet).
     let leave: () -> Void
+    /// Set on the iPhone's detail: the controls are the pane's grid (`PostGridControls`, with the offline words) over the
+    /// shared post actions, in place of the prominent button and the icon row. Nil: the wide layouts' own buttons.
+    var kit: PostActionKit?
 
     var model: AppModel { controller.model }
 
@@ -231,16 +234,30 @@ struct DetailHero: View {
 
 /// Everything under the picture, in the contract's order: the public switch, the buttons, the make row and the offline copy.
 /// A video's detail keeps today's sections; a gallery's and a photo's are the post's one switch and the gallery buttons.
+/// On the iPhone (`c.kit`) the buttons are the pane's grid, the one the pane's sheet draws.
 struct DetailControls: View {
     let c: DetailContext
+
+    /// The grid and the post's icon circles: the same subviews, over the same actions, as `PanePostPage`.
+    private func phoneGrid(_ kit: PostActionKit) -> some View {
+        Section {
+            PostGridControls(c: c, kit: kit, leave: c.leave, tools: true)
+                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                .listRowBackground(Color.clear)
+        }
+    }
 
     var body: some View {
         if c.isGalleryLike {
             GalleryVisibilitySection(controller: c.controller, item: c.item, rendition: c.rendition)
-            Section {
-                GalleryActions(c: c, leave: c.leave)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
+            if let kit = c.kit {
+                phoneGrid(kit)
+            } else {
+                Section {
+                    GalleryActions(c: c, leave: c.leave)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
             }
             if c.item.detailShape == .gallery { GalleryMakeRow(controller: c.controller, item: c.item) }
             if c.missingIndex == nil {
@@ -253,10 +270,14 @@ struct DetailControls: View {
             } else if c.controller.canSwitchVisibility(c.rendition) {
                 VisibilitySection(controller: c.controller, rendition: c.rendition)
             }
-            Section {
-                DetailActions(controller: c.controller, item: c.item, rendition: c.rendition, leave: c.leave)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
+            if let kit = c.kit {
+                phoneGrid(kit)
+            } else {
+                Section {
+                    DetailActions(controller: c.controller, item: c.item, rendition: c.rendition, leave: c.leave)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
             }
             // "from the post" and the framed copies (APP-API-CONTRACT 52.6), on a video saved from a post
             if c.rendition.kind == .video, c.model.canPostFrame(c.item) {

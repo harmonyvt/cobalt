@@ -84,8 +84,6 @@ beforeEach(async () => {
         MEDIA: new MemoryMedia(),
         MEDIA_BASE_URL: MEDIA,
         SHARE_BASE_URL: SHARE,
-        // moving previews on (section 29); the off default has its own test below
-        GALLERY_LOOPS: "1",
     };
     db.raw.prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)").run("key-1", "test", KEY_HASH, "0b5f2c3e", 1);
 });
@@ -120,10 +118,10 @@ describe("POST /share/sets", () => {
         expect(set.title).toBe("trip");
         expect(set.items.map((i: any) => i.url)).toEqual([`${MEDIA}ViDeO00001.mp4`, `${MEDIA}WeBpWeBp01.webp`, `${MEDIA}PhOtO00001.jpg`]);
         expect(set.items[0].poster_url).toBe(`${MEDIA}PoStEr0001.jpg`);
-        // the video's moving preview is queued (section 29): the Durable Object only writes a record
-        expect(containerCalls).toEqual(["/loops/kick"]);
+        // no moving preview is queued (section 29): the loop kick is off since 2026-10-20
+        expect(containerCalls).toEqual([]);
     });
-    it("ten files make one link; a link without a video queues no preview", async () => {
+    it("ten files make one link", async () => {
         const r = await create({ items: [webp.id, photo.id, fifth.id, ...more.map((m) => m.id)] });
         expect(r.status).toBe(201);
         expect(r.body.set.items).toHaveLength(10);
@@ -208,32 +206,9 @@ describe("the share host", () => {
         // Open Graph stays as the fallback
         expect(meta(html, "og:video")).toBe(`${MEDIA}ViDeO00001.mp4`);
     });
-    it("a video with a moving preview shows it in Discord's gallery, with a link button for sound", async () => {
+    it("Discord gets the real video even when a preview row exists: no button, and nothing is queued (the loops are off)", async () => {
         db.raw.prepare("INSERT INTO media_loops (item_id, url, r2_key, bytes, made_at) VALUES (?, ?, ?, 900, 1)").run(video.id, `${MEDIA}LoOpLoOp01.webp`, "LoOpLoOp01.webp");
         const html = await (await get(`${SHARE}g/${set.id}`, { headers: { "user-agent": "Discordbot/2.0" } })).text();
-        const doc = JSON.parse(/<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(html)![1]);
-        expect(doc.component.components[1].items.map((i: any) => i.media.url)).toEqual([
-            `${MEDIA}LoOpLoOp01.webp`,
-            `${MEDIA}WeBpWeBp01.webp`,
-            `${MEDIA}PhOtO00001.jpg`,
-        ]);
-        expect(doc.component.components[2]).toEqual({
-            type: 1,
-            components: [{ type: 2, style: 5, url: `${SHARE}g/${set.id}`, label: "watch with sound" }],
-        });
-        // Open Graph (every other app) keeps the real video
-        expect(meta(html, "og:video")).toBe(`${MEDIA}ViDeO00001.mp4`);
-        // without the table (migration 0018 not applied yet) the page is what it was
-        db.raw.exec("DROP TABLE media_loops");
-        const plain = await (await get(`${SHARE}g/${set.id}`, { headers: { "user-agent": "Discordbot/2.0" } })).text();
-        const doc2 = JSON.parse(/<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(plain)![1]);
-        expect(doc2.component.components[1].items[0].media.url).toBe(`${MEDIA}ViDeO00001.mp4`);
-        expect(doc2.component.components).toHaveLength(2);
-    });
-    it("with GALLERY_LOOPS off (the default) Discord gets the real video, no button, and nothing is queued", async () => {
-        db.raw.prepare("INSERT INTO media_loops (item_id, url, r2_key, bytes, made_at) VALUES (?, ?, ?, 900, 1)").run(video.id, `${MEDIA}LoOpLoOp01.webp`, "LoOpLoOp01.webp");
-        const off = { ...env, GALLERY_LOOPS: undefined };
-        const html = await (await get(`${SHARE}g/${set.id}`, { headers: { "user-agent": "Discordbot/2.0" } }, off)).text();
         const doc = JSON.parse(/<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(html)![1]);
         expect(doc.component.components[1].items.map((i: any) => i.media.url)).toEqual([
             `${MEDIA}ViDeO00001.mp4`,
@@ -245,14 +220,12 @@ describe("the share host", () => {
         const r = await get(
             `${API}/share/sets`,
             { method: "POST", headers: { ...AUTH, "content-type": "application/json" }, body: JSON.stringify({ items: [video.id, photo.id] }) },
-            off,
         );
         expect(r.status).toBe(201);
         expect(containerCalls).toEqual([]);
     });
     it("ten files stay under Discord's 3,000 bytes; a long description goes first", async () => {
         const ten = (await create({ items: [video.id, webp.id, photo.id, fifth.id, ...more.slice(0, 6).map((m) => m.id)], title: "t".repeat(80) })).body.set;
-        db.raw.prepare("INSERT INTO media_loops (item_id, url, r2_key, made_at) VALUES (?, ?, ?, 1)").run(video.id, `${MEDIA}LoOpLoOp01.webp`, "LoOpLoOp01.webp");
         const embedOf = async () => {
             const html = await (await get(`${SHARE}g/${ten.id}`, { headers: { "user-agent": "Discordbot/2.0" } })).text();
             const m = /<script id="discord:component-embed" type="application\/json">([^<]*)<\/script>/.exec(html);
@@ -261,14 +234,14 @@ describe("the share host", () => {
         const a = await embedOf();
         expect(new TextEncoder().encode(a!).byteLength).toBeLessThanOrEqual(3000);
         expect(JSON.parse(a!).component.components[1].items).toHaveLength(10);
-        // a caption long enough to break the limit is dropped, the gallery and button stay
+        // a caption long enough to break the limit is dropped, the gallery stays
         db.raw
             .prepare("INSERT INTO media_captions (subject, title, description, model, created_at, attempts) VALUES (?, ?, ?, 'm', 1, 1)")
             .run(`set:${ten.id}`, "t", "<".repeat(280));
         const b = await embedOf();
         expect(b).not.toBeNull();
         expect(new TextEncoder().encode(b!).byteLength).toBeLessThanOrEqual(3000);
-        expect(JSON.parse(b!).component.components).toHaveLength(3);
+        expect(JSON.parse(b!).component.components).toHaveLength(2);
     });
     it("the status lists every file as an attachment, big videos halved", async () => {
         for (const path of [`api/v1/statuses/${set.id}`, `users/cobalt/statuses/${set.id}`]) {

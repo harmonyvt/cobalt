@@ -105,6 +105,10 @@ public struct Job: Identifiable {
     /// Set when the job reaches a state that needs nothing more from the server (saved, webp ready, failed); nil while
     /// it is live. The tray keeps a finished job for five seconds beside the live ones.
     public internal(set) var finishedAt: Date?
+    /// The owner let go of this job (x, dismiss, closing it) while work of its own was still going on, on this device or on the
+    /// server (a render, a publish, the copy onto the device). The job stays in the queue, and in `activity.items`, until
+    /// that work settles, but the tray does not show it any more (`JobQueue.letGo`). Opening it again clears this.
+    public internal(set) var isReleased = false
 
     public enum Origin: Sendable { case app, share, relaunch, shortcut }
 

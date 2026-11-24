@@ -159,7 +159,6 @@ struct LibraryMosaic: View {
             budget.setCenter(center)
         }
         .onScrollPhaseChange { _, phase in budget.setScrolling(phase != .idle) }
-        .libraryBarFold(controller.fold)
         .onChange(of: reduceMotion, initial: true) { budget.setEnvironment(reduceMotion: reduceMotion, sceneActive: lifecycle.isForeground) }
         .onChange(of: lifecycle.phase) { budget.setEnvironment(reduceMotion: reduceMotion, sceneActive: lifecycle.isForeground) }
         .onChange(of: controller.reveal, initial: true) { _, request in

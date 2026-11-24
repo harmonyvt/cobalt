@@ -8,9 +8,10 @@ import Observation
 // backlog, the posters), and every action is routed back to the owner's existing method. A server line entry that is
 // one of this app's own jobs is shown once, as the job.
 //
-// Polling: only while the queue tab is on screen and the app is in front, and never without `features.queue`. Every
-// 5 s while something on the server moves (a job running or waiting in the line, an index pass running), else every
-// 30 s; errors back off (10, 20, 40, 80, then 120 s).
+// Polling is not this type's: `ServerActivityStore` reads `GET /queue` (or `/studio/line`) on every screen, 30 s while the server is
+// quiet, 3 s while it has work nobody here follows, never in the background, backing off after errors (apple 03-PHASE3 3.3). This
+// type is a view over that store (`snapshot`, `refresh`, `serverProblem`, the finished history) and keeps the surface the queue tab
+// and the menu bar read.
 
 /// Where an item sits on the queue tab, in the tab's order.
 public enum QueueSection: Int, Sendable, CaseIterable, Comparable, Hashable {
@@ -105,9 +106,15 @@ public struct FinishedWork: Sendable, Equatable, Identifiable {
     public var finishedAt: Date
     /// The stored media it landed as, when it is on this device (open shows its detail).
     public var mediaID: String?
+    /// What became of the copy on this device when the job left the queue (the sheet's Device check or warning). Nil: not known,
+    /// so `JobStatus(finished:)` guesses from `mediaID`.
+    public var deviceCopy: JobStatus.LocalCopyReceipt?
 
-    public init(id: UUID, title: String, outcome: Outcome, finishedAt: Date, mediaID: String? = nil) {
+    public init(
+        id: UUID, title: String, outcome: Outcome, finishedAt: Date, mediaID: String? = nil, deviceCopy: JobStatus.LocalCopyReceipt? = nil
+    ) {
         self.id = id; self.title = title; self.outcome = outcome; self.finishedAt = finishedAt; self.mediaID = mediaID
+        self.deviceCopy = deviceCopy
     }
 }
 
@@ -197,6 +204,8 @@ public struct QueueSummary: Sendable, Equatable {
 }
 
 /// The queue tab's model. Owned by `AppModel` (`unifiedQueue`).
+///
+/// A view over `ServerActivityStore` (the one poller) and the stores that own this device's work; it runs nothing of its own.
 @MainActor @Observable
 public final class UnifiedQueue {
     /// How long a finished job stays under "recently finished" after it left the app's queue.
@@ -205,33 +214,36 @@ public final class UnifiedQueue {
     public static let finishedLimit = 20
 
     /// The server's last answer (nil without `features.queue`, before the first answer, or after a server change).
-    public private(set) var snapshot: QueueSnapshot?
+    public var snapshot: QueueSnapshot? { activityStore.snapshot }
     /// When `snapshot` arrived (the device's clock).
-    public private(set) var updatedAt: Date?
+    public var updatedAt: Date? { activityStore.updatedAt }
     /// The last poll failed (the list keeps the last good snapshot and says so).
-    public private(set) var serverProblem = false
+    public var serverProblem: Bool { activityStore.serverProblem }
     /// Finished jobs that left the app's queue, newest first.
-    public internal(set) var finishedHistory: [FinishedWork] = []
+    public internal(set) var finishedHistory: [FinishedWork] {
+        get { activityStore.finishedHistory }
+        set { activityStore.finishedHistory = newValue }
+    }
     /// Renders of the editor the owner hid with "dismiss" (this device only).
-    public private(set) var dismissedEdits: Set<String> = []
+    public var dismissedEdits: Set<String> { activityStore.dismissedEdits }
     /// The editor's renders on this device (`EditorStore.renders`), wired by `AppModel`; nil in a queue with no editor.
     @ObservationIgnored var editRenders: (@MainActor () -> [EditRender])?
     /// The renders of each fresh snapshot (the Live Activities of renders); wired by `AppModel`.
-    @ObservationIgnored var onEdits: (@MainActor ([EditRender]) -> Void)?
+    @ObservationIgnored var onEdits: (@MainActor ([EditRender]) -> Void)? {
+        get { activityStore.onEdits }
+        set { activityStore.onEdits = newValue }
+    }
     /// The queue tab is on screen (`setVisible`).
     public private(set) var isVisible = false
-    /// The app is in front (`setForeground`).
-    public private(set) var isForeground = true
+    /// The app is in front (the store's: `setForeground`).
+    public var isForeground: Bool { activityStore.isForeground }
 
     @ObservationIgnored let ctx: PipelineContext
     @ObservationIgnored let jobs: JobQueue
     @ObservationIgnored let offline: OfflineDownloads
     @ObservationIgnored let photos: PhotosSync
-    @ObservationIgnored private var failures = 0
-    @ObservationIgnored private var pollTask: Task<Void, Never>?
-    @ObservationIgnored private var pollToken = 0
-    /// Polls sent (tests and telemetry).
-    @ObservationIgnored private(set) var polls = 0
+    /// A store this queue made itself because it was read before the model built the real one (kept alive here; the model's replaces it).
+    @ObservationIgnored private var stopgap: ServerActivityStore?
 
     init(context: PipelineContext, jobs: JobQueue, offline: OfflineDownloads, photos: PhotosSync) {
         self.ctx = context
@@ -239,6 +251,16 @@ public final class UnifiedQueue {
         self.offline = offline
         self.photos = photos
         jobs.onRetireFinished = { [weak self] job in self?.remember(job) }
+    }
+
+    /// The context's one poller. `AppModel.init` builds this queue first and the store after it, so the store is found when this
+    /// queue is first read; a queue with no model (a test) gets one of its own.
+    var activityStore: ServerActivityStore {
+        if let store = ServerActivityStore.current(for: ctx) { return store }
+        if let stopgap { return stopgap }
+        let store = ServerActivityStore(context: ctx)
+        stopgap = store
+        return store
     }
 
     // MARK: - Reading
@@ -267,122 +289,50 @@ public final class UnifiedQueue {
 
     public var summary: QueueSummary { Self.summary(of: items) }
 
-    /// The tab's badge: work in motion on this device (its live jobs and downloads). Server entries are left out: the
-    /// snapshot is only fresh while the tab is on screen, and the index's backlog is not something to badge.
+    /// The tab's badge: the one count of work in motion, `AppModel.activity.activeCount` (this device's jobs, downloads, photos
+    /// and the editor's renders, and the server's own rows). It used to be a count of its own that disagreed with `summary`; the
+    /// surfaces now read `activity` directly and this stays for the callers that have only the queue. Without a model (no
+    /// `ctx.activitySummary`): this device's live jobs, downloads and the editor's renders.
     public var badgeCount: Int {
-        jobs.live.count + offline.unfinishedCount
+        if let summary = ctx.activitySummary { return summary().activeCount }
+        return jobs.live.count + offline.unfinishedCount
             + mergedEdits.filter { $0.isActive && !dismissedEdits.contains($0.id) }.count
     }
 
     /// Nothing to show at all: the empty state.
     public var isEmpty: Bool { items.isEmpty }
 
-    // MARK: - Polling
+    // MARK: - Polling (the store's)
 
-    /// The queue tab appeared (true) or went away (false).
+    /// Reads taken (tests and telemetry).
+    var polls: Int { activityStore.polls }
+    var shouldPoll: Bool { activityStore.shouldPoll }
+
+    /// The queue tab appeared (true) or went away (false). Polling does not depend on it any more; showing the tab reads once
+    /// when the last answer is a few seconds old, so the tab never opens on a stale list.
     public func setVisible(_ visible: Bool) {
         guard isVisible != visible else { return }
         isVisible = visible
-        reschedule()
+        guard visible, let at = updatedAt, ctx.clock.now().timeIntervalSince(at) >= ServerActivityStore.activeSeconds else { return }
+        Task { await refresh() }
     }
 
-    /// The queue tab polls only while the app is in front (active; on the Mac, not hidden), through the app's one listener (`AppLifecycle`, `.work`).
-    /// Called once, by `AppModel.live()`.
-    func observeLifecycle(_ lifecycle: AppLifecycle = .shared) {
-        lifecycle.register(self, order: .work)
-    }
+    /// The app's one listener's call (`AppModel.observeLifecycle`): the store registers itself in its init, this signs it up with
+    /// another listener too (tests).
+    func observeLifecycle(_ lifecycle: AppLifecycle = .shared) { activityStore.observeLifecycle(lifecycle) }
 
-    /// The app came to the front (true) or left it (false): the lifecycle's `isActive` (the Mac: `isForeground`).
-    public func setForeground(_ foreground: Bool) {
-        guard isForeground != foreground else { return }
-        isForeground = foreground
-        reschedule()
-    }
+    /// The app came to the front (true) or left it (false).
+    public func setForeground(_ foreground: Bool) { activityStore.setForeground(foreground) }
 
     /// `features.queue` may have come or gone (`AppModel.apply`).
-    func capabilitiesChanged() {
-        if !ctx.capabilities.queue {
-            snapshot = nil
-            serverProblem = false
-            failures = 0
-        }
-        reschedule()
-    }
+    func capabilitiesChanged() { activityStore.capabilitiesChanged() }
 
     /// Another server: nothing from the old one is kept.
-    func serverChanged() {
-        snapshot = nil
-        updatedAt = nil
-        serverProblem = false
-        failures = 0
-        finishedHistory = []
-        dismissedEdits = []
-        reschedule()
-    }
-
-    var shouldPoll: Bool { isVisible && isForeground && ctx.capabilities.queue }
+    func serverChanged() { activityStore.serverChanged() }
 
     /// One `GET /queue` now (pull to refresh, and after an action). False when nothing new arrived.
     @discardableResult
-    public func refresh() async -> Bool {
-        guard ctx.capabilities.queue else {
-            snapshot = nil
-            return false
-        }
-        polls += 1
-        do {
-            let fresh = try await ctx.client.queue()
-            guard ctx.capabilities.queue else { return false }          // turned off while it was in flight
-            snapshot = fresh
-            if let edits = fresh.edits, !edits.isEmpty { onEdits?(edits) }
-            updatedAt = ctx.clock.now()
-            serverProblem = false
-            failures = 0
-            return true
-        } catch is CancellationError {
-            return false
-        } catch {
-            guard !Task.isCancelled else { return false }               // the tab went away mid-poll: not a failure
-            failures += 1
-            serverProblem = true
-            if failures == 1 {
-                Telemetry.log(.info, .net, "queue poll failed", data: ["error": .string(String(describing: error).prefix(80).description)])
-            }
-            return false
-        }
-    }
-
-    /// Seconds until the next poll: 5 while the server is busy, 30 when it is quiet, and backing off after errors
-    /// (10, 20, 40, 80, then 120 at most).
-    nonisolated static func delay(active: Bool, failures: Int) -> Double {
-        if failures > 0 { return min(120, 5 * pow(2, Double(min(failures, 6)))) }
-        return active ? 5 : 30
-    }
-
-    private func reschedule() {
-        if shouldPoll {
-            guard pollTask == nil else { return }
-            pollToken += 1
-            let token = pollToken
-            pollTask = Task { @MainActor [weak self] in
-                await self?.pollLoop()
-                guard let self, self.pollToken == token else { return }
-                self.pollTask = nil
-            }
-        } else {
-            pollTask?.cancel()
-            pollTask = nil
-        }
-    }
-
-    private func pollLoop() async {
-        while !Task.isCancelled, shouldPoll {
-            await refresh()
-            guard !Task.isCancelled, shouldPoll else { return }
-            let wait = Self.delay(active: snapshot?.isActive ?? false, failures: failures)
-            do { try await ctx.clock.sleep(seconds: wait) } catch { return }
-        }
-    }
+    public func refresh() async -> Bool { await activityStore.refresh() }
 
     // MARK: - Actions
 
@@ -416,7 +366,7 @@ public final class UnifiedQueue {
         case (.finished(let work), .dismiss):
             finishedHistory.removeAll { $0.id == work.id }
         case (.edit(let render), .dismiss):
-            dismissedEdits.insert(render.id)
+            activityStore.dismissedEdits.insert(render.id)
         default:
             break
         }
@@ -424,17 +374,7 @@ public final class UnifiedQueue {
 
     // MARK: - Recently finished
 
-    func remember(_ job: Job) {
-        let p = job.pipeline
-        let outcome: FinishedWork.Outcome
-        if case .done(let result) = p.state { outcome = .webp(result) } else { outcome = .saved }
-        let work = FinishedWork(
-            id: job.id, title: MediaTitle.text(p.resolvedTitle), outcome: outcome,
-            finishedAt: job.finishedAt ?? ctx.clock.now(), mediaID: p.stored?.mediaID)
-        finishedHistory.removeAll { $0.id == work.id }
-        finishedHistory.insert(work, at: 0)
-        if finishedHistory.count > Self.finishedLimit { finishedHistory.removeLast(finishedHistory.count - Self.finishedLimit) }
-    }
+    func remember(_ job: Job) { activityStore.remember(job) }
 
     // MARK: - The merge (pure, for tests)
 
@@ -515,7 +455,11 @@ public final class UnifiedQueue {
             case .downloading, .waiting:
                 downloadRows.append(QueueItem(id: "download:\(row.id)", section: .downloads, kind: .download(row), actions: [.cancel]))
             case .failed:
-                failed.append(QueueItem(id: "download:\(row.id)", section: .failed, kind: .download(row), actions: [.retry, .dismiss]))
+                // `DownloadActivitySource` says the same: a share-sheet copy has nothing to try again (the owner shares again), and a
+                // pending original the server no longer has never comes back.
+                let noRetry = row.origin == .share || (row.origin == .pendingOriginal && row.state == .failed(.gone))
+                failed.append(QueueItem(
+                    id: "download:\(row.id)", section: .failed, kind: .download(row), actions: noRetry ? [.dismiss] : [.retry, .dismiss]))
             default:
                 break
             }
@@ -597,21 +541,13 @@ public final class UnifiedQueue {
         var actions: [QueueAction] = []
         if case .failed(let f) = p.state {
             if f.keepsTrim && p.media != nil && p.sessionID != nil { actions.append(.open) }
-            if isRetryable(f) { actions.append(.retry) }
+            if f.isRetryable { actions.append(.retry) }
         } else {
             // a gallery: the save failed (try again), or a make failed (the focus has its own try again)
             if case .failed? = p.galleryRun?.phase { actions.append(.retry) } else { actions.append(.open) }
         }
         actions.append(.dismiss)
         return actions
-    }
-
-    /// "try again" cannot cure a failure of the input or of the key.
-    static func isRetryable(_ failure: PipelineFailure) -> Bool {
-        switch failure {
-        case .noLink, .tooLarge, .unsupported, .linkUnreadable, .keyMissing, .keyInvalid: return false
-        default: return true
-        }
     }
 
     static func summary(of items: [QueueItem]) -> QueueSummary {
@@ -628,16 +564,5 @@ public final class UnifiedQueue {
             }
         }
         return s
-    }
-}
-
-extension UnifiedQueue: LifecycleAware {
-    public func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
-        #if os(macOS)
-        // the Mac: in front unless hidden, as scenePhase was (it never left `.active` for Cmd-Tab)
-        setForeground(snapshot.isForeground)
-        #else
-        setForeground(snapshot.isActive)
-        #endif
     }
 }

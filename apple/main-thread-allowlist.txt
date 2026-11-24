@@ -33,8 +33,8 @@ Cobalt/Screens/Detail/RenditionHero.swift: onDisk = FileManager.default.fileExis
 Cobalt/Screens/Home/FocusView.swift: guard FileManager.default.fileExists(atPath: path) else { return false } # 8.17 baseline, move off main
 Cobalt/Screens/Home/GalleryPreviewHooks.swift: guard let file = video.fileURL, let size = (try? fm.attributesOfItem(atPath: file.path)[.size]) as? Int, size > 0 else { continue } # 8.17 baseline, move off main
 Cobalt/Screens/Home/GalleryPreviewHooks.swift: let fm = FileManager.default # 8.17 baseline, move off main
-Cobalt/Screens/Home/HomeScreen.swift: let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return } # 8.17 baseline, move off main
-Cobalt/Screens/Home/HomeScreen.swift: try? data.write(to: docs.appendingPathComponent("orbit-slots.json")) # 8.17 baseline, move off main
+Cobalt/Debug/PreviewAutomationModifiers.swift: let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return } # 8.17 baseline, move off main
+Cobalt/Debug/PreviewAutomationModifiers.swift: try? data.write(to: docs.appendingPathComponent("orbit-slots.json")) # 8.17 baseline, move off main
 Cobalt/Screens/Home/OrbitGallery.swift: if GalleryPreviewImages.directory != nil, isStill(video), let file = video.fileURL, fm.fileExists(atPath: file.path) { return file } # 8.17 baseline, move off main
 Cobalt/Screens/Home/OrbitGallery.swift: if isStill(video), let file = video.fileURL, fm.fileExists(atPath: file.path) { return file } # 8.17 baseline, move off main
 Cobalt/Screens/Home/OrbitGallery.swift: if let poster = video.posterURL, fm.fileExists(atPath: poster.path) { return poster } # 8.17 baseline, move off main

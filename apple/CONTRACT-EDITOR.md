@@ -341,6 +341,11 @@ extension QueueDestination { case edit(projectID: String) }     // a new case; `
 
 ## 4. Screens
 
+> **2026-11-24 (Phase 1 de-slop):** `EditorScreen.swift`, `EditorTopBar.swift`, `EditorInspector.swift`, `EditorPreviewPane.swift`
+> and the iPhone files `Phone/EditorPhoneScreen.swift`, `EditorPhoneHeader.swift`, `EditorPhonePreview.swift`,
+> `EditorPhoneTools.swift`, `EditorPhoneClipSheet.swift` and `EditorPhoneOverlaySheet.swift` named in sections 4.3 to 4.5 were
+> deleted: `EditorRoot` mounts `EditorShell` on every platform. The text below is kept as written; read it as history.
+
 ### 4.1 Entry points
 
 - **Library select** (`LibrarySelectPill`): with `model.editor.isAvailable`, the action row gets `edit` (`EditPicksButton`, lane 5;
@@ -872,3 +877,8 @@ lower lanes only, nothing moves. If it is under clips it overlaps in time, it mo
 No hint or caption text in the editor: "pinch to zoom", "lane 1 · sets the length", "this overlay covers the whole
 picture" and similar go. State is shown (handles, highlights, badges on clips such as a small key glyph), not written.
 Errors that block a render stay (they are not hints).
+
+Note (2026-11-24, state honesty): the crowded-preview note is shown again. When many videos overlap, the live preview may
+stutter while the render on the server is unaffected; `EditorPreviewCrowdedNote` says so, in `EditorShell`'s notices on the
+picture's bottom edge (and in the effects panel). It is state, not a hint: it shows only while `session.previewCrowded` is
+true, and it goes away when the timeline is lighter.

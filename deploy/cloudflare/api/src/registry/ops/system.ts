@@ -9,7 +9,6 @@ import { embedFrom } from "../../deps";
 import { editTablesPresent } from "../../edits";
 import { MEDIA_NAME_REGEX, parseAuthorization, TUNNEL_PARAMS, WEBP_ID_REGEX } from "../../gate";
 import { KEY_ID_HEADER } from "../../headers";
-import { harkConfigured } from "../../notify";
 import { background } from "../../background";
 import { describeBody, logRequest, normalizeUrlField, type BodyInfo } from "../../request-log";
 import { stageBaseFrom, twitchConfigFrom } from "../../stage";
@@ -83,7 +82,6 @@ export const capabilitiesOp = defineOp({
             auth,
             key,
             livePushConfigured(env),
-            harkConfigured(env),
             helper[0],
             helper[1],
             helper[2],

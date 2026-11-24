@@ -4,7 +4,9 @@ import SwiftUI
 // "how crazy" (0...100 tiles on screen, "redeems only" at 0) and "tile life" (3...120 s each), the "play videos through" and "unmute all videos"
 // switches, then a "more" fold with the tile size, the spotlight's time, how many videos may play at once and the auto
 // spotlight. A slider shows its value at once; the store sends the latest values 300 ms after the last move (last write wins),
-// so a drag is one request. A switch is sent at once and put back if the server refuses it.
+// so a drag is one request. A slider whose value is on its way shows a small spinner beside it, one whose write failed a red
+// mark (the bar under the header offers retry and revert). A switch is sent at once, shows its own spinner while it is on its
+// way, and is put back if the server refuses it.
 
 struct StageSliders: View {
     let store: StageStore
@@ -27,6 +29,15 @@ struct StageSliders: View {
 
     // MARK: the two sliders
 
+    /// What is happening to this slider's value: on its way, refused, or nothing.
+    private func mark(_ field: StageField) -> StageSliderRow.Mark {
+        switch store.saveState {
+        case .saving(let fields): return fields.contains(field) ? .saving : .none
+        case .failed(_, let fields): return fields.contains(field) ? .failed : .none
+        case .synced, .dirty: return .none
+        }
+    }
+
     private func crazy(_ stage: StageSettings) -> some View {
         StageSliderRow(
             title: Copy.Stage.howCrazy, value: Copy.Stage.onScreen(stage.density),
@@ -34,7 +45,7 @@ struct StageSliders: View {
             number: Binding(
                 get: { Double(store.stage?.density ?? stage.density) },
                 set: { store.setDensity(Int($0.rounded())) }),
-            range: Self.span(StageRule.densityRange), step: 1)
+            range: Self.span(StageRule.densityRange), step: 1, mark: mark(.density))
     }
 
     private func life(_ stage: StageSettings) -> some View {
@@ -44,7 +55,7 @@ struct StageSliders: View {
             number: Binding(
                 get: { Double(store.stage?.tileSeconds ?? stage.tileSeconds) },
                 set: { store.setTileSeconds(Int($0.rounded())) }),
-            range: Self.span(StageRule.tileSecondsRange), step: 1)
+            range: Self.span(StageRule.tileSecondsRange), step: 1, mark: mark(.tileSeconds))
     }
 
     // MARK: the two video switches
@@ -101,7 +112,7 @@ struct StageSliders: View {
             number: Binding(
                 get: { store.stage?.tileScale ?? stage.tileScale },
                 set: { store.setTileScale(($0 * 10).rounded() / 10) }),
-            range: StageRule.tileScaleRange, step: 0.1)
+            range: StageRule.tileScaleRange, step: 0.1, mark: mark(.tileScale))
     }
 
     private func spotlightTime(_ stage: StageSettings) -> some View {
@@ -111,7 +122,7 @@ struct StageSliders: View {
             number: Binding(
                 get: { Double(store.stage?.spotlightSeconds ?? stage.spotlightSeconds) },
                 set: { store.setSpotlightSeconds(Int($0.rounded())) }),
-            range: Self.span(StageRule.spotlightSecondsRange), step: 5)
+            range: Self.span(StageRule.spotlightSecondsRange), step: 5, mark: mark(.spotlightSeconds))
     }
 
     private func videos(_ stage: StageSettings) -> some View {
@@ -121,7 +132,7 @@ struct StageSliders: View {
             number: Binding(
                 get: { Double(store.stage?.videoMax ?? stage.videoMax) },
                 set: { store.setVideoMax(Int($0.rounded())) }),
-            range: Self.span(StageRule.videoMaxRange), step: 1)
+            range: Self.span(StageRule.videoMaxRange), step: 1, mark: mark(.videoMax))
     }
 
     private func auto(_ stage: StageSettings) -> some View {
@@ -144,7 +155,11 @@ struct StageSwitchRow: View {
     var body: some View {
         Toggle(isOn: $isOn) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(CobaltType.bodySemibold)
+                HStack(spacing: 8) {
+                    Text(title).font(CobaltType.bodySemibold)
+                    // the write for this very switch is on its way
+                    if busy { ProgressView().controlSize(.mini) }
+                }
                 Text(note)
                     .font(CobaltType.badge)
                     .foregroundStyle(CobaltColor.caption)
@@ -160,6 +175,9 @@ struct StageSwitchRow: View {
 
 /// A title and its value on one line, the slider under it, and what each end means.
 struct StageSliderRow: View {
+    /// Beside the value: the write for this slider is on its way, or was refused.
+    enum Mark { case none, saving, failed }
+
     let title: String
     let value: String
     let low: String?
@@ -167,6 +185,7 @@ struct StageSliderRow: View {
     @Binding var number: Double
     let range: ClosedRange<Double>
     let step: Double
+    var mark: Mark = .none
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -175,9 +194,17 @@ struct StageSliderRow: View {
                     .font(CobaltType.bodySemibold)
                     .foregroundStyle(CobaltColor.text)
                 Spacer(minLength: 8)
+                switch mark {
+                case .none: EmptyView()
+                case .saving: ProgressView().controlSize(.mini)
+                case .failed:
+                    Image(systemName: Symbol.error)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(CobaltColor.errorText)
+                }
                 Text(value)
                     .font(CobaltType.caption)
-                    .foregroundStyle(CobaltColor.caption)
+                    .foregroundStyle(mark == .failed ? CobaltColor.errorText : CobaltColor.caption)
                     .monospacedDigit()
             }
             .accessibilityHidden(true)

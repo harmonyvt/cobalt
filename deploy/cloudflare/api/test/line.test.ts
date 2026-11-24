@@ -1,7 +1,7 @@
 // The server's line (APP-API-CONTRACT.md section 17): queued saves and renders, the order they run in,
 // the two guards that would silently jump the line or lose a job, the pump, the ceilings, cancel,
 // `GET /studio/line`, the validation of `queue` / `title` / `priority`, and the gate. The Hark
-// summary has its own file (line-notify.test.ts).
+// summary is retired with the Hark bridge (the routes only answer "bridge off").
 import { dispatch as decide } from "./dispatch";
 import { describe, expect, it, vi } from "vitest";
 import { REGISTRY } from "../src/registry/index";
@@ -288,7 +288,7 @@ describe("fairness: nobody jumps the line", () => {
 });
 
 describe("share (origin: share) joins the line", () => {
-    it("while busy it is queued: no `save:` record, no busy retry, listed by /studio/recent as queued, announced when it finishes through its opt-in", async () => {
+    it("while busy it is queued: no `save:` record, no busy retry, listed by /studio/recent as queued, and finishes when the helper frees up", async () => {
         const L = await lineWorld();
         const R = await running(L);
         const share = asBody(
@@ -296,7 +296,7 @@ describe("share (origin: share) joins the line", () => {
                 url: link("share"), public: true, origin: "share", notify: { on: ["saved", "failed"], label: "x · share" },
             }),
         );
-        expect(share).toMatchObject({ status: "success", queued: true, queue_ahead: 1, notify: { bridge: true } });
+        expect(share).toMatchObject({ status: "success", queued: true, queue_ahead: 1, notify: { bridge: false, on: ["saved", "failed"], label: "x · share", expires_at: null } });
         expect(L.kv.m.has(`save:${share.id}`)).toBe(false);
         expect(L.kv.m.has(`share:${share.id}`)).toBe(true);
         expect(L.entries()).toMatchObject([{ sid: share.id, origin: "share", kind: "save", keyId: KEY_ID }]);
@@ -309,14 +309,10 @@ describe("share (origin: share) joins the line", () => {
         // the old 2 s retry loop is gone: sweeps while R runs never touch it
         await L.sweeps(3);
         expect(L.kv.m.has(`save:${share.id}`)).toBe(false);
-        expect(L.hark.calls).toEqual([]);
 
         R.release();
         await L.sweeps(3);
         expect(L.session(share.id).status).toBe("ready");
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toContain("x · share is saved");
-        expect(L.hark.calls[0]!.url).toBe(`cobalt-apple://session/${share.id}`);
     });
     it("a share that finds the helper free takes today's path: a `save:` record and the answer carries queued: false", async () => {
         const L = await lineWorld();
@@ -324,7 +320,7 @@ describe("share (origin: share) joins the line", () => {
         expect(share).toMatchObject({ queued: false, queue_ahead: null });
         expect(L.kv.m.has(`save:${share.id}`)).toBe(true);
     });
-    it("a share waits up to 30 minutes, not 2: past the ceiling it ends with error.studio.busy, announced", async () => {
+    it("a share waits up to 30 minutes, not 2: past the ceiling it ends with error.studio.busy", async () => {
         const L = await lineWorld();
         await running(L);
         const share = asBody(await create(L, { origin: "share", url: link("s"), notify: { on: ["failed"] } }));
@@ -335,9 +331,6 @@ describe("share (origin: share) joins the line", () => {
         L.clock.t += LINE_WAIT_MS;
         await L.studio.sweep();
         expect(L.session(share.id)).toMatchObject({ status: "error", error_code: "error.studio.busy" });
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]).toMatchObject({ title: "capystore couldn't finish" });
-        expect(L.hark.calls[0]!.body).toContain("the server was busy");
     });
     it("a share with the line full is refused 429 error.studio.line_full and creates nothing", async () => {
         const L = await lineWorld();
@@ -494,7 +487,7 @@ describe("the pump", () => {
         // the upload began and the object died: `starting` set, no in-memory mark in the new one
         const [e] = L.entries();
         L.kv.m.set(e.key, { ...e, key: undefined, starting: L.clock.t });
-        const reborn = L.make({ notify: L.notify });
+        const reborn = L.make({});
         L.clock.t += LINE_START_STALE_MS - 1000;
         await reborn.sweep();
         expect(L.helper.calls).not.toContain("POST /jobs/upload");
@@ -566,7 +559,7 @@ describe("the pump", () => {
         await L.studio.kickPosters();
         L.helper.posterGate = new Promise(() => {});
         // (one Durable Object: the poster, the sweep and the creates are the same instance)
-        const one = L.make({ posterIdleMs: 10, notify: L.notify });
+        const one = L.make({ posterIdleMs: 10 });
         await one.kickPosters();
         void one.sweep();
         await vi.waitFor(() => expect(L.helper.posterIds).toHaveLength(1));
@@ -654,7 +647,7 @@ describe("queue_ahead and GET /studio/line", () => {
         // a poster in flight belongs to nobody
         L.seed();
         L.helper.posterGate = new Promise(() => {});
-        const one = L.make({ notify: L.notify });
+        const one = L.make({});
         await one.kickPosters();
         void one.sweep();
         await vi.waitFor(() => expect(L.helper.posterIds).toHaveLength(1));
@@ -719,7 +712,7 @@ describe("ceilings", () => {
         // a client that did not ask to queue still gets the usual busy
         expect(await create(L, { url: link("plain") })).toEqual({ status: 429, body: { status: "error", error: { code: "error.studio.busy" } } });
     });
-    it("a save past 30 minutes ends with error.studio.busy, its title row is gone, and the failed hooks fire (per-session opt-in, live)", async () => {
+    it("a save past 30 minutes ends with error.studio.busy, its title row is gone, and the live failed hook fires", async () => {
         const L = await lineWorld();
         const R = await running(L);
         const a = asBody(await create(L, { url: link("a"), queue: true, title: "the good part", notify: { on: ["failed"] } }));
@@ -736,14 +729,11 @@ describe("ceilings", () => {
         expect(L.session(a.id)).toMatchObject({ status: "error", error_code: "error.studio.busy" });
         expect(L.entries()).toEqual([]);
         expect(L.rows("SELECT * FROM media_titles")).toEqual([]);
-        expect(L.hark.calls).toEqual([
-            { title: "capystore couldn't finish", body: expect.stringContaining("the server was busy"), url: `cobalt-apple://session/${a.id}` },
-        ]);
         expect(L.live.events).toContainEqual({ sid: a.id, e: { kind: "failed", code: "error.studio.busy" } });
         // the poll tells the same
         expect(asBody(await L.studio.advance(a.id, 0))).toMatchObject({ status: "error", error: { code: "error.studio.busy" }, queue_ahead: null });
     });
-    it("a render past 30 minutes ends with error.webp.busy and its failed hooks", async () => {
+    it("a render past 30 minutes ends with error.webp.busy and its live failed hook", async () => {
         const L = await lineWorld();
         const S = L.seed();
         await running(L);
@@ -752,9 +742,6 @@ describe("ceilings", () => {
         await L.studio.sweep();
         expect(L.rows("SELECT status, error_code FROM studio_renders WHERE id = ?", r.job)).toEqual([
             { status: "error", error_code: "error.webp.busy" },
-        ]);
-        expect(L.hark.calls).toEqual([
-            { title: "capystore couldn't finish", body: "couldn't make the webp — the server was busy", url: `cobalt-apple://session/${S.sid}` },
         ]);
         expect(L.live.events).toContainEqual({ sid: S.sid, job: r.job, e: { kind: "failed", code: "error.webp.busy" } });
         expect(await L.studio.renderStatus(S.sid, r.job, 0)).toEqual({
@@ -786,7 +773,7 @@ describe("ceilings", () => {
 });
 
 describe("cancel what has not started", () => {
-    it("DELETE /studio/<sid>/line removes a queued save: error.studio.cancelled, no Hark, live failed, the others move up; a repeat is the same 200", async () => {
+    it("DELETE /studio/<sid>/line removes a queued save: error.studio.cancelled, live failed, the others move up; a repeat is the same 200", async () => {
         const L = await lineWorld();
         await running(L);
         const a = asBody(await create(L, { url: link("a"), queue: true, title: "mine", notify: { on: ["saved", "failed"] } }));
@@ -801,16 +788,16 @@ describe("cancel what has not started", () => {
         expect(L.rows("SELECT * FROM media_titles")).toEqual([]);
         expect(asBody(await L.studio.advance(b.id, 0)).queue_ahead).toBe(1);
         expect(L.live.events).toContainEqual({ sid: a.id, e: { kind: "failed", code: "error.studio.cancelled" } });
-        // the owner did it: no Hark message, whatever the sweep and the polls do afterwards
+        // the owner did it: whatever the sweep and the polls do afterwards, it stays cancelled
         await L.sweeps(2);
         await L.studio.advance(a.id, 0);
-        expect(L.hark.calls).toEqual([]);
+        expect(L.session(a.id)).toMatchObject({ status: "error", error_code: "error.studio.cancelled" });
         // idempotent
         const again = await L.keyed(`/studio/${a.id}/line`, "DELETE");
         expect(again.status).toBe(200);
         expect(await again.json()).toEqual({ status: "success", cancelled: true });
     });
-    it("DELETE /studio/<sid>/render/<job> removes a queued render: error.webp.cancelled, no Hark even with notify: true, idempotent", async () => {
+    it("DELETE /studio/<sid>/render/<job> removes a queued render: error.webp.cancelled even with notify: true, idempotent", async () => {
         const L = await lineWorld();
         const S = L.seed();
         await running(L);
@@ -823,13 +810,12 @@ describe("cancel what has not started", () => {
             { status: "error", error_code: "error.webp.cancelled" },
         ]);
         expect(L.live.events).toContainEqual({ sid: S.sid, job: r.job, e: { kind: "failed", code: "error.webp.cancelled" } });
-        // polls of the cancelled render answer the error and never reach Hark
+        // polls of the cancelled render answer the error
         expect(await L.studio.renderStatus(S.sid, r.job, 0)).toEqual({
             status: 200,
             body: { status: "error", error: { code: "error.webp.cancelled" } },
         });
         await L.sweeps(2);
-        expect(L.hark.calls).toEqual([]);
         expect((await L.keyed(`/studio/${S.sid}/render/${r.job}`, "DELETE")).status).toBe(200);
     });
     it("a save or render that has started cannot be stopped: 409 error.studio.started", async () => {

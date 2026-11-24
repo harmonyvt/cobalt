@@ -1,6 +1,6 @@
 import Foundation
 
-/// What one pass did, for the library glow. The engine still sends, rolls back and pulls exactly as before.
+/// What one pass did, for the sync status. The engine still sends, rolls back and pulls exactly as before.
 enum SyncActivity: Sendable, Equatable {
     case passBegan
     case passEnded(pending: Int)
@@ -11,6 +11,9 @@ enum SyncActivity: Sendable, Equatable {
     case pulled
     /// The pass ended without a pull and the engine stays on. `offline`: nothing reached the server.
     case pullFailed(offline: Bool)
+    /// After a failed pull the engine will run the next pass by itself at this time (5 s, 15 s, 45 s,
+    /// then every 120 s). Foreground, reconnect and a manual retry still run one at once.
+    case retryScheduled(at: Date)
 }
 
 /// Sends the outbox, oldest first, then asks what changed. One pass is the body of the loop; tests
@@ -26,7 +29,18 @@ actor SyncEngine {
     private var pending = false
     private var idle: [CheckedContinuation<Void, Never>] = []
     private var wake: Task<Void, Never>?
+    /// True only after `GET /sync` answered 404/501 (`SyncError.notDeployed`), or a reload from 0 was
+    /// answered "too old" again (the one loop the engine must not retry). A 5xx or a network error
+    /// never sets it: those back off and try again (`scheduleRetry`).
     private(set) var fellBack = false
+    /// Failed pulls in a row since one last landed; picks the backoff step.
+    private var pullFailures = 0
+    private var retry: Task<Void, Never>?
+    /// When the pass that `retry` will start is due. Nil when none is waiting.
+    private(set) var nextRetryAt: Date?
+    private let retryDelays: [TimeInterval]
+    /// 5 s, 15 s, 45 s, then 120 s for every failure after that.
+    static let defaultRetryDelays: [TimeInterval] = [5, 15, 45, 120]
     /// The library publishes off this. Set from `LibrarySync` once the engine exists.
     private var onSnapshot: (@Sendable (SyncLibrarySnapshot) async -> Void)?
     private var onFallback: (@Sendable () async -> Void)?
@@ -34,7 +48,10 @@ actor SyncEngine {
     private var onRefused: (@Sendable (SyncOp, String) async -> Void)?
     /// A pass ended without a pull and the copy on screen is not fresh. The error is the pull's own.
     private var onPullFailed: (@Sendable (any Error) async -> Void)?
-    /// Reports what a pass did, for the library glow. Never changes what is sent or pulled.
+    /// A pull failed and the device has no copy to show: the library shows today's `GET /library` pages
+    /// for now. The engine stays on and keeps retrying; this is not a fallback.
+    private var onDegraded: (@Sendable () async -> Void)?
+    /// Reports what a pass did, for the sync status. Never changes what is sent or pulled.
     private var onActivity: (@Sendable (SyncActivity) async -> Void)?
 
     func setCallbacks(
@@ -42,25 +59,31 @@ actor SyncEngine {
         fallback: @escaping @Sendable () async -> Void,
         acknowledged: @escaping @Sendable (SyncOp, SyncReceipt) async -> Void,
         refused: @escaping @Sendable (SyncOp, String) async -> Void,
-        pullFailed: (@Sendable (any Error) async -> Void)? = nil
+        pullFailed: (@Sendable (any Error) async -> Void)? = nil,
+        degraded: (@Sendable () async -> Void)? = nil
     ) {
         onSnapshot = snapshot
         onFallback = fallback
         onAcknowledged = acknowledged
         onRefused = refused
         onPullFailed = pullFailed
+        onDegraded = degraded
     }
 
-    /// The glow listens here. Leaving it unset (the tests, a caller that does not care) changes nothing.
+    /// The status listens here. Leaving it unset (the tests, a caller that does not care) changes nothing.
     func setActivity(_ handler: (@Sendable (SyncActivity) async -> Void)?) {
         onActivity = handler
     }
 
-    init(store: SyncStore, transport: any SyncTransport, sender: any SyncSender, clock: @escaping @Sendable () -> Date = { Date() }) {
+    init(
+        store: SyncStore, transport: any SyncTransport, sender: any SyncSender, clock: @escaping @Sendable () -> Date = { Date() },
+        retryDelays: [TimeInterval] = SyncEngine.defaultRetryDelays
+    ) {
         self.store = store
         self.transport = transport
         self.sender = sender
         self.clock = clock
+        self.retryDelays = retryDelays.isEmpty ? SyncEngine.defaultRetryDelays : retryDelays
     }
 
     /// Runs one pass, and another if something else was asked for while it ran (a pull that arrived
@@ -88,11 +111,25 @@ actor SyncEngine {
     func invalidate() async {
         generation += 1
         fellBack = false
+        pullFailures = 0
+        cancelRetry()
         try? await store.wipeAll()
+    }
+
+    /// The library sync is being switched off: an in-flight pass drops its page, nothing starts again.
+    /// The copy and the outbox stay on disk.
+    func shutdown() {
+        generation += 1
+        wake?.cancel()
+        wake = nil
+        pullFailures = 0
+        cancelRetry()
     }
 
     private func pass(token: Int) async {
         guard token == generation else { return }
+        // This pass is the retry (or has made the waiting one unnecessary): a new one is scheduled only if it fails.
+        cancelRetry()
         await signal(.passBegan)
         let drained = await OutboxDrainer.drain(store: store, sender: sender, now: clock()) { [weak self] in
             await self?.isCurrent(token) ?? false
@@ -148,27 +185,61 @@ actor SyncEngine {
     /// `GET /sync` is not there on this server, or failed with nothing on the device to show: today's loading takes over for this launch.
     private func fallBack() async {
         fellBack = true
+        cancelRetry()
         await onFallback?()
         await signal(.fellBack)
     }
 
-    /// The pass ends without a pull. Nothing schedules another one, so this must not pass silently.
+    /// The pass ends without a pull. The engine never turns itself off for this (only `notDeployed`
+    /// does): a 5xx that a cold server answers while it wakes must not cost the whole launch.
     ///
-    /// Offline, or a key the server will not take: today's pages would fail the same way, so the
-    /// engine stays on, the library is told why (it shows the copy it has, if any, and the failure),
-    /// and the next reconnect, foreground or pull-to-refresh tries again. Anything else (a 5xx, a page
-    /// that does not decode) with no copy to show: today's pages are used for this launch, since they
-    /// may well work where the sync route does not.
+    /// - The library is always told why (`onPullFailed`, then the status).
+    /// - A key the server will not take (401/403): no timer, the same key fails the same way. The next
+    ///   foreground, reconnect or manual retry tries again.
+    /// - Anything else, with no copy on the device: the library shows today's `GET /library` pages for
+    ///   now (`onDegraded`), so the owner sees their posts at once.
+    /// - Anything else: another pass is scheduled with a growing wait (`scheduleRetry`).
     private func pullFailed(_ error: any Error, token: Int, restart: Bool) async {
         guard token == generation else { return }
         Telemetry.log(.warn, .sync, restart ? "sync restart failed" : "sync pull failed", data: ["error": .string(String(describing: error))])
         let offline = Self.isUnreachable(error)
-        if !offline, !Self.isAuth(error), !(await store.hasReadyMarker()) {
-            await fallBack()
-            return
-        }
+        let auth = Self.isAuth(error)
+        if !auth, !(await store.hasReadyMarker()) { await onDegraded?() }
         await onPullFailed?(error)
         await signal(.pullFailed(offline: offline))
+        if !auth { await scheduleRetry() }
+    }
+
+    /// Backoff after a failed pull: `retryDelays[failures - 1]`, the last one repeating.
+    static func retryDelay(afterFailures failures: Int, in delays: [TimeInterval] = defaultRetryDelays) -> TimeInterval {
+        delays[min(max(failures, 1), delays.count) - 1]
+    }
+
+    private func scheduleRetry() async {
+        pullFailures += 1
+        let delay = Self.retryDelay(afterFailures: pullFailures, in: retryDelays)
+        let due = clock().addingTimeInterval(delay)
+        retry?.cancel()
+        nextRetryAt = due
+        retry = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
+            guard let self, !Task.isCancelled else { return }
+            await self.retryFired()
+        }
+        await signal(.retryScheduled(at: due))
+    }
+
+    /// The timer ran out. It forgets itself first: the pass that follows cancels `retry`, and must not cancel its own task.
+    private func retryFired() async {
+        retry = nil
+        nextRetryAt = nil
+        await syncNow()
+    }
+
+    private func cancelRetry() {
+        retry?.cancel()
+        retry = nil
+        nextRetryAt = nil
     }
 
     private static func isUnreachable(_ error: any Error) -> Bool {
@@ -207,6 +278,7 @@ actor SyncEngine {
             if !page.more || page.seq <= since { break }
             since = page.seq
         }
+        pullFailures = 0
         await signal(.pulled)
     }
 
@@ -223,8 +295,15 @@ actor SyncEngine {
         wake = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
             guard let self, !Task.isCancelled else { return }
-            await self.syncNow()
+            await self.wakeFired()
         }
+    }
+
+    /// Like `retryFired`: the pass that follows calls `schedule`, which cancels `wake`, and that must not be this task
+    /// (a cancelled task's network request fails at once).
+    private func wakeFired() async {
+        wake = nil
+        await syncNow()
     }
 }
 

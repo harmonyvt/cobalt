@@ -6,6 +6,11 @@ the app contract: lanes do not deviate; if something here is impossible, stop an
 additive public API goes through Fable. Where this file and `CONTRACT.md` disagree, this file
 wins, and each such place is named below.
 
+> **2026-11-24 (Phase 1 de-slop):** the widget views this file names (`CobaltLiveActivity.swift`, `EditLiveActivity.swift`,
+> `ChatLiveActivity.swift`, `LiveViews.swift`, `LiveLockScreen.swift`, `LiveSummaryViews.swift`) and the legacy
+> `ActivityAttributes` types behind them were deleted when `JobLiveActivity` became the only Live Activity
+> (`CONTRACT-JOBLIVE.md` section 5). The text below is kept as written; read it as history.
+
 Two owner features (settled, not reopened):
 
 - **A. A Live Activity for every pipeline run**, started in the app or from the share sheet, on

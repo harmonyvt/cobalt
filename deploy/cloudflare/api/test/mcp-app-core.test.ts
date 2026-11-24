@@ -579,9 +579,9 @@ describe("the real app tools through the official client", () => {
             };
             const key = { color: "#00B140", similarity: 0.3, blend: 0.1, spill: 0.2 };
             const kept = agree([ov("a", { track: EDIT_OVERLAY_TRACKS - 1, hidden: true, key })]);
-            expect(kept.ok && kept.timeline.overlay[0]).toMatchObject({ track: EDIT_OVERLAY_TRACKS - 1, hidden: true, key: { color: "#00B140" } });
+            expect(kept.ok && (kept.timeline as { overlay: unknown[] }).overlay[0]).toMatchObject({ track: EDIT_OVERLAY_TRACKS - 1, hidden: true, key: { color: "#00B140" } });
             const shown = agree([ov("a", { hidden: false })]);
-            expect(shown.ok && "hidden" in shown.timeline.overlay[0]).toBe(false);
+            expect(shown.ok && "hidden" in (shown.timeline as { overlay: object[] }).overlay[0]!).toBe(false);
             expect(agree([ov("a", { track: EDIT_OVERLAY_TRACKS })]).ok).toBe(false);
             expect(agree([ov("a", { hidden: "yes" })]).ok).toBe(false);
             const many = Array.from({ length: EDIT_MAX_CLIPS - 1 }, (_, i) => ov(`o${i}`, { at: i * 0.1, out: 0.1 }));

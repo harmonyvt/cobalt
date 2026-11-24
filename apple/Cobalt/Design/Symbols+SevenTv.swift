@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// SF Symbols for the studio tab's 7TV card, set screen and sheets (APP-API-CONTRACT 57.7). Its own file, compiled into the
+/// SF Symbols for the live stage's 7TV card, set screen and sheets (APP-API-CONTRACT 57.7). Its own file, compiled into the
 /// extensions too (`Cobalt/Design`). Every name exists since SF Symbols 4.
 extension Symbol {
     enum SevenTv {
@@ -60,7 +60,7 @@ extension Symbol {
         /// The clash sheet's choices.
         static let choiceOn = "largecircle.fill.circle"
         static let choiceOff = "circle"
-        /// The studio's "7tv →" row.
+        /// The live stage's "7tv →" row.
         static let shortcut = "chevron.right"
         /// The upload sheet's "crop…" and "use this crop" (57.10).
         static let crop = "crop"

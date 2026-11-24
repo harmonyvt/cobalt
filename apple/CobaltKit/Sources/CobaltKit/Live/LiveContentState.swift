@@ -1,12 +1,12 @@
 import Foundation
 
-/// What a Live Activity shows, and what the server pushes (CONTRACT-LIVE.md 2.2).
+/// A save's stages as the app builds them (CONTRACT-LIVE.md 2.2): what the app's managers decide from, what the share sheet
+/// relays to the server for the stages only the device performs (`relayState`), and what the local builder
+/// `JobLive.job(save:...)` turns into the job island's `JobLiveState`. It is no longer what ActivityKit shows.
 ///
-/// The JSON keys are the Swift property names (camelCase): ActivityKit decodes the pushed
-/// `content-state` by property name with a default `JSONDecoder`, so this is the one object that is
-/// not snake_case on the wire, and it must be encoded with a plain `JSONEncoder` (no key strategy).
-/// Absent optionals are omitted, never `null`; `waking` and `packing` are always written. Times are
-/// unix seconds as `Double` (a `Date` would decode as seconds since 2001 on the push path).
+/// The JSON keys are the Swift property names (camelCase), so this is the one object that is not snake_case on the wire,
+/// and it must be encoded with a plain `JSONEncoder` (no key strategy). Absent optionals are omitted, never `null`;
+/// `waking` and `packing` are always written. Times are unix seconds as `Double`.
 public struct LiveContentState: Codable, Hashable, Sendable {
     public enum Stage: String, Codable, Sendable, CaseIterable {
         case fetching, uploading, saving, reading, ready, rendering, done, failed
@@ -32,7 +32,7 @@ public struct LiveContentState: Codable, Hashable, Sendable {
     public var code: String?             // failed: the server's error code, when there is one
 
     // The busy period's summary (CONTRACT-PARALLEL.md section 6). Additive and optional: the server never writes them
-    // (its allow-list drops unknown keys), a per-run activity never carries them, and an old widget ignores them.
+    // (its allow-list drops unknown keys), and a per-run activity never carries them.
     /// The jobs this activity speaks for (live ones, the lead included). Nil on a per-run activity.
     public var jobs: Int?
     /// Of those, the ones waiting for the server (queued on its line, or in the device line), the lead included when
@@ -174,8 +174,8 @@ public struct LiveContentState: Codable, Hashable, Sendable {
     }()
 }
 
-/// The activity's fixed attributes (CONTRACT-LIVE.md 2.2). Compiles on every platform so the macOS
-/// `swift test` run covers the wire shape; `CobaltActivityAttributes` (iOS only) mirrors it.
+/// A run's fixed attributes (CONTRACT-LIVE.md 2.2): what `PUT /live/runs/<run>` registers and `JobLive.job(save:...)` turns
+/// into the job activity's attributes.
 public struct LiveRunAttributes: Codable, Hashable, Sendable {
     public var run: String               // lowercase UUID
     public var input: String             // "link" | "file"
@@ -191,26 +191,3 @@ public struct LiveRunAttributes: Codable, Hashable, Sendable {
         self.origin = origin
     }
 }
-
-#if os(iOS) && canImport(ActivityKit)
-import ActivityKit
-
-/// Same stored properties as `LiveRunAttributes`; the push-to-start `attributes-type` is this
-/// type's name, exactly "CobaltActivityAttributes".
-public struct CobaltActivityAttributes: ActivityAttributes, Hashable, Sendable {
-    public typealias ContentState = LiveContentState
-    public var run: String
-    public var input: String
-    public var service: String
-    public var ref: String
-    public var origin: String
-
-    public init(_ a: LiveRunAttributes) {
-        run = a.run
-        input = a.input
-        service = a.service
-        ref = a.ref
-        origin = a.origin
-    }
-}
-#endif

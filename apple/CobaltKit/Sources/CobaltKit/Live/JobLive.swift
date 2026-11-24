@@ -526,11 +526,16 @@ public enum JobLive {
     ///   the clock would jump back as stages change).
     /// - the phase is `working` while any job runs, then `done` (some saved) or `failed` (none did).
     /// - a row's status is that job's headline (its words), capped like a headline.
-    public static func many(id: String, jobs: [JobLiveJob], since: Double, open: String? = nil) -> JobLiveJob {
-        let total = jobs.count
+    ///
+    /// `going`: the one count of what cobalt is doing (`ActivitySummary.activeCount`, apple 03-PHASE3 3.2). The rows only know
+    /// the app's own jobs; downloads onto the device and other devices' saves are going too, and the island must say the
+    /// number the pill and the sheet say. When given, it replaces the count taken from `jobs` (so "N going" and the "done/total"
+    /// ring read `done + failed + going`); nil keeps the rows' own count (the fixture's).
+    public static func many(id: String, jobs: [JobLiveJob], since: Double, open: String? = nil, going override: Int? = nil) -> JobLiveJob {
         let done = jobs.filter { $0.state.phase == .done }.count
         let failed = jobs.filter { $0.state.phase == .failed || $0.state.phase == .lost }.count
-        let going = total - done - failed
+        let going = override.map { max(0, $0) } ?? (jobs.count - done - failed)
+        let total = done + failed + going
 
         var words: [String] = []
         if done > 0 { words.append("\(done) done") }

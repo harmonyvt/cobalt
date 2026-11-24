@@ -65,6 +65,11 @@ public enum SessionStatus: String, Sendable, Codable { case saving, ready, error
 /// `queued` (APP-API-CONTRACT 17.4): the save waits in the server's line; `queue_ahead` says how many run before it.
 public enum SaveStep: String, Sendable, Codable { case fetching, reading, storing, queued }
 
+/// Which downloader runs a save (`engine`, `waking_engine`, `fallback_from` on `GET /studio/<sid>`; apple 05-API-WIRE-SCHEMAS
+/// section 2). cobalt is the default; `ytdlp` is the second downloader (APP-API-CONTRACT 49). An engine this build does not
+/// know decodes as "not said" (nil) in `StudioSession`, never as a failed session.
+public enum SaveEngine: String, Sendable, Codable, Equatable { case cobalt, ytdlp }
+
 public struct StudioRender: Sendable, Codable, Equatable, Identifiable {
     public var id: String
     public var url: URL
@@ -107,6 +112,18 @@ public struct StudioSession: Sendable, Codable, Equatable, Identifiable {
     public var itemCount: Int?
     /// `items`: what became of each item (`GET /studio/<sid>` of a gallery); empty for a single file.
     public var items: [SessionItem] = []
+    /// `items_done` / `items_total`: the helper's own count of a gallery save, while it saves ("4 of 6"). Nil from a server that
+    /// does not say (the app then estimates from the bytes) and for a single file.
+    public var itemsDone: Int?
+    public var itemsTotal: Int?
+    /// `engine`: which downloader runs this save, once it began. Nil from a server without the second downloader.
+    public var engine: SaveEngine?
+    /// `waking_engine`: the downloader that is starting up, only while `waking` is true.
+    public var wakingEngine: SaveEngine?
+    /// `fallback_from` / `fallback_code`: the save switched downloaders mid-way, and this is the engine that failed and the
+    /// error code that made it switch (both nil: no switch).
+    public var fallbackFrom: SaveEngine?
+    public var fallbackCode: String?
 }
 
 /// What became of one item of a gallery save (`items` on `GET /studio/<sid>`, 18.2).
@@ -146,6 +163,9 @@ extension StudioSession {
         case visibility
         case queueAhead                       // `queue_ahead`
         case itemCount, items                 // `item_count`, `items`
+        case itemsDone, itemsTotal            // `items_done`, `items_total`
+        case engine, wakingEngine             // `engine`, `waking_engine`
+        case fallbackFrom, fallbackCode       // `fallback_from`, `fallback_code`
     }
 
     struct ErrorBody: Codable, Equatable { var code: String? }
@@ -175,6 +195,14 @@ extension StudioSession {
         queueAhead = (try? c.decodeIfPresent(Int.self, forKey: .queueAhead)) ?? nil
         itemCount = (try? c.decodeIfPresent(Int.self, forKey: .itemCount)) ?? nil
         items = ((try? c.decodeIfPresent([Lossy<SessionItem>].self, forKey: .items)) ?? nil)?.compactMap(\.value) ?? []
+        // Every field below is additive: an older server, plain cobalt and a cached fixture lack all of them, and an
+        // engine this build does not know is "not said".
+        itemsDone = (try? c.decodeIfPresent(Int.self, forKey: .itemsDone)) ?? nil
+        itemsTotal = (try? c.decodeIfPresent(Int.self, forKey: .itemsTotal)) ?? nil
+        engine = (try? c.decodeIfPresent(SaveEngine.self, forKey: .engine)) ?? nil
+        wakingEngine = (try? c.decodeIfPresent(SaveEngine.self, forKey: .wakingEngine)) ?? nil
+        fallbackFrom = (try? c.decodeIfPresent(SaveEngine.self, forKey: .fallbackFrom)) ?? nil
+        fallbackCode = (try? c.decodeIfPresent(String.self, forKey: .fallbackCode)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -201,6 +229,12 @@ extension StudioSession {
         try c.encodeIfPresent(queueAhead, forKey: .queueAhead)
         try c.encodeIfPresent(itemCount, forKey: .itemCount)
         if !items.isEmpty { try c.encode(items, forKey: .items) }
+        try c.encodeIfPresent(itemsDone, forKey: .itemsDone)
+        try c.encodeIfPresent(itemsTotal, forKey: .itemsTotal)
+        try c.encodeIfPresent(engine, forKey: .engine)
+        try c.encodeIfPresent(wakingEngine, forKey: .wakingEngine)
+        try c.encodeIfPresent(fallbackFrom, forKey: .fallbackFrom)
+        try c.encodeIfPresent(fallbackCode, forKey: .fallbackCode)
     }
 }
 

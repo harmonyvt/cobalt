@@ -31,6 +31,41 @@ enum HeroProgress: Equatable {
     case working
 }
 
+extension HeroProgress {
+    /// What the planet's edge shows for this run: read off its status (`Stage.rendering(.decode, done, total)` for a webp,
+    /// `galleryProgress` for a gallery's items landing).
+    @MainActor
+    static func of(_ pipeline: Pipeline) -> HeroProgress {
+        guard let status = JobStatus(pipeline: pipeline, now: Date()) else { return .none }
+        var sending = false
+        if case .sending? = pipeline.galleryRun?.make { sending = true }
+        return HeroProgress(status: status, sending: sending, waitsInLine: pipeline.line != nil)
+    }
+
+    /// `waitsInLine`: queued, not started: the planet does not breathe for work nobody is doing yet. `sending`: a gallery's
+    /// make is on its way to the server (a status calls that "queued" like any wait, and the planet breathes for it).
+    init(status: JobStatus, sending: Bool, waitsInLine: Bool) {
+        if waitsInLine { self = .none; return }
+        switch status.stage {
+        case .galleryProgress(let done, let total, _, _):
+            // the ticks along the planet's edge light up as the items land
+            self = .decoding(done: done, total: max(1, total))
+        case .rendering(let phase, let done, let total):
+            // a gallery's make in flight makes it breathe
+            if status.kind == .gallery { self = .working; return }
+            switch phase {
+            case .decode?: self = .decoding(done: done ?? 0, total: total ?? 0)
+            case .pack?: self = .packing
+            default: self = .working
+            }
+        case .queued:
+            self = status.kind == .gallery && sending ? .working : .none
+        default:
+            self = .none
+        }
+    }
+}
+
 // MARK: - the layer
 
 struct FocusLayer: View {
@@ -93,6 +128,11 @@ struct FocusLayer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.hapticsEnabled) private var haptics
     @Environment(\.homeHeight) private var homeHeight
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// The secondary actions draw their words on a phone (apple 04-PHASE4 4.3): no long press to learn what an icon does.
+    private var wordsOnButtons: Bool { FocusActionStyle.labelled(sizeClass: sizeClass, typeSize: typeSize) }
 
     // MARK: derived
 
@@ -216,9 +256,7 @@ struct FocusLayer: View {
     /// The server can crop (`features.crop`); `-previewCrop YES` shows the button over a preview scenario
     /// that does not say so (the preview server's capabilities are CobaltKit's).
     private var serverCrops: Bool {
-        #if DEBUG
-        if UserDefaults.standard.bool(forKey: "previewCrop") { return true }
-        #endif
+        if DebugPreviewFlags.cropButton { return true }
         return capabilities.crop
     }
 
@@ -268,25 +306,7 @@ struct FocusLayer: View {
         return false
     }
 
-    private var heroProgress: HeroProgress {
-        // queued, not started: the planet does not breathe for work nobody is doing yet
-        if pipeline.line != nil { return .none }
-        if isGallery, let run = pipeline.galleryRun {
-            // the ticks along the planet's edge light up as the items land; a make in flight makes it breathe
-            if case .saving = run.phase { return .decoding(done: run.done, total: max(1, run.total)) }
-            if case .making = run.make { return .working }
-            if case .sending = run.make { return .working }
-            return .none
-        }
-        if case .rendering(let p) = pipeline.state {
-            switch p {
-            case .decoding(let done, let total): return .decoding(done: done, total: total)
-            case .packing: return .packing
-            case .working: return .working
-            }
-        }
-        return .none
-    }
+    private var heroProgress: HeroProgress { HeroProgress.of(pipeline) }
 
     private var isHosting: Bool { pipeline.hosting == .working }
 
@@ -298,9 +318,7 @@ struct FocusLayer: View {
 
     /// The edge sweep runs while hosting (`-previewSweepHold YES` holds it on for design review).
     private var heroSharing: Bool {
-        #if DEBUG
-        if UserDefaults.standard.bool(forKey: "previewSweepHold") { return true }
-        #endif
+        if DebugPreviewFlags.sweepHold { return true }
         return isHosting
     }
 
@@ -519,118 +537,8 @@ struct FocusLayer: View {
                 withAnimation(reduceMotion ? Motion.fade : FocusMotion.content) { showsTrim = true }
             }
         }
-        #if DEBUG
-        // `-previewAutoClose 3`: close the focused planet 3 s after it has lifted (evidence of the return trip).
-        .task(id: lifted) {
-            let secs = UserDefaults.standard.double(forKey: "previewAutoClose")
-            guard secs > 0, lifted else { return }
-            try? await Task.sleep(for: .seconds(secs))
-            if !Task.isCancelled { onClose() }
-        }
-        // `-previewConvert 2 -previewMake 3 -previewCopy 2`: press "convert to webp" 2 s after the planet has
-        // lifted, then (a clip over 10 s: the trim strip is up) "make webp" 3 s later, then the copy button
-        // 2 s after the webp has landed (evidence of the convert phase without a finger on the glass).
-        .task(id: lifted) {
-            let d = UserDefaults.standard
-            let after = d.double(forKey: "previewConvert")
-            guard after > 0, lifted else { return }
-            try? await Task.sleep(for: .seconds(after))
-            guard !Task.isCancelled else { return }
-            convert()
-            let make = d.double(forKey: "previewMake")
-            guard make > 0 else { return }
-            try? await Task.sleep(for: .seconds(make))
-            if !Task.isCancelled, showsTrim { pipeline.makeWebp() }
-        }
-        .task(id: hasWebp) {
-            let after = UserDefaults.standard.double(forKey: "previewCopy")
-            guard after > 0, hasWebp else { return }
-            try? await Task.sleep(for: .seconds(after))
-            if !Task.isCancelled { pipeline.copyResultLink(); flash($copiedWebp) }
-        }
-        // `-previewCrop YES -previewCropOpen 1 -previewCropPreset 1:1 -previewCropDone 2 -previewCropMake 2`: once the
-        // trim strip is up (a clip that fits a webp: once the planet has lifted) open the crop editor after 1 s,
-        // pick the preset, press "done" 2 s later and "make webp" 2 s after that. The same functions the buttons
-        // call; the gestures themselves are driven by hand.
-        .task(id: "\(lifted)\(showsTrim)") {
-            let d = UserDefaults.standard
-            let after = d.double(forKey: "previewCropOpen")
-            guard after > 0, lifted, showsTrim || !isLong else { return }
-            try? await Task.sleep(for: .seconds(after))
-            guard !Task.isCancelled, cropEditor == nil else { return }
-            openCrop()
-            if let label = d.string(forKey: "previewCropPreset"), let preset = CropRect.Aspect.allCases.first(where: { $0.label == label }) {
-                try? await Task.sleep(for: .milliseconds(600))
-                withAnimation(Motion.rows) { cropEditor?.choose(preset) }
-            }
-            let done = d.double(forKey: "previewCropDone")
-            guard done > 0 else { return }
-            try? await Task.sleep(for: .seconds(done))
-            guard !Task.isCancelled else { return }
-            finishCrop()
-            let make = d.double(forKey: "previewCropMake")
-            guard make > 0 else { return }
-            try? await Task.sleep(for: .seconds(make))
-            if !Task.isCancelled { pipeline.makeWebp() }
-        }
-        // A gallery's drivers (evidence without a finger on the glass; the same functions the buttons call):
-        // `-previewGallerySheet webp|mp4|image` opens the combine sheet with that output once the planet has lifted;
-        // `-previewGalleryMake webp|mp4|image -previewGalleryMakeAt 2` chooses that make N s after the lift, the way
-        // the sheet does (`Pipeline.make`, held until the save is over); `-previewGalleryRetry 1` presses
-        // `try photo 7 again` N s after the save ended with a failure.
-        .task(id: lifted) {
-            let d = UserDefaults.standard
-            guard lifted, isGallery else { return }
-            if let raw = d.string(forKey: "previewGallerySheet"), let kind = GalleryMakeKind(rawValue: raw) {
-                try? await Task.sleep(for: .seconds(max(0.5, d.double(forKey: "previewGallerySheetAt"))))
-                if !Task.isCancelled { makeKind = kind }
-            }
-        }
-        .task(id: lifted) {
-            let d = UserDefaults.standard
-            guard lifted, isGallery, let raw = d.string(forKey: "previewGalleryMake"), let kind = GalleryMakeKind(rawValue: raw) else { return }
-            try? await Task.sleep(for: .seconds(d.double(forKey: "previewGalleryMakeAt")))
-            guard !Task.isCancelled else { return }
-            let items = pipeline.galleryItems
-            let ids = items.map(\.id)
-            switch kind {
-            case .webp: await pipeline.make(.slideshow(SlideshowPlan(format: .webp, items: ids)))
-            case .mp4: await pipeline.make(.slideshow(SlideshowPlan(format: .mp4, items: ids)))
-            case .image: await pipeline.make(.image(GalleryImagePlan(items: items.filter(\.isPhoto).map(\.id))))
-            }
-        }
-        .task(id: galleryBeat) {
-            let after = UserDefaults.standard.double(forKey: "previewGalleryRetry")
-            guard after > 0, galleryBeat == "saved", galleryFacts?.failed.isEmpty == false else { return }
-            try? await Task.sleep(for: .seconds(after))
-            if !Task.isCancelled { retryGalleryItems() }
-        }
-        // `-previewGalleryRemake 1`: presses the make's `try again` N s after a make failed.
-        .task(id: galleryBeat) {
-            let after = UserDefaults.standard.double(forKey: "previewGalleryRemake")
-            guard after > 0, galleryBeat.contains("makefail") else { return }
-            try? await Task.sleep(for: .seconds(after))
-            if !Task.isCancelled { remake() }
-        }
-        // `-previewGalleryOpen 1`: presses `open` N s after the gallery is saved (the detail of its media over the focus).
-        .task(id: galleryBeat) {
-            let after = UserDefaults.standard.double(forKey: "previewGalleryOpen")
-            guard after > 0, galleryBeat == "saved", galleryFacts?.failed.isEmpty == true else { return }
-            try? await Task.sleep(for: .seconds(after))
-            if !Task.isCancelled { openGallery() }
-        }
-        // `-previewShimmerLoop YES` / `-previewPulseLoop YES`: replay the shimmer or the failure pulse every
-        // 2.2 s so a screenshot can catch them mid-flight (design review only).
-        .task {
-            let d = UserDefaults.standard
-            guard d.bool(forKey: "previewShimmerLoop") || d.bool(forKey: "previewPulseLoop") else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(2200))
-                if d.bool(forKey: "previewShimmerLoop") { shimmer += 1 }
-                if d.bool(forKey: "previewPulseLoop") { pulse += 1 }
-            }
-        }
-        #endif
+        // `-preview*` launch-argument automation (debug builds; Debug/PreviewAutomationModifiers.swift)
+        .debugFocusAutomation(automation)
         .haptic(.success, trigger: shimmer, enabled: haptics) { $0 > 0 }
         .haptic(.error, trigger: pulse, enabled: haptics) { $0 > 0 }
         .haptic(.success, trigger: copiedWebp, enabled: haptics) { $0 }
@@ -713,6 +621,12 @@ struct FocusLayer: View {
             .padding(.vertical, 10)
             .padding(.horizontal, 14)
             .accessibilityElement(children: .combine)
+            if pipeline.localCopyState.isDisplayed {
+                // the copy on this device, only while it is coming or when it failed (apple 02-PHASE2 2.2.4)
+                cardDivider
+                LocalCopyRow(pipeline: pipeline)
+                    .transition(.opacity)
+            }
             if hasWebp, let result = pipeline.webpResult {
                 cardDivider
                 ResultRow(
@@ -744,6 +658,7 @@ struct FocusLayer: View {
         .animation(reduceMotion ? Motion.fade : FocusMotion.content.delay(lifted ? 0.2 : 0), value: lifted)
         .motion(Motion.rows, value: hasWebp)
         .motion(Motion.rows, value: hasLink)
+        .motion(Motion.rows, value: pipeline.localCopyState)
         .accessibilityElement(children: .contain)
     }
 
@@ -876,7 +791,7 @@ struct FocusLayer: View {
             if let failure, !isRendering {
                 InlineStatus(message: failure.message) {
                     Button(action: failure.retry) { Label(Copy.tryAgain, systemImage: Symbol.retry) }
-                        .buttonStyle(.cobaltIcon(.small))
+                        .buttonStyle(.focusAction(.inline, size: .small, labelled: wordsOnButtons))
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -915,6 +830,33 @@ struct FocusLayer: View {
     private func copyVideo(_ url: URL, _ form: LinkForm) {
         Pasteboard.copy(link(url, form))
         flash(form == .share ? $copiedLink : $copiedLinkDirect)
+    }
+
+    /// What the `-preview*` launch-argument automation reads and drives (`.debugFocusAutomation`; nothing in release).
+    private var automation: FocusAutomationHooks {
+        FocusAutomationHooks(
+            pipeline: pipeline,
+            lifted: lifted,
+            showsTrim: showsTrim,
+            hasWebp: hasWebp,
+            galleryBeat: galleryBeat,
+            onClose: { onClose() },
+            trimIsShown: { showsTrim },
+            isLong: { isLong },
+            isGallery: { isGallery },
+            galleryFailedIsEmpty: { galleryFacts?.failed.isEmpty },
+            hasCropEditor: { cropEditor != nil },
+            convert: { convert() },
+            openCrop: { openCrop() },
+            finishCrop: { finishCrop() },
+            chooseCropPreset: { cropEditor?.choose($0) },
+            setMakeKind: { makeKind = $0 },
+            retryGalleryItems: { retryGalleryItems() },
+            remake: { remake() },
+            openGallery: { openGallery() },
+            flashCopiedWebp: { flash($copiedWebp) },
+            bumpShimmer: { shimmer += 1 },
+            bumpPulse: { pulse += 1 })
     }
 
     private func flash(_ flag: Binding<Bool>) {
@@ -997,18 +939,31 @@ struct FocusLayer: View {
         return GlassEffectContainer(spacing: Self.gap) {
             VStack(spacing: Self.gap) {
                 if let primary = primaryChoice { primaryButton(primary).appear(lifted) }
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { ForEach(items, id: \.self) { secondaryButton($0) } }
+                if wordsOnButtons {
+                    // the phone: cells with their words, three to a line (a short last line keeps the cells' width)
                     VStack(spacing: 10) {
                         ForEach(Array(stride(from: 0, to: items.count, by: 3)), id: \.self) { i in
                             HStack(spacing: 10) {
                                 ForEach(Array(items[i..<min(i + 3, items.count)]), id: \.self) { secondaryButton($0) }
+                                ForEach(0..<(3 - min(3, items.count - i)), id: \.self) { _ in Color.clear.frame(maxWidth: .infinity, minHeight: 1) }
                             }
                         }
                     }
-                    VStack(spacing: 10) { ForEach(items, id: \.self) { secondaryButton($0) } }
+                    .frame(maxWidth: .infinity)
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) { ForEach(items, id: \.self) { secondaryButton($0) } }
+                        VStack(spacing: 10) {
+                            ForEach(Array(stride(from: 0, to: items.count, by: 3)), id: \.self) { i in
+                                HStack(spacing: 10) {
+                                    ForEach(Array(items[i..<min(i + 3, items.count)]), id: \.self) { secondaryButton($0) }
+                                }
+                            }
+                        }
+                        VStack(spacing: 10) { ForEach(items, id: \.self) { secondaryButton($0) } }
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
             }
         }
         // on the wide tiers the rows do not stretch across the whole column
@@ -1074,7 +1029,7 @@ struct FocusLayer: View {
                 } label: {
                     Label(Copy.LinkPair.copyDirectLink, systemImage: copied ? Symbol.checkmark : LinkForm.direct.symbol)
                 }
-                .buttonStyle(.cobaltIcon(state: copied ? .done : .idle))
+                .buttonStyle(.focusAction(state: copied ? .done : .idle, labelled: wordsOnButtons))
                 .symbolBounce(on: copied)
                 .accessibilityLabel(copied ? Copy.copied : Copy.LinkPair.directA11y)
                 .appear(lifted)
@@ -1083,16 +1038,16 @@ struct FocusLayer: View {
             Button { convert() } label: {
                 Label(choice == .convert ? Copy.convertToWebp : Copy.anotherWebp, systemImage: Symbol.convert)
             }
-            .buttonStyle(.cobaltIcon())
+            .buttonStyle(.focusAction(labelled: wordsOnButtons))
             .appear(lifted)
         case .crop:
             Button { openCrop() } label: { Label(cropBadge ?? CropCopy.crop, systemImage: CropCopy.symbol) }
-                .buttonStyle(.cobaltIcon())
+                .buttonStyle(.focusAction(labelled: wordsOnButtons))
                 .accessibilityHint(CropCopy.cropA11yHint)
                 .appear(lifted)
         case .publicShare:
             Button { pipeline.hostOriginal() } label: { Label(Copy.publicShare, systemImage: Symbol.publicShare) }
-                .buttonStyle(.cobaltIcon())
+                .buttonStyle(.focusAction(labelled: wordsOnButtons))
                 .accessibilityHint(Copy.hostOriginal)
                 .appear(lifted)
         case .savePhotos:
@@ -1100,7 +1055,7 @@ struct FocusLayer: View {
             Button { pipeline.saveToPhotos() } label: {
                 Label(photos.title, systemImage: photos.done ? photos.doneSymbol : Symbol.savePhotos)
             }
-            .buttonStyle(.cobaltIcon(state: photos.done ? .done : (pipeline.photos == .working ? .working : .idle)))
+            .buttonStyle(.focusAction(state: photos.done ? .done : (pipeline.photos == .working ? .working : .idle), labelled: wordsOnButtons))
             .symbolBounce(on: photos.done)
             // "in your cobalt album": a statement, not an action
             .allowsHitTesting(!photos.placed)
@@ -1110,12 +1065,12 @@ struct FocusLayer: View {
             // plain cobalt: no public hosting, so the system share sheet for the file on this device
             if let file = localVideo?.fileURL {
                 ShareLink(item: file) { Label(Copy.share, systemImage: Symbol.share) }
-                    .buttonStyle(.cobaltIcon())
+                    .buttonStyle(.focusAction(labelled: wordsOnButtons))
                     .appear(lifted)
             }
         case .close:
             Button(action: close) { Label(Copy.close, systemImage: Symbol.close) }
-                .buttonStyle(.cobaltIcon())
+                .buttonStyle(.focusAction(labelled: wordsOnButtons))
                 .appear(lifted)
         case .copyWebp, .copyVideo:
             EmptyView()
@@ -1163,7 +1118,7 @@ struct FocusLayer: View {
                 // being made cannot be stopped, so there is no button for it: closing leaves it going alongside.
                 if canCancelQueuedWebp, let id = model.queue.focusedID {
                     Button { Task { await model.queue.cancel(id) } } label: { Label(Copy.cancel, systemImage: Symbol.close) }
-                        .buttonStyle(.cobaltIcon(.small))
+                        .buttonStyle(.focusAction(.inline, size: .small, labelled: wordsOnButtons))
                         .accessibilityLabel(TrayCopy.cancelWebpA11y)
                         .transition(.opacity)
                 }
@@ -1188,7 +1143,11 @@ private struct TrimPanel: View {
     let onCrop: @MainActor () -> Void
     let onCancel: @MainActor () -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
+        let words = FocusActionStyle.labelled(sizeClass: sizeClass, typeSize: typeSize)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 // with the crop badge beside it the readout drops its "of 00:14.8" so neither is cut
@@ -1217,10 +1176,10 @@ private struct TrimPanel: View {
             let makeWebp = Button(Copy.makeWebp, systemImage: Symbol.makeWebp) { pipeline.makeWebp() }
                 .buttonStyle(.cobaltPrimary())
             let crop = Button { onCrop() } label: { Label(CropCopy.crop, systemImage: CropCopy.symbol) }
-                .buttonStyle(.cobaltIcon())
+                .buttonStyle(.focusAction(.inline, labelled: words))
                 .accessibilityHint(CropCopy.cropA11yHint)
             let cancel = Button { onCancel() } label: { Label(Copy.cancelTrim, systemImage: Symbol.close) }
-                .buttonStyle(.cobaltIcon())
+                .buttonStyle(.focusAction(.inline, labelled: words))
             GlassEffectContainer(spacing: 10) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 10) { makeWebp; if canCrop { crop }; cancel }
@@ -1826,51 +1785,77 @@ private struct ResultRow: View {
     var onCopyDirect: (() -> Void)?
     let onCopy: () -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var words: Bool { FocusActionStyle.labelled(sizeClass: sizeClass, typeSize: typeSize) }
+
     private var copyLabel: String {
         if onCopyDirect != nil { return Copy.LinkPair.copyShareLink }
         return kind == .webp ? Copy.copyWebpLink : Copy.copyVideoLink
     }
     private var shareLabel: String { kind == .webp ? Copy.shareWebpLink : Copy.shareVideoLink }
 
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: kind == .webp ? Symbol.webpBadge : Symbol.linkBadge)
-                .font(.system(size: 15, weight: .medium))
+    private var badge: some View {
+        Image(systemName: kind == .webp ? Symbol.webpBadge : Symbol.linkBadge)
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(CobaltColor.text)
+            .frame(width: 22)
+            .accessibilityHidden(true)
+    }
+
+    private var texts: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(kind == .webp ? Copy.webpLink : Copy.videoLink)
+                .font(CobaltType.bodySemibold)
                 .foregroundStyle(CobaltColor.text)
-                .frame(width: 22)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(kind == .webp ? Copy.webpLink : Copy.videoLink)
-                    .font(CobaltType.bodySemibold)
-                    .foregroundStyle(CobaltColor.text)
-                Text(meta ?? displayURL(url))
-                    .font(CobaltType.captionSmall)
-                    .foregroundStyle(CobaltColor.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .monospacedDigit()
+            Text(meta ?? displayURL(url))
+                .font(CobaltType.captionSmall)
+                .foregroundStyle(CobaltColor.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var buttons: some View {
+        IconRow(spacing: 8, alignment: words ? .leading : .trailing) {
+            Button(action: onCopy) {
+                Label(copyLabel, systemImage: copied ? Symbol.checkmark : Symbol.copyLink)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .combine)
-            IconRow(spacing: 8, alignment: .trailing) {
-                Button(action: onCopy) {
-                    Label(copyLabel, systemImage: copied ? Symbol.checkmark : Symbol.copyLink)
+            .buttonStyle(.focusAction(.inline, size: .small, state: copied ? .done : .idle, shortTitle: Copy.Capture.copyShort, labelled: words))
+            .symbolBounce(on: copied)
+            .accessibilityLabel(copied ? Copy.copied : copyLabel)
+            if let onCopyDirect {
+                Button(action: onCopyDirect) {
+                    Label(Copy.LinkPair.copyDirectLink, systemImage: copiedDirect ? Symbol.checkmark : Symbol.LinkPair.direct)
                 }
-                .buttonStyle(.cobaltIcon(.small, state: copied ? .done : .idle))
-                .symbolBounce(on: copied)
-                .accessibilityLabel(copied ? Copy.copied : copyLabel)
-                if let onCopyDirect {
-                    Button(action: onCopyDirect) {
-                        Label(Copy.LinkPair.copyDirectLink, systemImage: copiedDirect ? Symbol.checkmark : Symbol.LinkPair.direct)
-                    }
-                    .buttonStyle(.cobaltIcon(.small, state: copiedDirect ? .done : .idle))
-                    .symbolBounce(on: copiedDirect)
-                    .accessibilityLabel(copiedDirect ? Copy.copied : Copy.LinkPair.copyDirectLink)
-                }
-                ShareLink(item: url) { Label(shareLabel, systemImage: Symbol.share) }
-                    .buttonStyle(.cobaltIcon(.small))
+                .buttonStyle(.focusAction(.inline, size: .small, state: copiedDirect ? .done : .idle, shortTitle: Copy.Capture.directShort, labelled: words))
+                .symbolBounce(on: copiedDirect)
+                .accessibilityLabel(copiedDirect ? Copy.copied : Copy.LinkPair.copyDirectLink)
             }
-            .fixedSize()
+            ShareLink(item: url) { Label(shareLabel, systemImage: Symbol.share) }
+                .buttonStyle(.focusAction(.inline, size: .small, shortTitle: Copy.Capture.shareShort, labelled: words))
+        }
+    }
+
+    var body: some View {
+        Group {
+            if words {
+                // the phone: the buttons carry words, so they take a line of their own under the link's name
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) { badge; texts }
+                    buttons
+                }
+            } else {
+                HStack(spacing: 10) {
+                    badge
+                    texts
+                    buttons.fixedSize()
+                }
+            }
         }
         .padding(.leading, 14)
         .padding(.trailing, 8)

@@ -48,7 +48,7 @@ export type ShareSetDeps = {
     // for long: the Worker hands it to waitUntil.
     kickLoops?: () => Promise<void>;
     // Whether Discord's gallery shows a video's moving preview in its place (section 29.1). Absent = on
-    // (tests); the Worker passes GALLERY_LOOPS === "1", off by default since 2026-10-20.
+    // (tests); the Worker passes false: off since 2026-10-20, Discord plays the real video.
     loops?: boolean;
     // the random bytes of a private link's key (section 36); absent = crypto
     keyBytes?: (n: number) => Uint8Array;

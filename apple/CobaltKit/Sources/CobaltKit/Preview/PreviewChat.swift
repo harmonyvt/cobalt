@@ -266,7 +266,7 @@ extension PreviewData {
             ChatToolCall(op: "edits.render", ms: 300, card: .job(.init(
                 op: "edits.render", job: "PrEvIeWjob000001", status: "done", progress: 1, postID: ids[3], kind: "video", seconds: 34.4,
                 width: 720, height: 1280, bytes: 10_400_000))),
-            ChatToolCall(op: "stage.get", ms: 30, status: .error, error: "cobalt.stage.get: the studio is off"),
+            ChatToolCall(op: "stage.get", ms: 30, status: .error, error: "cobalt.stage.get: the live stage is off"),
             ChatToolCall(op: "links.create", ms: 220, card: .link(.init(
                 id: "3301894276177155739", url: URL(string: "https://share.capybaraharmony.com/g/3301894276177155739")!,
                 title: "harbour + catJAM", files: 3))),

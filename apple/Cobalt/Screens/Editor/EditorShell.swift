@@ -82,7 +82,7 @@ private struct EditorShellSlots: View {
                 .place(layout.tools)
             EditorShellTopBar(model: model, session: session, wide: wide)
                 .place(layout.topBar)
-            conflictBanner
+            banners
         }
         .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
     }
@@ -111,15 +111,23 @@ private struct EditorShellSlots: View {
             .motion(Motion.card, value: ui.drawer)
     }
 
+    /// Under the top bar: the conflict banner and, when the render poll lost the server, the reconnect banner (both can be up).
     @ViewBuilder
-    private var conflictBanner: some View {
-        if case .conflict = session.saveState {
-            Group {
-                #if os(iOS)
-                if wide { EditorConflictBanner(session: session) } else { EditorPhoneConflictBanner(session: session) }
-                #else
-                EditorConflictBanner(session: session)
-                #endif
+    private var banners: some View {
+        let conflict: Bool = { if case .conflict = session.saveState { return true } else { return false } }()
+        let reconnecting: Bool = { if case .reconnecting = session.renderPollState { return true } else { return false } }()
+        if conflict || reconnecting {
+            VStack(spacing: 0) {
+                if conflict {
+                    #if os(iOS)
+                    if wide { EditorConflictBanner(session: session) } else { EditorPhoneConflictBanner(session: session) }
+                    #else
+                    EditorConflictBanner(session: session)
+                    #endif
+                }
+                if reconnecting {
+                    EditorReconnectBanner(session: session)
+                }
             }
             .frame(width: layout.size.width)
             .offset(y: layout.topBar.maxY)
@@ -181,6 +189,10 @@ private struct EditorShellPresentations: ViewModifier {
                         session.cutoutFor = nil
                     }
                 }
+            }
+            .onChange(of: session.noticeNonce) { _, _ in
+                // something that did not apply (an overlay that would not fit, a price that would not load): say why, once
+                if let notice = session.notice { host.show(Copy.Editor.notice(notice), seconds: 4) }
             }
             .onChange(of: session.renderConfirmRequested, initial: true) { _, requested in
                 guard requested else { return }
@@ -352,7 +364,9 @@ private struct EditorShellCanvasView<Overlay: View>: View {
 }
 
 /// What stops a render, on the picture's bottom edge (not a band of its own): a file that would not come with `try again`, a
-/// deleted file, and a clip the preview left out. The old crowded-preview note was a hint and is gone (15.6).
+/// deleted file, and a clip the preview left out. Two hints sit with them: lots of videos at once (the preview may stutter, the
+/// render is fine: `EditorPreviewCrowdedNote`, 15.6's hint is back) and a pitch the preview could not make (with `try again`).
+/// One view for every regime, as the picture is.
 private struct EditorShellNotices: View {
     let session: EditSession
 
@@ -374,6 +388,16 @@ private struct EditorShellNotices: View {
             if !session.previewSkips.isEmpty {
                 Text(Copy.Editor.previewSkipped(session.previewSkips.count))
                     .notice()
+            }
+            EditorPreviewCrowdedNote(session: session, onPicture: true, includeSkipped: false)
+            let pitch = session.pitchPreviewFailures
+            if pitch > 0 {
+                HStack(spacing: 8) {
+                    Text(Copy.Editor.pitchPreviewFailed(pitch))
+                    Button { session.retryPitchPreview() } label: { Label(Copy.Editor.tryAgain, systemImage: Symbol.Editor.retry) }
+                        .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.linkBlue))
+                }
+                .notice()
             }
         }
         .padding(8)

@@ -16,7 +16,6 @@ export const CLIENT = "0b5f2c3e-6c1a-4f5e-9a57-1d0e6c9f2a11";
 export const KEY_ID = "key-row-1";
 export const AUTH = { authorization: `Api-Key ${CLIENT}` };
 export const JSON_HEADERS = { ...AUTH, "content-type": "application/json" };
-export const HARK = "https://hark.example/hook/abc";
 
 // 16-character library ids
 export const ids = {
@@ -322,10 +321,6 @@ export function coreWorld() {
     const db = w.db;
     const clock = w.clock;
     const container = new FakeEditContainer();
-    const harkCalls: { url: string; body: any }[] = [];
-    let harkStatus = 200;
-    let harkThrows = false;
-    const harkQueue: number[] = [];
     const cores: Record<string, EditRenderCore & { pending: number | null; storage: MemoryKV; scheduled: number[]; ensured: number; up: boolean; envChecks: number }> = {};
 
     const makeCore = (instance: string, over: Partial<EditCoreDeps> = {}) => {
@@ -351,12 +346,6 @@ export function coreWorld() {
             },
             beforeClaim: async () => {
                 state.envChecks++;
-            },
-            hark: HARK,
-            harkFetch: async (url, init) => {
-                if (harkThrows) throw new Error("network down");
-                harkCalls.push({ url, body: JSON.parse(String(init.body)) });
-                return new Response(null, { status: harkQueue.length ? harkQueue.shift()! : harkStatus });
             },
             log: () => {},
             ...over,
@@ -421,13 +410,6 @@ export function coreWorld() {
         db,
         clock,
         container,
-        harkCalls,
-        setHark: (status: number, throws = false) => {
-            harkStatus = status;
-            harkThrows = throws;
-        },
-        // the statuses the next Hark calls answer, then `setHark`'s
-        harkScript: (...statuses: number[]) => void harkQueue.push(...statuses),
         makeCore,
         run,
         queueRender,

@@ -17,9 +17,67 @@ import type { ApnsClient, ApnsPush, Environment } from "./apns";
 import { KEY_ID_HEADER } from "./headers";
 import { RENDER_SELECT, renderProgress, type RenderRow } from "./edits";
 import { TOKEN_REGEX } from "./live";
-import { plainReason } from "./notify";
 import type { KV } from "./webp";
 import { asJobPayload, jobOfEdit } from "./job-live";
+
+// A short plain reason for an error code the owner may see on the lock screen.
+export function plainReason(code: string): string {
+    if (code.startsWith("error.api.fetch.") || code.startsWith("error.api.content.") || code.startsWith("error.api.link.")) {
+        return "the link could not be fetched";
+    }
+    switch (code) {
+        case "error.webp.no_video":
+        case "error.webp.bad_source":
+        case "error.webp.download_failed":
+            return "the link could not be fetched";
+        case "error.studio.busy":
+        case "error.webp.busy":
+            return "the server was busy";
+        case "error.studio.save_lost":
+        case "error.webp.job_lost":
+            return "the server lost track of the job";
+        case "error.studio.too_large":
+        case "error.webp.too_large":
+        case "error.library.too_large":
+            return "the video is too large";
+        case "error.webp.unsupported":
+        case "error.library.unsupported":
+        case "error.studio.not_video":
+            return "that kind of video is not supported";
+        case "error.studio.expired":
+            return "the session expired";
+        case "error.studio.storage":
+        case "error.webp.storage":
+            return "storing the file failed";
+        case "error.studio.unavailable":
+            return "the server was not available";
+        case "error.webp.too_long":
+            return "the clip is too long";
+        case "error.studio.too_few_photos":
+            return "there are fewer than 2 photos to use";
+        case "error.studio.not_gallery":
+            return "there are fewer than 2 items to use";
+        case "error.studio.missing":
+            return "a file is missing on the server";
+        // the editor's renders (APP-API-CONTRACT.md section 31.11)
+        case "error.edit.render_failed":
+            return "the video couldn't be made";
+        case "error.edit.timeout":
+            return "it took too long";
+        case "error.edit.source_missing":
+            return "a clip was deleted from the library";
+        case "error.edit.lost":
+            return "the server restarted";
+        case "error.edit.too_large":
+            return "the video was too big";
+        case "error.edit.storage":
+            return "the server couldn't store it";
+        case "error.studio.unsupported_image":
+            return "that kind of photo is not supported";
+        default:
+            return "something went wrong on the server";
+    }
+}
 
 export const EDIT_LIVE_PREFIX = "live:edit:";
 export const RENDER_ID_REGEX = /^[A-Za-z0-9]{20}$/;

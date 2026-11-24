@@ -1,46 +1,6 @@
 import CobaltKit
 import SwiftUI
 
-/// The `render` button of the top bar. At rest it says `render`; while a render of this project runs it carries the progress
-/// (`waiting · 1 ahead`, `preparing`, `rendering 40%`, `finishing`) and opens the same popover.
-struct RenderButton: View {
-    let model: AppModel
-    let session: EditSession
-    @Binding var shown: Bool
-
-    private var running: EditRender? {
-        guard let r = session.activeRender, r.isActive else { return nil }
-        return r
-    }
-
-    var body: some View {
-        Button { shown = true } label: {
-            HStack(spacing: 6) {
-                if let running {
-                    ProgressView(value: running.progress.map { min(1, max(0, $0)) })
-                        .progressViewStyle(.circular)
-                        .controlSize(.small)
-                    Text(Copy.Editor.renderLine(running))
-                        .monospacedDigit()
-                } else {
-                    Text(Copy.Editor.render)
-                }
-            }
-            .lineLimit(1)
-            .fixedSize()
-        }
-        .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
-        .help("\(Copy.Editor.render) · ⌘↩")
-        .accessibilityLabel(running.map { "\(Copy.Editor.render), \(Copy.Editor.renderLine($0))" } ?? Copy.Editor.render)
-        .popover(isPresented: $shown, arrowEdge: .bottom) {
-            EditorRenderCard(model: model, session: session, close: { shown = false })
-                #if os(iOS)
-                .presentationCompactAdaptation(.popover)
-                #endif
-        }
-    }
-}
-
 /// The popover (Mac, iPad) and the iPhone's sheet content: before a render, the confirm card (`renderTitle`, the summary,
 /// `renderNote`, `render`, the close in the top-right corner, disabled with the first problem's words or `renderOffline`); once one
 /// runs, its progress, `done` and a `cancel render` icon (its confirmation keeps its words); if the edit changed since it started, `renderingOlder`.

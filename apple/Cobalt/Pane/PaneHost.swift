@@ -11,7 +11,9 @@ import UIKit
 /// - two screens: the pane is the leading (wide) or top (tall) screen, a hairline on the hinge; spanned, the page has
 ///   both screens (media on one, details on the other);
 /// - column: the pane is a 440 / 400 pt leading column with a hairline divider; spanned, the whole area, wide shape;
-/// - compact: a sheet (`.large`, drag indicator), and spanned a full-screen cover over it (a bigger sheet on the Mac).
+/// - compact: a sheet (`.large`, drag indicator). On the iPhone that is all: there is no span (it was a full-screen cover
+///   stacked over the sheet), and a pane still spanned when the window turns compact goes back to `screen`. The Mac's
+///   sheet grows when spanned.
 ///
 /// The tab keeps its room while the pane is spanned (it is only covered), so nothing behind reflows. The pane slides in
 /// from the leading (top) edge with the `Motion` spring, or cross-fades under Reduce Motion. The route is saved per
@@ -19,9 +21,8 @@ import UIKit
 /// back. The bar is `PaneBarAccessory` (applied to the tab view on iOS, here on the Mac).
 ///
 /// What a page keeps across shape changes: inline, screen <-> span keeps the page's view (only `\.paneShape` changes, and
-/// `PanePage` lays its hero out anew). Inline <-> compact (a rotation, a resize, folding) and, on one narrow screen,
-/// sheet <-> cover are different presentations, so SwiftUI rebuilds the page there; one page at a time is drawn (a
-/// stream never plays twice). Whatever must outlive that (a player and its playhead, a chat connection) lives in
+/// `PanePage` lays its hero out anew). Inline <-> compact (a rotation, a resize, folding) is a different presentation, so
+/// SwiftUI rebuilds the page there; one page at a time is drawn (a stream never plays twice). Whatever must outlive that (a player and its playhead, a chat connection) lives in
 /// `pane.keepAlive(_:for:make:)`, which keeps it while the pane holds the item, whatever it is drawn in.
 struct PaneHost<Content: View>: View {
     let model: AppModel
@@ -35,6 +36,8 @@ struct PaneHost<Content: View>: View {
     @SceneStorage("pane") private var saved: Data?
     @State private var size: CGSize = .zero
     @State private var edgeTargeted = false
+    /// Work waiting for the compact sheet to finish going down (`PaneAfterDismiss`).
+    @State private var afterDismiss = PaneAfterDismiss()
 
     init(model: AppModel, dragging: Bool = false, @ViewBuilder content: () -> Content) {
         self.model = model
@@ -89,7 +92,7 @@ struct PaneHost<Content: View>: View {
                         .transition(transition(placement))
                 }
                 if inline, showsSeam(placement, spanned: spanned) {
-                    PaneSeam(queue: model.queue, axis: seamAxis(placement), showingJobID: showingJobID)
+                    PaneSeam(queue: model.queue, activity: model.activity, axis: seamAxis(placement), showingJobID: showingJobID)
                         .layoutValue(key: PaneRoleKey.self, value: .seam)
                         .transition(.opacity)
                 }
@@ -129,12 +132,33 @@ struct PaneHost<Content: View>: View {
             pane.restoreOnce(saved)
         }
         .onChange(of: pane.machine.saved) { _, now in saved = now.encoded() }
-        .sheet(isPresented: sheetShown) { compactSheet }
+        .onChange(of: sheetShown.wrappedValue, initial: true) { _, up in afterDismiss.sheetIsUp = up }
+        .sheet(isPresented: sheetShown, onDismiss: { afterDismiss.sheetDidDismiss() }) { compactSheet }
+        #if os(iOS)
+        // no span on one narrow screen (the cover stacked over the sheet): a pane still spanned there goes back to screen
+        .onChange(of: pane.state, initial: true) { _, state in
+            if state == .span, measured, placement == .compact { pane.unspan() }
+        }
+        .onChange(of: placement) { _, now in
+            if now == .compact, measured, pane.state == .span { pane.unspan() }
+        }
+        #endif
         .overlay(alignment: edgeAlignment(placement)) { edgeStrip(placement) }
         #if os(macOS)
         .modifier(PaneBarAccessory(model: model))
         #endif
-        .environment(\.paneOffline, model.capabilities.kind == .unreachable)
+        .environment(\.paneOffline, Self.isOffline(model))
+        .environment(\.paneAfterDismiss, afterDismiss)
+        .environment(\.mediaDetailModel, model)
+    }
+
+    /// The server can't be reached. DEBUG: `-previewPaneOffline YES` says so over the preview data (simulator evidence of the
+    /// grid's offline words; the previews have no way to lose the network).
+    static func isOffline(_ model: AppModel) -> Bool {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "previewPaneOffline") { return true }
+        #endif
+        return model.capabilities.kind == .unreachable
     }
 
     // MARK: inline
@@ -195,7 +219,9 @@ struct PaneHost<Content: View>: View {
     private var compactSheet: some View {
         PaneCompactSheet(model: model)
             .environment(pane)
-            .environment(\.paneOffline, model.capabilities.kind == .unreachable)
+            .environment(\.paneOffline, Self.isOffline(model))
+            .environment(\.paneAfterDismiss, afterDismiss)
+            .environment(\.mediaDetailModel, model)
             .cobaltRoot(model: model)
     }
 
@@ -231,7 +257,8 @@ private struct LayoutKey: Equatable {
     var placement: PanePlacement
 }
 
-/// The pane in a sheet on one narrow screen; spanned, a full-screen cover over it (on the Mac, the sheet itself grows).
+/// The pane in a sheet on one narrow screen. On the iPhone and a narrow iPad window that is the whole pane (no span, so no
+/// cover over the sheet); on the Mac the sheet itself grows when spanned.
 private struct PaneCompactSheet: View {
     let model: AppModel
     @Environment(Pane.self) private var pane
@@ -244,11 +271,8 @@ private struct PaneCompactSheet: View {
     var body: some View {
         Group {
             #if os(iOS)
-            if pane.state == .screen, let item = pane.item {
+            if let item = pane.item {
                 PaneChrome(model: model, item: item, shape: .tall)
-            } else {
-                // spanned: the cover has the page (one page at a time, so a stream never plays twice)
-                CobaltColor.bg
             }
             #else
             if let item = pane.item {
@@ -265,42 +289,47 @@ private struct PaneCompactSheet: View {
         .onChange(of: pane.item) { _, _ in detent = .medium }
         // a pushed editor with unsaved changes (`.paneHoldsClose`): no swipe down
         .interactiveDismissDisabled(pane.holdsClose)
-        #if os(iOS)
-        .fullScreenCover(isPresented: coverShown) {
-            PaneCover(model: model)
-                .environment(pane)
-                .cobaltRoot(model: model)
-                .interactiveDismissDisabled(pane.holdsClose)
-        }
-        #endif
-    }
-
-    #if os(iOS)
-    private var coverShown: Binding<Bool> {
-        Binding(
-            get: { pane.state == .span && pane.item != nil },
-            set: { shown in if !shown, pane.state == .span { pane.unspan() } })
-    }
-    #endif
-}
-
-#if os(iOS)
-/// The spanned pane on one narrow screen: tall in portrait, wide in landscape.
-private struct PaneCover: View {
-    let model: AppModel
-    @Environment(Pane.self) private var pane
-    @State private var wide = false
-
-    var body: some View {
-        Group {
-            if let item = pane.item {
-                PaneChrome(model: model, item: item, shape: wide ? .wide : .tall)
-            }
-        }
-        .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.1 } action: { wide = $0 }
     }
 }
-#endif
+
+extension AppModel {
+    /// The server can't be reached (`PaneHost.isOffline`): what `\.paneOffline` carries into a page.
+    var serverIsAway: Bool { PaneHost<EmptyView>.isOffline(self) }
+}
+
+// MARK: - after the sheet
+
+/// Work that must wait for the compact sheet to be gone before it presents something of its own (the library's share sheet
+/// and its link picker, the confirm of hiding): a sheet cannot be presented from under another. `PaneHost` owns one and
+/// reads `onDismiss` of its sheet, so the work runs the moment the sheet has really finished going down, not after a guessed
+/// delay. Where no sheet is up the work runs at once.
+///
+///     afterDismiss.run { controller.addPicksToLink(picks) }   // then close the pane
+@MainActor
+final class PaneAfterDismiss {
+    /// The compact sheet is up (set by `PaneHost`).
+    var sheetIsUp = false
+    private var pending: [@MainActor () -> Void] = []
+
+    /// Queues `work` for the sheet's dismissal; runs it now when no sheet is up. Call before closing the pane.
+    func run(_ work: @escaping @MainActor () -> Void) {
+        if sheetIsUp { pending.append(work) } else { work() }
+    }
+
+    /// The sheet is gone (`sheet(isPresented:onDismiss:)`): promotes the queued work, in order.
+    func sheetDidDismiss() {
+        let queued = pending
+        pending = []
+        for work in queued { work() }
+    }
+}
+
+extension EnvironmentValues {
+    /// The pane's after-the-sheet queue; nil outside a `PaneHost` (previews), where work runs at once.
+    @Entry var paneAfterDismiss: PaneAfterDismiss? = nil
+    /// The model for `MediaDetailRoute`'s destination (`.mediaDetailDestination()`), set by the window's `PaneHost`.
+    @Entry var mediaDetailModel: AppModel? = nil
+}
 
 // MARK: layout
 

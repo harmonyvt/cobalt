@@ -94,17 +94,12 @@ struct LiveContentStateTests {
         #expect(LiveContentState.samples["decoding"]?.isTerminal == false)
     }
 
-    @Test func attributesCarryTheLowercaseRunAndMirrorOneToOne() throws {
+    @Test func attributesCarryTheLowercaseRun() throws {
         let a = LiveRunAttributes(run: runID, input: "file", service: "file", ref: "IMG_0412.mov", origin: "app")
         #expect(a.run == "5b7b6c2e-1d6a-4c5e-9e0a-0c7a1f0a2b3c")
         let object = try jsonObject(try JSONEncoder().encode(a))
         #expect(Set(object.keys) == ["run", "input", "service", "ref", "origin"])
         #expect(try JSONDecoder().decode(LiveRunAttributes.self, from: JSONEncoder().encode(a)) == a)
-        #if os(iOS) && canImport(ActivityKit)
-        let c = CobaltActivityAttributes(a)
-        #expect(c.run == a.run && c.input == a.input && c.service == a.service && c.ref == a.ref && c.origin == a.origin)
-        #expect(String(describing: CobaltActivityAttributes.self) == "CobaltActivityAttributes")
-        #endif
     }
 }
 
@@ -220,11 +215,6 @@ struct LiveClientTests {
         #expect(edit.httpMethod == "PUT")
         let editBody = try jsonObject(StubProtocol.bodyData(of: edit))
         #expect(editBody["token"] as? String == token && editBody["env"] as? String == "production" && editBody["type"] as? String == "job")
-        // an old-type chat activity (changeover release) leaves the type out
-        try await client.putChatLiveToken(threadID: "OldOldOldOld0001", token: token, environment: .sandbox, job: false)
-        let oldChat = try #require(seen.all.first { $0.url?.path == "/live/chats/OldOldOldOld0001" })
-        let oldBody = try jsonObject(StubProtocol.bodyData(of: oldChat))
-        #expect(oldBody["token"] as? String == token && oldBody["type"] == nil)
     }
 
     @Test func registeringARunSendsSnakeCaseOutsideAndCamelCaseInside() async throws {

@@ -1,5 +1,19 @@
 # cobalt for apple: app contract (pinned 2026-10-02)
 
+> **2026-11-25, iPhone navigation (apple 04-PHASE4).** On the iPhone (compact width) the app has four tabs: **capture** (the
+> save screen), **library**, **live** (one picker: live stage | twitch | 7tv, the last one remembered) and **tools** (a list:
+> links, chat & swarms, editor projects, booru, names; the swarms waiting count is its badge). There is no "more" tab. Every
+> root screen ends its bar with the activity pill and the settings gear (the library puts its "..." menu first, so never more
+> than three items); the gear opens `SettingsScreen` in a sheet with `done`, and settings is a hub of four group pages
+> (account & server, downloads & storage, media & webp, live & integrations) that push inside that sheet.
+> `PhoneNavState` (`App/PhoneNavState.swift`) says which screen really shows and is written into `model.selectedTab`, so the
+> live stage stops polling when it is left. The iPad keeps its sidebar and the Mac its split view and `Settings` scene.
+> Compact rules: no `span` (the pane is a sheet on the iPhone, never a full-screen cover over a sheet); one detail: the capture
+> tab's recent saves and the library's grid both push `MediaDetail` through `MediaDetailRoute` / `.mediaDetailDestination()`
+> (the iPad and the Mac open a post in the pane); the library search is the system's `.searchable`. User-facing copy: "studio"
+> is "live stage" (the OBS canvas) or "clip" / "save" (a save session); "cobalt" is "capystore" where it means this product (the
+> Photos album stays "cobalt" on purpose, `PhotosSync.albumTitle`).
+
 One multiplatform SwiftUI app (iPhone, iPad, Mac; native macOS SwiftUI, not Catalyst) plus an
 iOS share extension, for the owner's private cobalt fork. Lanes CORE and UI build against this
 file in parallel; Lane API builds `deploy/cloudflare/APP-API-CONTRACT.md` (the server half).

@@ -144,6 +144,7 @@ const StageInfo = z
         twitch: z.unknown().describe("null while Twitch is not connected"),
         spotlight: z.unknown().describe("what is spotlit right now, or null"),
         updated_at: z.number(),
+        connected_canvases: z.number().nullable().describe("canvases (OBS browser sources) connected to the studio right now; 0 means nothing is showing it; null = not known"),
     })
     .meta({ id: "Stage" });
 const StageItem = z

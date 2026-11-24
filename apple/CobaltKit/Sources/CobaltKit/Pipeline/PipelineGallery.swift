@@ -74,6 +74,8 @@ public struct GalleryRun: Sendable, Equatable {
     }
 
     public var phase: Phase = .saving
+    /// The server says it is starting up (`waking` of `GET /studio/<sid>`), not the device's guess.
+    public var waking = false
     /// The items the post has (`item_count`), failed ones included.
     public var total: Int
     /// Items saved so far: "saving 4 of 10". Never above `total`; `total - failures.count` when the save ended.
@@ -148,9 +150,20 @@ extension Pipeline {
             case .error:
                 throw mapFailure(code: s.errorCode ?? "error.studio.unknown", during: .saving, limits: ctx.capabilities.limits)
             case .saving:
+                serverSpoke = true
+                noteSaveStatus(s)
                 observeLine(queueAhead: s.step == .queued ? max(1, s.queueAhead ?? 1) : nil)
-                // The server says how many bytes of the whole post it has; the number of items done follows it.
-                if let bytes = s.stepBytes, let total = s.stepTotal, total > 0, let run = galleryRun {
+                let waking = saveStatus.waking
+                setGalleryRun { $0.waking = waking }
+                if let reported = s.itemsDone, galleryRun != nil {
+                    // The server counts the items itself (`items_done` of `items_total`): that is the number.
+                    setGalleryRun { run in
+                        if let total = s.itemsTotal, total > run.total { run.total = total }
+                        let done = min(max(0, reported), run.total)
+                        if done > run.done { run.done = done }
+                    }
+                } else if let bytes = s.stepBytes, let total = s.stepTotal, total > 0, let run = galleryRun {
+                    // An older server: it says how many bytes of the whole post it has; the number of items done follows it.
                     let share = min(1, max(0, Double(bytes) / Double(total)))
                     let done = min(max(0, run.total - 1), Int((share * Double(run.total)).rounded(.down)))
                     setGalleryRun { if done > $0.done { $0.done = done } }
@@ -192,7 +205,7 @@ extension Pipeline {
             "items": .int(items.count), "photos": .int(items.filter(\.isPhoto).count),
             "videos": .int(items.filter { !$0.isPhoto }.count), "failed": .int(failures.count),
         ])
-        setGalleryRun { $0.phase = .saved }
+        setGalleryRun { $0.phase = .saved; $0.waking = false }
         settleJobRecords()
         ctx.galleryChanged?()
         if case .waiting(let chosen) = galleryRun?.make {
@@ -308,6 +321,7 @@ extension Pipeline {
         // item of a gallery is already in the gallery's folder
         let postItems = max(galleryRun?.total ?? 0, files.count)
         var done = 0
+        var notKept: String?                                        // the code of the last item whose copy here failed
         let ready = files.filter { failures[$0.itemIndex ?? -1] == nil }
         for file in ready {
             try Task.checkCancellation()
@@ -333,12 +347,16 @@ extension Pipeline {
                 } catch {
                     // the item is saved on the server; only the copy here failed: it is not "kept", and the library has it
                     Telemetry.log(.warn, .store, "gallery item not kept on device", data: Telemetry.errorData(error))
+                    notKept = Pipeline.localCopyCode(error)
                 }
             }
             done += 1
             setGalleryRun { $0.done = max($0.done, min(done, max(0, $0.total - failures.count))) }
         }
         setGalleryRun { $0.done = max(0, $0.total - failures.count) }
+        // the posts are saved on the server either way; a copy that did not arrive here says so (no retry: "try photo 7 again"
+        // is the gallery's own)
+        if let notKept, token == runToken { localCopyState = .failed(code: notKept) }
     }
 
     /// A save that the server finished before the app looked (the focus job, a Shortcut, a relaunch): the same ending.
@@ -522,9 +540,14 @@ extension Pipeline {
             makeJobID = accepted.job
             observeLine(queueAhead: accepted.queued ? max(1, accepted.queueAhead ?? 1) : nil)
             setGalleryRun { $0.make = accepted.queued ? .queued(m, ahead: max(1, accepted.queueAhead ?? 1)) : .making(m, .init(phase: .uploading)) }
+            // the same spacing as the save's and the render's poll: the server long-polls (`wait=1`), but its fallback while the
+            // container has a bad moment answers at once, and a loop with no gap would hammer it
+            var pacer = PollPacer()
             while true {
                 try Task.checkCancellation()
+                try await pacer.beforePoll(clock: ctx.clock)
                 let status = try await retrying { try await client.makeStatus(session: sid, job: accepted.job, wait: 1) }
+                pacer.observe(status, clock: ctx.clock)
                 try Task.checkCancellation()
                 guard token == runToken else { return }
                 switch status {

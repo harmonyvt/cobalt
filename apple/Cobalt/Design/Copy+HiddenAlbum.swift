@@ -92,6 +92,15 @@ extension Copy {
             case .private: return "\(n) with a private link"
             }
         }
+        /// What was said afterwards while the server is away and the sync outbox holds the change.
+        static func queued(_ status: PostStatus, count n: Int) -> String {
+            switch status {
+            case .hidden: return "queued. \(n) will be hidden when you're back online"
+            case .off: return "queued. \(n) will be set to only you when you're back online"
+            case .public: return "queued. \(n) will go public when you're back online"
+            case .private: return "queued. \(n) will get a private link when you're back online"
+            }
+        }
         /// Posts the server refused.
         static func failed(_ n: Int) -> String { "\(n) couldn't change" }
         /// Posts that took the status but have files the server could not switch.

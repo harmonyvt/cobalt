@@ -90,13 +90,15 @@ struct StagePoolPicker: View {
         switch kind {
         case .collection:
             chooser(
-                prompt: Copy.Stage.chooseCollection, empty: Copy.Stage.noCollections,
+                prompt: Copy.Stage.chooseCollection,
+                empty: EmptyNotes(none: Copy.Stage.noCollections, loading: Copy.Stage.collectionsLoading, failed: Copy.Stage.collectionsFailed),
                 entries: shareSets.collections.map { PoolEntry(id: $0.id, name: $0.name) },
                 chosen: stage.pool.kind == .collection ? stage.pool.ref : nil,
                 choice: { StagePoolChoice.collection(id: $0) })
         case .group:
             chooser(
-                prompt: Copy.Stage.chooseSet, empty: Copy.Stage.noSets,
+                prompt: Copy.Stage.chooseSet,
+                empty: EmptyNotes(none: Copy.Stage.noSets, loading: Copy.Stage.setsLoading, failed: Copy.Stage.setsFailed),
                 entries: shareSets.groups.map { PoolEntry(id: $0.id, name: $0.name) },
                 chosen: stage.pool.kind == .group ? stage.pool.ref : nil,
                 choice: { StagePoolChoice.group(id: $0) })
@@ -107,14 +109,51 @@ struct StagePoolPicker: View {
         }
     }
 
+    /// What an empty chooser says: nothing made yet, still loading, or the load failed (which is not the same as nothing).
+    private struct EmptyNotes {
+        let none: String
+        let loading: String
+        let failed: String
+    }
+
+    @ViewBuilder
+    private func emptyNote(_ notes: EmptyNotes) -> some View {
+        switch shareSets.state {
+        case .failed:
+            HStack(spacing: 10) {
+                Label(notes.failed, systemImage: Symbol.error)
+                    .font(CobaltType.caption)
+                    .foregroundStyle(CobaltColor.errorText)
+                Spacer(minLength: 8)
+                Button(Copy.Stage.loadRetry, systemImage: Symbol.retry) { Task { await shareSets.refresh() } }
+                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+            }
+        case .idle, .loading:
+            if model.capabilities.shareCollections || model.capabilities.shareGroups {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(notes.loading)
+                        .font(CobaltType.caption)
+                        .foregroundStyle(CobaltColor.caption)
+                }
+            } else {
+                Text(notes.none)
+                    .font(CobaltType.caption)
+                    .foregroundStyle(CobaltColor.caption)
+            }
+        case .loaded:
+            Text(notes.none)
+                .font(CobaltType.caption)
+                .foregroundStyle(CobaltColor.caption)
+        }
+    }
+
     private func chooser(
-        prompt: String, empty: String, entries: [PoolEntry], chosen: String?, choice: @escaping (String) -> StagePoolChoice
+        prompt: String, empty: EmptyNotes, entries: [PoolEntry], chosen: String?, choice: @escaping (String) -> StagePoolChoice
     ) -> some View {
         Group {
             if entries.isEmpty {
-                Text(empty)
-                    .font(CobaltType.caption)
-                    .foregroundStyle(CobaltColor.caption)
+                emptyNote(empty)
             } else {
                 Menu {
                     ForEach(entries) { entry in

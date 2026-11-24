@@ -117,17 +117,18 @@ struct QueueSnapshotDecodingTests {
     }
 }
 
-// MARK: - Polling
+// MARK: - Polling (the store's; its own cadence tests are in ServerActivityStoreTests)
 
 @MainActor
 struct UnifiedQueuePollingTests {
     @Test func theCadence() {
-        #expect(UnifiedQueue.delay(active: true, failures: 0) == 5)
-        #expect(UnifiedQueue.delay(active: false, failures: 0) == 30)
-        #expect(UnifiedQueue.delay(active: true, failures: 1) == 10)
-        #expect(UnifiedQueue.delay(active: false, failures: 2) == 20)
-        #expect(UnifiedQueue.delay(active: false, failures: 5) == 120)
-        #expect(UnifiedQueue.delay(active: false, failures: 50) == 120)
+        // 30 s while quiet, 3 s while the server moves, and 6, 12, 24, 48, 96, 120 after failures: the store's, shared by the queue tab
+        #expect(ServerActivityStore.delay(active: true, failures: 0) == 3)
+        #expect(ServerActivityStore.delay(active: false, failures: 0) == 30)
+        #expect(ServerActivityStore.delay(active: true, failures: 1) == 6)
+        #expect(ServerActivityStore.delay(active: false, failures: 2) == 12)
+        #expect(ServerActivityStore.delay(active: false, failures: 5) == 96)
+        #expect(ServerActivityStore.delay(active: false, failures: 50) == 120)
     }
 
     @Test func capabilityOffMeansNoPolling() async {
@@ -143,27 +144,24 @@ struct UnifiedQueuePollingTests {
         rig.unified.setVisible(false)
     }
 
-    @Test func pollsOnlyWhileVisibleAndInFront() async {
+    @Test func pollsOnEveryScreenButOnlyWhileInFront() async {
         let rig = QueueRig(.quiet)
-        await rig.run(for: 60)
-        #expect(rig.count("GET queue") == 0, "the tab is not on screen")
-        rig.unified.setVisible(true)
         await rig.settle()
-        #expect(rig.count("GET queue") == 1, "the first poll is at once")
+        #expect(rig.count("GET queue") == 1, "the first poll is at once, with the queue tab not on screen")
         #expect(rig.unified.snapshot != nil)
         await rig.run(for: 61)
         let quiet = rig.count("GET queue")
-        #expect(quiet >= 2 && quiet <= 4, "every 30 s while nothing moves: \(quiet)")
+        #expect(quiet >= 3 && quiet <= 5, "every 30 s while nothing moves: \(quiet)")
         rig.unified.setForeground(false)
         await rig.run(for: 120)
         #expect(rig.count("GET queue") == quiet, "never in the background")
         rig.unified.setForeground(true)
         await rig.settle()
         #expect(rig.count("GET queue") == quiet + 1)
+        rig.unified.setVisible(true)
         rig.unified.setVisible(false)
-        let shown = rig.count("GET queue")
-        await rig.run(for: 120)
-        #expect(rig.count("GET queue") == shown, "never off screen")
+        await rig.settle()
+        #expect(rig.count("GET queue") == quiet + 1, "the tab coming and going does not change the cadence")
     }
 
     @Test func pollsFasterWhileTheServerIsBusy() async {
@@ -174,7 +172,7 @@ struct UnifiedQueuePollingTests {
         let first = rig.count("GET queue")
         await rig.run(for: 20)
         let busy = rig.count("GET queue") - first
-        #expect(busy >= 3 && busy <= 5, "every 5 s while something moves: \(busy)")
+        #expect(busy >= 5 && busy <= 8, "every 3 s while something moves: \(busy)")
         rig.unified.setVisible(false)
     }
 
@@ -185,9 +183,9 @@ struct UnifiedQueuePollingTests {
         await rig.settle()
         #expect(rig.unified.serverProblem)
         await rig.run(for: 35)
-        // 10 s, 20 s, 40 s between tries (the run may wake the next one past 35 s): at most 4, not the 8 of every 5 s
+        // 6 s, 12 s, 24 s between tries (the run may wake the next one past 35 s): at most 5, not the 12 of every 3 s
         let tries = rig.count("GET queue")
-        #expect(tries >= 3 && tries <= 4, "\(tries)")
+        #expect(tries >= 3 && tries <= 5, "\(tries)")
         rig.server.queueFails = false
         await rig.run(for: 85)
         #expect(!rig.unified.serverProblem && rig.unified.snapshot != nil)

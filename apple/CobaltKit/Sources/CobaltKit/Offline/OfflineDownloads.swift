@@ -17,11 +17,24 @@ import Observation
 //
 // A client that cannot hand over a `URLRequest` (`PreviewClient`, test stubs) is fetched in the foreground with
 // `client.download`; the same queue, states and landing apply.
+//
+// Phase 3 (apple 03-PHASE3): this is the one place the app lists "a download onto this device". Two more kinds of row sit
+// beside the queue's own, so `rows`, `states` and the counts (and `JobStatus(download:)` over them) see every pull:
+//
+// - **a tracked transfer** (`transfer`): a copy the app runs itself and that is not a queue job (origin `.share`: the
+//   library's share-sheet copy pass). Nothing is written to the ledger and nothing lands in Files or "kept"; the row exists
+//   for the length of the transfer (and, if it failed, until `dismissFailedTransfers`).
+// - **a pending original** (`PendingOriginals`, the share sheet's background downloads, key `s:<session>`): read from the
+//   ledger the share extension also writes. Read-only here (the ledger's format is the extension's), apart from "stop" and
+//   "try again", which go through `OriginalFetcher`. A pipeline's own original uses the same `s:<session>` key and wins.
 
 @MainActor @Observable
 public final class OfflineDownloads {
     /// The background session's identifier; `AppModel.handleBackgroundDownloads` routes it here.
     public static let sessionIdentifier = BackgroundSessionID.prefix + "offline"
+    /// `OfflineJob.origin` of a pipeline's own original (the save the owner just made, not a "keep offline"): it lands with
+    /// `AddOrigin.save`, so the photos album copies it like any save made here, and it is not marked "not new".
+    static let saveOrigin = "save"
     /// The ledger's `session` for a foreground fetch (no system task to re-attach to).
     static let foregroundSession = "foreground"
     /// Network losses, 5xx answers and landings that did not work count against this; then `failed`.
@@ -41,6 +54,7 @@ public final class OfflineDownloads {
         /// What the queue tab calls it (the post's title, else the file's name), read when the entry was tracked.
         var name: String = ""
         var queuedAt: Date = .distantPast
+        var origin: OfflineDownloadRow.Origin = .keepOffline
     }
     private var tracks: [String: Track] = [:]
 
@@ -48,12 +62,31 @@ public final class OfflineDownloads {
     /// not redrawn on every progress event.
     public private(set) var unfinishedCount = 0
 
+    /// A copy the app runs itself (`transfer`): how to stop it, and the keys the owner stopped (their failure is not one).
+    @ObservationIgnored private var transferStops: [String: @MainActor () -> Void] = [:]
+    @ObservationIgnored private var stoppedTransfers: Set<String> = []
+
+    /// The share sheet's pending originals that are still going (not failed, not stored): what `recount` adds. Refreshed by
+    /// `pendingChanged`, so a progress event does not read the ledger.
+    @ObservationIgnored private var pendingLive = 0
+    /// Bumped when the ledger changed (this process's write, or `reconcile`), so a view that read `rows` reads it again.
+    private var pendingTick = 0
+
     private func recount() {
-        let n = tracks.values.reduce(0) { count, t in
+        let own = tracks.values.reduce(0) { count, t in
             if case .failed = t.state { return count }
             return count + 1
         }
+        let n = own + pendingLive
         if n != unfinishedCount { unfinishedCount = n }
+    }
+
+    /// The ledger of the share sheet's originals moved (or may have, in the other process): read it again.
+    func pendingChanged() {
+        guard pending != nil else { return }
+        pendingLive = pendingRows().filter { !$0.isFailed }.count
+        pendingTick &+= 1
+        recount()
     }
 
     /// What the queue is doing: renditions left (downloading or waiting), the bytes so far and the bytes in all
@@ -75,6 +108,11 @@ public final class OfflineDownloads {
                 break
             }
         }
+        for row in pendingRows() where !row.isFailed {
+            left += 1
+            if case .downloading(let p) = row.state { bytes += p.bytes }
+            total = Self.plus(total, row.expectedBytes)
+        }
         return (left, bytes, left == 0 ? nil : total)
     }
 
@@ -84,6 +122,10 @@ public final class OfflineDownloads {
     @ObservationIgnored let clock: any PipelineClock
     @ObservationIgnored let client: @MainActor () -> any CobaltClient
     @ObservationIgnored let isPreview: Bool
+    /// The share sheet's ledger (`Sync/originals.json`), when this process has one: the app's. Nil in the share extension, in
+    /// previews and in tests that do not give one.
+    @ObservationIgnored let pending: PendingOriginals?
+    @ObservationIgnored private var pendingObserver: UUID?
     /// The photos album and the Mac folder must not copy what lands here: their keys are marked "already there"
     /// before the file lands (set by `AppModel`).
     @ObservationIgnored var markNotNew: (@MainActor ([String]) async -> Void)?
@@ -101,7 +143,7 @@ public final class OfflineDownloads {
 
     init(
         store: OfflineStore, queue: OfflineQueue, transport: (any OfflineTransport)?, clock: any PipelineClock,
-        client: @escaping @MainActor () -> any CobaltClient, isPreview: Bool = false
+        client: @escaping @MainActor () -> any CobaltClient, isPreview: Bool = false, pendingOriginals: PendingOriginals? = nil
     ) {
         self.store = store
         self.queue = queue
@@ -109,8 +151,19 @@ public final class OfflineDownloads {
         self.clock = clock
         self.client = client
         self.isPreview = isPreview
+        // The app builds this with the real background transport and no ledger of its own: it reads the app group's, the one
+        // its `OriginalFetcher` writes. A fake transport (tests, previews) never reads the real file.
+        self.pending = pendingOriginals ?? (!isPreview && transport is URLSessionOfflineTransport ? PendingOriginals.shared() : nil)
         self.sink = Self.makeSink(self, queue: queue, inboxRoot: store.root, clock: clock)
         loadStates()
+        if let pending = self.pending {
+            pendingObserver = pending.observe { [weak self] in Task { @MainActor in self?.pendingChanged() } }
+            pendingChanged()
+        }
+    }
+
+    isolated deinit {
+        if let pendingObserver { pending?.stopObserving(pendingObserver) }
     }
 
     /// Built outside the main actor on purpose: the closure it carries is called by the system's delegate queue.
@@ -137,7 +190,7 @@ public final class OfflineDownloads {
         let aliases = Array(Set(entry.job.aliases + [entry.key]))
         var t = tracks[entry.key] ?? Track(
             aliases: aliases, state: state, expected: entry.job.expectedBytes, name: Self.name(of: entry.job, store: store),
-            queuedAt: entry.queuedAt)
+            queuedAt: entry.queuedAt, origin: Self.origin(of: entry.job))
         t.state = state
         if case .downloading(let p) = state, let total = p.total { t.expected = total }
         // write only what changed: every library card and the queue observe these
@@ -164,20 +217,184 @@ public final class OfflineDownloads {
     /// Every download the engine is carrying or has given up on, one row per rendition (not per alias), oldest first.
     /// The queue tab's "downloads" section (and its failed ones).
     public var rows: [OfflineDownloadRow] {
-        tracks
-            .map { key, t in OfflineDownloadRow(id: key, name: t.name, state: t.state, expectedBytes: t.expected, queuedAt: t.queuedAt) }
-            .sorted { ($0.queuedAt, $0.id) < ($1.queuedAt, $1.id) }
+        _ = pendingTick                                   // the ledger is not observable: a change in it bumps this
+        let own = tracks.map { key, t in
+            OfflineDownloadRow(
+                id: key, name: t.name, state: t.state, expectedBytes: t.expected, queuedAt: t.queuedAt, origin: t.origin)
+        }
+        return (own + pendingRows()).sorted { ($0.queuedAt, $0.id) < ($1.queuedAt, $1.id) }
     }
 
     /// "stop downloading" for one row (a failed row is taken off the list the same way).
     public func stop(key: String) {
+        if let stop = transferStops[key] {                        // a tracked transfer: cancel the copy
+            stoppedTransfers.insert(key)
+            stop()
+            return
+        }
+        if tracks[key]?.origin == .share {                        // a failed tracked transfer: off the list
+            forget(key)
+            return
+        }
+        if tracks[key] == nil, let session = Self.session(ofKey: key), pending?.entry(session) != nil {
+            pending?.cancel(session: session)
+            return
+        }
         cancel(keys: [key])
     }
 
-    /// "try again" for a failed row: the same job, queued again (what "keep offline" does for a failed rendition).
+    /// "try again" for a failed row: the same job, queued again (what "keep offline" does for a failed rendition). A pending
+    /// original that gave up is started again by its fetcher; a tracked transfer has no job to queue (its caller retries).
     public func retry(key: String) {
+        if tracks[key] == nil, let session = Self.session(ofKey: key), pending?.entry(session) != nil {
+            pending?.retry(session: session)
+            return
+        }
         guard let entry = queue.entry(key), case .failed = entry.state else { return }
         enqueue([entry.job])
+    }
+
+    private static func origin(of job: OfflineJob) -> OfflineDownloadRow.Origin {
+        switch job.origin {
+        case OfflineJob.pulledOrigin: return .pulled
+        case Self.saveOrigin: return .save
+        default: return .keepOffline
+        }
+    }
+
+    /// `s:<session>` is the session's key (a pipeline's own original, a pending original).
+    static func session(ofKey key: String) -> String? {
+        key.hasPrefix("s:") && key.count > 2 ? String(key.dropFirst(2)) : nil
+    }
+
+    // MARK: - Pending originals (the share sheet's ledger)
+
+    /// The ledger's live and given-up entries as rows, one per session (`s:<id>`). An entry that is stored is done and is not a
+    /// row; a key the queue already tracks (the pipeline's own original of that session) is not listed twice.
+    func pendingRows() -> [OfflineDownloadRow] {
+        guard let pending else { return [] }
+        return pending.all().compactMap { entry in
+            let key = "s:\(entry.id)"
+            guard tracks[key] == nil, let state = Self.rowState(of: entry) else { return nil }
+            let name = entry.media?.name.isEmpty == false ? entry.media?.name : entry.link?.host
+            return OfflineDownloadRow(
+                id: key, name: name ?? "", state: state, expectedBytes: entry.media?.bytes, queuedAt: entry.createdAt,
+                origin: .pendingOriginal)
+        }
+    }
+
+    /// A ledger entry as a download state. The ledger keeps no byte count of a running task (the system does), so a running
+    /// original is `downloading` with its size, when known, and no progress: indeterminate. Nil: nothing to show (stored).
+    static func rowState(of entry: PendingOriginal) -> RenditionOffline? {
+        let total = entry.media?.bytes
+        switch entry.state {
+        case .stored:
+            return nil
+        case .queued:
+            return .waiting
+        case .downloading:
+            return .downloading(TransferProgress(bytes: 0, total: total))
+        case .arrived:
+            return .downloading(TransferProgress(bytes: total ?? 0, total: total))
+        case .failed(let code, _):
+            return entry.isLive ? .waiting : .failed(Self.failure(ofLedgerCode: code))
+        case .gone:
+            return .failed(.gone)
+        }
+    }
+
+    /// The code the ledger keeps (an HTTP status, a URL-loading code, or a POSIX one) as a failure.
+    static func failure(ofLedgerCode code: Int) -> OfflineFailure {
+        if code == 401 || code == 403 { return .auth }
+        if code == Int(ENOSPC) { return .full }
+        if OfflineSources.isNetworkLoss(code) { return .unreachable }
+        return .other(code)
+    }
+
+    // MARK: - Tracked transfers (a copy the app runs itself)
+
+    /// Runs `operation` (a download the caller owns, for example the library's copy for the share sheet) as a row of this
+    /// engine: listed in `rows` and `states` under `key` while it runs, with the bytes `operation` reports, and gone when it
+    /// ends. Origin `.share`: it never touches the queue's ledger, Files or "kept"; what the caller downloaded stays the
+    /// caller's. A failure leaves the row as `failed` (so the activity list says so) until `dismissFailedTransfers()` or a
+    /// new `transfer` with the same key; "stop" on the row cancels `operation`'s task, which then throws.
+    @discardableResult
+    public func transfer<T: Sendable>(
+        key: String, name: String, expectedBytes: Int64? = nil,
+        operation: @escaping @MainActor (_ progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> T
+    ) async throws -> T {
+        stoppedTransfers.remove(key)
+        let first = TransferProgress(bytes: 0, total: expectedBytes)
+        tracks[key] = Track(
+            aliases: [key], state: .downloading(first), expected: expectedBytes, name: name, queuedAt: clock.now(), origin: .share)
+        states[key] = .downloading(first)
+        recount()
+        let relay = MainActorRelay<TransferProgress> { [weak self] p in self?.transferProgressed(key, p) }
+        let task = Task { @MainActor in try await operation { relay.push($0) } }
+        transferStops[key] = { task.cancel() }
+        do {
+            let value = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            transferStops[key] = nil
+            forget(key)
+            return value
+        } catch {
+            transferStops[key] = nil
+            let stopped = stoppedTransfers.remove(key) != nil
+            if stopped || Self.isCancellation(error) {
+                forget(key)                                       // the owner stopped it: nothing failed
+            } else if tracks[key] != nil {
+                let failure = Self.failure(of: error)
+                tracks[key]?.state = .failed(failure)
+                states[key] = .failed(failure)
+                recount()
+                Telemetry.log(.warn, .sync, "transfer failed", data: ["reason": .string("\(failure)")])
+            }
+            throw error
+        }
+    }
+
+    /// The key the library's share copy of post `id` is tracked under (`transfer`).
+    public static func shareKey(_ id: String) -> String { "share:\(id)" }
+
+    private func transferProgressed(_ key: String, _ p: TransferProgress) {
+        guard transferStops[key] != nil, var t = tracks[key] else { return }
+        if let total = p.total { t.expected = total }
+        t.state = .downloading(p)
+        tracks[key] = t
+        states[key] = t.state
+    }
+
+    /// The tracked transfers that failed leave the list (the caller's pass is over, or the owner dismissed them).
+    public func dismissFailedTransfers() {
+        for (key, t) in tracks where t.origin == .share && transferStops[key] == nil { forget(key) }
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let e = error as? CobaltError { return e == .cancelled || e == .network(.cancelled) }
+        return (error as? URLError)?.code == .cancelled
+    }
+
+    /// Why a copy that threw did not finish, as the failure a row shows.
+    static func failure(of error: Error) -> OfflineFailure {
+        if OfflineSources.isDiskFull(error) { return .full }
+        if OfflineSources.isGone(error) { return .gone }
+        switch error {
+        case CobaltError.noAPIKey: return .auth
+        case CobaltError.api(let code, let status):
+            return status == 401 || status == 403 || code.hasPrefix("error.api.auth.") ? .auth : .other(status)
+        case CobaltError.invalidResponse(let status):
+            return status == 401 || status == 403 ? .auth : .other(status)
+        case CobaltError.network, is URLError: return .unreachable
+        case let f as PipelineFailure:
+            switch f {
+            case .unreachable: return .unreachable
+            case .keyInvalid, .keyMissing: return .auth
+            case .expired: return .gone
+            default: return .other(0)
+            }
+        default: return .other(0)
+        }
     }
 
     private static func name(of job: OfflineJob, store: OfflineStore) -> String {
@@ -460,9 +677,10 @@ public final class OfflineDownloads {
             start(key)
             return
         }
-        // before the file lands: nothing racing the album's pass sees a "new save"
-        await markNotNew?(entry.job.notNewKeys(store: store))
-        let origin: AddOrigin = entry.job.isPulled ? .pulled : .keepOffline
+        let isOwnSave = entry.job.origin == Self.saveOrigin
+        // before the file lands: nothing racing the album's pass sees a "new save" (a save made here is one)
+        if !isOwnSave { await markNotNew?(entry.job.notNewKeys(store: store)) }
+        let origin: AddOrigin = entry.job.isPulled ? .pulled : (isOwnSave ? .save : .keepOffline)
         do {
             switch entry.job.target {
             case .existing(let id):
@@ -525,6 +743,7 @@ public final class OfflineDownloads {
     /// system still holds, and restart what it lost.
     func reconcile() async {
         guard !isPreview else { return }
+        pendingChanged()                           // the share extension may have written the ledger since
         let now = clock.now()
         queue.prune(now: now)
         var attaching: [OfflineEntry] = []
@@ -583,6 +802,7 @@ public final class OfflineDownloads {
         await session.waitForEvents(timeout: 25)
         await store.scanVisibleRoot()
         for entry in queue.all() { if case .arrived = entry.state { await land(entry.key) } }
+        pendingChanged()
         await landed?()
     }
 
@@ -627,9 +847,27 @@ public struct OfflineDownloadRow: Sendable, Equatable, Identifiable {
     public var state: RenditionOffline
     public var expectedBytes: Int64?
     public var queuedAt: Date
+    /// Who asked for it (the activity list words some of these differently, and "try again" means something else on each).
+    public var origin: Origin
 
-    public init(id: String, name: String, state: RenditionOffline, expectedBytes: Int64? = nil, queuedAt: Date) {
+    public enum Origin: Sendable, Equatable {
+        /// The owner's "keep offline".
+        case keepOffline
+        /// The Mac's pull of saves made anywhere (`SavePull`).
+        case pulled
+        /// A pipeline's own original (the save the owner just made, kept on this device).
+        case save
+        /// The library's copy for the share sheet (`OfflineDownloads.transfer`): lands nowhere, the share sheet takes the file.
+        case share
+        /// An original the share sheet handed to a background download (`PendingOriginals`).
+        case pendingOriginal
+    }
+
+    public init(
+        id: String, name: String, state: RenditionOffline, expectedBytes: Int64? = nil, queuedAt: Date, origin: Origin = .keepOffline
+    ) {
         self.id = id; self.name = name; self.state = state; self.expectedBytes = expectedBytes; self.queuedAt = queuedAt
+        self.origin = origin
     }
 
     public var isFailed: Bool {

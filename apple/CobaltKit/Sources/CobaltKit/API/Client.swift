@@ -305,6 +305,8 @@ public protocol CobaltClient: Sendable {
     func stagePool(offset: Int, limit: Int) async throws -> StagePoolPage
     /// `GET /stage/redemptions?limit=&before=` (1...100): newest first; `before` pages back.
     func stageRedemptions(limit: Int, before: Date?) async throws -> [StageRedemption]
+    /// The same route with the top-level `connected_canvases` count (nil from an older server: unknown, never none).
+    func stageRedemptionsPage(limit: Int, before: Date?) async throws -> StageRedemptionsPage
     /// `PATCH /stage/rewards/<action>` `{cost?, cooldown_seconds?, enabled?}` (nil fields are left out): the reward as it is
     /// now (`synced` false when Twitch refused).
     func updateStageReward(_ kind: StageRewardKind, cost: Int?, cooldownSeconds: Int?, enabled: Bool?) async throws -> StageReward
@@ -385,6 +387,10 @@ public protocol CobaltClient: Sendable {
 }
 
 extension CobaltClient {
+    /// A client that reads only the list leaves the connected-canvas count unknown.
+    public func stageRedemptionsPage(limit: Int, before: Date?) async throws -> StageRedemptionsPage {
+        StageRedemptionsPage(redemptions: try await stageRedemptions(limit: limit, before: before))
+    }
     public func createStudio(link: URL, public makePublic: Bool?) async throws -> StudioCreated {
         try await createStudio(link: link)
     }

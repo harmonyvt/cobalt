@@ -11,6 +11,15 @@ import UserNotifications
 /// (the queue is a sheet there) and a "more" tab for the rest.
 public enum AppTab: String, Sendable, CaseIterable {
     case save, library, links, sevenTv, stage, twitch, booru, chat, swarms, names, queue, settings
+    /// The iPhone's "tools" tab at its list (nothing pushed): only the iPhone shell writes it, so `selectedTab` is true there
+    /// too (apple 04-PHASE4 4.1). Never a tab on the iPad or the Mac (`isAvailable` is false).
+    case tools
+
+    /// Every tab the iPad and the Mac can show: `.tools` is the iPhone's own, never one of them, so it is left out (and the
+    /// `allCases` tests that pin the tabs keep passing).
+    public static var allCases: [AppTab] {
+        [.save, .library, .links, .sevenTv, .stage, .twitch, .booru, .chat, .swarms, .names, .queue, .settings]
+    }
 
     /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
     /// chat needs `features.chat`, the studio needs `features.stage`, search names need `features.names` (48.6).
@@ -25,6 +34,7 @@ public enum AppTab: String, Sendable, CaseIterable {
         // booru: Danbooru through the server, at most sensitive (APP-API-CONTRACT 72)
         case .booru: return caps.booru
         case .save, .queue, .settings: return true
+        case .tools: return false
         }
     }
 }
@@ -158,6 +168,13 @@ public final class AppModel {
     /// The queue tab (apple/CONTRACT.md section 12): the jobs, the server's line, downloads, the photos album and the
     /// search index in one list. Polls `GET /queue` only while the tab is on screen.
     public let unifiedQueue: UnifiedQueue
+    /// Everything cobalt is doing, once, with the one count every surface reads (apple 03-PHASE3 3.2): `activity.activeCount`,
+    /// `activity.attentionCount`, `activity.items`. Derived from the stores above; keeps no state of its own.
+    public let activity: ActivityModel
+    /// The one paced poller of the server's background work (apple 03-PHASE3 3.3). A stub until Phase 3 lane (c).
+    public let serverActivity: ServerActivityStore
+    /// What the System Health Inspector shows (apple 03-PHASE3 3.4.2). A stub until Phase 3 lane (d).
+    public let health: SystemHealth
     /// What the focus screens read: the focused job's pipeline, or an idle one when nothing is focused. A run started
     /// on it by hand becomes the focused job at once.
     public var pipeline: Pipeline { queue.focused?.pipeline ?? queue.idlePipeline }
@@ -241,6 +258,7 @@ public final class AppModel {
         offline.landed = { [sync] in await sync.refresh() }
         self.offlineDownloads = offline
         context.photosSync = sync
+        context.offlineDownloads = offline
         self.ctx = context
         self.settings = context.settings
         self.store = context.store
@@ -267,7 +285,13 @@ public final class AppModel {
                 fileURL: context.store.root.deletingLastPathComponent().appendingPathComponent("job-ledger.json"),
                 now: { [clock = context.clock] in clock.now() }))
         self.queue = jobQueue
-        self.unifiedQueue = UnifiedQueue(context: context, jobs: jobQueue, offline: offline, photos: sync)
+        let unified = UnifiedQueue(context: context, jobs: jobQueue, offline: offline, photos: sync)
+        self.unifiedQueue = unified
+        let activityModel = ActivityModel(context: context, queue: jobQueue, offline: offline, unified: unified, photos: sync)
+        self.activity = activityModel
+        context.activitySummary = { [weak activityModel] in activityModel?.summary ?? .empty }
+        self.serverActivity = ServerActivityStore(context: context)
+        self.health = SystemHealth(context: context)
         self.makeClient = makeClient
         unifiedQueue.editRenders = { [weak self] in self?.editor.renders ?? [] }
         context.keyRejected = { [weak self] in self?.markKeyInvalid() }
@@ -358,23 +382,7 @@ public final class AppModel {
                 let librarySync = try LibrarySync(databaseURL: SyncContract.databaseURL()) { @MainActor [unowned ctx] in
                     ctx.client as? HTTPCobaltClient
                 }
-                model.library.sync = librarySync
-                librarySync.onApply = { [weak model] snapshot, source in
-                    model?.library.replaceFromSync(snapshot, source: source)
-                }
-                librarySync.onLegacy = { [weak model] in
-                    await model?.library.refreshFromServer()
-                }
-                librarySync.onPullFailure = { [weak model] error in
-                    model?.library.syncPullFailed(error)
-                }
-                // A delete queued by an earlier launch: the device's copy of that post goes now.
-                librarySync.onDeleteConfirmed = { [weak model] post in
-                    guard let model else { return }
-                    await model.store.boot()
-                    guard let media = model.store.media(joining: post) else { return }
-                    await model.store.removeMedia(media.id)
-                }
+                model.library.attach(librarySync)
                 Task { await librarySync.start() }
             } catch {
                 Telemetry.log(.error, .sync, "sync store failed", data: ["error": .string(String(describing: error))])
@@ -511,7 +519,6 @@ public final class AppModel {
         queue.serverChanged()                    // first: every job's Live Activity ends against the server it belonged to
         savePull.serverChanged()                 // another library: a new baseline for the pull
         unifiedQueue.serverChanged()             // nothing from the old server's queue is kept
-        ctx.background.cancelAll()               // detached runs belonged to the old server too
         ctx.client = makeClient(settings)
         apply(.unknown)
         library.reset()
@@ -577,7 +584,7 @@ public final class AppModel {
         }
         guard url.host(percentEncoded: false)?.lowercased() == "job",
               let id = UUID(uuidString: url.lastPathComponent),
-              !ctx.background.owns(job: id),            // a detached or queued run of this process is still carrying it
+              !ctx.background.owns(job: id),            // a queued run of this process is still carrying it
               let job = jobs.all().first(where: { $0.id == id })
         else { return }
         // Mid-run (saving, reading, rendering, a picker, a trim in progress) the home pipeline is

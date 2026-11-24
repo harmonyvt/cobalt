@@ -21,6 +21,16 @@ struct LibraryReveal: Equatable {
     let token = UUID()
 }
 
+/// Where a share of ticked posts stands once the copying pass is over and some posts did not come ("3 of 4 ready · 1
+/// failed"). The share sheet waits for the owner's choice: share what is ready, or try the failed ones again.
+struct SharePrepSummary: Equatable {
+    var ready: Int
+    var total: Int
+    var failed: Int
+
+    var text: String { Copy.Save.sharePrepSummary(ready: ready, of: total, failed: failed) }
+}
+
 extension LibraryRow {
     /// Whether select mode can tick it. Galleries are not shared, so they cannot be ticked, except in the hidden album
     /// (a hidden post is a post whatever it holds, and the album offers `unhide` and `status…`, never a share).
@@ -50,6 +60,11 @@ struct SharePrepRow: Identifiable, Equatable {
     /// The video's length, when the file is a video.
     var length: Double?
     var state: State
+    /// Why this post could not be copied (an `error.*` code), set together with `state == .skipped`: a download that failed,
+    /// or a post with no file to fetch. Nil for every row that is or is going to be ready.
+    var failure: String?
+    /// The bytes of the download in flight, when it reports them.
+    var progress: TransferProgress?
 
     init(_ row: LibraryRow, state: State) {
         id = row.id
@@ -74,9 +89,6 @@ struct SharePrepRow: Identifiable, Equatable {
 @MainActor @Observable
 final class LibraryController {
     let model: AppModel
-    /// How far the top bar has folded with the scroll (its own object: it changes every scrolled frame, and only the
-    /// bar reads it).
-    let fold = LibraryBarFold()
 
     // MARK: the stuck zoom back (owner, 2026-11-14)
 
@@ -202,6 +214,11 @@ final class LibraryController {
     var sharePrep: [SharePrepRow] = []
     /// The card's `cancel`: the copy stops before the next post and no sheet opens.
     var shareCancelled = false
+    /// Set while the pass is over and some posts failed: the card says so and waits for `shareReadyOnes()` or `retryFailedShares()`
+    /// (or `cancel`), so the share sheet never opens on a quiet partial result.
+    var sharePrepSummary: SharePrepSummary?
+    @ObservationIgnored private var shareDecision: ShareDecision?
+    private enum ShareDecision { case shareReady, retry }
     /// Bumped by a refresh: a tile whose picture failed tries again.
     var reload = 0
     var renaming: MediaItem?
@@ -440,50 +457,111 @@ final class LibraryController {
     /// Local files for the ticked posts, in `rows` order. One file per picked row: that row's face only
     /// (never a gallery, not `post.link`, never `publicURL`). One download at a time.
     /// The URL `localCopy` returns is kept — deleting it can destroy the only copy.
-    /// Empty means nothing could be shared (`Copy.actionFailed` is already shown). `[]` while a share is
-    /// already being prepared: the caller does nothing.
+    ///
+    /// A post that cannot be copied is never dropped quietly (apple 02-PHASE2 2.2.4): its row says why (`failure`), and when
+    /// the pass ends with some failed the card says "3 of 4 ready · 1 failed" and waits: `shareReadyOnes()` shares what came,
+    /// `retryFailedShares()` tries the failed ones again, `cancel` shares nothing. Empty means nothing is shared
+    /// (`Copy.actionFailed` is already shown, or the owner cancelled). `[]` while a share is already being prepared: the
+    /// caller does nothing.
     func sharePicked(_ rows: [LibraryRow]) async -> [URL] {
         guard !preparingShare else { return [] }
         preparingShare = true
         let chosen = picked
         let rows = rows.filter(\.shareable)
         shareCancelled = false
-        sharePrep = rows.filter { chosen.contains($0.id) }.map { SharePrepRow($0, state: Self.shareState(of: $0.item.face)) }
+        shareDecision = nil
+        sharePrepSummary = nil
+        let order = rows.filter { chosen.contains($0.id) }
+        sharePrep = order.map { SharePrepRow($0, state: Self.shareState(of: $0.item.face)) }
         defer {
             preparingShare = false
+            model.offlineDownloads.dismissFailedTransfers()
             sharePrep = []
+            sharePrepSummary = nil
+            shareDecision = nil
         }
-        var urls: [URL] = []
-        for row in rows where chosen.contains(row.id) {
-            // `cancel` on the card: nothing is shared (what already downloaded stays as the cache's)
+        var copied: [String: URL] = [:]
+        var pass = order
+        while true {
+            for row in pass {
+                // `cancel` on the card: nothing is shared (what already downloaded stays as the cache's)
+                if shareCancelled { return [] }
+                if let url = await copyForShare(row) { copied[row.id] = url }
+            }
             if shareCancelled { return [] }
-            let face = row.item.face
-            if let url = face.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) {
-                setShareState(row.id, .onDevice)
-                urls.append(url)
-                continue
+            let ready = order.compactMap { copied[$0.id] }
+            let failed = sharePrep.filter { $0.failure != nil }
+            if failed.isEmpty {
+                if ready.isEmpty { showStatus(Copy.actionFailed); failTick += 1 }
+                return ready
             }
-            setShareState(row.id, .downloading)
-            guard let file = face.file else {
-                setShareState(row.id, .skipped)
-                continue
-            }
-            do {
-                let copied = try await model.library.localCopy(file)
-                guard copied.isFileURL else {
-                    setShareState(row.id, .skipped)
-                    continue
-                }
-                setShareState(row.id, .ready)
-                urls.append(copied)
-            } catch {
-                setShareState(row.id, .skipped)
-                continue
+            // some did not come: say so, and let the owner choose before the sheet opens
+            sharePrepSummary = SharePrepSummary(ready: ready.count, total: order.count, failed: failed.count)
+            warnTick += 1
+            let decision = await awaitShareDecision()
+            sharePrepSummary = nil
+            shareDecision = nil
+            guard let decision, !shareCancelled else { return [] }
+            switch decision {
+            case .shareReady:
+                return ready
+            case .retry:
+                let again = Set(failed.map(\.id))
+                for id in again { resetShareRow(id) }
+                pass = order.filter { again.contains($0.id) }
             }
         }
-        if shareCancelled { return [] }
-        if urls.isEmpty { showStatus(Copy.actionFailed); failTick += 1 }
-        return urls
+    }
+
+    /// `share the ones that are ready` on the summary: the sheet opens on what came.
+    func shareReadyOnes() { if sharePrepSummary != nil { shareDecision = .shareReady } }
+    /// `retry` on the summary: the failed posts are copied again, then the summary says how it went.
+    func retryFailedShares() { if sharePrepSummary != nil { shareDecision = .retry } }
+
+    private func awaitShareDecision() async -> ShareDecision? {
+        while shareDecision == nil, !shareCancelled {
+            try? await Task.sleep(for: .milliseconds(80))
+        }
+        return shareDecision
+    }
+
+    /// One post's file for the share sheet: the one on this device, else a download. Nil when it could not come, with the
+    /// row saying why.
+    private func copyForShare(_ row: LibraryRow) async -> URL? {
+        let face = row.item.face
+        if let url = face.local?.fileURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) {
+            setShareState(row.id, .onDevice)
+            return url
+        }
+        setShareState(row.id, .downloading)
+        guard let file = face.file else {
+            failShareRow(row.id, code: "error.app.no_file")
+            return nil
+        }
+        do {
+            // the copy is a row of the downloads engine while it runs (`activity` lists it), landing nowhere: the share sheet takes the file
+            let library = model.library
+            let copied = try await model.offlineDownloads.transfer(
+                key: OfflineDownloads.shareKey(row.id), name: row.title, expectedBytes: file.bytes
+            ) { progress in try await library.localCopy(file, progress: progress) }
+            guard copied.isFileURL else {
+                failShareRow(row.id, code: "error.app.no_file")
+                return nil
+            }
+            setShareState(row.id, .ready)
+            return copied
+        } catch {
+            let code = Self.shareFailureCode(error)
+            Telemetry.log(.warn, .store, "share copy failed", data: Telemetry.errorData(error).merging(["copy": .string(code)]) { a, _ in a })
+            failShareRow(row.id, code: code)
+            return nil
+        }
+    }
+
+    private static func shareFailureCode(_ error: Error) -> String {
+        if let failure = error as? PipelineFailure { return failure.code }
+        if error is CancellationError { return "error.app.cancelled" }
+        return Pipeline.localCopyCode(error)
     }
 
     /// `share` of the select actions: copies each ticked face on screen, hands the files to the share sheet and leaves
@@ -586,6 +664,24 @@ final class LibraryController {
     private func setShareState(_ id: String, _ state: SharePrepRow.State) {
         guard let index = sharePrep.firstIndex(where: { $0.id == id }) else { return }
         sharePrep[index].state = state
+        sharePrep[index].progress = nil
+    }
+
+    /// The row did not come: it stays `.skipped` (the card's red mark) and keeps the code, which the card's line and the
+    /// summary read.
+    private func failShareRow(_ id: String, code: String) {
+        guard let index = sharePrep.firstIndex(where: { $0.id == id }) else { return }
+        sharePrep[index].state = .skipped
+        sharePrep[index].failure = code
+        sharePrep[index].progress = nil
+    }
+
+    /// A retry: the row waits again, with nothing left of its failure.
+    private func resetShareRow(_ id: String) {
+        guard let index = sharePrep.firstIndex(where: { $0.id == id }) else { return }
+        sharePrep[index].state = .waiting
+        sharePrep[index].failure = nil
+        sharePrep[index].progress = nil
     }
 
     private static func shareState(of face: Rendition) -> SharePrepRow.State {

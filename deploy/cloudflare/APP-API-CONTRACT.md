@@ -404,6 +404,8 @@ Worker's D1 answers and its fallback):
 | `step_total` | number \| null | total bytes when known (`storing`: always the helper's file size; `fetching`: the download's `content-length` when it sent one) |
 | `waking` | boolean | `true` while this save is waiting for the container to start; else `false` |
 
+Engine fields (`engine`, `waking_engine`, `fallback_from`, `fallback_code`) and `error_detail` are added in section 73.1.
+
 The existing `bytes` field keeps its meaning (the stored size, `null` while saving). That is
 why progress uses new names instead of reusing it.
 
@@ -3306,7 +3308,7 @@ points. points are spent on twitch."). Works at phone width.
 "spotlight_auto", "spotlight_seconds", "sound", "video_max", "store_open", "store_hint", "live_url":
 "<STAGE_BASE_URL>live/<token>", "store_url": "<STAGE_BASE_URL>store", "twitch": null | { "login", "display_name",
 "connected_at", "status": "ok"|"reconnect"|"not_affiliate"|"setting_up", "last_event_at": <ms>|null },
-"spotlight": <spotlight>|null, "updated_at" }` (`pool.missing`: the collection or set was deleted; the pool is
+"spotlight": <spotlight>|null, "updated_at", "connected_canvases": <n>|null }` (`connected_canvases`: section 73.2; `pool.missing`: the collection or set was deleted; the pool is
 then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "enabled", "synced": bool }`
 (`synced`: Twitch has the current values). `<redemption>` = `{ "id", "action", "user_name", "input", "item":
 <item>|null, "status", "reason", "created_at" }`.
@@ -3331,7 +3333,7 @@ then empty). `<reward>` = `{ "action", "title", "cost", "cooldown_seconds", "ena
 - `GET /stage/pool?offset=&limit=<1..100, default 60>` → `200 { "status": "success", "total", "offset", "next",
   "items": [<item>] }` (the app's "pick for the spotlight" sheet).
 - `GET /stage/redemptions?limit=<1..100, default 30>&before=<ms>` → `200 { "status": "success", "redemptions":
-  [<redemption>] }`, newest first.
+  [<redemption>], "connected_canvases": <n>|null }`, newest first (`connected_canvases`: section 73.2).
 - `PATCH /stage/rewards/<action>` `{ "cost"?: 1..1000000, "cooldown_seconds"?: 0..604800, "enabled"?: bool }` →
   saves (out-of-range values are 400 `error.stage.bad_request`, not clamped), then updates the Twitch reward (when
   connected); `200 { "status": "success", "reward": <reward> }`, with
@@ -5953,8 +5955,8 @@ downloader by default and the only one for picked items of a post (`items` as an
 - On a switch the first engine's copy is dropped, the save record (`save:<sid>` in DO storage) gets
   `engine` and `fellBack` (the first code), and the fetch starts again with a fresh download budget and attempt count.
   The progress shows `fetching` again; `waking` is always false for the box.
-- When both fail the session's code is **cobalt's** (the app knows its words), unless yt-dlp says
-  `error.studio.too_large`.
+- When both fail the session's code is **cobalt's** (the app knows its words), unless yt-dlp says something
+  about the post itself: `error.studio.too_large`, `error.api.youtube.*` or `error.api.content.*` (section 73.1).
 - Busy (429), unreachable (30 s of misses, then `error.studio.unavailable`), and a box restart mid-download (the fetch
   starts again, at most 3 times) behave exactly as with the helper.
 - Saves still run one at a time across both engines (the server's line, section 17).
@@ -8023,3 +8025,35 @@ touch) calls `make` with `replace` and the seam/hinge glows while it runs. Live 
 - Apps: a "booru" section on a picture's detail page ("find on booru"), and a sheet that waits for iqdb, then shows the linked post or the close matches with their similarity, artist and characters.
 
 **72.12 The owner's Danbooru key** (2026-11-23, owner: "I want to be able to set a danbooru key please"). The booru filters sheet has a "danbooru account" card: a username and an API key (made on Danbooru from the profile, "API Key"), checked against `GET https://danbooru.donmai.us/profile.json` with HTTP basic auth before saving, then kept in the device keychain (`danbooru.login`, `danbooru.api_key`) and never sent to capystore's server. With a key, "find on booru" first asks Danbooru's own search: a multipart `POST /iqdb_queries.json` with `search[file]` and basic auth, answering `[{post_id, score, post}]` (score = similarity); the posts it carries skip the `posts.json` fetch. Anything it refuses or fails falls back to iqdb.org (72.11). Everything else is unchanged: the posts still go through `POST /booru/filter` (general only), and linking is `PUT /library/items/<id>/booru`. The key is not used for browsing.
+
+## 73. Honest save and stage state (addendum, 2026-11-24; transparency pass, phase 2.1: the app shows what the server knows instead of guessing it. All additive; no migration, no new route.)
+
+**73.1 `GET /studio/<sid>`: which engine, and why it switched.** While `status == "saving"` the session body also carries four
+keys (a ready or failed session reads byte for byte as before; a client that does not know them ignores them):
+
+| field | type | meaning |
+|---|---|---|
+| `engine` | `"cobalt" \| "ytdlp" \| null` | the downloader running this save (section 49); `null` while the save is queued or the DO has not said yet |
+| `waking_engine` | `"cobalt" \| "ytdlp" \| null` | the engine whose container is starting; non-null only while `waking` is `true`. The yt-dlp box now reports its cold start like cobalt's container did (before, `waking` stayed `false` and the first step simply took a while) |
+| `fallback_from` | `"cobalt" \| "ytdlp" \| null` | the engine that failed first, when the save switched engines (49.2); `null` = no switch |
+| `fallback_code` | string \| null | the code that engine failed with (the one that caused the switch) |
+
+They stay set through `fetching`, `reading` and `storing`. A switch no longer resets the progress silently: the first
+`fetching` after it already says `engine: <the new engine>`, `fallback_from`, `fallback_code`. A gallery save (items) is always
+cobalt's and carries `engine: "cobalt"`. `items_done` / `items_total` (section 18.2) were already sent for a save of several items.
+
+*Error chain.* When the second engine also fails, the session's `error.code` is still cobalt's (49.2), **except** when the failing
+engine says what is wrong with the post itself: `error.studio.too_large`, `error.api.youtube.*` (a login), `error.api.content.*` (a
+private, age-gated or unavailable post). Those win over cobalt's earlier "could not fetch". A session that failed after a switch
+also carries `error_detail: { "primary_code", "primary_engine", "prior_code", "prior_engine" }`: `primary_*` is the engine that failed
+last and what it said, `prior_*` the one that failed first. `error.code` is the code to show; `error_detail` is what each said.
+`error_detail` is kept in the Durable Object's storage for a day (not in D1), so it is on the answer of the poll that sees the
+save fail (the DO's advance reply), not on a later plain `GET` of the failed session (the Worker answers a failed session from D1 alone).
+
+**73.2 Studio: `connected_canvases`.** The number of OBS canvas pages holding a socket to the StageRoom right now (the room counts its
+hibernating sockets too, `getWebSockets().length`; the room's internal `/state` answer gained `viewers`). It is on the `<stage>` object
+(`GET /stage`, `PATCH /stage`, `POST /stage/action`, `POST /stage/rotate`, `DELETE /stage/twitch`; also `stage.get`/`stage.set`
+for the chat AI) and at the top level of `GET /stage/redemptions` (the feed the app already polls every 4 s, so the count moves
+without another request). A number >= 0, or `null` when it is not known (the room could not be asked, or an older room that does not report it); the key is always present. `0` = the room answered and nothing is showing the studio, so the app shows "unknown" for `null`, never "no obs connected". Rotating the canvas token closes
+every socket, so the count falls to 0 shortly after until the pages reconnect (the rotate answer itself may still show the old count).
+
