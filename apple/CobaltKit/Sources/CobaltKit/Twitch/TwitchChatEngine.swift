@@ -26,6 +26,10 @@ public actor TwitchChatEngine {
     public static let lineLimit = 300
     static let ircURL = URL(string: "wss://irc-ws.chat.twitch.tv:443")!
     static let publishGap: Duration = .milliseconds(120)
+    /// Twitch's IRC has no history: the recent lines come from the public recent-messages service Chatterino and other
+    /// chat clients use (it is told the channel name only). Best effort: no answer, no history.
+    static let historyBase = "https://recent-messages.robotty.de/api/v2/recent-messages/"
+    static let historyLimit = 150
 
     public nonisolated let snapshots: AsyncStream<TwitchChatSnapshot>
     private let continuation: AsyncStream<TwitchChatSnapshot>.Continuation
@@ -76,6 +80,8 @@ public actor TwitchChatEngine {
     private var myBadges: [TwitchBadgeRef] = []
     private var myDisplayName: String?
     private var localCounter = 0
+    /// The recent lines were asked for once (never again on a reconnect).
+    private var historyAsked = false
 
     public init(channel: String, credentials: TwitchCredentials?, session: URLSession = .shared) {
         self.channel = channel.lowercased()
@@ -92,6 +98,7 @@ public actor TwitchChatEngine {
         set(status: .connecting)
         connectIRC()
         Task { await self.loadGlobals() }
+        Task { await self.loadHistory() }
     }
 
     public func stop() {
@@ -316,7 +323,8 @@ public actor TwitchChatEngine {
             id: id, kind: .notice(said), login: nick, displayName: m.tags["display-name"] ?? nick,
             color: TwitchIRC.color(m.tags["color"]), badges: resolve(TwitchIRC.badges(m.tags["badges"])),
             fragments: text.isEmpty ? [] : ChatFragmenter.fragments(text: text, ranges: ranges, named: named),
-            timestamp: Date(), mentionsMe: false, mine: false, replyTo: nil)
+            timestamp: m.tags["tmi-sent-ts"].flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
+            mentionsMe: false, mine: false, replyTo: nil)
         if !text.isEmpty { raw[id] = (text, ranges) }
         append(line)
     }
@@ -374,6 +382,40 @@ public actor TwitchChatEngine {
         guard dirty, !stopped else { return }
         dirty = false
         continuation.yield(snapshot)
+    }
+
+    // MARK: - history
+
+    private struct HistoryWire: Decodable {
+        let messages: [String]
+    }
+
+    /// The channel's recent lines, put in front of whatever arrived live meanwhile, so the chat opens full.
+    private func loadHistory() async {
+        guard !historyAsked else { return }
+        historyAsked = true
+        var comps = URLComponents(string: Self.historyBase + channel)
+        comps?.queryItems = [
+            URLQueryItem(name: "limit", value: String(Self.historyLimit)),
+            URLQueryItem(name: "hide_moderation_messages", value: "true"),
+        ]
+        guard let url = comps?.url, let data = await get(url),
+              let wire = try? JSONDecoder().decode(HistoryWire.self, from: data), !stopped
+        else { return }
+        let login = authRefused ? nil : credentials
+        let live = snapshot.lines
+        snapshot.lines = []
+        for rawLine in wire.messages {
+            guard let m = TwitchIRC.parse(rawLine) else { continue }
+            switch m.command {
+            case "PRIVMSG": privmsg(m, login: login)
+            case "USERNOTICE": usernotice(m, login: login)
+            default: continue
+            }
+        }
+        let old = Set(snapshot.lines.map(\.id))
+        for line in live where !old.contains(line.id) { append(line) }
+        markDirty()
     }
 
     // MARK: - emotes and badges

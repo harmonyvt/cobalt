@@ -247,7 +247,7 @@ public struct TwitchEmoteList: Sendable, Equatable {
         ]
     }
 
-    /// Up to `limit` emotes whose name starts with `prefix` (case-insensitive), exact matches first.
+    /// Up to `limit` emotes whose name starts with `prefix` (case-insensitive), exact matches first, then names holding it.
     public func completions(for prefix: String, limit: Int = 8) -> [ChatEmote] {
         guard prefix.count >= 2 else { return [] }
         let p = prefix.lowercased()
@@ -260,7 +260,15 @@ public struct TwitchEmoteList: Sendable, Equatable {
             if n == p { exact.append(e) } else { starts.append(e) }
             if exact.count + starts.count >= limit * 3 { break }
         }
-        return Array((exact + starts).prefix(limit))
+        // then names with the letters anywhere ("cat" finds "catJAM" first, then "PETTHECAT")
+        var inside: [ChatEmote] = []
+        if exact.count + starts.count < limit {
+            for e in emotes where inside.count < limit && !seen.contains(e.name) && e.name.lowercased().contains(p) {
+                seen.insert(e.name)
+                inside.append(e)
+            }
+        }
+        return Array((exact + starts + inside).prefix(limit))
     }
 }
 

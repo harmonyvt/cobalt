@@ -79,6 +79,11 @@ struct ChatFragmenterTests {
         #expect(list.completions(for: "liabox").map(\.name) == ["liaBox", "liaBoxing"])
         #expect(list.completions(for: "l").isEmpty)
     }
+
+    @Test func completionsThenNamesHoldingIt() {
+        let list = TwitchEmoteList(emotes: [seven("PETTHECAT"), seven("catJAM"), seven("other")])
+        #expect(list.completions(for: "cat").map(\.name) == ["catJAM", "PETTHECAT"])
+    }
 }
 
 struct SevenTvChatWireTests {
