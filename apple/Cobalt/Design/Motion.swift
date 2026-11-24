@@ -16,6 +16,8 @@ enum Motion {
     static let orbitPop = Animation.spring(duration: 0.8, bounce: 0.45)
     static let copy = Animation.easeInOut(duration: 0.25)
     static let card = Animation.spring(duration: 0.5, bounce: 0.2)
+    /// The screen pane sliding in/out or spanning: zero bounce so it lands cleanly on the hinge without overshooting.
+    static let pane = Animation.spring(duration: 0.4, bounce: 0)
     static let rows = Animation.spring(duration: 0.4, bounce: 0.35)
     static let dissolve = Animation.easeIn(duration: 0.42)
     static let tier = Animation.spring(duration: 0.75, bounce: 0.12)

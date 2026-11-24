@@ -92,7 +92,6 @@ private struct CollectionPaneHero: View {
     let links: [ShareSet]
 
     @Environment(\.paneShape) private var shape
-    @Environment(\.paneHeaderHeight) private var headerHeight
 
     private var items: [ShareSetItem] {
         links.prefix(4).compactMap { $0.items.first(where: \.isPublic) ?? $0.items.first }
@@ -116,14 +115,13 @@ private struct CollectionPaneHero: View {
                 .font(.system(size: 44, weight: .light))
                 .foregroundStyle(CobaltColor.collection)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.top, headerHeight)
                 .accessibilityHidden(true)
         } else {
             LinkTileGrid(count: items.count) { index, side in
                 LinkThumb(item: items[index], side: side, radius: 12, maxPixel: 640)
             }
-            .padding(.top, headerHeight)
-            .padding([.horizontal, .bottom], 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
             .accessibilityHidden(true)
         }
     }

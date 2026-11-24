@@ -46,30 +46,32 @@ private struct TwitchChatHeader: View {
     var showsLabel = true
 
     var body: some View {
-        HStack(spacing: 6) {
-            if showsLabel {
-                Text(Copy.Twitch.chat)
-                    .font(Font.cobalt(13, .semibold))
-                    .foregroundStyle(CobaltColor.text)
+        if showsLabel || statusText != nil || !modes.isEmpty {
+            HStack(spacing: 6) {
+                if showsLabel {
+                    Text(Copy.Twitch.chat)
+                        .font(Font.cobalt(13, .semibold))
+                        .foregroundStyle(CobaltColor.text)
+                }
+                if let s = statusText {
+                    Text(s)
+                        .font(Font.cobalt(12))
+                        .foregroundStyle(isProblem ? CobaltColor.errorText : CobaltColor.caption)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                ForEach(modes, id: \.self) { mode in
+                    Text(mode)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(TwitchChatPalette.twitch)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(TwitchChatPalette.twitch.opacity(0.12), in: Capsule())
+                }
             }
-            if let s = statusText {
-                Text(s)
-                    .font(Font.cobalt(12))
-                    .foregroundStyle(isProblem ? CobaltColor.errorText : CobaltColor.caption)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            ForEach(modes, id: \.self) { mode in
-                Text(mode)
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(TwitchChatPalette.twitch)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(TwitchChatPalette.twitch.opacity(0.12), in: Capsule())
-            }
+            .padding(.horizontal, 12)
+            .frame(height: 34)
         }
-        .padding(.horizontal, 12)
-        .frame(height: 34)
     }
 
     private var statusText: String? {

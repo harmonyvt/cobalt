@@ -57,6 +57,7 @@ private struct SevenTvEmoteView: View {
     let emoteSet: SevenTvSetModel?
 
     @Environment(Pane.self) private var pane: Pane?
+    @Environment(\.paneShape) private var shape
     @Environment(\.shell) private var shell
     @Environment(\.openURL) private var openURL
     @State private var alias: String
@@ -90,16 +91,9 @@ private struct SevenTvEmoteView: View {
 
     var body: some View {
         PanePage(
-            title: shownName, subtitle: Copy.SevenTv.sevenTvNameLine(hit.name, animated: hit.animated),
-            actions: [PaneAction(Copy.SevenTv.openOn7tv, systemImage: Symbol.SevenTv.website) { openURL(pageURL) }]
+            title: shownName, subtitle: Copy.SevenTv.sevenTvNameLine(hit.name, animated: hit.animated)
         ) {
-            ZStack {
-                CobaltColor.surface
-                EmotePicture(url: hit.previewURL, animated: hit.animated, side: 200)
-                    .padding(24)
-            }
-            .frame(minHeight: 220)
-            .accessibilityHidden(true)
+            emoteHero
         } controls: {
             VStack(alignment: .leading, spacing: 12) {
                 if editable {
@@ -126,10 +120,6 @@ private struct SevenTvEmoteView: View {
                 }
                 PaneActionGrid(actions)
             }
-        } body: {
-            if editable, let emoteSet, !emoteSet.otherSets.isEmpty {
-                copyMenu(emoteSet).padding(.horizontal, 16)
-            }
         } shelf: {
             PaneCard(Copy.SevenTv.variants) { variantsCard }
         }
@@ -147,6 +137,26 @@ private struct SevenTvEmoteView: View {
         .haptic(.error, trigger: failTick)
     }
 
+    @ViewBuilder
+    private var emoteHero: some View {
+        let stage = ZStack {
+            CobaltColor.surface
+            EmotePicture(url: hit.previewURL, animated: hit.animated, side: 180)
+                .padding(20)
+        }
+        .frame(minHeight: 200)
+        .accessibilityHidden(true)
+
+        if shape == .tall {
+            stage
+                .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+        } else {
+            stage
+        }
+    }
+
     // MARK: actions
 
     private var actions: [PaneAction] {
@@ -157,6 +167,15 @@ private struct SevenTvEmoteView: View {
             },
             PaneAction(Copy.SevenTv.openOn7tv, systemImage: Symbol.SevenTv.website) { openURL(pageURL) },
         ]
+        if editable, let emoteSet, !emoteSet.otherSets.isEmpty {
+            let choices = emoteSet.otherSets.map { target in
+                PaneAction(target.name, systemImage: Symbol.SevenTv.copyToSet, id: "copy-\(target.id)") {
+                    copy(to: target)
+                }
+            }
+            list.append(
+                PaneAction(Copy.SevenTv.copyToSet, systemImage: Symbol.SevenTv.copyToSet, disabled: working, choices: choices) {})
+        }
         if editable {
             list.append(
                 PaneAction(Copy.SevenTv.remove, systemImage: Symbol.SevenTv.remove, role: .destructive, disabled: working) {
@@ -187,28 +206,6 @@ private struct SevenTvEmoteView: View {
                 .font(CobaltType.badge)
                 .foregroundStyle(CobaltColor.caption)
         }
-    }
-
-    private func copyMenu(_ emoteSet: SevenTvSetModel) -> some View {
-        Menu {
-            ForEach(emoteSet.otherSets) { target in
-                Button(target.name) { copy(to: target) }
-            }
-        } label: {
-            Label(Copy.SevenTv.copyToSet, systemImage: Symbol.SevenTv.copyToSet)
-                .font(CobaltType.buttonSmall)
-                .foregroundStyle(CobaltColor.text)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, 14)
-                .frame(minHeight: Metrics.hit)
-                .background(CobaltColor.elevated, in: Capsule())
-                .contentShape(Capsule())
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .disabled(working)
     }
 
     // MARK: edits

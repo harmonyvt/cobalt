@@ -39,6 +39,8 @@ struct DetailInfo: View {
     var missing: Int?
     /// The link to show for a public file: its rich link page when the server has them (APP-API-CONTRACT 22).
     var shareLink: (URL) -> URL = { $0 }
+    /// Grouped `Form` rows need an 8 pt leading inset to clear their clip; `PanePage` supplies its own 16 pt margins.
+    var formInset = true
 
     var body: some View {
         if let missing {
@@ -66,8 +68,8 @@ struct DetailInfo: View {
         }
         // The row clips what sits within ~6 pt of its edge, and Plex Mono's first glyphs ("m", "1") reach the
         // edge of their box: 5 pt cut them ("nedia…", "'4.8 s"). 8 pt at the leading edge clears it.
-        .padding(.leading, 8)
-        .padding(.trailing, 3)
+        .padding(.leading, formInset ? 8 : 0)
+        .padding(.trailing, formInset ? 3 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

@@ -35,7 +35,6 @@ struct PaneSelectionContent: View {
     @Bindable var controller: LibraryController
 
     @Environment(\.paneShape) private var shape
-    @Environment(\.paneHeaderHeight) private var headerHeight
     @State private var pickingCollection = false
     @State private var deleting = false
     @State private var editNote: String?
@@ -118,11 +117,11 @@ struct PaneSelectionContent: View {
 
     // MARK: the picks
 
-    /// The picks in tap order: a strip under the header (tall), a grid on the media's own screen otherwise.
+    /// The picks in tap order: a strip under the header bar (tall), a grid on the media's own screen otherwise.
     @ViewBuilder
     private func thumbs(_ picks: [LibraryRow]) -> some View {
         if picks.isEmpty {
-            Color.clear.frame(height: shape == .tall ? headerHeight : nil)
+            EmptyView()
         } else if shape == .tall {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -136,7 +135,7 @@ struct PaneSelectionContent: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, compact ? 6 : 8)
                 }
-                .padding(.top, headerHeight)
+                .padding(.top, 8)
                 .onChange(of: picks.last?.id) { _, last in
                     guard let last else { return }
                     withAnimation(Motion.rows) { proxy.scrollTo(last, anchor: .trailing) }
@@ -150,7 +149,6 @@ struct PaneSelectionContent: View {
                     }
                 }
                 .padding(16)
-                .padding(.top, headerHeight)
             }
         }
     }

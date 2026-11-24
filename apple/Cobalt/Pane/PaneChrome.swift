@@ -17,25 +17,57 @@ struct PaneChrome: View {
 
     @Environment(Pane.self) private var pane
     @Environment(\.paneOffline) private var offline
+    @State private var floatingHeader = false
 
-    /// The header's height over the top of the page (a 44 pt circle and its margins).
-    static let headerHeight: CGFloat = 60
+    /// The header bar's height (48 pt on macOS, 56 pt on iOS).
+    static var headerHeight: CGFloat { Platform.isMac ? 48 : 56 }
+
+    /// Extra clearance above the header when presented in an iOS compact sheet so the system drag indicator sits cleanly
+    /// above the buttons and context label.
+    private var sheetTopClearance: CGFloat {
+        #if os(iOS)
+        return pane.placement == .compact && pane.state == .screen ? 10 : 0
+        #else
+        return 0
+        #endif
+    }
+
+    private var reservedHeaderHeight: CGFloat { Self.headerHeight + sheetTopClearance }
+
+    /// Shifts a horizontal hinge into `PaneDestination`'s coordinate space when the dedicated header sits above it so
+    /// `PaneHalves` still lands precisely on the physical hinge.
+    private var effectiveHinge: PaneHinge? {
+        guard let hinge, !floatingHeader, hinge.axis == .horizontal else { return hinge }
+        return PaneHinge(axis: .horizontal, position: max(0, hinge.position - reservedHeaderHeight - 0.5))
+    }
 
     var body: some View {
         NavigationStack {
-            PaneDestination(item: item, model: model)
-                .environment(\.paneItem, item)
-                .environment(\.paneShape, shape)
-                .environment(\.paneHinge, hinge)
-                .environment(\.paneHeaderHeight, Self.headerHeight)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlayPreferenceValue(PaneMoreKey.self, alignment: .top) { more in header(more) }
-                #if os(iOS)
-                .toolbar(.hidden, for: .navigationBar)
-                #endif
+            VStack(spacing: 0) {
+                if !floatingHeader {
+                    Color.clear.frame(height: reservedHeaderHeight)
+                    Rectangle()
+                        .fill(CobaltColor.hairline)
+                        .frame(height: 0.5)
+                        .accessibilityHidden(true)
+                }
+                PaneDestination(item: item, model: model)
+                    .environment(\.paneItem, item)
+                    .environment(\.paneShape, shape)
+                    .environment(\.paneHinge, effectiveHinge)
+                    .environment(\.paneHeaderHeight, floatingHeader ? Self.headerHeight : 0)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .onPreferenceChange(PaneFloatingHeaderKey.self) { floatingHeader = $0 }
+            .overlayPreferenceValue(PaneMoreKey.self, alignment: .top) { more in
+                header(more, floating: floatingHeader)
+            }
+            #if os(iOS)
+            .toolbar(.hidden, for: .navigationBar)
+            #endif
         }
         .id(item)                                           // another item is another page, with a fresh stack
-        .background(CobaltColor.bg)
+        .modifier(PaneChromeBackground())
         .background { keys }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Pane.container(pane.title ?? Copy.Pane.context(item)))
@@ -47,7 +79,7 @@ struct PaneChrome: View {
     // MARK: header
 
     @ViewBuilder
-    private func header(_ more: [PaneAction]) -> some View {
+    private func header(_ more: [PaneAction], floating: Bool) -> some View {
         Group {
             if let halves = headerHalves {
                 // nothing on the hinge (split), nothing over the hero's edge (wide: the media is the left half): span on
@@ -55,13 +87,13 @@ struct PaneChrome: View {
                 PaneHalves(hinge: halves) {
                     HStack { spanButton; Spacer(minLength: 0) }
                     ZStack {
-                        contextLabel.padding(.horizontal, 100)
+                        contextLabel(floating: floating).padding(.horizontal, 100)
                         HStack(spacing: 8) { Spacer(minLength: 0); trailing(more) }
                     }
                 }
             } else {
                 ZStack {
-                    contextLabel.padding(.horizontal, 110)
+                    contextLabel(floating: floating).padding(.horizontal, 110)
                     HStack(spacing: 8) {
                         spanButton
                         Spacer(minLength: 0)
@@ -70,8 +102,9 @@ struct PaneChrome: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, Platform.isMac ? 12 : 10)
         .frame(height: Self.headerHeight)
+        .padding(.top, floating ? 0 : sheetTopClearance)
     }
 
     /// Where the header splits in two: on the hinge of a split pane on two screens side by side, and down the middle of
@@ -86,15 +119,24 @@ struct PaneChrome: View {
         return nil
     }
 
-    private var contextLabel: some View {
-        Text(Copy.Pane.context(item))
-            .font(Font.cobalt(12, .semibold, relativeTo: .caption))
-            .foregroundStyle(CobaltColor.text)
-            .lineLimit(1)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .glassEffect(.regular, in: .capsule)
-            .accessibilityHidden(true)                      // the container's label already says where this is
+    @ViewBuilder
+    private func contextLabel(floating: Bool) -> some View {
+        if floating {
+            Text(Copy.Pane.context(item))
+                .font(Font.cobalt(12, .semibold, relativeTo: .caption))
+                .foregroundStyle(CobaltColor.text)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .glassEffect(.regular, in: .capsule)
+                .accessibilityHidden(true)                      // the container's label already says where this is
+        } else {
+            Text(Copy.Pane.context(item))
+                .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
+                .foregroundStyle(CobaltColor.caption)
+                .lineLimit(1)
+                .accessibilityHidden(true)                      // the container's label already says where this is
+        }
     }
 
     private var spanButton: some View {
@@ -102,7 +144,7 @@ struct PaneChrome: View {
         let title = spanned ? Copy.Pane.unspan : Copy.Pane.span
         return Button { pane.toggleSpan() } label: {
             Image(systemName: spanned ? Symbol.Pane.unspan : Symbol.Pane.span)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: Platform.isMac ? 12 : 14, weight: .semibold))
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
@@ -131,7 +173,8 @@ struct PaneChrome: View {
                 }
             } label: {
                 Image(systemName: Symbol.Pane.more)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: Platform.isMac ? 13 : 14, weight: .semibold))
+                    .frame(width: Platform.isMac ? 14 : 18, height: Platform.isMac ? 14 : 18)
             }
             .menuIndicator(.hidden)
             .buttonStyle(.glass)
@@ -230,20 +273,37 @@ struct PaneBarAccessory: ViewModifier {
     }
 }
 
-/// The line on the hinge (or the column's divider). While a save or make runs it is the job's progress light, a green
-/// bar filling along the line, so no banner covers either side (the old spread seam did the same).
+/// The pane's surface: flat `CobaltColor.bg` on iOS, native frosted material on macOS so the column harmonizes with
+/// the translucent window and sidebar while still cleanly occluding the tab underneath when spanned.
+private struct PaneChromeBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.background(.thickMaterial)
+        #else
+        content.background(CobaltColor.bg)
+        #endif
+    }
+}
+
+/// The line on the hinge (or the column's divider). While another save or make runs in the background (not the one
+/// already displayed in the pane), a quiet 2 pt progress bar fills along the line.
 struct PaneSeam: View {
     let queue: JobQueue
     let axis: PanePlacement.Axis
+    /// The job already displayed in the pane, if any: no need to mirror its progress on the divider beside it.
+    var showingJobID: UUID? = nil
 
     private var vertical: Bool { axis == .vertical }
+    private var showsBackgroundProgress: Bool {
+        queue.live.contains { $0.id != showingJobID }
+    }
 
     var body: some View {
         ZStack(alignment: vertical ? .bottom : .leading) {
             Rectangle()
                 .fill(CobaltColor.hairline)
                 .frame(width: vertical ? 1 : nil, height: vertical ? nil : 1)
-            if !queue.live.isEmpty {
+            if showsBackgroundProgress {
                 TimelineView(.periodic(from: .now, by: 0.5)) { context in
                     let f = queue.seamFraction(now: context.date) ?? 0
                     GeometryReader { geo in
@@ -251,14 +311,13 @@ struct PaneSeam: View {
                         let fill = max(12, length * f)
                         let light = Capsule()
                             .fill(LinearGradient(
-                                colors: [CobaltColor.success.opacity(0.25), CobaltColor.success],
+                                colors: [CobaltColor.success.opacity(0.25), CobaltColor.success.opacity(0.8)],
                                 startPoint: vertical ? .top : .trailing, endPoint: vertical ? .bottom : .leading))
-                            .shadow(color: CobaltColor.success.opacity(0.8), radius: 5)
                         if vertical {
-                            light.frame(width: 3, height: fill)
+                            light.frame(width: 2, height: fill)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         } else {
-                            light.frame(width: fill, height: 3)
+                            light.frame(width: fill, height: 2)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                         }
                     }

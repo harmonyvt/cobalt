@@ -150,7 +150,6 @@ private struct LinkPaneHero: View {
     let model: AppModel
 
     @Environment(\.paneShape) private var shape
-    @Environment(\.paneHeaderHeight) private var headerHeight
     @Environment(Pane.self) private var pane: Pane?
 
     var body: some View {
@@ -185,8 +184,8 @@ private struct LinkPaneHero: View {
                 meta: entry.meta, warning: entry.warningText))
             .accessibilityHint(entry.post == nil ? "" : Copy.LinkEdit.openPostHint)
         }
-        .padding(.top, headerHeight)
-        .padding([.horizontal, .bottom], 12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 }
 

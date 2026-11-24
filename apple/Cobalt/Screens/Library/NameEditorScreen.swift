@@ -42,7 +42,6 @@ struct NamePage: View {
 
     @Environment(Pane.self) private var pane
     @Environment(\.paneShape) private var shape
-    @Environment(\.paneHeaderHeight) private var headerHeight
     @State private var failed = false
     @State private var confirmingDelete = false
 
@@ -120,16 +119,24 @@ struct NamePage: View {
     }
 
     /// The name's example pictures, fanned, over a quiet field (nothing in a bar: a name is never running).
+    @ViewBuilder
     private func hero(_ editor: SearchNameEditor) -> some View {
         let keys = Array(editor.posts(marked: .yes).prefix(6).map(\.key))
-        return ZStack {
+        let stage = ZStack {
             CobaltColor.surface
             NameStack(model: model, keys: keys)
                 .scaleEffect(1.5)
         }
         .frame(height: 120)
-        .padding(.top, shape == .tall ? headerHeight : 0)
-        .background(CobaltColor.surface)
+
+        if shape == .tall {
+            stage
+                .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+        } else {
+            stage
+        }
     }
 
     /// Save, with the model's own problem line (what the old save bar said).

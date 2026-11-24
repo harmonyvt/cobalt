@@ -70,39 +70,51 @@ struct PaneHost<Content: View>: View {
         let placement = self.placement
         let inline = self.inline
         let spanned = pane.state == .span
-        PaneSplitLayout(placement: placement, spanned: spanned) {
-            content
-                .layoutValue(key: PaneRoleKey.self, value: .tab)
-                .accessibilityHidden(inline && spanned)
-            if inline, let item = pane.item {
-                PaneChrome(model: model, item: item, shape: inlineShape(placement, spanned: spanned),
-                           hinge: inlineHinge(placement, spanned: spanned))
-                    .layoutValue(key: PaneRoleKey.self, value: .pane)
-                    .accessibilitySortPriority(1)            // reading order: the pane first
-                    .transition(transition(placement))
+        // The tab stays in its own un-animated layout slot, anchored to its trailing (or bottom) edge, so opening or
+        // closing the pane resizes `UITabBarController` / `UINavigationController` in a single atomic pass. Animating
+        // the tab's frame across 60 fps caused subpixel trailing-edge jitter that made iOS 27 Duo's right chrome rail
+        // repeatedly detach and re-dock the navigation bar buttons on every frame. The pane and seam animate in an
+        // overlay above the tab so the pane still slides smoothly from the leading/top edge and spans cleanly over it.
+        ZStack(alignment: .topLeading) {
+            PaneTabLayout(placement: placement, hasPane: inline) {
+                content
+                    .accessibilityHidden(inline && spanned)
             }
-            if inline, showsSeam(placement, spanned: spanned) {
-                PaneSeam(queue: model.queue, axis: seamAxis(placement))
-                    .layoutValue(key: PaneRoleKey.self, value: .seam)
-                    .transition(.opacity)
+            PaneOverlayLayout(placement: placement, spanned: spanned) {
+                if inline, let item = pane.item {
+                    PaneChrome(model: model, item: item, shape: inlineShape(placement, spanned: spanned),
+                               hinge: inlineHinge(placement, spanned: spanned))
+                        .layoutValue(key: PaneRoleKey.self, value: .pane)
+                        .accessibilitySortPriority(1)            // reading order: the pane first
+                        .transition(transition(placement))
+                }
+                if inline, showsSeam(placement, spanned: spanned) {
+                    PaneSeam(queue: model.queue, axis: seamAxis(placement), showingJobID: showingJobID)
+                        .layoutValue(key: PaneRoleKey.self, value: .seam)
+                        .transition(.opacity)
+                }
             }
+            .accessibilitySortPriority(1)
+            .motion(Motion.pane, value: LayoutKey(inline: inline, state: pane.state, placement: placement))
         }
-        .motion(Motion.card, value: LayoutKey(inline: inline, state: pane.state, placement: placement))
+        .cobaltPage()
         .hapticChange(.impact(weight: .light), trigger: inline ? placement.name : "off") { old, new in
             old != "off" && new != "off"                    // a posture change settling the pane somewhere new
         }
-        // Measured as if the keyboard were down: the keyboard takes height, and a Duo open wide (about 951 x 669) less a
-        // keyboard is under `phoneWideMinHeight`, so typing in the tab beside the pane (twitch chat) flipped the placement to
-        // compact and threw the pane up as a sheet. The window only changes shape on a fold, a rotation or a resize.
+        // Measured as if the keyboard were down: `.onGeometryChange` must sit INSIDE `.ignoresSafeArea(.keyboard)`
+        // because `.ignoresSafeArea` only expands its child and reports the keyboard-shrunk size outward. A Duo open
+        // wide (about 951 x 669) less a keyboard falls under `phoneWideMinHeight`, and a Duo open tall less a keyboard
+        // falls under `height > width`, which flipped placement to `.compact` and threw the pane up as a sheet when
+        // typing in twitch chat. The window only changes shape on a fold, a rotation or a resize.
         .background {
             Color.clear
-                #if os(iOS)
-                .ignoresSafeArea(.keyboard)
-                #endif
                 .onGeometryChange(for: CGSize.self) { $0.size } action: {
                     size = $0
                     pane.measure($0)
                 }
+                #if os(iOS)
+                .ignoresSafeArea(.keyboard)
+                #endif
         }
         .onChange(of: placement, initial: true) { _, now in if measured { pane.place(now) } }
         .onAppear {
@@ -149,6 +161,13 @@ struct PaneHost<Content: View>: View {
     private func seamAxis(_ placement: PanePlacement) -> PanePlacement.Axis {
         if case .twoScreens(let axis, _) = placement { return axis }
         return .vertical
+    }
+
+    private var showingJobID: UUID? {
+        switch pane.item {
+        case .save(let id), .job(let id): return UUID(uuidString: id)
+        default: return nil
+        }
     }
 
     private func transition(_ placement: PanePlacement) -> AnyTransition {
@@ -285,15 +304,51 @@ private struct PaneCover: View {
 
 // MARK: layout
 
-private enum PaneRole: Sendable { case tab, pane, seam }
+private enum PaneRole: Sendable { case pane, seam }
 
 private struct PaneRoleKey: LayoutValueKey {
-    static let defaultValue: PaneRole = .tab
+    static let defaultValue: PaneRole = .pane
 }
 
-/// Places the tab, the pane and the hairline for a placement. The tab always stays the first subview, so folding,
-/// unfolding and opening the pane never rebuild it (its navigation stacks, scroll and selection survive).
-private struct PaneSplitLayout: Layout {
+/// Places the tab alone, un-animated and anchored to its stationary edge (trailing for a vertical hinge or column,
+/// bottom for a horizontal hinge). The tab always stays the sole subview here, so folding, unfolding and opening the
+/// pane never rebuild it (its navigation stacks, scroll and selection survive).
+private struct PaneTabLayout: Layout {
+    var placement: PanePlacement
+    var hasPane: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let tabView = subviews.first else { return }
+        var size = bounds.size
+        if hasPane {
+            switch placement {
+            case .twoScreens(axis: .vertical, hinge: let hinge):
+                size.width = bounds.width - min(max(hinge, 0), bounds.width)
+            case .twoScreens(axis: .horizontal, hinge: let hinge):
+                size.height = bounds.height - min(max(hinge, 0), bounds.height)
+            case .column(let width):
+                size.width = bounds.width - min(width, bounds.width)
+            case .compact:
+                break
+            }
+        }
+        switch placement {
+        case .twoScreens(axis: .horizontal, hinge: _):
+            tabView.place(at: CGPoint(x: bounds.minX, y: bounds.maxY), anchor: .bottomLeading, proposal: ProposedViewSize(size))
+        case .twoScreens(axis: .vertical, hinge: _), .column:
+            tabView.place(at: CGPoint(x: bounds.maxX, y: bounds.minY), anchor: .topTrailing, proposal: ProposedViewSize(size))
+        case .compact:
+            tabView.place(at: bounds.origin, proposal: ProposedViewSize(size))
+        }
+    }
+}
+
+/// Places the pane and the hairline over the leading (or top) half of `PaneHost`, or across the whole host when spanned.
+private struct PaneOverlayLayout: Layout {
     var placement: PanePlacement
     var spanned: Bool
 
@@ -302,40 +357,32 @@ private struct PaneSplitLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let hasPane = subviews.contains { $0[PaneRoleKey.self] == .pane }
-        var tab = bounds
+        guard !subviews.isEmpty else { return }
         var paneRect = bounds
         // the line: its centre and whether it runs top to bottom
         var seam: (center: CGPoint, vertical: Bool, length: CGFloat)?
 
-        if hasPane {
-            switch placement {
-            case .twoScreens(axis: .vertical, hinge: let hinge):
-                let x = min(max(hinge, 0), bounds.width)
-                paneRect = CGRect(x: bounds.minX, y: bounds.minY, width: x, height: bounds.height)
-                tab = CGRect(x: bounds.minX + x, y: bounds.minY, width: bounds.width - x, height: bounds.height)
-                seam = (CGPoint(x: bounds.minX + x, y: bounds.midY), true, bounds.height)
-            case .twoScreens(axis: .horizontal, hinge: let hinge):
-                let y = min(max(hinge, 0), bounds.height)
-                paneRect = CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: y)
-                tab = CGRect(x: bounds.minX, y: bounds.minY + y, width: bounds.width, height: bounds.height - y)
-                seam = (CGPoint(x: bounds.midX, y: bounds.minY + y), false, bounds.width)
-            case .column(let width):
-                let w = min(width, bounds.width)
-                paneRect = CGRect(x: bounds.minX, y: bounds.minY, width: w, height: bounds.height)
-                tab = CGRect(x: bounds.minX + w, y: bounds.minY, width: bounds.width - w, height: bounds.height)
-                seam = spanned ? nil : (CGPoint(x: bounds.minX + w, y: bounds.midY), true, bounds.height)
-            case .compact:
-                break
-            }
-            // spanned: the page has the whole area; the tab keeps its room underneath, covered
-            if spanned { paneRect = bounds }
+        switch placement {
+        case .twoScreens(axis: .vertical, hinge: let hinge):
+            let x = min(max(hinge, 0), bounds.width)
+            paneRect = CGRect(x: bounds.minX, y: bounds.minY, width: x, height: bounds.height)
+            seam = (CGPoint(x: bounds.minX + x, y: bounds.midY), true, bounds.height)
+        case .twoScreens(axis: .horizontal, hinge: let hinge):
+            let y = min(max(hinge, 0), bounds.height)
+            paneRect = CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: y)
+            seam = (CGPoint(x: bounds.midX, y: bounds.minY + y), false, bounds.width)
+        case .column(let width):
+            let w = min(width, bounds.width)
+            paneRect = CGRect(x: bounds.minX, y: bounds.minY, width: w, height: bounds.height)
+            seam = spanned ? nil : (CGPoint(x: bounds.minX + w, y: bounds.midY), true, bounds.height)
+        case .compact:
+            break
         }
+        // spanned: the page has the whole area; the tab keeps its room underneath, covered
+        if spanned { paneRect = bounds }
 
         for subview in subviews {
             switch subview[PaneRoleKey.self] {
-            case .tab:
-                subview.place(at: tab.origin, proposal: ProposedViewSize(tab.size))
             case .pane:
                 subview.place(at: paneRect.origin, proposal: ProposedViewSize(paneRect.size))
             case .seam:

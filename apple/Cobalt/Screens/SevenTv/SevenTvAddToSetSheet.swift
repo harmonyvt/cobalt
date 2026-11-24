@@ -336,6 +336,7 @@ struct SevenTvAddToSetPage: View {
 /// The page of a made picker: the emote as the hero, the channels and the last result as the controls, the sets as the body.
 private struct SevenTvAddToSetPicked: View {
     @State private var flow: SevenTvAddToSetFlow
+    @Environment(\.paneShape) private var shape
 
     init(picker: SevenTvAddToSetModel) {
         _flow = State(initialValue: SevenTvAddToSetFlow(picker: picker))
@@ -345,13 +346,7 @@ private struct SevenTvAddToSetPicked: View {
 
     var body: some View {
         PanePage(title: picker.emote.name, subtitle: Copy.SevenTv.addToSetTitle) {
-            ZStack {
-                CobaltColor.surface
-                EmotePicture(url: picker.pending ? nil : picker.emote.previewURL, animated: picker.emote.animated, side: 160)
-                    .padding(24)
-            }
-            .frame(minHeight: 200)
-            .accessibilityHidden(true)
+            emoteHero
         } controls: {
             VStack(alignment: .leading, spacing: 10) {
                 if picker.channels.isEmpty {
@@ -373,6 +368,26 @@ private struct SevenTvAddToSetPicked: View {
             }
         }
         .modifier(SevenTvAddToSetPresentations(flow: flow))
+    }
+
+    @ViewBuilder
+    private var emoteHero: some View {
+        let stage = ZStack {
+            CobaltColor.surface
+            EmotePicture(url: picker.pending ? nil : picker.emote.previewURL, animated: picker.emote.animated, side: 160)
+                .padding(20)
+        }
+        .frame(minHeight: 180)
+        .accessibilityHidden(true)
+
+        if shape == .tall {
+            stage
+                .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+        } else {
+            stage
+        }
     }
 }
 

@@ -12,7 +12,6 @@ struct QueueJobPage: View {
 
     @Environment(Pane.self) private var pane
     @Environment(\.paneShape) private var shape
-    @Environment(\.paneHeaderHeight) private var headerHeight
 
     private var item: PaneItem { .job(id) }
 
@@ -38,7 +37,7 @@ struct QueueJobPage: View {
     private func page(_ job: Job) -> some View {
         let facts = JobCardFacts(job: job, lineMax: model.capabilities.limits.lineMax, lineMode: model.queue.lineMode)
         return PanePage(
-            title: facts.title, subtitle: facts.headline, progress: facts.showsBar ? facts.fraction : nil
+            title: facts.title, subtitle: facts.headline, progress: shape == .bar && facts.showsBar ? facts.fraction : nil
         ) {
             hero(facts)
         } controls: {
@@ -63,16 +62,23 @@ struct QueueJobPage: View {
 
     @ViewBuilder
     private func hero(_ facts: JobCardFacts) -> some View {
-        ZStack {
+        let badge = ZStack {
             CobaltColor.surface
             Image(systemName: glyph(facts))
-                .font(.system(size: shape == .bar ? 18 : 40, weight: shape == .bar ? .semibold : .light))
+                .font(.system(size: shape == .bar ? 18 : 36, weight: shape == .bar ? .semibold : .light))
                 .foregroundStyle(facts.kind == .failed ? CobaltColor.errorText : CobaltColor.text)
                 .accessibilityHidden(true)
         }
-        .frame(maxHeight: shape == .bar ? nil : 200)
-        .padding(.top, shape == .tall ? headerHeight : 0)
-        .background(CobaltColor.surface)
+        if shape == .tall {
+            badge
+                .frame(height: 140)
+                .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+        } else {
+            badge
+                .frame(maxHeight: shape == .bar ? nil : 200)
+        }
     }
 
     @ViewBuilder

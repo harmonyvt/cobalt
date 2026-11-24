@@ -44,7 +44,7 @@ struct HeroFullScreenButton: View {
 }
 
 enum DetailSymbol {
-    static let fullScreen = "arrow.up.left.and.arrow.down.right"
+    static let fullScreen = "viewfinder"
 }
 
 extension View {

@@ -11,6 +11,7 @@ struct BooruPostPage: View {
     let id: Int
 
     @Environment(Pane.self) private var pane: Pane?
+    @Environment(\.paneShape) private var shape
     @Environment(\.openURL) private var openURL
     @State private var saved = false
     @State private var hiddenTags: Set<String> = []
@@ -54,10 +55,7 @@ struct BooruPostPage: View {
     private func page(_ post: BooruPost) -> some View {
         PanePage(
             title: post.tags.character.first?.replacingOccurrences(of: "_", with: " ") ?? Copy.Booru.title,
-            subtitle: Copy.Booru.size(post.width, post.height, post.ext),
-            actions: [
-                PaneAction(Copy.Booru.openDanbooru, systemImage: Symbol.Booru.open) { openURL(post.pageUrl) },
-            ]
+            subtitle: Copy.Booru.size(post.width, post.height, post.ext)
         ) {
             picture(post)
         } controls: {
@@ -82,8 +80,9 @@ struct BooruPostPage: View {
         }
     }
 
+    @ViewBuilder
     private func picture(_ post: BooruPost) -> some View {
-        ZStack {
+        let image = ZStack {
             LinearGradient(colors: [CobaltColor.frameTop, CobaltColor.frameBottom], startPoint: .top, endPoint: .bottom)
             AsyncImage(url: post.sampleUrl) { phase in
                 if let image = phase.image {
@@ -94,7 +93,18 @@ struct BooruPostPage: View {
             }
             .mediaMask()
         }
-        .aspectRatio(max(0.4, min(post.aspect, 2.5)), contentMode: .fit)
+        if shape == .tall {
+            image
+                .aspectRatio(max(0.4, min(post.aspect, 2.5)), contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .frame(maxHeight: 280)
+                .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+        } else {
+            image
+                .aspectRatio(max(0.4, min(post.aspect, 2.5)), contentMode: .fit)
+        }
     }
 
     private func info(_ post: BooruPost) -> some View {
