@@ -10,82 +10,8 @@ import Foundation
 /// `Copy.failure`, `Copy.keepVideos`, `Copy.remove`, `Copy.keep`).
 extension Copy {
     enum Live {
-        /// The stage line of the expanded island and the lock screen card.
-        /// `origin` "share": a done state with no link is an instant share the server saved (APP-API-CONTRACT 8.10).
-        static func stage(_ s: LiveContentState, service: String?, origin: String = "app") -> String {
-            switch s.stage {
-            case .fetching:
-                return Copy.fetching(from: service.flatMap { $0 == "file" || $0.isEmpty ? nil : $0 })
-            case .uploading: return Copy.uploading
-            case .saving: return Copy.savingPrivately
-            case .reading: return Copy.reading
-            case .ready: return ready
-            case .rendering:
-                if s.packing { return Copy.packing }
-                return s.framesTotal != nil ? Copy.decoding : Copy.makingWebp
-            case .done:
-                if s.resultURL != nil { return Copy.webpReady }
-                return origin == "share" ? savedToLibrary : savedLocal
-            case .failed: return failure(s)
-            }
-        }
-
-        static let ready = "ready to trim"                                                    // new
-        /// Plain cobalt, local mode: the clip was saved on this device and there is no link.
-        static var savedLocal: String { "saved on this \(Copy.device)" }                       // new
-        /// An instant share's save, now in the library (no link: nothing was made from it).
-        static let savedToLibrary = "saved to capystore"                                      // new
-        static let waitingForCobalt = "waiting for capystore…"                                   // new
         static let open = "open"                                                              // new
         static let copyLink = "copy link"
-        static let linkCopied = "link copied"
-
-        /// The existing failure text for the case the activity carries (it holds the case name and the
-        /// server's code, not the enum). Two lines at most in the widget.
-        static func failure(_ s: LiveContentState) -> String {
-            let code = s.code ?? ""
-            switch s.failure {
-            case "noLink": return Copy.failure(.noLink)
-            case "tooLarge": return "that file is over the size limit."                       // new (the limit is not in the state)
-            case "fetchFailed": return Copy.failure(.fetchFailed(code: code))
-            case "linkUnreadable": return Copy.failure(.linkUnreadable(code: code))
-            case "unsupported": return Copy.failure(.unsupported)
-            case "serverBusy": return Copy.failure(.serverBusy)
-            case "renderBusy": return Copy.failure(.renderBusy)
-            case "renderLost": return Copy.failure(.renderLost)
-            case "expired": return Copy.failure(.expired)
-            case "keyMissing": return Copy.failure(.keyMissing)
-            case "keyInvalid": return Copy.failure(.keyInvalid)
-            case "unreachable": return Copy.failure(.unreachable)
-            default: return Copy.failure(.server(code: code))
-            }
-        }
-
-        /// "instagram · Dd7P496wolG", or the file's name for a file.
-        static func source(service: String, ref: String, input: String) -> String {
-            if input == "file" || service == "file" || service.isEmpty { return ref }
-            return ref.isEmpty ? service : "\(service) · \(ref)"
-        }
-
-        /// "480×854 · 10.1 s · 4.5 MB": the finished webp.
-        static func result(_ s: LiveContentState) -> String? {
-            var parts: [String] = []
-            if let w = s.resultWidth, let h = s.resultHeight { parts.append(Format.size(w, h)) }
-            if let t = s.resultSeconds { parts.append(Format.seconds(t)) }
-            if let b = s.resultBytes { parts.append(Format.bytes(b)) }
-            return parts.isEmpty ? nil : parts.joined(separator: " · ")
-        }
-
-        /// The link without its scheme: "media.capybaraharmony.com/PrEvIeW001.webp".
-        static func link(_ url: String) -> String {
-            for scheme in ["https://", "http://"] where url.hasPrefix(scheme) { return String(url.dropFirst(scheme.count)) }
-            return url
-        }
-
-        /// Spoken summary of the whole activity (VoiceOver on the Lock Screen).
-        static func a11y(_ s: LiveContentState, service: String?, metric: String?) -> String {
-            [stage(s, service: service), metric].compactMap { $0 }.joined(separator: ", ")
-        }
 
         // settings row (2.8)
         static let row = "live activity"                                                      // new

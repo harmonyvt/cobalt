@@ -216,9 +216,7 @@ struct FocusLayer: View {
     /// The server can crop (`features.crop`); `-previewCrop YES` shows the button over a preview scenario
     /// that does not say so (the preview server's capabilities are CobaltKit's).
     private var serverCrops: Bool {
-        #if DEBUG
-        if UserDefaults.standard.bool(forKey: "previewCrop") { return true }
-        #endif
+        if DebugPreviewFlags.cropButton { return true }
         return capabilities.crop
     }
 
@@ -298,9 +296,7 @@ struct FocusLayer: View {
 
     /// The edge sweep runs while hosting (`-previewSweepHold YES` holds it on for design review).
     private var heroSharing: Bool {
-        #if DEBUG
-        if UserDefaults.standard.bool(forKey: "previewSweepHold") { return true }
-        #endif
+        if DebugPreviewFlags.sweepHold { return true }
         return isHosting
     }
 
@@ -519,118 +515,8 @@ struct FocusLayer: View {
                 withAnimation(reduceMotion ? Motion.fade : FocusMotion.content) { showsTrim = true }
             }
         }
-        #if DEBUG
-        // `-previewAutoClose 3`: close the focused planet 3 s after it has lifted (evidence of the return trip).
-        .task(id: lifted) {
-            let secs = UserDefaults.standard.double(forKey: "previewAutoClose")
-            guard secs > 0, lifted else { return }
-            try? await Task.sleep(for: .seconds(secs))
-            if !Task.isCancelled { onClose() }
-        }
-        // `-previewConvert 2 -previewMake 3 -previewCopy 2`: press "convert to webp" 2 s after the planet has
-        // lifted, then (a clip over 10 s: the trim strip is up) "make webp" 3 s later, then the copy button
-        // 2 s after the webp has landed (evidence of the convert phase without a finger on the glass).
-        .task(id: lifted) {
-            let d = UserDefaults.standard
-            let after = d.double(forKey: "previewConvert")
-            guard after > 0, lifted else { return }
-            try? await Task.sleep(for: .seconds(after))
-            guard !Task.isCancelled else { return }
-            convert()
-            let make = d.double(forKey: "previewMake")
-            guard make > 0 else { return }
-            try? await Task.sleep(for: .seconds(make))
-            if !Task.isCancelled, showsTrim { pipeline.makeWebp() }
-        }
-        .task(id: hasWebp) {
-            let after = UserDefaults.standard.double(forKey: "previewCopy")
-            guard after > 0, hasWebp else { return }
-            try? await Task.sleep(for: .seconds(after))
-            if !Task.isCancelled { pipeline.copyResultLink(); flash($copiedWebp) }
-        }
-        // `-previewCrop YES -previewCropOpen 1 -previewCropPreset 1:1 -previewCropDone 2 -previewCropMake 2`: once the
-        // trim strip is up (a clip that fits a webp: once the planet has lifted) open the crop editor after 1 s,
-        // pick the preset, press "done" 2 s later and "make webp" 2 s after that. The same functions the buttons
-        // call; the gestures themselves are driven by hand.
-        .task(id: "\(lifted)\(showsTrim)") {
-            let d = UserDefaults.standard
-            let after = d.double(forKey: "previewCropOpen")
-            guard after > 0, lifted, showsTrim || !isLong else { return }
-            try? await Task.sleep(for: .seconds(after))
-            guard !Task.isCancelled, cropEditor == nil else { return }
-            openCrop()
-            if let label = d.string(forKey: "previewCropPreset"), let preset = CropRect.Aspect.allCases.first(where: { $0.label == label }) {
-                try? await Task.sleep(for: .milliseconds(600))
-                withAnimation(Motion.rows) { cropEditor?.choose(preset) }
-            }
-            let done = d.double(forKey: "previewCropDone")
-            guard done > 0 else { return }
-            try? await Task.sleep(for: .seconds(done))
-            guard !Task.isCancelled else { return }
-            finishCrop()
-            let make = d.double(forKey: "previewCropMake")
-            guard make > 0 else { return }
-            try? await Task.sleep(for: .seconds(make))
-            if !Task.isCancelled { pipeline.makeWebp() }
-        }
-        // A gallery's drivers (evidence without a finger on the glass; the same functions the buttons call):
-        // `-previewGallerySheet webp|mp4|image` opens the combine sheet with that output once the planet has lifted;
-        // `-previewGalleryMake webp|mp4|image -previewGalleryMakeAt 2` chooses that make N s after the lift, the way
-        // the sheet does (`Pipeline.make`, held until the save is over); `-previewGalleryRetry 1` presses
-        // `try photo 7 again` N s after the save ended with a failure.
-        .task(id: lifted) {
-            let d = UserDefaults.standard
-            guard lifted, isGallery else { return }
-            if let raw = d.string(forKey: "previewGallerySheet"), let kind = GalleryMakeKind(rawValue: raw) {
-                try? await Task.sleep(for: .seconds(max(0.5, d.double(forKey: "previewGallerySheetAt"))))
-                if !Task.isCancelled { makeKind = kind }
-            }
-        }
-        .task(id: lifted) {
-            let d = UserDefaults.standard
-            guard lifted, isGallery, let raw = d.string(forKey: "previewGalleryMake"), let kind = GalleryMakeKind(rawValue: raw) else { return }
-            try? await Task.sleep(for: .seconds(d.double(forKey: "previewGalleryMakeAt")))
-            guard !Task.isCancelled else { return }
-            let items = pipeline.galleryItems
-            let ids = items.map(\.id)
-            switch kind {
-            case .webp: await pipeline.make(.slideshow(SlideshowPlan(format: .webp, items: ids)))
-            case .mp4: await pipeline.make(.slideshow(SlideshowPlan(format: .mp4, items: ids)))
-            case .image: await pipeline.make(.image(GalleryImagePlan(items: items.filter(\.isPhoto).map(\.id))))
-            }
-        }
-        .task(id: galleryBeat) {
-            let after = UserDefaults.standard.double(forKey: "previewGalleryRetry")
-            guard after > 0, galleryBeat == "saved", galleryFacts?.failed.isEmpty == false else { return }
-            try? await Task.sleep(for: .seconds(after))
-            if !Task.isCancelled { retryGalleryItems() }
-        }
-        // `-previewGalleryRemake 1`: presses the make's `try again` N s after a make failed.
-        .task(id: galleryBeat) {
-            let after = UserDefaults.standard.double(forKey: "previewGalleryRemake")
-            guard after > 0, galleryBeat.contains("makefail") else { return }
-            try? await Task.sleep(for: .seconds(after))
-            if !Task.isCancelled { remake() }
-        }
-        // `-previewGalleryOpen 1`: presses `open` N s after the gallery is saved (the detail of its media over the focus).
-        .task(id: galleryBeat) {
-            let after = UserDefaults.standard.double(forKey: "previewGalleryOpen")
-            guard after > 0, galleryBeat == "saved", galleryFacts?.failed.isEmpty == true else { return }
-            try? await Task.sleep(for: .seconds(after))
-            if !Task.isCancelled { openGallery() }
-        }
-        // `-previewShimmerLoop YES` / `-previewPulseLoop YES`: replay the shimmer or the failure pulse every
-        // 2.2 s so a screenshot can catch them mid-flight (design review only).
-        .task {
-            let d = UserDefaults.standard
-            guard d.bool(forKey: "previewShimmerLoop") || d.bool(forKey: "previewPulseLoop") else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(2200))
-                if d.bool(forKey: "previewShimmerLoop") { shimmer += 1 }
-                if d.bool(forKey: "previewPulseLoop") { pulse += 1 }
-            }
-        }
-        #endif
+        // `-preview*` launch-argument automation (debug builds; Debug/PreviewAutomationModifiers.swift)
+        .debugFocusAutomation(automation)
         .haptic(.success, trigger: shimmer, enabled: haptics) { $0 > 0 }
         .haptic(.error, trigger: pulse, enabled: haptics) { $0 > 0 }
         .haptic(.success, trigger: copiedWebp, enabled: haptics) { $0 }
@@ -915,6 +801,33 @@ struct FocusLayer: View {
     private func copyVideo(_ url: URL, _ form: LinkForm) {
         Pasteboard.copy(link(url, form))
         flash(form == .share ? $copiedLink : $copiedLinkDirect)
+    }
+
+    /// What the `-preview*` launch-argument automation reads and drives (`.debugFocusAutomation`; nothing in release).
+    private var automation: FocusAutomationHooks {
+        FocusAutomationHooks(
+            pipeline: pipeline,
+            lifted: lifted,
+            showsTrim: showsTrim,
+            hasWebp: hasWebp,
+            galleryBeat: galleryBeat,
+            onClose: { onClose() },
+            trimIsShown: { showsTrim },
+            isLong: { isLong },
+            isGallery: { isGallery },
+            galleryFailedIsEmpty: { galleryFacts?.failed.isEmpty },
+            hasCropEditor: { cropEditor != nil },
+            convert: { convert() },
+            openCrop: { openCrop() },
+            finishCrop: { finishCrop() },
+            chooseCropPreset: { cropEditor?.choose($0) },
+            setMakeKind: { makeKind = $0 },
+            retryGalleryItems: { retryGalleryItems() },
+            remake: { remake() },
+            openGallery: { openGallery() },
+            flashCopiedWebp: { flash($copiedWebp) },
+            bumpShimmer: { shimmer += 1 },
+            bumpPulse: { pulse += 1 })
     }
 
     private func flash(_ flag: Binding<Bool>) {

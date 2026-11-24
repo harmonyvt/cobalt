@@ -1,7 +1,6 @@
 import Foundation
 import Network
 import Synchronization
-import SyncGlowKit
 
 /// Notes from a pass. The engine appends and returns; it does not wait on the main actor. `Mutex`
 /// stays inside this class, so the callback captures a reference.
@@ -52,17 +51,20 @@ final class LibrarySync {
     private var connected = false
     /// The route fell back and today's loading has not been started for it yet.
     private var owesLegacyLoad = false
-    /// The last pull did not reach the server, and the glow was told so.
-    private var pullOffline = false
+    /// The server's code for the last refusal or failed pull in the inbox, handed to the status when
+    /// the activity that follows it is read (the engine appends the failure, then the signal).
+    private var failureCode: String?
     /// Engine callbacks append here and return. They do not hop to the main actor: a pass that
     /// waited on the main actor (the caller of `kick`) stalled for seconds, and a nudge set just
     /// before that wait was already "over" by the time the pass began.
     private let inbox = SyncInbox()
+    /// The drain of the inbox that is running now, if any.
+    private var flushing: Task<Void, Never>?
     /// False after `GET /sync` answers 404, or fails (a 503, a 500) with nothing on the device to show.
     /// Today's library loading takes over for this launch.
     private(set) var isActive = true
-    /// What the sync glow draws. Updated as passes start and end; it does not decide them.
-    let status = SyncGlowStatus()
+    /// What the library sync is doing. Updated as passes start and end; it does not decide them.
+    let status = SyncStatusTracker()
     var onApply: (@MainActor (SyncLibrarySnapshot, String) -> Void)?
     /// The route is missing and the cache, if any, must not be the only copy the screen keeps.
     /// Called once for every fallback, whichever pass it happened in.
@@ -140,9 +142,7 @@ final class LibrarySync {
     }
 
     /// The ChangeFeed socket will call this. The nudge carries no rows; the pull does.
-    /// The glow plays one pulse along its edge, then the same pass as any other kick.
     func nudge() async {
-        status.nudged()
         await kick(.nudge)
     }
 
@@ -251,7 +251,21 @@ final class LibrarySync {
     /// Applies what the pass recorded. `kick` calls this before it returns, so the screen and the
     /// glow match the pass with no extra hop. A retry the engine starts on its own has no `kick`,
     /// so the callback also asks for a flush; draining twice is empty the second time.
+    ///
+    /// One drain at a time: applying an item can wait (the cursor is read from the store), so a second
+    /// caller that drained meanwhile would find the inbox empty and return before the first had
+    /// written the status. It waits for the drain in flight, then drains what is left.
     private func flushInbox() async {
+        while let running = flushing { await running.value }
+        let drain = Task { @MainActor [weak self] in
+            await self?.drainInbox()
+            self?.flushing = nil
+        }
+        flushing = drain
+        await drain.value
+    }
+
+    private func drainInbox() async {
         for item in inbox.drain() {
             switch item {
             case .snapshot(let snapshot, let source):
@@ -261,47 +275,40 @@ final class LibrarySync {
             case .acknowledged(let op, let receipt):
                 await acknowledge(op, receipt)
             case .refused(let op, let reason):
+                failureCode = reason
                 refuse(op, reason: reason)
             case .pullFailed(let error):
+                failureCode = SyncStatusReducer.code(of: error)
                 onPullFailure?(error)
             case .activity(let signal):
-                receive(signal)
+                await receive(signal)
             }
         }
     }
 
-    private func receive(_ signal: SyncActivity) {
+    private func receive(_ signal: SyncActivity) async {
         switch signal {
         case .passBegan:
             status.passBegan()
         case .passEnded(let pending):
-            status.passEnded(pending: pending)
+            status.passEnded(pending: pending, cursor: await store.cursor())
         case .refused(let pending):
-            status.refused(pending: pending)
+            status.refused(pending: pending, code: takeFailureCode())
         case .repull:
             status.repullBegan()
         case .fellBack:
             status.routeFellBack()
         case .pulled:
-            // the server answered: an "offline" that came from a failed pull is over
-            guard pullOffline else { return }
-            pullOffline = false
-            status.reachability(true, pending: status.pendingCount)
+            status.pulled(cursor: await store.cursor())
         case .pullFailed(let offline):
-            // The glow has no state of its own for a pull that failed. Nothing reached the server:
-            // offline. The server answered and would not serve the pull: the refused flicker.
-            if offline {
-                pullOffline = true
-                status.reachability(false, pending: status.pendingCount)
-            } else {
-                // the server was reached this time: an "offline" left by an earlier pull is over
-                if pullOffline {
-                    pullOffline = false
-                    status.reachability(true, pending: status.pendingCount)
-                }
-                status.refused(pending: status.pendingCount)
-            }
+            // Nothing reached the server: offline. The server answered and would not serve the pull: an error.
+            status.pullFailed(offline: offline, code: takeFailureCode(), pending: status.pendingCount)
         }
+    }
+
+    private func takeFailureCode() -> String? {
+        defer { failureCode = nil }
+        return failureCode
     }
 
     private func noteReachable(_ up: Bool) async {

@@ -341,6 +341,11 @@ extension QueueDestination { case edit(projectID: String) }     // a new case; `
 
 ## 4. Screens
 
+> **2026-11-24 (Phase 1 de-slop):** `EditorScreen.swift`, `EditorTopBar.swift`, `EditorInspector.swift`, `EditorPreviewPane.swift`
+> and the iPhone files `Phone/EditorPhoneScreen.swift`, `EditorPhoneHeader.swift`, `EditorPhonePreview.swift`,
+> `EditorPhoneTools.swift`, `EditorPhoneClipSheet.swift` and `EditorPhoneOverlaySheet.swift` named in sections 4.3 to 4.5 were
+> deleted: `EditorRoot` mounts `EditorShell` on every platform. The text below is kept as written; read it as history.
+
 ### 4.1 Entry points
 
 - **Library select** (`LibrarySelectPill`): with `model.editor.isAvailable`, the action row gets `edit` (`EditPicksButton`, lane 5;

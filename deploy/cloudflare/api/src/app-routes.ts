@@ -221,8 +221,6 @@ export async function capabilities(
     key: string | undefined,
     // the three APNs secrets are configured (Live Activity push, section 8)
     livePush = false,
-    // the Hark webhook is configured (notification bridge, section 9)
-    notifyBridge = false,
     // the container's helper has said it has the slideshow routes (section 18.8): a Worker deployed ahead of the
     // container rollout must not advertise what an older helper image cannot do
     helperGallery = false,
@@ -275,7 +273,8 @@ export async function capabilities(
                 render_progress: true,
                 finishes_unpolled: true,
                 live_activity_push: livePush === true,
-                notify_bridge: notifyBridge === true,
+                // the Hark bridge is retired (Phase 1 de-slop): always false, kept on the wire so older clients decode
+                notify_bridge: false,
                 crop: true,
                 source_wait: true,
                 delete_post: true,

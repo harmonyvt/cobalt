@@ -168,7 +168,7 @@ real("the Durable Object against the real helper: the makes", () => {
         expect(rows(L, sid, "export")).toHaveLength(1);
     });
 
-    it("the share sheet's one request: save everything, then make the webp, ONE message (the public link)", async () => {
+    it("the share sheet's one request: save everything, then make the webp (public)", async () => {
         const L = await lineWorld({ helperFn: realHelper });
         const label = "x · @ilokineedsleep";
         const r = await saved(L, ["p0.jpg", "p1.jpg", "p2.jpg"], {
@@ -183,8 +183,8 @@ real("the Durable Object against the real helper: the makes", () => {
         expect(done.status).toBe("success");
         await L.sweeps(3);
         const row = rows(L, r.id, "slideshow")[0]!;
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toMatch(new RegExp(`^${label} · slideshow webp ready · 480×600 · [0-9.]+ [KM]B\\n${MEDIA_BASE}${row.public_key}$`));
+        expect(row.public_key).toBeTruthy();
+        expect(done).toMatchObject({ width: 480, height: 600 });
         const webp = parseWebp(Buffer.from(L.originals.objects.get(row.r2_key)!.bytes))!;
         expect(Math.abs(webp.durationMs - 6000)).toBeLessThanOrEqual(70);
     });
@@ -202,8 +202,6 @@ real("the Durable Object against the real helper: the makes", () => {
         expect(done).toMatchObject({ status: "success", width: 1080, height: 4050 });
         expect(rows(L, res.id, "item")).toHaveLength(3);
         await L.sweeps(3);
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toMatch(/^x · gallery image ready · 1080×4050 · /);
     });
 
     it("a webp over 60 s is refused before anything runs, and a 0.5 s photo slideshow is made", async () => {

@@ -41,7 +41,7 @@ import {
     type SlideshowInput,
     type SlideshowRun,
 } from "./line";
-import { NOTIFY_MAX_BODY_BYTES, isEmptyLineBody, parseOptIn, type LineOutcome, type MakeWhat, type NotifyHooks, type NotifyRenderEvent } from "./notify";
+import { NOTIFY_MAX_BODY_BYTES, isEmptyLineBody, parseOptIn } from "./notify-off";
 import { MAX_POSTER_BYTES, PosterService, POSTER_BATCH, type MediaStore } from "./poster";
 import { LOOP_KICK_MAX, LoopService, type ReadBucket } from "./loops";
 import { ABOUT_KICK_MAX, SAFETY_KICK_MAX, AboutProbeService } from "./about-probe";
@@ -79,13 +79,6 @@ export const RECENT_MAX = 25;
 const SHARE_PREFIX = "share:";
 type ShareRecord = { keyId: string; at: number };
 
-// What POST /studio needs of the Hark service: the very call `PUT /studio/<sid>/notify` makes
-// (NotifyService.put, notify.ts). A structural type so `NotifyHooks` stays as it is.
-type NotifyOptInCall = {
-    put(keyId: string, sid: string, raw: string): Promise<{ status: number; body: unknown }>;
-};
-const canOptIn = (n: unknown): n is NotifyOptInCall =>
-    typeof n === "object" && n !== null && typeof (n as { put?: unknown }).put === "function";
 export const MAX_SOURCE_BYTES = 200 * 1024 * 1024;
 export const MAX_BODY_BYTES = 8192;
 export const MAX_STUDIO_WAIT_SECONDS = 25;
@@ -120,9 +113,6 @@ export const SWEEP_SAVE_SLACK_MS = 60_000;
 // sleepAfter, so one hung item must never be able to hold the container awake.
 // (The pass as a whole is capped again in sweep.ts: SWEEP_PASS_MS.)
 export const SWEEP_ITEM_MS = 30_000;
-
-// One notification call (the webhook call inside is capped at 3 s by notify.ts).
-export const NOTIFY_CALL_MS = 5000;
 
 // The header the helper puts on every answer to say what it can do (helper/server.js HELPER_CAPS_HEADER)
 export const HELPER_CAPS_HEADER = "x-cobalt-helper";
@@ -829,10 +819,6 @@ export type StudioDeps = {
     // raced against `livePushMs` (LIVE_PUSH_MS): it can never fail or stall a poll.
     live?: LiveHooks;
     livePushMs?: number;
-    // Hark notification bridge (APP-API-CONTRACT.md section 9). Every call is awaited but raced
-    // against `notifyMs` (default NOTIFY_CALL_MS): it can never fail or stall a poll for long.
-    notify?: NotifyHooks;
-    notifyMs?: number;
     // The public bucket and its base URL (APP-API-CONTRACT.md section 13): server-made posters
     // and `public: true` hosting. Absent = both off (a save that asks for `public` ends with
     // public_state 'failed'; no poster jobs are queued).
@@ -1272,97 +1258,6 @@ export class StudioService {
         }
     }
 
-    // ---- Hark notification hooks (section 9) ------------------------------------------
-
-    // Awaited, raced against NOTIFY_CALL_MS, errors logged by label only: a hook that
-    // throws or hangs never fails or stalls the poll beyond that. (No error text: nothing
-    // from the webhook call may reach a log.)
-    private async notifyCall(label: string, fn: (n: NotifyHooks) => Promise<void>): Promise<void> {
-        const notify = this.d.notify;
-        if (!notify) return;
-        try {
-            await raceCeiling(
-                Promise.resolve().then(() => fn(notify)),
-                this.d.notifyMs ?? NOTIFY_CALL_MS,
-                `notify ${label}`,
-            );
-        } catch (e) {
-            console.error("[studio] notify failed:", label, e instanceof Error ? e.name : "error");
-        }
-    }
-
-    // The notification that follows from what renderStatus answered: a poll and the sweep
-    // reach it the same way, and the event's own record makes a repeat a no-op.
-    private async notifyRender(sid: string, job: string, reply: StudioReply): Promise<void> {
-        if (!this.d.notify || reply.status !== 200) return;
-        const b = reply.body as {
-            status?: unknown;
-            url?: unknown;
-            bytes?: unknown;
-            width?: unknown;
-            height?: unknown;
-            format?: unknown;
-            cropped?: unknown;
-            error?: { code?: unknown };
-        };
-        // a make's done answer says what it is (a slideshow's `format`, a gallery image's `cropped`); its link is absent
-        // while the post is private, and the message still goes
-        const what: MakeWhat | undefined =
-            b.format === "webp" ? "slideshow webp" : b.format === "mp4" ? "slideshow" : Array.isArray(b.cropped) ? "gallery image" : undefined;
-        let e: NotifyRenderEvent | null = null;
-        if (b.status === "success" && (typeof b.url === "string" || what)) {
-            e = {
-                kind: "success",
-                url: typeof b.url === "string" ? b.url : null,
-                bytes: finite(b.bytes),
-                width: finite(b.width),
-                height: finite(b.height),
-                ...(what ? { what } : {}),
-            };
-        } else if (b.status === "error" && typeof b.error?.code === "string") {
-            // a cancelled render (section 17.7) is the owner's own doing: no Hark message, however
-            // often it is polled again
-            if (b.error.code === "error.webp.cancelled") return;
-            const { suppress, ...made } = await this.failedMake(sid, job, b.error.code);
-            if (suppress) return;
-            e = { kind: "failed", code: b.error.code, ...made };
-        }
-        if (e) {
-            const ev = e;
-            await this.notifyCall("render", (n) => n.onRender(sid, job, ev));
-            await this.settleLine(sid, job, ev.kind === "success" ? { ...ev, kind: "rendered" } : ev);
-        }
-    }
-
-    // What a failed render was, when it was a make (18.12): its name, and for one asked for with its save how many items
-    // that save kept and (a webp over its cap) how long it would have been. Nothing for a webp of a clip. Never throws.
-    private async failedMake(sid: string, job: string, code: string): Promise<{ what?: MakeWhat; suppress?: boolean; chained?: { saved: number; length?: string | null } }> {
-        try {
-            const row = await getRender(this.d.db, sid, job);
-            if (!row || (row.kind !== "slideshow" && row.kind !== "gallery_image")) return {};
-            const plan = parseJsonObject(row.plan);
-            const what: MakeWhat = row.kind === "gallery_image" ? "gallery image" : plan?.format === "webp" ? "slideshow webp" : "slideshow";
-            if (plan?.chained !== true) return { what };
-            // its save failed: the save's own failure message went already (18.12: one message), whoever polls this job
-            if ((await getSession(this.d.db, sid))?.status !== "ready") return { what, suppress: true };
-            const rows = await this.makeRows(sid);
-            let length: string | null = null;
-            if (code === "error.webp.too_long" && what === "slideshow webp" && Array.isArray(plan.items) && Array.isArray(plan.seconds)) {
-                const byIndex = new Map(rows.map((r) => [r.item_index, r]));
-                let total = 0;
-                (plan.items as number[]).forEach((i, n) => {
-                    const sec = (plan.seconds as (number | null)[])[n];
-                    total += typeof sec === "number" ? sec : (byIndex.get(i)?.duration ?? 0);
-                });
-                const whole = Math.round(total);
-                length = `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
-            }
-            return { what, chained: { saved: rows.length, length } };
-        } catch {
-            return {};
-        }
-    }
-
     private async readJson(res: Response): Promise<any | null> {
         try {
             return await res.json();
@@ -1386,10 +1281,6 @@ export class StudioService {
         const p = this.lineChain.then(fn, fn);
         this.lineChain = p.catch(() => {});
         return p;
-    }
-
-    private async settleLine(sid: string, job: string | null, outcome: LineOutcome): Promise<void> {
-        await this.notifyCall("line settle", (n) => n.onLineSettle(sid, job, outcome));
     }
 
     // What holds the helper (17.2): a `save:` record; a render or /webp job record accepted within
@@ -1484,11 +1375,10 @@ export class StudioService {
         }
     }
 
-    // Ending a queued job is two steps so the line lock is never held across a notification: the
+    // Ending a queued job is two steps so the line lock is never held across a Live Activity push: the
     // row is marked first (`markEnd`, D1 only, safe under the lock; it is also what makes a poll that
     // races the removal of the entry see a finished session, never a startable one), then the hooks
-    // run (`endHooks`) once the lock is released. A `silent` end is the owner's doing (a cancel, a
-    // deleted post): no Hark message, and the line summary drops the member.
+    // run (`endHooks`) once the lock is released.
     private async markEnd(sid: string, job: string | null, code: string): Promise<boolean> {
         if (job === null) return await this.markError(sid, code);
         try {
@@ -1503,39 +1393,26 @@ export class StudioService {
         }
     }
 
-    private async endHooks(sid: string, job: string | null, code: string, silent: boolean, changed: boolean): Promise<void> {
+    private async endHooks(sid: string, job: string | null, code: string): Promise<void> {
         if (job === null) {
             await this.dropTitle(sid);
             this.progress.delete(sid);
             await this.liveCall("save failed", (l) => l.onSave(sid, { kind: "failed", code }));
-            if (!changed) return;
-            if (!silent) await this.notifyCall("save failed", (n) => n.onSaveFailed(sid, code));
-            await this.settleLine(sid, null, silent ? { kind: "cancelled" } : { kind: "failed", code });
             return;
         }
         this.encodes.delete(job);
         await this.liveRender(sid, job, { kind: "failed", code });
-        if (!changed) return;
-        if (!silent) {
-            // a make that came with its save says what it was (18.12)
-            const { suppress, ...made } = await this.failedMake(sid, job, code);
-            if (!suppress) await this.notifyCall("render", (n) => n.onRender(sid, job, { kind: "failed", code, ...made }));
-        }
-        await this.settleLine(sid, job, silent ? { kind: "cancelled" } : { kind: "failed", code });
     }
 
     // Both steps at once, for callers that do not hold the line lock.
-    private async endQueuedSave(sid: string, code: string, silent: boolean): Promise<void> {
-        await this.endHooks(sid, null, code, silent, await this.markEnd(sid, null, code));
-    }
-    private async endQueuedRender(sid: string, job: string, code: string, silent: boolean): Promise<void> {
-        await this.endHooks(sid, job, code, silent, await this.markEnd(sid, job, code));
+    private async endQueuedRender(sid: string, job: string, code: string): Promise<void> {
+        await this.markEnd(sid, job, code);
+        await this.endHooks(sid, job, code);
     }
 
     // Under the line lock: removes the entry and marks its row; returns the hooks to run after the
-    // lock is released. `code` / `silent` as for an end; an entry that waited past LINE_WAIT_MS is
-    // `error.studio.busy` / `error.webp.busy`.
-    private async endEntry(key: string, entry: LineEntry, code: string, silent: boolean): Promise<() => Promise<void>> {
+    // lock is released. An entry that waited past LINE_WAIT_MS is `error.studio.busy` / `error.webp.busy`.
+    private async endEntry(key: string, entry: LineEntry, code: string): Promise<() => Promise<void>> {
         const job = entry.kind !== "save" ? entry.job : null;
         if (entry.kind !== "save" && !job) {
             await this.line.remove(key);
@@ -1549,11 +1426,11 @@ export class StudioService {
                 .run()
                 .catch(() => {});
             await this.line.remove(key);
-            return () => this.settleLine(entry.sid, null, silent ? { kind: "cancelled" } : { kind: "failed", code });
+            return async () => {};
         }
-        const changed = await this.markEnd(entry.sid, job, code);
+        await this.markEnd(entry.sid, job, code);
         await this.line.remove(key);
-        return () => this.endHooks(entry.sid, job, code, silent, changed);
+        return () => this.endHooks(entry.sid, job, code);
     }
 
     private async expireStale(): Promise<void> {
@@ -1563,7 +1440,7 @@ export class StudioService {
             for (const { key, entry } of await this.line.list()) {
                 if (now - entry.at <= LINE_WAIT_MS) continue;
                 if (await this.uploading(entry, now)) continue;
-                after.push(await this.endEntry(key, entry, entry.kind === "save" ? "error.studio.busy" : "error.webp.busy", false));
+                after.push(await this.endEntry(key, entry, entry.kind === "save" ? "error.studio.busy" : "error.webp.busy"));
             }
         });
         for (const run of after) await run();
@@ -1590,7 +1467,7 @@ export class StudioService {
             const now = this.d.now();
             for (const { key, entry } of await this.line.list()) {
                 if (now - entry.at > LINE_WAIT_MS) {
-                    after.push(await this.endEntry(key, entry, entry.kind === "save" ? "error.studio.busy" : "error.webp.busy", false));
+                    after.push(await this.endEntry(key, entry, entry.kind === "save" ? "error.studio.busy" : "error.webp.busy"));
                     continue;
                 }
                 if (entry.kind === "save") {
@@ -1618,9 +1495,8 @@ export class StudioService {
                         row = { ...row, status: "saving" };
                     }
                     if (row && row.status === "saving" && row.expires_at <= now) {
-                        // its post was deleted while it waited: the row ends, silently (the owner did
-                        // it), so the line summary does not wait on it for a day
-                        after.push(await this.endEntry(key, entry, "error.studio.expired", true));
+                        // its post was deleted while it waited: the row ends
+                        after.push(await this.endEntry(key, entry, "error.studio.expired"));
                         continue;
                     }
                     if (!row || row.status !== "saving") {
@@ -1682,7 +1558,7 @@ export class StudioService {
                 if (entry.kind === "slideshow" || entry.kind === "gallery_image") {
                     if (!(entry.kind === "slideshow" ? entry.slideshow : entry.gallery) || !session || session.expires_at <= now || session.status !== "ready") {
                         const gone = !session || session.expires_at <= now;
-                        after.push(await this.endEntry(key, entry, gone ? "error.studio.expired" : "error.studio.not_ready", gone));
+                        after.push(await this.endEntry(key, entry, gone ? "error.studio.expired" : "error.studio.not_ready"));
                         continue;
                     }
                     if (this.startingJobs.has(job)) return;
@@ -1695,7 +1571,7 @@ export class StudioService {
                 if (!session || session.expires_at <= now || session.status !== "ready" || !session.r2_key || !entry.render) {
                     // an expired session means its post was deleted: the owner's doing, no message
                     const gone = !session || session.expires_at <= now;
-                    after.push(await this.endEntry(key, entry, gone ? "error.studio.expired" : "error.studio.not_ready", gone));
+                    after.push(await this.endEntry(key, entry, gone ? "error.studio.expired" : "error.studio.not_ready"));
                     continue;
                 }
                 // an upload this very object began and has not finished: leave it
@@ -1762,7 +1638,7 @@ export class StudioService {
         // the next pass tries again; the 30 min ceiling bounds it. (Nobody is waiting to retry it.)
         if (missing && entry.render?.itemId && reply && reply.status === 502 && body?.error?.code === "error.webp.storage") {
             await this.line.remove(key);
-            await this.endQueuedRender(entry.sid, job, "error.studio.missing", false);
+            await this.endQueuedRender(entry.sid, job, "error.studio.missing");
             return "again";
         }
         const transient =
@@ -1776,7 +1652,7 @@ export class StudioService {
         }
         const code = typeof body?.error?.code === "string" ? body.error.code : "error.webp.unavailable";
         await this.line.remove(key);
-        await this.endQueuedRender(entry.sid, job, code, false);
+        await this.endQueuedRender(entry.sid, job, code);
         return "again";
     }
 
@@ -1825,7 +1701,7 @@ export class StudioService {
             const found = await this.line.find(sid, null);
             // started (it has its `save:` record) or no longer saving: not ours to stop
             if (!found || (await this.d.storage.get(`save:${sid}`))) return;
-            hooks = await this.endEntry(found.key, found.entry, "error.studio.cancelled", true);
+            hooks = await this.endEntry(found.key, found.entry, "error.studio.cancelled");
         });
         if (hooks) {
             await (hooks as () => Promise<void>)();
@@ -1862,7 +1738,7 @@ export class StudioService {
             // its upload into the helper has begun (or the helper already took it): it runs
             if (startingFresh(found.entry, this.d.now()) || this.startingJobs.has(job)) return;
             if (await this.d.storage.get(`job:${job}`)) return;
-            hooks = await this.endEntry(found.key, found.entry, "error.webp.cancelled", true);
+            hooks = await this.endEntry(found.key, found.entry, "error.webp.cancelled");
         });
         if (hooks) {
             await (hooks as () => Promise<void>)();
@@ -1966,61 +1842,15 @@ export class StudioService {
         };
     }
 
-    // ---- PUT|DELETE /studio/line/notify (the line summary, section 17.8) -------------------------
+    // ---- PUT|DELETE /studio/line/notify (retired: the Hark line summary is gone) -------------------
 
-    // What the key has in flight: its line entries, its sessions with a `save:` record and the
-    // unfinished render jobs of its sessions.
-    private async lineMembers(keyId: string): Promise<string[]> {
-        const members = new Set<string>();
-        for (const { entry } of await this.line.list()) {
-            if (entry.keyId === keyId) members.add(entry.kind === "save" || !entry.job ? entry.sid : `${entry.sid}:${entry.job}`);
-        }
-        for (const key of (await this.d.storage.list<unknown>({ prefix: "save:" })).keys()) {
-            const sid = key.slice("save:".length);
-            const row = await getSession(this.d.db, sid);
-            if (row && row.key_id === keyId && row.status === "saving") members.add(sid);
-        }
-        const now = this.d.now();
-        for (const [key, rec] of await this.d.storage.list<JobRecord>({ prefix: "job:" })) {
-            if (!rec || !rec.keyId.startsWith("studio:") || now - rec.createdAt > jobWindowMs(rec)) continue;
-            const id = key.slice("job:".length);
-            if (await this.d.storage.get(`result:${id}`)) continue;
-            const sid = rec.keyId.slice("studio:".length);
-            const row = await getSession(this.d.db, sid);
-            if (row && row.key_id === keyId) members.add(`${sid}:${id}`);
-        }
-        return [...members];
-    }
-
-    async lineNotifyPut(keyId: string, rawBody: string): Promise<StudioReply> {
+    // Kept for older builds: the body is still checked, then the answer is always "bridge off" and nothing is stored.
+    async lineNotifyPut(_keyId: string, rawBody: string): Promise<StudioReply> {
         if (!isEmptyLineBody(rawBody)) return studioErr(400, "error.notify.invalid");
-        const notify = this.d.notify as (NotifyHooks & { putLine?: unknown }) | undefined;
-        if (!notify || typeof notify.putLine !== "function") {
-            // no Hark service in this Durable Object: nothing stored, nothing will be sent
-            return { status: 200, body: { status: "success", bridge: false, watching: 0, expires_at: null } };
-        }
-        let members: string[];
-        try {
-            members = await this.lineMembers(keyId);
-        } catch {
-            return studioErr(503, "error.api.generic");
-        }
-        const put = notify as unknown as { putLine(keyId: string, members: string[]): Promise<StudioReply> };
-        try {
-            return await raceCeiling(put.putLine(keyId, members), this.d.notifyMs ?? NOTIFY_CALL_MS, "notify line");
-        } catch {
-            return studioErr(503, "error.api.generic");
-        }
+        return { status: 200, body: { status: "success", bridge: false, watching: 0, expires_at: null } };
     }
 
-    async lineNotifyDelete(keyId: string): Promise<StudioReply> {
-        const notify = this.d.notify as { removeLine?: (keyId: string) => Promise<StudioReply> } | undefined;
-        if (!notify || typeof notify.removeLine !== "function") return { status: 204, body: null };
-        try {
-            await raceCeiling(notify.removeLine(keyId), this.d.notifyMs ?? NOTIFY_CALL_MS, "notify line");
-        } catch {
-            return studioErr(503, "error.api.generic");
-        }
+    async lineNotifyDelete(_keyId: string): Promise<StudioReply> {
         return { status: 204, body: null };
     }
 
@@ -2089,14 +1919,12 @@ export class StudioService {
         }
         const phoneOn = phoneField !== false;
         // `notify: {on, label}` (section 14): the opt-in of PUT /studio/<sid>/notify, validated by
-        // the same parser BEFORE anything is created.
-        let optIn: string | null = null;
+        // the same parser BEFORE anything is created. The bridge is retired: it is only echoed back as "off".
+        let optIn: ReturnType<typeof parseOptIn> = null;
         if (notifyField !== undefined && notifyField !== null) {
             const text = isPlainObject(notifyField) ? JSON.stringify(notifyField) : "";
-            if (text === "" || new TextEncoder().encode(text).length > NOTIFY_MAX_BODY_BYTES || !parseOptIn(text)) {
-                return studioErr(400, "error.notify.invalid");
-            }
-            optIn = text;
+            optIn = text === "" || new TextEncoder().encode(text).length > NOTIFY_MAX_BODY_BYTES ? null : parseOptIn(text);
+            if (!optIn) return studioErr(400, "error.notify.invalid");
         }
         // `queue: true` (section 17.3): wait in the server's line instead of the `429`. A share
         // sheet has no one to retry a refusal, so `origin: "share"` implies it.
@@ -2230,8 +2058,6 @@ export class StudioService {
                 (l) => l.startAgent?.(sid, { kind: "save", service: serviceFromUrl(link), ref, title, ...(fromExtension ? { browser: true } : {}) }) ?? Promise.resolve(),
             );
         }
-        // The opt-in goes in before the save can move, so even an instant save is announced.
-        const notifyBody = optIn === null ? undefined : await this.optInAtCreate(keyId, sid, optIn);
 
         // Not free: the save is in the line (no `save:` record, no kick): the sweep starts it when
         // its turn comes, polled or not.
@@ -2256,7 +2082,7 @@ export class StudioService {
                 url: `${base}/studio/${sid}`,
                 // only for a caller that opted in (a share, or `queue: true`): the rest see today's shape
                 ...(wantsQueue ? { queued: !free, queue_ahead: ahead } : {}),
-                ...(notifyBody ? { notify: notifyBody } : {}),
+                ...(optIn ? { notify: { bridge: false, on: optIn.on, label: optIn.label, expires_at: null } } : {}),
                 ...(make && makeJob ? { make: { job: makeJob, kind: make.kind }, ...(make.kind === "slideshow" ? { slideshow: { job: makeJob } } : {}) } : {}),
             },
         };
@@ -2359,25 +2185,6 @@ export class StudioService {
         } catch (e) {
             console.error("[studio] could not remember share", String(e instanceof Error ? e.name : "error"));
         }
-    }
-
-    // The Hark opt-in of a session that was just created (the body of PUT /studio/<sid>/notify,
-    // answered by the same service). The save is not refused when it cannot be stored: the owner
-    // still has the app's own poll.
-    private async optInAtCreate(
-        keyId: string,
-        sid: string,
-        raw: string,
-    ): Promise<{ bridge: boolean; on: unknown; label: unknown; expires_at: unknown } | undefined> {
-        const notify = this.d.notify;
-        if (!canOptIn(notify)) return undefined;
-        let out: { bridge: boolean; on: unknown; label: unknown; expires_at: unknown } | undefined;
-        await this.notifyCall("create opt-in", async () => {
-            const r = await notify.put(keyId, sid, raw);
-            const b = r.body as { bridge?: unknown; on?: unknown; label?: unknown; expires_at?: unknown } | null;
-            if (r.status === 200 && b) out = { bridge: b.bridge === true, on: b.on ?? null, label: b.label ?? null, expires_at: b.expires_at ?? null };
-        });
-        return out;
     }
 
     // GET /studio/recent?since=<ms>&limit=<1..25> (keyed): the sessions this key created from a
@@ -2567,7 +2374,6 @@ export class StudioService {
         await this.d.storage.delete(`save:${sid}`).catch(() => {});
         this.progress.delete(sid);
         this.lastStoringPush.delete(sid);
-        await this.settleLine(sid, null, { kind: "failed", code });
         return POLL_INTERVAL_MS;
     }
 
@@ -2615,12 +2421,8 @@ export class StudioService {
         this.progress.delete(sid);
         this.lastStoringPush.delete(sid);
         await this.liveCall("save failed", (l) => l.onSave(sid, { kind: "failed", code }));
-        if (changed) {
-            await this.notifyCall("save failed", (n) => n.onSaveFailed(sid, code));
-            // a failed save leaves no title behind (section 17.3), and settles the line summary
-            await this.dropTitle(sid);
-            await this.settleLine(sid, null, { kind: "failed", code });
-        }
+        // a failed save leaves no title behind (section 17.3)
+        if (changed) await this.dropTitle(sid);
         return POLL_INTERVAL_MS;
     }
 
@@ -3007,8 +2809,6 @@ export class StudioService {
                 created_at: this.d.now(),
                 poster: thumb?.url ?? null,
             });
-            // the save is ready: the owner who walked away is told (once: the event's record)
-            await this.notifyCall("saved", (n) => n.onSaved(sid));
             await this.liveCall("saved", (l) =>
                 l.onSave(sid, {
                     kind: "saved",
@@ -3018,7 +2818,6 @@ export class StudioService {
                     seconds: finite(done.duration),
                 }),
             );
-            await this.settleLine(sid, null, { kind: "saved" });
             becameReady = true;
         }
         await this.dropHelperCopy(sid);
@@ -3234,11 +3033,9 @@ export class StudioService {
             if (lead.poster) {
                 await this.d.db.prepare("UPDATE studio_sessions SET poster = ?1 WHERE id = ?2").bind(lead.poster, sid).run().catch(() => {});
             }
-            if (!retry) await this.notifyCall("saved", (n) => n.onSaved(sid));
             await this.liveCall("saved", (l) =>
                 l.onSave(sid, { kind: "saved", bytes: lead.bytes ?? null, width: lead.width ?? null, height: lead.height ?? null, seconds: lead.duration ?? null }),
             );
-            await this.settleLine(sid, null, { kind: "saved" });
             becameReady = true;
         }
         await this.dropHelperCopy(sid);
@@ -3708,7 +3505,6 @@ export class StudioService {
         await this.d.storage.delete(`save:${sid}`).catch(() => {});
         this.progress.delete(sid);
         if (Number(ready.meta?.changes ?? 0) > 0) {
-            await this.settleLine(sid, null, { kind: "saved" });
             await this.afterReady(sid, row.public_state === "pending", [key]);
         }
         return POLL_INTERVAL_MS;
@@ -3749,7 +3545,7 @@ export class StudioService {
         } catch {
             return studioErr(400, "error.webp.invalid_params");
         }
-        // `"notify": true`: tell the owner about this render's result (section 9.3)
+        // `"notify"` (section 9.3) is still checked as a boolean, and ignored: the Hark bridge is retired
         const notifyFlag = isPlainObject(parsed) ? parsed.notify : undefined;
         if (notifyFlag !== undefined && typeof notifyFlag !== "boolean") return studioErr(400, "error.webp.invalid_params");
         // `queue` and `priority` (section 17.3): wait in the line instead of the 429; the render the
@@ -3806,7 +3602,7 @@ export class StudioService {
             ...(p.background ? { background: p.background } : {}),
             ...(p.format ? { format: p.format } : {}),
         };
-        const joinOpts = { sid, row, params, p, focused, notifyFlag: notifyFlag === true, item, r2Key };
+        const joinOpts = { sid, row, params, p, focused, item, r2Key };
         if (!free) {
             if (!queueFlag) return await this.refuse("error.webp.busy");
             return await this.enqueueRender(joinOpts);
@@ -3843,19 +3639,17 @@ export class StudioService {
         }
         // accepted: the run (if one is registered for this session) is now rendering
         await this.liveRender(sid, job, { kind: "accepted", title: row.title, duration: row.duration });
-        if (notifyFlag === true) await this.notifyCall("render opt-in", (n) => n.optInJob(sid, job));
         return { status: 202, body: { status: "pending", job, ...(queueFlag ? { queued: false, queue_ahead: null } : {}) } };
     }
 
-    // A render that waits: its id is minted here, its row inserted `pending` as on the free path, its
-    // `notify` opt-in registered now, and the entry carries the validated params (17.3).
+    // A render that waits: its id is minted here, its row inserted `pending` as on the free path, and the
+    // entry carries the validated params (17.3).
     private async enqueueRender(o: {
         sid: string;
         row: SessionRow;
         params: WebpParams;
         p: RenderParams;
         focused: boolean;
-        notifyFlag: boolean;
         item?: { index: number; id: string };
         r2Key: string;
     }): Promise<StudioReply> {
@@ -3872,7 +3666,6 @@ export class StudioService {
         } catch {
             return studioErr(503, "error.api.generic");
         }
-        if (o.notifyFlag) await this.notifyCall("render opt-in", (n) => n.optInJob(o.sid, job));
         const joined = await this.joinLine(
             {
                 kind: "render",
@@ -4093,7 +3886,6 @@ export class StudioService {
         } catch {
             return studioErr(503, "error.api.generic");
         }
-        if (parsed.notify === true) await this.notifyCall("render opt-in", (n) => n.optInJob(sid, job));
         const joined = await this.joinLine(this.makeEntry(kind, sid, job, row.key_id ?? "", now, built.run), focused);
         if (joined === null) {
             await this.d.db.prepare("DELETE FROM studio_renders WHERE id = ?1").bind(job).run().catch(() => {});
@@ -4151,7 +3943,7 @@ export class StudioService {
             built = { ok: false, status: 400, code: "error.webp.invalid_params" };
         }
         if (!built.ok) {
-            await this.endQueuedRender(sid, job, built.code, false);
+            await this.endQueuedRender(sid, job, built.code);
             return "ended";
         }
         const entry = this.makeEntry(kind, sid, job, session.key_id ?? "", this.d.now(), built.run);
@@ -4161,7 +3953,7 @@ export class StudioService {
             return "full" in q ? ("full" as const) : ("ok" as const);
         });
         if (joined === "full") {
-            await this.endQueuedRender(sid, job, "error.studio.line_full", false);
+            await this.endQueuedRender(sid, job, "error.studio.line_full");
             return "ended";
         }
         await this.scheduleSweep();
@@ -4305,7 +4097,7 @@ export class StudioService {
             return "done";
         }
         await this.line.remove(key);
-        await this.endQueuedRender(entry.sid, job, out.code, false);
+        await this.endQueuedRender(entry.sid, job, out.code);
         return "again";
     }
 
@@ -4780,7 +4572,6 @@ export class StudioService {
     async renderStatus(sid: string, job: string, waitSeconds: number): Promise<StudioReply> {
         const reply = await this.renderStatusInner(sid, job, waitSeconds);
         await this.emitRender(sid, job, reply);
-        await this.notifyRender(sid, job, reply);
         return reply;
     }
 

@@ -135,9 +135,6 @@ extension EditSession {
         guard let first = problems.first else { return nil }
         return Copy.Editor.problem(first, duration: timing.seconds)
     }
-
-    /// `1080p · 30` for the timeline's canvas.
-    var qualityLine: String { Copy.Editor.qualityLabel(timeline.canvas.resolution.rawValue, timeline.canvas.fps) }
 }
 
 /// What buttons need to know of the playhead: the main clip under it and whether a split there works.

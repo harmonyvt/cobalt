@@ -281,3 +281,62 @@ enum EditorShellCanvas {
         if on { Label(title, systemImage: Symbol.keep) } else { Text(title) }
     }
 }
+
+// MARK: - the title
+
+/// The project's name; a click turns it into a field (return saves, esc cancels, an empty one goes back).
+struct EditorTitleField: View {
+    let session: EditSession
+
+    @State private var editing = false
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Group {
+            if editing {
+                TextField(Copy.Editor.renamePlaceholder, text: $text)
+                    .textFieldStyle(.plain)
+                    .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
+                    .frame(minWidth: 120, maxWidth: 240)
+                    .padding(.horizontal, 8)
+                    .frame(minHeight: Platform.isMac ? 28 : 36)
+                    .background(EditorColor.field, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .focused($focused)
+                    .onAppear { focused = true }
+                    .onSubmit(commit)
+                    .onKeyPress(.escape) {
+                        editing = false
+                        return .handled
+                    }
+                    .onChange(of: focused) { _, isFocused in if !isFocused && editing { commit() } }
+                    .accessibilityLabel(Copy.Editor.renameField)
+            } else {
+                Button {
+                    text = session.project.title
+                    editing = true
+                    focused = true
+                } label: {
+                    Text(session.project.title.isEmpty ? Copy.Editor.untitled : session.project.title)
+                        .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
+                        .foregroundStyle(CobaltColor.text)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: 240, alignment: .leading)
+                        .frame(minHeight: Platform.isMac ? 28 : 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(Copy.Editor.rename)
+                .accessibilityLabel(session.project.title)
+                .accessibilityHint(Copy.Editor.renameTitle)
+            }
+        }
+    }
+
+    private func commit() {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        editing = false
+        if !clean.isEmpty { session.rename(clean) }
+    }
+}

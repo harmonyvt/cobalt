@@ -24,31 +24,28 @@ const exportRows = (L: LW, sid: string) => L.rows("SELECT * FROM media_items WHE
 const slideRows = (L: LW, sid: string) => L.rows("SELECT * FROM media_items WHERE session_id = ? AND role = 'slideshow' AND deleted_at IS NULL ORDER BY created_at, id", sid);
 
 describe("R1: the save failed, then the make job is polled", () => {
-    it("one Hark message in all (the save's), however often the make job is polled", async () => {
+    it("the make job of a failed save answers the save's error, however often it is polled", async () => {
         const L = await lineWorld();
         L.helper.gallery = Array.from({ length: 3 }, () => ({ type: "photo" as const, fail: "error.studio.fetch_failed" }));
         const r = asBody(await create(L, { slideshow: webp() }));
         await L.settle(r.id);
         await L.sweeps(3);
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.title).toBe("capystore couldn't finish");
         const poll = await L.studio.renderStatus(r.id, r.make.job, 0);
         expect(asBody(poll).error.code).toBe("error.studio.fetch_failed");
         await L.studio.renderStatus(r.id, r.make.job, 0);
         await L.sweeps(2);
-        expect(L.hark.calls).toHaveLength(1);
+        expect(asBody(await L.studio.renderStatus(r.id, r.make.job, 0)).error.code).toBe("error.studio.fetch_failed");
     });
 
-    it("a make that failed after a good save still says so (the suppression is only for a failed save)", async () => {
+    it("a make that failed after a good save is still an error answer of its own", async () => {
         const L = await lineWorld();
         L.helper.gallery = five();
         L.helper.galleryError = "error.webp.encode_failed";
         const r = asBody(await create(L, { gallery_image: { items: [0, 1, 2], layout: "grid3" } }));
         await L.settle(r.id);
         await L.sweeps(3);
-        await L.studio.renderStatus(r.id, r.make.job, 0);
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toContain("saved 5 items. the gallery image couldn't be made");
+        const poll = asBody(await L.studio.renderStatus(r.id, r.make.job, 0));
+        expect(poll.status).toBe("error");
     });
 });
 

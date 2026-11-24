@@ -1,5 +1,5 @@
-// Live Activity and Hark routes as ops (APP-API-CONTRACT.md 33.12, plan thread T7): sections 8, 9, 17.6, 27.9 and 32.
-// All go to the main Durable Object (token and run store, APNs, the Hark opt-ins) with the verified key id and never
+// Live Activity routes and the retired Hark opt-in routes as ops (APP-API-CONTRACT.md 33.12, plan thread T7): sections 8, 9, 17.6, 27.9 and 32.
+// All go to the main Durable Object (token and run store, APNs; the Hark opt-ins answer "bridge off") with the verified key id and never
 // the client's key; none wakes the container, reads a body here or writes request_log (a relay arrives about once a
 // second). Client keys only: the library service gets 404 (one key per device). No CORS: the app sends no Origin.
 //
@@ -43,7 +43,7 @@ export const LIVE_OPS = [
     ...both("live.edit", "/live/edits/:rid", "An editor render's activity token.", { rid: EDIT_RENDER_ID_REGEX }),
     // section 61.5: a push-started swarm activity's token
     ...both("live.swarm", "/live/swarms/:id", "A push-started swarm activity's token.", { id: /^[A-Za-z0-9]{16}$/ }),
-    // section 9: the Hark opt-in for one save (the Durable Object checks the owner), and 17.6: the line's summary
+    // section 9: the Hark opt-in for one save (retired: the Durable Object checks the owner and answers bridge off), and 17.6: the line's summary
     ...both("studio.notify", "/studio/:sid/notify", "Hark when this save is done.", { sid: STUDIO_SID_REGEX }),
     ...both("studio.line.notify", "/studio/line/notify", "Hark when the line is done."),
 ];

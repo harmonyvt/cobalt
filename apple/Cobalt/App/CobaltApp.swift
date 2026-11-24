@@ -155,7 +155,6 @@ struct CobaltApp: App {
         #endif
         #if DEBUG
         LaunchConfig.runDebugLiveIfRequested()
-        SyncGlowDebugLaunch.apply(to: model)
         await LaunchConfig.runPreviewScriptIfRequested(model)
         #endif
     }
@@ -207,9 +206,6 @@ struct CobaltApp: App {
             .backgroundTask(.urlSession(matching: AppModel.ownsBackgroundSession)) { [model] identifier in
                 await model.handleBackgroundDownloads(identifier: identifier)
             }
-            #if DEBUG
-            .commands { SyncGlowDebugCommands(model: model) }
-            #endif
     }
     #else
     /// One window, not a `WindowGroup`: a group opens another window for every `cobalt-apple://` link
@@ -237,9 +233,6 @@ struct CobaltApp: App {
                 CommandGroup(after: .toolbar) {
                     StageWallpaperCommand(model: model)
                 }
-                #if DEBUG
-                SyncGlowDebugCommands(model: model)
-                #endif
             }
     }
 

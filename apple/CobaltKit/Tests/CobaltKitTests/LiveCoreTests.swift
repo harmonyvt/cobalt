@@ -744,61 +744,6 @@ struct LiveManagerLaunchTests {
         #expect(LiveActivityManager.registrationState(nil, since: 1).stage == .fetching)
     }
 
-    @Test func anOldTypeActivityTheServerStartedHandsItsTokenToTheOldRoute() async throws {
-        // the first share after the update, before this build ran: the server only had the old start token
-        let rig = LiveRig(push: true, environment: .sandbox)
-        let now = rig.h.clock.now()
-        // one already on screen at launch (fresh), one started while the app runs
-        let onScreenRun = UUID()
-        let onScreen = FakeOldActivity(
-            id: onScreenRun.uuidString.lowercased(), staleDate: now.addingTimeInterval(100),
-            saveRun: (LiveRunAttributes(run: onScreenRun, input: "link", service: "x", ref: "1", origin: "share"), LiveContentState.samples["fetching_waking"]!))
-        rig.adapter.old = [onScreen]
-        rig.manager.start(observeLifecycle: false)
-        await rig.h.settle()
-        let run = UUID()
-        let attributes = LiveRunAttributes(run: run, input: "link", service: "instagram", ref: "Dd7P496wolG", origin: "share")
-        let saving = LiveContentState.samples["saving_storing"]!
-        let started = FakeOldActivity(id: run.uuidString.lowercased(), staleDate: now.addingTimeInterval(120), saveRun: (attributes, saving))
-        rig.adapter.systemStartsOld(started)
-        await rig.h.settle()
-        started.sendToken(hexToken)
-        onScreen.sendToken(String(repeating: "cd", count: 32))
-        await rig.settle()
-        #expect(rig.log.runs.count == 2)
-        let r = try #require(rig.log.runs.first { $0.run == run })
-        #expect(!r.job, "the old type: the server must push the old shape")
-        #expect(r.updateToken == hexToken && r.attributes == attributes && r.state == saving && !r.start)
-        #expect(rig.log.runs.contains { $0.run == onScreenRun && !$0.job })
-        #expect(!started.isEnded && !onScreen.isEnded, "the server writes and ends them")
-        // the same token is not sent twice
-        rig.manager.foreground()
-        await rig.settle()
-        #expect(rig.log.runs.count == 2)
-    }
-
-    @Test func oldTypeActivitiesNobodyWritesEndAndOneOfARunTheAppShowsGivesWay() async throws {
-        let rig = LiveRig(push: false)
-        let now = rig.h.clock.now()
-        let stale = FakeOldActivity(id: UUID().uuidString.lowercased(), staleDate: now.addingTimeInterval(-5))
-        let undated = FakeOldActivity(id: UUID().uuidString.lowercased(), staleDate: nil)
-        let fresh = FakeOldActivity(id: UUID().uuidString.lowercased(), staleDate: now.addingTimeInterval(100))
-        rig.adapter.old = [stale, undated, fresh]
-        rig.manager.start(observeLifecycle: false)
-        await rig.settle()
-        #expect(stale.isEnded && undated.isEnded, "nobody writes them any more")
-        #expect(!fresh.isEnded, "the server still writes it (registered before the update) and ends it itself")
-        // the app shows a run with an old activity on screen: the job activity replaces it
-        let runID = UUID()
-        let mine = FakeOldActivity(id: runID.uuidString.lowercased(), staleDate: now.addingTimeInterval(100))
-        rig.adapter.old.append(mine)
-        rig.pipeline.nextLiveRunID = runID              // the run the old activity shows (a queue job's id works this way)
-        rig.pipeline.start(link: URL(string: shortLink)!)
-        await rig.settle()
-        #expect(rig.adapter.requests.count == 1 && rig.adapter.requests[0].attributes.id == runID.uuidString.lowercased())
-        #expect(mine.isEnded && mine.endCount == 1 && !fresh.isEnded, "one island per job")
-    }
-
     @Test func aRunAdoptsTheActivityThatAlreadyCarriesItsRunId() async throws {
         // "trim in cobalt": the share sheet's push-started activity, taken over by the app's pipeline
         let rig = LiveRig(push: false)

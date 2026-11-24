@@ -1,7 +1,7 @@
 // The share sheet's one request (APP-API-CONTRACT.md 18.12, lane S1): `slideshow.format` and `gallery_image` on POST /studio,
-// chained after the save over the items that were saved, and the ONE Hark message of the story.
+// chained after the save over the items that were saved. (The Hark message that used to end the story is retired.)
 import { describe, expect, it } from "vitest";
-import { KEY_ID, MEDIA_BASE, asBody, json } from "./poster-world";
+import { KEY_ID, asBody, json } from "./poster-world";
 import { lineWorld, type LW } from "./line-world";
 import { POST, itemRows } from "./gallery-world";
 import type { GalleryItemSpec } from "./studio-fakes";
@@ -21,8 +21,8 @@ async function run(L: LW, body: Record<string, unknown>) {
     return r as { id: string; make: { job: string; kind: string } };
 }
 
-describe("a save with a slideshow webp: one request, one message", () => {
-    it("201 {make: {job, kind}}; saved, then made over the items; the webp is the helper's frame; ONE message, with the post's name and the link", async () => {
+describe("a save with a slideshow webp: one request", () => {
+    it("201 {make: {job, kind}}; saved, then made over the items; the webp is the helper's frame", async () => {
         const L = await lineWorld();
         L.helper.gallery = five();
         const r = await run(L, { slideshow: slideshow() });
@@ -32,53 +32,40 @@ describe("a save with a slideshow webp: one request, one message", () => {
         expect(renderRow(L, r.make.job)).toMatchObject({ kind: "slideshow", status: "success" });
         const row = L.rows("SELECT * FROM media_items WHERE session_id = ? AND role = 'slideshow'", r.id)[0];
         expect(row.content_type).toBe("image/webp");
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]).toEqual({
-            title: "capystore",
-            body: `${LABEL} · slideshow webp ready · 480×600 · 3 KB\n${MEDIA_BASE}${row.public_key}`,
-            url: `cobalt-apple://session/${r.id}`,
-        });
-        // a poll of the job again says nothing more
+        expect(row.public_key).toBeTruthy();
+        // a poll of the job again changes nothing
         await L.studio.renderStatus(r.id, r.make.job, 0);
         await L.sweeps(2);
-        expect(L.hark.calls).toHaveLength(1);
+        expect(L.rows("SELECT * FROM media_items WHERE session_id = ? AND role = 'slideshow'", r.id)).toHaveLength(1);
     });
 
-    it("a private post has no link: the message still goes, without the link line", async () => {
+    it("a private post has no public link", async () => {
         const L = await lineWorld();
         L.helper.gallery = five();
-        await run(L, { public: false, slideshow: slideshow() });
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toBe(`${LABEL} · slideshow webp ready · 480×600 · 3 KB`);
+        const r = await run(L, { public: false, slideshow: slideshow() });
+        const row = L.rows("SELECT * FROM media_items WHERE session_id = ? AND role = 'slideshow'", r.id)[0];
+        expect(row.public_key).toBeFalsy();
     });
 
-    it("the mp4 slideshow: `slideshow ready`", async () => {
+    it("the mp4 slideshow is 1080x1350", async () => {
         const L = await lineWorld();
         L.helper.gallery = five();
-        await run(L, { slideshow: slideshow({ format: undefined, quality: undefined, width: undefined }) });
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toMatch(new RegExp(`^${LABEL} · slideshow ready · 1080×1350 · 5 KB`));
+        const r = await run(L, { slideshow: slideshow({ format: undefined, quality: undefined, width: undefined }) });
+        expect(renderRow(L, r.make.job)).toMatchObject({ kind: "slideshow", status: "success" });
+        const row = L.rows("SELECT * FROM media_items WHERE session_id = ? AND role = 'slideshow'", r.id)[0];
+        expect(row.content_type).toBe("video/mp4");
     });
 
-    it("`saved` is not sent unless asked; asked, it is a second message", async () => {
+    it("the old `notify` field is still accepted: the answer says the bridge is off", async () => {
         const L = await lineWorld();
         L.helper.gallery = five();
-        await run(L, { notify: { on: ["saved", "rendered", "failed"], label: LABEL }, slideshow: slideshow() });
-        expect(L.hark.calls).toHaveLength(2);
-        expect(L.hark.calls[0]!.body).toContain("is saved");
-        expect(L.hark.calls[1]!.body).toContain("slideshow webp ready");
-    });
-
-    it("`failed` only: a success says nothing", async () => {
-        const L = await lineWorld();
-        L.helper.gallery = five();
-        await run(L, { notify: { on: ["failed"], label: LABEL }, slideshow: slideshow() });
-        expect(L.hark.calls).toEqual([]);
+        const r = asBody(await create(L, { notify: { on: ["saved", "rendered", "failed"], label: LABEL }, slideshow: slideshow() }));
+        expect(r.notify).toEqual({ bridge: false, on: ["saved", "rendered", "failed"], label: LABEL, expires_at: null });
     });
 });
 
 describe("a save with a gallery image", () => {
-    it("saved, then made over the photos; ONE message: `<label> · gallery image ready · <w>×<h> · <size>`", async () => {
+    it("saved, then made over the photos", async () => {
         const L = await lineWorld();
         L.helper.gallery = five();
         const r = await run(L, { gallery_image: gallery() });
@@ -87,8 +74,7 @@ describe("a save with a gallery image", () => {
         expect(L.helper.galleryStarts[0]!.body).toEqual({ layout: "grid3", slides: [{ n: 0 }, { n: 1 }, { n: 2 }] });
         const row = L.rows("SELECT * FROM media_items WHERE session_id = ? AND role = 'export'", r.id)[0];
         expect(row.content_type).toBe("image/jpeg");
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toBe(`${LABEL} · gallery image ready · 2160×4500 · 4 KB\n${MEDIA_BASE}${row.public_key}`);
+        expect(row.public_key).toBeTruthy();
     });
 
     it("a photo that did not save is dropped from the plan; the image is made over the saved ones", async () => {
@@ -98,40 +84,32 @@ describe("a save with a gallery image", () => {
         expect(L.helper.galleryStarts[0]!.body.slides).toHaveLength(3);
         const items = itemRows(L as any, r.id);
         expect(JSON.parse(L.rows("SELECT made_from FROM media_items WHERE role = 'export'")[0].made_from)).toEqual(items.map((x) => x.id));
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toContain("gallery image ready");
     });
 });
 
-describe("what goes wrong, in one message", () => {
-    it("the save fails: the save's failure message (and no second one); the make ends with the save's code", async () => {
+describe("what goes wrong", () => {
+    it("the save fails: the make ends with the save's code", async () => {
         const L = await lineWorld();
         L.helper.gallery = [{ type: "photo", fail: "error.studio.fetch_failed" }, { type: "photo", fail: "error.studio.fetch_failed" }, { type: "photo", fail: "error.studio.fetch_failed" }];
         const r = await run(L, { slideshow: slideshow({ items: [0, 1, 2], seconds: [2, 2, 2] }) });
         expect(renderRow(L, r.make.job)).toMatchObject({ status: "error", error_code: "error.studio.fetch_failed" });
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]).toMatchObject({ title: "capystore couldn't finish" });
-        expect(L.hark.calls[0]!.body).toContain(`couldn't save ${LABEL}`);
     });
 
-    it("the save works and a webp would run over 60 s: `saved <n> items. the slideshow webp would be <m:ss> and webps stop at 60 s. open capystore to make the mp4.`", async () => {
+    it("the save works and a webp would run over 60 s: the make ends too_long, the save stays", async () => {
         const L = await lineWorld();
         L.helper.gallery = [{ type: "photo" }, { type: "video", duration: 70 }];
         const r = await run(L, { item_count: 2, slideshow: slideshow({ items: [0, 1], seconds: [2, null] }) });
         expect(renderRow(L, r.make.job)).toMatchObject({ status: "error", error_code: "error.webp.too_long" });
         expect(itemRows(L as any, r.id)).toHaveLength(2); // the save stays
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toBe(`${LABEL} · saved 2 items. the slideshow webp would be 1:12 and webps stop at 60 s. open capystore to make the mp4.`);
     });
 
-    it("the save works and the helper cannot make it: `saved <n> items. the <what> couldn't be made — <reason>`", async () => {
+    it("the save works and the helper cannot make it: the make ends in error, the save stays", async () => {
         const L = await lineWorld();
         L.helper.gallery = five();
         L.helper.galleryError = "error.webp.encode_failed";
-        await run(L, { gallery_image: gallery() });
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]).toMatchObject({ title: "capystore" });
-        expect(L.hark.calls[0]!.body).toBe(`${LABEL} · saved 5 items. the gallery image couldn't be made — something went wrong on the server`);
+        const r = await run(L, { gallery_image: gallery() });
+        expect(renderRow(L, r.make.job)).toMatchObject({ status: "error" });
+        expect(itemRows(L as any, r.id)).toHaveLength(5);
     });
 
     it("fewer than 2 photos saved: the gallery image ends too_few_photos, the save stays", async () => {
@@ -140,8 +118,6 @@ describe("what goes wrong, in one message", () => {
         const r = await run(L, { item_count: 3, gallery_image: gallery({ items: [0, 1] }) });
         expect(renderRow(L, r.make.job)).toMatchObject({ status: "error", error_code: "error.studio.too_few_photos" });
         expect(itemRows(L as any, r.id)).toHaveLength(2);
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toBe(`${LABEL} · saved 2 items. the gallery image couldn't be made — there are fewer than 2 photos to use`);
     });
 
     it("fewer than 2 items saved for a slideshow: not_gallery", async () => {
@@ -149,8 +125,6 @@ describe("what goes wrong, in one message", () => {
         L.helper.gallery = [{ type: "photo" }, { type: "photo", fail: "error.studio.fetch_failed" }, { type: "photo", fail: "error.studio.fetch_failed" }];
         const r = await run(L, { slideshow: slideshow({ items: [0, 1, 2], seconds: [2, 2, 2] }) });
         expect(renderRow(L, r.make.job)).toMatchObject({ status: "error", error_code: "error.studio.not_gallery" });
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toBe(`${LABEL} · saved 1 item. the slideshow webp couldn't be made — there are fewer than 2 items to use`);
     });
 
     it("a seconds mix that does not match the items (a number for a video) ends invalid_params once the types are known", async () => {
@@ -159,8 +133,7 @@ describe("what goes wrong, in one message", () => {
         const r = await run(L, { slideshow: slideshow({ seconds: [2, 2, 2, 5, null] }) });
         expect(renderRow(L, r.make.job)).toMatchObject({ status: "error", error_code: "error.webp.invalid_params" });
         expect(L.helper.slideStarts).toEqual([]);
-        expect(L.hark.calls).toHaveLength(1);
-        expect(L.hark.calls[0]!.body).toContain("saved 5 items. the slideshow webp couldn't be made");
+        expect(itemRows(L as any, r.id)).toHaveLength(5);
     });
 });
 

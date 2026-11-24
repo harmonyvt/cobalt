@@ -1,13 +1,12 @@
 // Instant share (APP-API-CONTRACT.md section 14): `notify` and `origin: "share"` on POST /studio,
 // and GET /studio/recent. The Worker, the Durable Object's services (the real StudioService with
-// the real NotifyService) and the real SQL on node:sqlite run together; the helper, both R2
-// buckets and the Hark webhook are fakes.
+// and the real SQL on node:sqlite run together; the helper and both R2 buckets are fakes. The
+// Hark bridge is retired: `notify` is still checked and echoed back as "bridge off".
 import { dispatch as decide } from "./dispatch";
 import { beforeEach, describe, expect, it } from "vitest";
 import { KEY_ID_HEADER } from "../src/headers";
-import { NotifyService } from "../src/notify";
 import { RECENT_MAX, SHARE_KEEP_MS, SHARE_KICK_MS, handleStudioRoute, isStudioRoute } from "../src/studio";
-import { handleNotifyRoute, isNotifyRoute } from "../src/notify";
+import { handleNotifyRoute, isNotifyRoute } from "../src/notify-off";
 import { handleRequest, type WorkerEnv } from "../src/worker";
 import { hashKey } from "../src/keys";
 import { SERVICE_HEADER } from "../src/headers";
@@ -19,45 +18,29 @@ import { StudioService } from "../src/studio";
 
 const OTHER_KEY_ID = "key-row-2";
 const OTHER_CLIENT = "7c1d9e4a-3b5f-4a2e-8d6c-0e9f1b2a3c4d";
-const HOOK = "https://hark.example/api/webhook/T0pS3cretHookToken";
 
-class FakeHark {
-    calls: { title: string; body: string; url?: string }[] = [];
-    fetch = async (_url: string, init: RequestInit): Promise<Response> => {
-        this.calls.push(JSON.parse(String(init.body)));
-        return new Response('{"ok":true}', { status: 200 });
-    };
-}
-
-function wire(opts: { webhookUrl?: string | null; withNotify?: boolean } = {}) {
+function wire() {
     const db = createFakeD1();
     const clock = new Clock();
     const kv = new MemoryKV();
     const originals = new MemoryOriginals();
     const media = new MemoryMedia();
     const helper = new FakeHelper();
-    const hark = new FakeHark();
     const webp = new WebpService({
         storage: kv, bucket: media, mediaBaseUrl: MEDIA_BASE, now: clock.now, sleep: clock.sleep,
         ensureRunning: async () => {}, helper: helper.helper, db,
-    });
-    const notify = new NotifyService({
-        storage: kv, db, now: clock.now,
-        webhookUrl: opts.webhookUrl === undefined ? HOOK : opts.webhookUrl,
-        fetch: hark.fetch,
     });
     const make = (over: Partial<ConstructorParameters<typeof StudioService>[0]> = {}) =>
         new StudioService({
             db, storage: kv, originals, webp, webBaseUrl: ORIGIN, now: clock.now, sleep: clock.sleep,
             ensureRunning: async () => {}, helper: helper.helper, fixedLength, media, mediaBaseUrl: MEDIA_BASE,
-            ...(opts.withNotify === false ? {} : { notify }),
             ...over,
         });
     const studio = make();
     const container = {
         async fetch(r: Request) {
             const p = new URL(r.url).pathname;
-            if (isNotifyRoute(p)) return handleNotifyRoute(notify, r);
+            if (isNotifyRoute(p)) return handleNotifyRoute(db, r);
             if (isStudioRoute(p)) return handleStudioRoute(studio, r);
             return new Response('{"status":"ok"}');
         },
@@ -65,7 +48,6 @@ function wire(opts: { webhookUrl?: string | null; withNotify?: boolean } = {}) {
     const env: WorkerEnv = {
         API_URL: "https://api.capybaraharmony.com/", CORS_URL: ORIGIN, COBALT_API_KEY: INTERNAL,
         DB: db, ORIGINALS: originals, MEDIA: media, MEDIA_BASE_URL: MEDIA_BASE,
-        ...(opts.webhookUrl === null ? {} : { HARK_WEBHOOK_URL: opts.webhookUrl ?? HOOK, HARK_NOTIFY: "1" }),
     };
     const call = (url: string, init: RequestInit = {}) =>
         handleRequest(new Request(`https://api.capybaraharmony.com${url}`, init), env, container, {
@@ -84,7 +66,7 @@ function wire(opts: { webhookUrl?: string | null; withNotify?: boolean } = {}) {
         }
         throw new Error("never finished");
     };
-    return { db, clock, kv, helper, hark, notify, studio, make, call, addKey, sessions, noteKeys, settle, env };
+    return { db, clock, kv, helper, studio, make, call, addKey, sessions, noteKeys, settle, env };
 }
 type W = ReturnType<typeof wire>;
 
@@ -99,37 +81,15 @@ beforeEach(async () => {
 });
 
 describe("POST /studio with notify", () => {
-    it("registers the Hark opt-in for the new session, the same record PUT /studio/<sid>/notify stores", async () => {
+    it("the opt-in is validated and echoed back as `bridge: false`: nothing is stored, nothing is sent", async () => {
         const r = await w.studio.create(KEY_ID, json(shareBody()));
         expect(r.status).toBe(201);
         const sid = asBody(r).id as string;
-        expect(asBody(r).notify).toMatchObject({ bridge: true, on: ["saved", "failed"], label: "x · 2105237035271258436" });
-        expect(asBody(r).notify.expires_at).toBe(w.clock.t + 24 * 60 * 60 * 1000);
-        expect(w.kv.m.get(`notify:optin:${sid}`)).toMatchObject({ keyId: KEY_ID, on: ["saved", "failed"], label: "x · 2105237035271258436" });
-        // identical to what the PUT route would have stored
-        const w2 = wire();
-        await w2.addKey();
-        const sid2 = asBody(await w2.studio.create(KEY_ID, json({ url: LINK }))).id as string;
-        await w2.notify.put(KEY_ID, sid2, json({ on: ["saved", "failed"], label: "x · 2105237035271258436" }));
-        expect(w2.kv.m.get(`notify:optin:${sid2}`)).toEqual(w.kv.m.get(`notify:optin:${sid}`));
-    });
-
-    it("the opt-in is in before the save can move: an instant save is announced, with the session's url", async () => {
-        const sid = asBody(await w.studio.create(KEY_ID, json(shareBody()))).id as string;
-        expect(w.hark.calls).toEqual([]);
+        expect(asBody(r).notify).toEqual({ bridge: false, on: ["saved", "failed"], label: "x · 2105237035271258436", expires_at: null });
+        expect(w.noteKeys()).toEqual([]);
         const done = asBody(await w.settle(sid));
         expect(done.status).toBe("ready");
-        expect(w.hark.calls).toHaveLength(1);
-        expect(w.hark.calls[0].body).toContain("x · 2105237035271258436 is saved");
-        expect(w.hark.calls[0].url).toBe(`cobalt-apple://session/${sid}`);
-    });
-
-    it("a failed save is announced too", async () => {
-        w.helper.fetchError = "error.fetch.fail";
-        const sid = asBody(await w.studio.create(KEY_ID, json(shareBody()))).id as string;
-        await w.settle(sid);
-        expect(w.hark.calls).toHaveLength(1);
-        expect(w.hark.calls[0].title).toBe("capystore couldn't finish");
+        expect(w.noteKeys()).toEqual([]);
     });
 
     it("through the Worker: free text with a link keeps `notify` and `origin`", async () => {
@@ -140,7 +100,6 @@ describe("POST /studio with notify", () => {
         });
         expect(res.status).toBe(201);
         const sid = ((await res.json()) as any).id as string;
-        expect(w.kv.m.has(`notify:optin:${sid}`)).toBe(true);
         expect(w.kv.m.has(`share:${sid}`)).toBe(true);
     });
 
@@ -190,31 +149,6 @@ describe("POST /studio with notify", () => {
         expect(res.status).toBe(400);
         expect(((await res.json()) as any).error.code).toBe("error.notify.invalid");
         expect(w.sessions()).toEqual([]);
-    });
-
-    it("with the bridge off the opt-in is ignored: the save is created, nothing stored, nothing sent", async () => {
-        const off = wire({ webhookUrl: null });
-        await off.addKey();
-        const r = await off.studio.create(KEY_ID, json(shareBody()));
-        expect(r.status).toBe(201);
-        expect(asBody(r).notify).toMatchObject({ bridge: false, expires_at: null });
-        const sid = asBody(r).id as string;
-        expect(off.noteKeys()).toEqual([]);
-        await off.settle(sid);
-        expect(off.hark.calls).toEqual([]);
-        // validation still applies with the bridge off
-        const bad = await off.studio.create(KEY_ID, json({ url: LINK, notify: { on: [] } }));
-        expect(bad.status).toBe(400);
-    });
-
-    it("a server whose Durable Object has no Hark service just creates the save", async () => {
-        const bare = wire({ withNotify: false });
-        await bare.addKey();
-        const r = await bare.studio.create(KEY_ID, json(shareBody()));
-        expect(r.status).toBe(201);
-        // a share answers its place in the line too (APP-API-CONTRACT.md section 17.3): free here
-        expect(Object.keys(r.body as object).sort()).toEqual(["id", "queue_ahead", "queued", "status", "url"]);
-        expect(asBody(r)).toMatchObject({ queued: false, queue_ahead: null });
     });
 
     it("the capability flag is announced", async () => {

@@ -137,14 +137,6 @@ final class LiveActivityManager: JobLiveSink {
         var registeredToken: String?
     }
 
-    /// An old-type activity the server push-started (changeover release, `OldLiveActivity`) that this process watches.
-    private struct AdoptedOld {
-        let activity: any OldLiveActivity
-        var task: Task<Void, Never>?
-        var token: String?
-        var registeredToken: String?
-    }
-
     private let adapter: any LiveActivityAdapter
     private let environment: LiveEnvironment?
     private let grace: any BackgroundGrace
@@ -157,7 +149,6 @@ final class LiveActivityManager: JobLiveSink {
     private var runCounter = 0
     private var summary: Summary?
     private var adopted: [String: Adopted] = [:]
-    private var adoptedOld: [String: AdoptedOld] = [:]
     private var tasks: [Task<Void, Never>] = []
     private var latestStartToken: String?
     private var sentStartSignature: String?
@@ -196,13 +187,6 @@ final class LiveActivityManager: JobLiveSink {
             for await handle in stream {
                 guard let self else { return }
                 self.adoptIfWanted(handle)
-            }
-        })
-        tasks.append(Task { [weak self] in
-            guard let stream = self?.adapter.newOldActivities() else { return }
-            for await old in stream {
-                guard let self else { return }
-                self.adoptOld(old)
             }
         })
         // Leaving the screen comes through the app's one listener (`AppLifecycle`, after the work it summarises). Coming
@@ -244,7 +228,6 @@ final class LiveActivityManager: JobLiveSink {
             scheduleRegister(r)
         }
         for id in adopted.keys { registerAdopted(id) }
-        for id in adoptedOld.keys { registerOld(id) }
     }
 
     // MARK: - Environment
@@ -519,11 +502,6 @@ final class LiveActivityManager: JobLiveSink {
         r.activityTried = true
         guard adapter.isAvailable else { return }
         let id = r.idString
-        // An old-type activity of this run (from an older build) gives way: one island per job.
-        let old = adapter.oldActivities
-        let t = now
-        adoptedOld.removeValue(forKey: id)?.task?.cancel()
-        writes.enqueue { await OldLiveActivities.end(old, now: t, showing: id) }
         if let existing = adapter.activities.first(where: { $0.attributes.id == id && !$0.isEnded }) {
             r.handle = existing
             // What it shows came from the server: the next write replaces it.
@@ -1053,41 +1031,6 @@ final class LiveActivityManager: JobLiveSink {
         }
     }
 
-    // MARK: - Old-type activities the server started (changeover release)
-
-    /// Follows an old-type save activity the server push-started, so its token reaches the server on the old route.
-    private func adoptOld(_ a: any OldLiveActivity) {
-        guard !a.isEnded, a.saveRun != nil, adoptedOld[a.id] == nil else { return }
-        let id = a.id
-        let tokens = a.pushTokens()
-        adoptedOld[id] = AdoptedOld(activity: a)
-        adoptedOld[id]?.task = Task { [weak self] in
-            for await token in tokens {
-                guard let self else { return }
-                self.adoptedOld[id]?.token = token
-                self.registerOld(id)
-            }
-        }
-    }
-
-    /// `PUT /live/runs/<run>` without `"type": "job"`: the server pushes the old shape, which the old widget draws.
-    private func registerOld(_ id: String) {
-        guard var entry = adoptedOld[id], let token = entry.token, entry.registeredToken != token, !entry.activity.isEnded,
-              pushAvailable, let ctx, let env = environment, let run = entry.activity.saveRun,
-              let runID = UUID(uuidString: id)
-        else { return }
-        entry.registeredToken = token
-        adoptedOld[id] = entry
-        let registration = LiveRunRegistration(
-            run: runID, environment: env, updateToken: token, session: ctx.jobs.all().first { $0.id == runID }?.sessionID,
-            start: false, attributes: run.attributes, state: run.state, job: false)
-        let client = ctx.client
-        network.enqueue { [weak self] in
-            do { _ = try await client.registerLiveRun(registration) }
-            catch { self?.adoptedOld[id]?.registeredToken = nil }
-        }
-    }
-
     /// Foreground and launch: pick up what the server started, end what nobody follows (a run that
     /// is neither the home pipeline's nor a `SharedJob` with work left, and not being written to).
     func reconcile() {
@@ -1115,16 +1058,6 @@ final class LiveActivityManager: JobLiveSink {
                 writes.enqueue { await handle.end(nil, dismissAt: nil) }
             }
         }
-        // Old-type activities from an older build that nobody writes any more go too (the server still writes the
-        // ones it was told about before the update, and ends them itself). A fresh one hands over its token: the server
-        // may have push-started it after the update, before this build ran (changeover release).
-        let old = adapter.oldActivities
-        for a in old where !a.isEnded && a.isFresh(at: t) { adoptOld(a) }
-        for (id, entry) in adoptedOld where entry.activity.isEnded {
-            entry.task?.cancel()
-            adoptedOld[id] = nil
-        }
-        writes.enqueue { await OldLiveActivities.end(old, now: t) }
         let alive = Set(live.filter { !$0.isEnded }.map { $0.attributes.id })
         for id in adopted.keys where !alive.contains(id) {
             adopted[id]?.task.cancel()

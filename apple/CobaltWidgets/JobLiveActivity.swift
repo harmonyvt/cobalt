@@ -18,10 +18,9 @@ import WidgetKit
 //
 // "Several at once" (any state with rows) swaps the dots for up to three one-line rows.
 //
-// Looks: the app's own tokens, not the mockup's. The mockup's mono type is IBM Plex Mono through `liveFont` (as the
-// other widgets), and its "accent" is the app's one ink (0xe1e1e1 on black, `LiveInk.primary`); green and red are the app's
+// Looks: the app's own tokens, not the mockup's. The mockup's mono type is IBM Plex Mono through `liveFont`, and its "accent" is the app's one ink (0xe1e1e1 on black, `LiveInk.primary`); green and red are the app's
 // `success` and (dark) `errorText`. Live Activities only animate what the system animates, so the bar's no-number state is
-// a still segment (`StoryBar`'s own, as in the other widgets), not a sliding one.
+// a still segment (`StoryBar`'s own), not a sliding one.
 
 struct JobLiveActivity: Widget {
     var body: some WidgetConfiguration {
@@ -144,7 +143,7 @@ struct JobFacts {
     }
 
     /// Widgets cannot write to the clipboard. The app's `handleAppLink` copies `cobalt-apple://copy?url=<link>` when it opens
-    /// (the same route the old widgets' "copy link" uses; web links only).
+    /// (web links only).
     var copyURL: URL? {
         guard let link = state.link else { return nil }
         var parts = URLComponents()
@@ -247,7 +246,7 @@ struct JobLockScreenView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, LiveLock.horizontalPadding)
         .padding(.vertical, LiveLock.verticalPadding)
-        // The card cannot grow with text: clamp at the budget's largest size, as the other widgets do.
+        // The card cannot grow with text: clamp at the budget's largest size.
         .dynamicTypeSize(...LiveLock.largestType)
         .widgetURL(facts.openURL)
     }

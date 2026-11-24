@@ -39,11 +39,6 @@ export interface WorkerEnv {
     APNS_TEAM_ID?: string;
     APNS_BUNDLE_ID?: string;
     APNS_VIA?: string;
-    // Hark notification bridge (section 9): the webhook URL, a secret. Absent, empty or not
-    // an https URL means the bridge is off and `features.notify_bridge` false.
-    HARK_WEBHOOK_URL?: string;
-    // "1" turns the Hark bridge on; anything else (the config's "0") keeps it off.
-    HARK_NOTIFY?: string;
     // Edge-cache purge for the public bucket (section 16): the zone id (a plain var) and a Cache Purge
     // token (a secret). Absent or empty: no purge, `cache_cleared: null`.
     MEDIA_ZONE_ID?: string;
@@ -61,9 +56,6 @@ export interface WorkerEnv {
     // Rich link pages (section 22): https://<share host>/ (a plain var). The Worker answers that host
     // itself, before the gate. Absent or empty: no pages, `share_base_url: null`.
     SHARE_BASE_URL?: string;
-    // Gallery links' moving previews (section 29.1): "1" shows each video in Discord's gallery as a 4 s
-    // silent WebP that plays by itself; anything else (the default) shows the real video.
-    GALLERY_LOOPS?: string;
     // Roast captions (section 25): the Anthropic key and optional AI Gateway URL (secrets), the model.
     ANTHROPIC_API_KEY?: string;
     ROAST_BASE_URL?: string;

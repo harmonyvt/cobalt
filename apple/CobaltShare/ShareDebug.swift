@@ -61,11 +61,12 @@ enum ShareDebug {
         guard flags?.probeActivity == true else { return }
         let info = ActivityAuthorizationInfo()
         log("probe: areActivitiesEnabled=\(info.areActivitiesEnabled)")
-        let attributes = CobaltActivityAttributes(LiveRunAttributes(
-            run: UUID(), input: "link", service: "instagram", ref: "Dd7P496wolG", origin: "share"))
-        let state = LiveContentState(stage: .fetching, rail: 0, since: Date().timeIntervalSince1970)
+        let job = JobLive.job(
+            save: LiveContentState(stage: .fetching, rail: 0, since: Date().timeIntervalSince1970),
+            attributes: LiveRunAttributes(run: UUID(), input: "link", service: "instagram", ref: "Dd7P496wolG", origin: "share"))
         do {
-            let activity = try Activity.request(attributes: attributes, content: .init(state: state, staleDate: nil), pushType: nil)
+            let activity = try Activity.request(
+                attributes: CobaltJobActivityAttributes(job.attributes), content: .init(state: job.state, staleDate: nil), pushType: nil)
             log("probe: Activity.request SUCCEEDED id=\(activity.id)")
         } catch {
             log("probe: Activity.request FAILED \(String(reflecting: error))")

@@ -385,7 +385,7 @@ describe("GET /capabilities", () => {
         const { db, stats } = timedDb(fake);
         const d = { db, mediaBaseUrl: MEDIA, now: () => T, shareBaseUrl: SHARE, keyCache: new KeyCache() };
         // chat and the editor on, so that the two migrations they need are asked about too
-        const caps = (dd: typeof d | Omit<typeof d, "keyCache"> = d) => capabilities(dd, "key", KEY, false, false, false, false, false, false, false, true, false, false, true);
+        const caps = (dd: typeof d | Omit<typeof d, "keyCache"> = d) => capabilities(dd, "key", KEY, false, false, false, false, false, false, true, false, false, true);
         return { fake, d, stats, waits, caps };
     }
 
@@ -403,7 +403,7 @@ describe("GET /capabilities", () => {
         expect(await w.caps(uncached)).toEqual(first);
         expect([w.stats.n, w.waits.n]).toEqual([9, 3]);
         // no key: nothing to ask at all
-        expect((await capabilities(w.d, "missing", undefined, false, false, false, false, false, false, false, true, false, false, true)).body).toMatchObject({ key: "missing", key_name: null });
+        expect((await capabilities(w.d, "missing", undefined, false, false, false, false, false, false, true, false, false, true)).body).toMatchObject({ key: "missing", key_name: null });
         expect([w.stats.n, w.waits.n]).toEqual([9, 3]);
     });
 

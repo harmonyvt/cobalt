@@ -797,7 +797,7 @@ describe("features.about and features.about_sound", () => {
     it("about exactly while search is on and the Anthropic key is set; about_sound while Workers AI is there too", async () => {
         const w = world();
         const f = async (search: boolean, about: boolean, sound: boolean) =>
-            ((await capabilities(w.d, "missing", undefined, false, false, false, false, false, false, search, false, false, false, false, false, about, sound)).body as any).features;
+            ((await capabilities(w.d, "missing", undefined, false, false, false, false, false, search, false, false, false, false, false, about, sound)).body as any).features;
         expect(await f(true, true, true)).toMatchObject({ about: true, about_sound: true });
         expect(await f(true, true, false)).toMatchObject({ about: true, about_sound: false });
         expect(await f(false, true, true)).toMatchObject({ about: false, about_sound: false });

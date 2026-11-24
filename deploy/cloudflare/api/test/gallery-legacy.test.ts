@@ -1,35 +1,22 @@
 // Lane S0 (APP-API-CONTRACT.md 18.9), the API half: a save from a client that sends NO `items` (the 1.13 share sheet,
 // a batch paste, a Shortcut) of a photo-only post. The helper (fake, speaking 18.7) answers what the S0 helper answers
 // for that request: a done body with an `items` list and `picker_count`. The Worker, the Durable Object's services
-// (the real StudioService and NotifyService) and the real SQL run together. What is proved here: the Durable Object
+// (the real StudioService) and the real SQL run together. What is proved here: the Durable Object
 // already stores N rows whenever the helper's answer has an `items` list, with no change outside the helper.
 import { beforeEach, describe, expect, it } from "vitest";
-import { NotifyService } from "../src/notify";
 import { KEY_ID, LINK, MEDIA_BASE, POSTER_URL, asBody, json, world, type World } from "./poster-world";
 import { itemRows, photos } from "./gallery-world";
 import { listAll } from "./visibility-fixture";
 
-const HOOK = "https://hark.example/api/webhook/T0pS3cretHookToken";
 const X_POST = "https://x.com/ilokineedsleep/status/2106850389551374806";
 
-class FakeHark {
-    calls: { title: string; body: string; url?: string }[] = [];
-    fetch = async (_url: string, init: RequestInit): Promise<Response> => {
-        this.calls.push(JSON.parse(String(init.body)));
-        return new Response('{"ok":true}', { status: 200 });
-    };
-}
-
 let w: World;
-let hark: FakeHark;
 let studio: ReturnType<World["make"]>;
 
 beforeEach(async () => {
     w = world();
     await w.addKey();
-    hark = new FakeHark();
-    const notify = new NotifyService({ storage: w.kv, db: w.db, now: w.clock.now, webhookUrl: HOOK, fetch: hark.fetch });
-    studio = w.make({ notify });
+    studio = w.make({});
 });
 
 // A save with no `items`, the way an old client asks, and the answer an S0 helper gives it.
@@ -92,16 +79,6 @@ describe("a 4-photo post saved with no `items` (the 1.13 share sheet on an X gal
         expect(v3.files).toHaveLength(4);
     });
 
-    it("fires exactly one `saved` notification, with the session's url", async () => {
-        const { sid } = await saveLegacy(photos(4));
-        expect(hark.calls).toHaveLength(1);
-        expect(hark.calls[0].body).toContain("x · 2106850389551374806 is saved");
-        expect(hark.calls[0].url).toBe(`cobalt-apple://session/${sid}`);
-        // polling a finished session again does not announce it again
-        await studio.advance(sid, 0);
-        expect(hark.calls).toHaveLength(1);
-    });
-
     it("an item that fails is recorded and the rest are kept; the save is still `ready`", async () => {
         const { sid, done } = await saveLegacy([{ type: "photo" }, { type: "photo", fail: "error.studio.fetch_failed" }, { type: "photo" }, { type: "photo" }]);
         expect(done.status).toBe("ready");
@@ -109,7 +86,6 @@ describe("a 4-photo post saved with no `items` (the 1.13 share sheet on an X gal
         expect(itemRows(w, sid).map((r) => r.item_index)).toEqual([0, 2, 3]);
         const v3 = await listAll(w, "v=3");
         expect(v3.posts[0]).toMatchObject({ kind: "gallery", item_count: 3, items_failed: [1] });
-        expect(hark.calls).toHaveLength(1);
     });
 });
 

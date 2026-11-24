@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import SyncGlowKit
 import UniformTypeIdentifiers
 
 @MainActor @Observable
@@ -120,37 +119,10 @@ public final class LibraryModel {
     @ObservationIgnored var hiddenSyncing = false
     /// The on-device library, when `sync.engine` is on. Nil leaves every load on `GET /library`.
     @ObservationIgnored var sync: LibrarySync?
-    #if DEBUG
-    /// A glow status with no engine behind it, so a debug build can force a state for a screenshot
-    /// while `sync.engine` is off.
-    public var debugStatus: SyncGlowStatus?
-    #endif
-
-    /// The sync glow. Nil while the flag is off and nothing has forced a preview.
-    public var syncStatus: SyncGlowStatus? {
-        #if DEBUG
-        sync?.status ?? debugStatus
-        #else
-        sync?.status
-        #endif
+    /// What the on-device sync is doing right now. Nil while `sync.engine` is off.
+    public var syncStatus: SyncStatusSnapshot? {
+        sync?.status.snapshot
     }
-
-    #if DEBUG
-    /// Holds the glow on one state. `nil` follows the engine again (and hides the band when there is no engine).
-    public func debugSyncGlow(_ state: SyncGlowState?, pending: Int) {
-        if state == nil {
-            sync?.status.debugForce(nil, pending: 0)
-            debugStatus = nil
-            return
-        }
-        if let status = sync?.status {
-            status.debugForce(state, pending: pending)
-            return
-        }
-        if debugStatus == nil { debugStatus = SyncGlowStatus() }
-        debugStatus?.debugForce(state, pending: pending)
-    }
-    #endif
 
     // 50 (the client's cap), not 20: each page that lands rebuilds the whole library screen, and a small page lands
     // mid-scroll (8.15)

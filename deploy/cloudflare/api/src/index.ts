@@ -11,7 +11,7 @@ import { handleLiveRoute, isLiveRoute, LiveService } from "./live";
 import { EditLiveService, handleEditLiveRoute, isEditLiveRoute } from "./edit-live";
 import { SwarmLiveService, handleSwarmLiveRoute, isSwarmLiveRoute } from "./swarm-live";
 import { ChatLiveService, handleChatLiveRoute, isChatLiveRoute } from "./chat-live";
-import { handleNotifyRoute, harkConfigFrom, isNotifyRoute, NotifyService } from "./notify";
+import { handleNotifyRoute, isNotifyRoute } from "./notify-off";
 import { handleStudioRoute, isStudioRoute, parseSaveEngineMode, StudioService, type YtDlpDeps } from "./studio";
 import { YTDLP_START_PATH } from "./ytdlp-path";
 import { fetchWithStartRetry } from "./start-retry";
@@ -22,7 +22,6 @@ import { purgeFrom } from "./visibility";
 import { releaseHeld } from "./hidden";
 import { syncMaintenance } from "./sync";
 import { shareBaseFrom } from "./deps";
-import { shareLinkFrom } from "./share";
 import { drainIndexer, SEARCH_RUN_BUDGET_MS } from "./embed";
 import { refreshNames } from "./names";
 import { backfillCaptions, captionerFrom } from "./roast";
@@ -41,7 +40,6 @@ import { loaderRunner } from "./chat-loader";
 import { relayFetch } from "./model-fetch";
 import { roomPort, stageRetention } from "./stage";
 import { editsRecover, kickRenderers, type RendererNamespace } from "./edits";
-import { notifyEndedRow } from "./edit-render-core";
 import { handleChatBudgetRoute, isChatBudgetRoute } from "./registry/budget";
 import { handleChatPendingRoute, isChatPendingRoute } from "./registry/pending";
 export { ModelRelay } from "./model-relay";
@@ -125,7 +123,6 @@ export class CobaltContainer extends Container<Env> {
     private editLive: EditLiveService;
     private swarmLive: SwarmLiveService;
     private chatLive: ChatLiveService;
-    private notify: NotifyService;
 
     constructor(ctx: DurableObjectState<{}>, env: Env) {
         super(ctx, env);
@@ -255,21 +252,6 @@ export class CobaltContainer extends Container<Env> {
         // chat replies shown on the owner's other devices (section 27.9): the start tokens, pushes from the chat route
         this.chatLive = new ChatLiveService({ storage: this.ctx.storage, now: webpDeps.now, apns, scheduleSweep: () => this.scheduleSweepSoon() });
 
-        // Hark notification bridge (APP-API-CONTRACT.md section 9). HARK_WEBHOOK_URL is a
-        // secret read only here (the Worker reads it for the capability flag); it never goes
-        // into envVars, so the container never sees it. Missing or empty: the bridge is off.
-        this.notify = new NotifyService({
-            storage: this.ctx.storage,
-            db: env.DB,
-            now: webpDeps.now,
-            webhookUrl: harkConfigFrom(env),
-            fetch: (url, init) => fetch(url, init),
-            // a failed send is retried by the sweep: arm it
-            scheduleSweep: () => this.scheduleSweepSoon(),
-            // a webp's link in the message is its rich link page (section 22)
-            shareLink: shareLinkFrom(env),
-        });
-
         // cobalt studio: saves a link into the private R2 bucket (advanced by
         // the studio page's polls, which reach this DO through the Worker) and
         // renders WebPs from the stored copy. The video moves helper -> R2 and
@@ -318,7 +300,6 @@ export class CobaltContainer extends Container<Env> {
             // The sweep stops waiting after 30 s. This holds the about/safety job until it records the clip or the error.
             keep: (p) => this.ctx.waitUntil(p),
             live: this.live,
-            notify: this.notify,
             // server-made posters and `public: true` hosting (APP-API-CONTRACT.md section 13)
             media: env.MEDIA,
             mediaBaseUrl: env.MEDIA_BASE_URL,
@@ -386,7 +367,7 @@ export class CobaltContainer extends Container<Env> {
 
         // The schedule's callback (public: the library looks the method up by name).
     async sweepJobs(): Promise<void> {
-        await runSweep(this.sweepScheduler(), () => this.studio.sweep(), undefined, this.sweepLive(), this.notify);
+        await runSweep(this.sweepScheduler(), () => this.studio.sweep(), undefined, this.sweepLive());
     }
 
     // A container rollout restarts the running instance with the env it was
@@ -452,10 +433,10 @@ export class CobaltContainer extends Container<Env> {
             return handleRmbgRoute(this.rmbg, request);
         }
 
-        // The Hark opt-in (PUT|DELETE /studio/<sid>/notify) is DO storage and D1 only, like
+        // The retired Hark opt-in (PUT|DELETE /studio/<sid>/notify) answers "bridge off" from D1 alone, like
         // the live routes: never wakes or restarts the container.
         if (isNotifyRoute(new URL(request.url).pathname)) {
-            return handleNotifyRoute(this.notify, request);
+            return handleNotifyRoute(this.env.DB, request);
         }
 
         if (this.ctx.container?.running) {
@@ -597,7 +578,6 @@ async function runScheduled(
                         db: env.DB,
                         now: () => Date.now(),
                         kick: kickRenderers(env.EDIT_RENDERER as unknown as RendererNamespace),
-                        onLost: (rid) => notifyEndedRow({ db: env.DB, hark: harkConfigFrom(env), now: () => Date.now() }, rid),
                     });
                     if (r.requeued || r.lost || r.cancelled || r.queued) console.log("[edits] recover", JSON.stringify(r));
                 } catch (e) {
@@ -807,22 +787,5 @@ async function runScheduled(
                     (e) => console.error("[posters] daily kick failed", e instanceof Error ? e.name : "error"),
                 ),
         );
-        // Gallery links' moving previews (APP-API-CONTRACT.md section 29): the backfill of anything a
-        // link's own kick missed, and the removal of previews whose video was deleted or made private.
-        // Off unless GALLERY_LOOPS is "1" (section 29.1).
-        if (env.GALLERY_LOOPS === "1")
-            ctx.waitUntil(
-                getContainer(env.COBALT, "main")
-                    .fetch(
-                        new Request("https://do.internal/loops/kick?limit=50&clean=1", {
-                            method: "POST",
-                            headers: { [KEY_ID_HEADER]: "cron:loops" },
-                        }),
-                    )
-                    .then(
-                        async (res) => console.log("[loops] daily kick", res.status, await res.text().catch(() => "")),
-                        (e) => console.error("[loops] daily kick failed", e instanceof Error ? e.name : "error"),
-                    ),
-            );
     }
 }

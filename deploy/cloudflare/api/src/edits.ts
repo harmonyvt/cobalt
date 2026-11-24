@@ -899,8 +899,6 @@ export type RecoverDeps = {
     db: D1Database;
     now: () => number;
     kick: () => Promise<void>;
-    // called with the id of each render this run ended `error.edit.lost` (index.ts wires the Hark message, 31.11)
-    onLost?: (rid: string) => Promise<void>;
 };
 
 // A claimed render nobody has written to for 10 minutes lost its renderer (a deploy, an eviction): back into the line
@@ -951,10 +949,7 @@ export async function editsRecover(d: RecoverDeps): Promise<{ requeued: number; 
                         .run()
                 ).meta?.changes ?? 0,
             );
-            if (changed > 0) {
-                lost++;
-                if (d.onLost) await d.onLost(r.id).catch(() => {});
-            }
+            if (changed > 0) lost++;
         }
     }
     const q = await d.db.prepare("SELECT COUNT(*) AS n FROM edit_renders WHERE status = 'queued' AND cancel_requested = 0").first<{ n: number }>();

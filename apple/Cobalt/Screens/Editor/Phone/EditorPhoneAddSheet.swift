@@ -2,6 +2,11 @@
 import CobaltKit
 import SwiftUI
 
+/// What the add sheet puts the picked file on.
+enum EditorPhoneAddMode: String, Equatable {
+    case main, overlay
+}
+
 /// The bin as a sheet (apple/CONTRACT-EDITOR.md 4.4, 12): the library's files in a grid with `add` on each tile, a search field
 /// and `done`. For the main track (`+` on the timeline) it offers videos and appends the pick; for the overlay (the `overlay`
 /// tool) it offers videos, images (photos, gifs, webps, cutouts) and 7TV emotes on three shelves and puts the pick at the

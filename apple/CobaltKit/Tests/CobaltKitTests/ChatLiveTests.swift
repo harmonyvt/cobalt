@@ -143,19 +143,14 @@ private final class FakeChatAdapter: ChatLiveAdapter {
     var madeWithPush: [Bool] = []
     var requested: [JobLiveJob] = []
     var pushed: [FakeChatHandle] = []
-    var old: [FakeOldActivity] = []
-    let oldStream: AsyncStream<any OldLiveActivity>
-    let oldSink: AsyncStream<any OldLiveActivity>.Continuation
     let createdStream: AsyncStream<any JobActivityHandle>
     let createdSink: AsyncStream<any JobActivityHandle>.Continuation
 
     init() {
         (createdStream, createdSink) = AsyncStream.makeStream(of: (any JobActivityHandle).self)
-        (oldStream, oldSink) = AsyncStream.makeStream(of: (any OldLiveActivity).self)
     }
 
     var activities: [any JobActivityHandle] { made + pushed }
-    var oldActivities: [any OldLiveActivity] { old }
     func request(_ job: JobLiveJob, staleDate: Date, push: Bool) throws -> any JobActivityHandle {
         let h = FakeChatHandle(job: job)
         made.append(h)
@@ -164,7 +159,6 @@ private final class FakeChatAdapter: ChatLiveAdapter {
         return h
     }
     func newActivities() -> AsyncStream<any JobActivityHandle> { createdStream }
-    func newOldActivities() -> AsyncStream<any OldLiveActivity> { oldStream }
 }
 
 private final class FakeChatLiveClient: ChatLiveClient, @unchecked Sendable {
@@ -279,43 +273,6 @@ struct ChatLiveManagerTests {
         try await Task.sleep(for: .milliseconds(30))
         #expect(client.tokens.filter { $0.0 == "ZZZZZZZZZZZZZZZZ" }.count == 1, "one follower per activity")
         #expect(client.jobFlags.allSatisfy { $0 }, "job activities say type: job")
-    }
-
-    @Test func anOldTypeChatActivityTheServerStartedHandsItsTokenToTheOldRoute() async throws {
-        // a key with no job start token yet (the first reply after the update): the server starts the old chat type
-        let adapter = FakeChatAdapter()
-        let client = FakeChatLiveClient()
-        var caps = Capabilities.unknown
-        caps.chat = true
-        caps.chatLivePush = true
-        let manager = ChatLiveManager(
-            adapter: adapter, now: { Date() }, isAppActive: { false }, environment: .production,
-            capabilities: { caps }, client: { client })
-        manager.start()
-        let old = FakeOldActivity(id: "AbCdEfGh12345678", staleDate: Date().addingTimeInterval(90))
-        adapter.old.append(old)
-        adapter.oldSink.yield(old)
-        old.sendToken("ab12")
-        for _ in 0..<50 where client.tokens.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(client.tokens.map(\.0) == ["AbCdEfGh12345678"] && client.tokens.map(\.1) == ["ab12"])
-        #expect(client.jobFlags == [false], "the old type: the server must push the old shape")
-        #expect(!old.isEnded, "the server writes and ends it")
-    }
-
-    @Test func oldChatActivitiesNobodyWritesAreEndedAtLaunchAndANewReplyEndsItsThreadsOldOne() async throws {
-        let adapter = FakeChatAdapter()
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let stale = FakeOldActivity(id: "OldOldOldOld0001", staleDate: now.addingTimeInterval(-10))
-        let fresh = FakeOldActivity(id: "OldOldOldOld0002", staleDate: now.addingTimeInterval(60))
-        adapter.old = [stale, fresh]
-        let manager = ChatLiveManager(adapter: adapter, now: { now }, isAppActive: { false })
-        manager.start()
-        await manager.settle()
-        #expect(stale.isEnded && !fresh.isEnded, "the server still writes the fresh one: it ends it itself")
-        manager.began(thread: "OldOldOldOld0002", prompt: "again", source: .app)
-        await manager.settle()
-        #expect(fresh.isEnded, "one island per thread: the old type gives way to the job activity")
-        #expect(adapter.made.count == 1)
     }
 
     @Test func aReplySentFromThisPhoneHandsItsTokenToTheServerWhenItPushes() async throws {

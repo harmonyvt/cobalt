@@ -361,10 +361,107 @@ struct SyncHTTPTests {
     }
 }
 
-@Suite("library glow wiring")
+@Suite("sync status: the reducer behind SyncStatusSnapshot")
+struct SyncStatusReducerTests {
+    private let t1 = Date(timeIntervalSince1970: 1_700_000_100)
+
+    @Test func startsIdleWithNothingPending() {
+        let reducer = SyncStatusReducer()
+        #expect(reducer.snapshot == SyncStatusSnapshot(state: .idle, pendingCount: 0, cursorSeq: 0, lastSyncedAt: nil))
+    }
+
+    @Test func aPassIsSyncingThenIdleAndRecordsTheCursorAndTime() {
+        var reducer = SyncStatusReducer()
+        reducer.passBegan()
+        #expect(reducer.snapshot.state == .syncing)
+        reducer.pulled(cursor: 42, at: t1)
+        reducer.passEnded(pending: 0, cursor: 42)
+        #expect(reducer.snapshot == SyncStatusSnapshot(state: .idle, pendingCount: 0, cursorSeq: 42, lastSyncedAt: t1))
+    }
+
+    @Test func nothingReachingTheServerIsOfflineWithWhatIsWaiting() {
+        var reducer = SyncStatusReducer()
+        reducer.passBegan()
+        reducer.pullFailed(offline: true, code: nil, pending: 3)
+        reducer.passEnded(pending: 3, cursor: 7)
+        #expect(reducer.snapshot.state == .offline(pending: 3))
+        #expect(reducer.snapshot.pendingCount == 3)
+        #expect(reducer.snapshot.cursorSeq == 7)
+        // the path coming back, then the next pass pulling, ends it
+        reducer.reachability(true, pending: 3)
+        #expect(reducer.snapshot.state == .idle)
+        reducer.reachability(false, pending: 3)
+        #expect(reducer.snapshot.state == .offline(pending: 3))
+        reducer.passBegan()
+        reducer.pulled(cursor: 9, at: t1)
+        reducer.passEnded(pending: 0, cursor: 9)
+        #expect(reducer.snapshot.state == .idle)
+        #expect(reducer.snapshot.pendingCount == 0)
+    }
+
+    @Test func aRefusalIsAnErrorWithTheServersCodeUntilTheNextPassBegins() {
+        var reducer = SyncStatusReducer()
+        reducer.passBegan()
+        reducer.refused(pending: 1, code: "error.library.bad_title")
+        reducer.pulled(cursor: 3, at: t1)
+        reducer.passEnded(pending: 0, cursor: 3)
+        #expect(reducer.snapshot.state == .error(code: "error.library.bad_title", pending: 0, nextRetryAt: nil))
+        reducer.passBegan()
+        #expect(reducer.snapshot.state == .syncing)
+        reducer.passEnded(pending: 0, cursor: 3)
+        #expect(reducer.snapshot.state == .idle)
+    }
+
+    @Test func aPullTheServerWouldNotServeIsAnErrorAndAnEmptyCodeIsNoCode() {
+        var reducer = SyncStatusReducer()
+        reducer.passBegan()
+        reducer.pullFailed(offline: false, code: "error.api.generic", pending: 2)
+        reducer.passEnded(pending: 2, cursor: 0)
+        #expect(reducer.snapshot.state == .error(code: "error.api.generic", pending: 2, nextRetryAt: nil))
+        reducer.passBegan()
+        reducer.refused(pending: 2, code: "")
+        reducer.passEnded(pending: 2, cursor: 0)
+        #expect(reducer.snapshot.state == .error(code: nil, pending: 2, nextRetryAt: nil))
+        #expect(SyncStatusReducer.code(of: CobaltError.api(code: "error.x", httpStatus: 500)) == "error.x")
+        #expect(SyncStatusReducer.code(of: CobaltError.noAPIKey) == nil)
+    }
+
+    @Test func aRepullShowsOnlyWhileThePassRunsAndDropsTheCursor() {
+        var reducer = SyncStatusReducer()
+        reducer.passBegan()
+        reducer.pulled(cursor: 50, at: t1)
+        reducer.repullBegan()
+        #expect(reducer.snapshot.state == .repulling)
+        #expect(reducer.snapshot.cursorSeq == 0)
+        reducer.pulled(cursor: 12, at: t1)
+        reducer.passEnded(pending: 0, cursor: 12)
+        #expect(reducer.snapshot.state == .idle)
+        #expect(reducer.snapshot.cursorSeq == 12)
+    }
+
+    @Test func aMissingRouteDisablesUntilAPassAfterItEndsWithoutAnother404() {
+        var reducer = SyncStatusReducer()
+        reducer.passBegan()
+        reducer.routeFellBack()
+        reducer.passEnded(pending: 0, cursor: 0)
+        #expect(reducer.snapshot.state == .disabled)
+        // a reset for another server starts a pass: still disabled while it runs, back when it ends clean
+        reducer.passBegan()
+        #expect(reducer.snapshot.state == .disabled)
+        reducer.passEnded(pending: 0, cursor: 5)
+        #expect(reducer.snapshot.state == .idle)
+        // and a pass that falls back again stays disabled
+        reducer.passBegan()
+        reducer.routeFellBack()
+        reducer.passEnded(pending: 0, cursor: 0)
+        #expect(reducer.snapshot.state == .disabled)
+    }
+}
+
+@Suite("library sync status wiring")
 @MainActor
-struct LibrarySyncGlowTests {
-    @Test func aRefusalReachesTheGlowAndTheTitleStillComesBack() async throws {
+struct LibrarySyncStatusTests {
+    @Test func aRefusalReachesTheStatusAndTheTitleStillComesBack() async throws {
         let store = try SyncStore(fileURL: try tempDB())
         let original = sample("p", title: "old", custom: "old")
         try await store.upsert(original)
@@ -375,26 +472,27 @@ struct LibrarySyncGlowTests {
             },
             sender: ScriptedSender(results: [.failure(SyncError.refused("error.library.bad_title"))]))
         try await sync.enqueueTitle(before: original, after: renamed(original, "nope"), anchor: "p-f", title: "nope", undo: {})
-        #expect(sync.status.state == .refused)
-        #expect(sync.status.lastEvent == .refused)
+        #expect(sync.status.snapshot.state == .error(code: "error.library.bad_title", pending: 0, nextRetryAt: nil))
+        #expect(sync.status.snapshot.cursorSeq == 3)
         #expect(try await store.post(id: "p")?.customTitle == "old")
         #expect(try await store.pendingOps().isEmpty)
     }
 
-    @Test func aNudgeMarksTheGlowAndStillPulls() async throws {
+    @Test func aNudgeStillPullsAndLeavesTheCursorAndTimeInTheSnapshot() async throws {
         let store = try SyncStore(fileURL: try tempDB())
         let pulls = QuietPull { _ in
             SyncPage(seq: 2, more: false, posts: [sample("a", title: "a")], links: [], collections: [], sets: [], names: [], rules: [], gone: [])
         }
         let sync = LibrarySync(store: store, transport: pulls, sender: ScriptedSender(results: []))
         await sync.nudge()
-        #expect(sync.status.lastEvent == .nudge)
-        #expect(sync.status.state == .nudge)
+        #expect(sync.status.snapshot.state == .idle)
+        #expect(sync.status.snapshot.cursorSeq == 2)
+        #expect(sync.status.snapshot.lastSyncedAt != nil)
         #expect(pulls.calls == [0])
         #expect(try await store.post(id: "a")?.title == "a")
     }
 
-    @Test func aMissingRouteTurnsTheGlowOffAndKeepsTheCopy() async throws {
+    @Test func aMissingRouteDisablesTheStatusAndKeepsTheCopy() async throws {
         let store = try SyncStore(fileURL: try tempDB())
         try await store.upsert(sample("kept", title: "kept"))
         let sync = LibrarySync(
@@ -403,9 +501,29 @@ struct LibrarySyncGlowTests {
             sender: ScriptedSender(results: []))
         await sync.kick(.launch)
         #expect(!sync.isActive)
-        #expect(sync.status.state == .off)
-        #expect(sync.status.lastEvent == .fellBack)
+        #expect(sync.status.snapshot.state == .disabled)
         #expect(try await store.post(id: "kept")?.title == "kept")
+    }
+
+    @Test func anUnreachableServerIsOfflineAndTheNextPullEndsIt() async throws {
+        let store = try SyncStore(fileURL: try tempDB())
+        let attempts = Mutex(0)
+        let sync = LibrarySync(
+            store: store,
+            transport: QuietPull { _ in
+                let n = attempts.withLock { $0 += 1; return $0 }
+                if n == 1 { throw URLError(.notConnectedToInternet) }
+                return SyncPage(seq: 4, more: false, posts: [], links: [], collections: [], sets: [], names: [], rules: [], gone: [])
+            },
+            sender: ScriptedSender(results: []))
+        await sync.kick(.launch)
+        #expect(sync.isActive)
+        #expect(sync.status.snapshot.state == .offline(pending: 0))
+        #expect(sync.status.snapshot.lastSyncedAt == nil)
+        await sync.kick(.reconnect)
+        #expect(sync.status.snapshot.state == .idle)
+        #expect(sync.status.snapshot.cursorSeq == 4)
+        #expect(sync.status.snapshot.lastSyncedAt != nil)
     }
 }
 
@@ -871,7 +989,7 @@ struct LibrarySyncAnswerTests {
         #expect(try await store.post(id: "p")?.visibility == .private)
         #expect(try await store.post(id: "p")?.files.map(\.isPublic) == [false, false])
         #expect(try await store.pendingOps().isEmpty)
-        #expect(sync.status.state == .refused)
+        #expect(sync.status.snapshot.state == .error(code: "error.private.not_toggleable", pending: 0, nextRetryAt: nil))
     }
 
     @Test func aPartialDeleteIsReportedToTheCallerAndToItsConfirmation() async throws {
@@ -907,7 +1025,7 @@ struct LibrarySyncAnswerTests {
         #expect(try await store.pendingOps().isEmpty)
     }
 
-    @Test func aPullThatCannotReachTheServerTurnsTheGlowOfflineAndTellsTheLibrary() async throws {
+    @Test func aPullThatCannotReachTheServerTurnsTheStatusOfflineAndTellsTheLibrary() async throws {
         let store = try SyncStore(fileURL: try tempDB())
         try await store.apply(page(1, posts: [sample("kept", title: "kept")]))
         let down = Mutex(true)
@@ -920,19 +1038,19 @@ struct LibrarySyncAnswerTests {
         sync.onPullFailure = { error in told.withLock { $0.append(pipelineFailure(from: error, during: .saving)) } }
         await sync.kick(.foreground)
         #expect(sync.isActive)
-        #expect(sync.status.state == .offlinePending)
+        #expect(sync.status.snapshot.state == .offline(pending: 0))
         #expect(told.withLock { $0 } == [.unreachable])
         #expect(try await store.post(id: "kept")?.title == "kept")
 
         down.withLock { $0 = false }
         await sync.kick(.foreground)
-        #expect(sync.status.state == .upToDate)
+        #expect(sync.status.snapshot.state == .idle)
         #expect(told.withLock { $0 }.count == 1)
     }
 
-    /// Offline, then the server is reached and will not serve the pull. The refused flicker plays
-    /// and, once it is over, the glow must not settle back on "offline": the server answered.
-    @Test func aPullTheServerRefusesAfterAnOfflineOneEndsTheGlowsOffline() async throws {
+    /// Offline, then the server is reached and will not serve the pull. The status must not stay on
+    /// "offline": the server answered, so it reads as an error and stays there until the next pass.
+    @Test func aPullTheServerRefusesAfterAnOfflineOneEndsTheStatusOffline() async throws {
         let store = try SyncStore(fileURL: try tempDB())
         try await store.apply(page(1, posts: [sample("kept", title: "kept")]))
         let down = Mutex(true)
@@ -944,19 +1062,16 @@ struct LibrarySyncAnswerTests {
         let told = Mutex(0)
         sync.onPullFailure = { _ in told.withLock { $0 += 1 } }
         await sync.kick(.foreground)
-        #expect(sync.status.state == .offlinePending)
+        #expect(sync.status.snapshot.state == .offline(pending: 0))
 
         down.withLock { $0 = false }
         await sync.kick(.foreground)
         #expect(sync.isActive)
-        #expect(sync.status.state == .refused)
+        #expect(sync.status.snapshot.state == .error(code: "error.api.generic", pending: 0, nextRetryAt: nil))
         #expect(told.withLock { $0 } == 2)
-        // long after the flicker
-        sync.status.tick(now: Date().addingTimeInterval(3_600))
-        #expect(sync.status.state == .upToDate)
     }
 
-    @Test func aPullTheServerRefusesWithACopyFlickersTheGlowAndTellsTheLibrary() async throws {
+    @Test func aPullTheServerRefusesWithACopyShowsAnErrorAndTellsTheLibrary() async throws {
         let store = try SyncStore(fileURL: try tempDB())
         try await store.apply(page(1, posts: [sample("kept", title: "kept")]))
         let sync = LibrarySync(
@@ -967,7 +1082,7 @@ struct LibrarySyncAnswerTests {
         sync.onPullFailure = { _ in told.withLock { $0 += 1 } }
         await sync.kick(.foreground)
         #expect(sync.isActive)
-        #expect(sync.status.state == .refused)
+        #expect(sync.status.snapshot.state == .error(code: "error.api.generic", pending: 0, nextRetryAt: nil))
         #expect(told.withLock { $0 } == 1)
     }
 
@@ -981,7 +1096,7 @@ struct LibrarySyncAnswerTests {
         sync.onLegacy = { loads.withLock { $0 += 1 } }
         await sync.kick(.foreground)
         #expect(!sync.isActive)
-        #expect(sync.status.state == .off)
+        #expect(sync.status.snapshot.state == .disabled)
         #expect(loads.withLock { $0 } == 1)
 
         await sync.kick(.foreground)

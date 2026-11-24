@@ -1,16 +1,15 @@
 // Direct media links, the API half (APP-API-CONTRACT.md section 19): a pasted link to a file that cobalt has no service
 // for is saved by the helper as ONE file, and the Worker and the Durable Object treat the result exactly like a single
-// photo or video save. The Worker, the real StudioService with the real NotifyService and the real SQL run together;
-// the helper (in its direct-link answer), both R2 buckets and the Hark webhook are fakes. The helper's own rule is in
+// photo or video save. The Worker, the real StudioService and the real SQL run together;
+// the helper (in its direct-link answer) and both R2 buckets are fakes. The helper's own rule is in
 // direct-links.test.ts.
 import { beforeEach, describe, expect, it } from "vitest";
 import { handleRequest } from "../src/worker";
-import { NotifyService, handleNotifyRoute, isNotifyRoute } from "../src/notify";
+import { handleNotifyRoute, isNotifyRoute } from "../src/notify-off";
 import { handleStudioRoute, isStudioRoute } from "../src/studio";
 import { fixedLengthPair } from "./studio-fakes";
 import { CLIENT, KEY_ID, auth, asBody, json, world, type World } from "./poster-world";
 
-const HOOK = "https://hark.example/api/webhook/T0pS3cretHookToken";
 // What the owner pastes: a Discord CDN attachment, with its signed query
 const DISCORD =
     "https://cdn.discordapp.com/attachments/1425871290003177532/1425871327433318440/LiaPoor.png?ex=68f12b7a&is=68efd9fa&hm=9c1a5e3f7b0d4a62c8e1f4d3b2a09f8e7d6c5b4a39281706f5e4d3c2b1a09f8e&";
@@ -18,16 +17,7 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...n
 const THUMB = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(60).fill(9)]);
 const SAVED_PNG = { contentType: "image/png", ext: "png", duration: null, width: 1024, height: 768, title: "LiaPoor", service: "discordapp", picker_count: null, direct: true };
 
-class FakeHark {
-    calls: { title: string; body: string; url?: string }[] = [];
-    fetch = async (_url: string, init: RequestInit): Promise<Response> => {
-        this.calls.push(JSON.parse(String(init.body)));
-        return new Response('{"ok":true}', { status: 200 });
-    };
-}
-
 let w: World;
-let hark: FakeHark;
 let studio: ReturnType<World["make"]>;
 let call: (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -45,13 +35,11 @@ const library = async () => (await (await call("/library?v=3", { headers: auth }
 beforeEach(async () => {
     w = world();
     await w.addKey();
-    hark = new FakeHark();
-    const notify = new NotifyService({ storage: w.kv, db: w.db, now: w.clock.now, webhookUrl: HOOK, fetch: hark.fetch });
-    studio = w.make({ notify });
+    studio = w.make({});
     const container = {
         async fetch(r: Request) {
             const p = new URL(r.url).pathname;
-            if (isNotifyRoute(p)) return handleNotifyRoute(notify, r);
+            if (isNotifyRoute(p)) return handleNotifyRoute(w.db, r);
             if (isStudioRoute(p)) return handleStudioRoute(studio, r);
             return new Response('{"status":"ok"}', { headers: { "content-type": "application/json" } });
         },
@@ -111,15 +99,6 @@ describe("a pasted Discord attachment link through POST /studio", () => {
         expect(post1.files[0]).toMatchObject({ content_type: "image/png", width: 1024, height: 768, source: "saved" });
     });
 
-    it("announces the save once, without the link or its token", async () => {
-        const sid = ((await (await post({ url: DISCORD, notify: { on: ["saved", "failed"], label: "discord · LiaPoor" } })).json()) as any).id as string;
-        await settle(sid);
-        expect(hark.calls).toHaveLength(1);
-        expect(hark.calls[0]!.body).toContain("discord · LiaPoor is saved");
-        expect(hark.calls[0]!.url).toBe(`cobalt-apple://session/${sid}`);
-        expect(JSON.stringify(hark.calls)).not.toMatch(/hm=|9c1a5e3f|cdn\.discordapp/);
-    });
-
     it("a video link is a single video save (duration, no thumb path)", async () => {
         w.helper.fetchDone = { contentType: "video/mp4", ext: "mp4", duration: 12.4, width: 1280, height: 720, title: "clip", service: "example", picker_count: null, direct: true };
         w.helper.videoBytes = new Uint8Array(8192).fill(5);
@@ -139,15 +118,12 @@ describe("a pasted Discord attachment link through POST /studio", () => {
         expect(w.items()[0]!.item_index).toBeNull();
     });
 
-    it("a link the helper cannot use as a file ends with cobalt's own error, which the opt-in announces as a failure", async () => {
+    it("a link the helper cannot use as a file ends with cobalt's own error", async () => {
         w.helper.fetchError = "error.api.link.invalid";
         const sid = ((await (await post({ url: DISCORD, notify: { on: ["saved", "failed"], label: "discord · LiaPoor" } })).json()) as any).id as string;
         const done = asBody(await settle(sid));
         expect(done).toMatchObject({ status: "error", error: { code: "error.api.link.invalid" } });
         expect(w.items()).toEqual([]);
-        expect(hark.calls).toHaveLength(1);
-        expect(hark.calls[0]!.title).toBe("capystore couldn't finish");
-        expect(JSON.stringify(hark.calls)).not.toMatch(/hm=|9c1a5e3f/);
     });
 
     it("an oversize file is the studio's too-large error", async () => {
