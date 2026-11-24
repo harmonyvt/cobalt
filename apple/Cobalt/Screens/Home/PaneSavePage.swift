@@ -56,7 +56,6 @@ struct PaneSaveContent: View {
     let pane: Pane
 
     @Environment(\.paneShape) private var shape
-    @Environment(\.paneHeaderHeight) private var headerHeight
 
     private var pipeline: Pipeline { job.pipeline }
     private var settings: CobaltKit.Settings { model.settings }
@@ -97,8 +96,7 @@ struct PaneSaveContent: View {
 
     private func page(_ facts: JobCardFacts) -> some View {
         PanePage(
-            title: facts.title, subtitle: subtitle(facts),
-            progress: job.isLive && facts.showsBar ? facts.fraction : nil
+            title: facts.title, subtitle: subtitle(facts)
         ) {
             poster
         } controls: {
@@ -119,7 +117,7 @@ struct PaneSaveContent: View {
 
     @ViewBuilder
     private var poster: some View {
-        ZStack {
+        let content = ZStack {
             Rectangle().fill(FrameGradient.fill(1))
             if let frame = pipeline.posterFrame {
                 Image(decorative: frame, scale: 1)
@@ -128,9 +126,18 @@ struct PaneSaveContent: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: shape == .tall ? 300 : nil)
-        .frame(maxHeight: shape == .tall ? nil : .infinity)
         .accessibilityHidden(true)
+
+        if shape == .tall {
+            content
+                .frame(height: Platform.isMac ? 220 : 240)
+                .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+        } else {
+            content
+                .frame(maxHeight: .infinity)
+        }
     }
 
     // MARK: controls

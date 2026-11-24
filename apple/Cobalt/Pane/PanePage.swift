@@ -40,7 +40,6 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
 
     @Environment(\.paneShape) private var shape
     @Environment(\.paneHinge) private var hinge
-    @Environment(\.paneHeaderHeight) private var headerHeight
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(Pane.self) private var pane: Pane?
     @Environment(\.paneItem) private var paneItem
@@ -74,6 +73,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
             }
         }
         .preference(key: PaneMoreKey.self, value: more)
+        .preference(key: PaneFloatingHeaderKey.self, value: shape == .wide && wideStyle == .heroOnly)
         .onChange(of: title, initial: true) { pane?.reportTitle(title, for: paneItem) }
     }
 
@@ -81,21 +81,20 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
 
     private var heroMaxHeight: CGFloat { typeSize.isAccessibilitySize ? 200 : 380 }
 
-    /// One column: the hero under the header, then title, controls, body and the paged shelf.
+    /// One column: the hero under the header bar, then title, controls, body and the paged shelf.
     private var tall: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Group(subviews: hero) { parts in
-                    if parts.isEmpty {
-                        Color.clear.frame(height: headerHeight)
-                    } else {
+            Group(subviews: hero) { parts in
+                VStack(alignment: .leading, spacing: 16) {
+                    if !parts.isEmpty {
                         ZStack { parts }
                             .frame(maxWidth: .infinity)
                             .frame(maxHeight: heroMaxHeight)
                             .clipped()
                     }
+                    column(stackedShelf: false)
                 }
-                column(stackedShelf: false)
+                .padding(.top, parts.isEmpty ? 16 : 0)
             }
             .padding(.bottom, 24)
         }
@@ -106,7 +105,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
     private var wide: some View {
         Group(subviews: hero) { parts in
             if parts.isEmpty {
-                ScrollView { column(stackedShelf: false).padding(.top, headerHeight).padding(.bottom, 24) }
+                ScrollView { column(stackedShelf: false).padding(.top, 16).padding(.bottom, 24) }
             } else if wideStyle == .heroOnly {
                 ZStack { parts }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -130,7 +129,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
                         titleBlock
                         PaneShelf(stacked: true) { shelf }
                     }
-                    .padding(.top, headerHeight)
+                    .padding(.top, 16)
                     .padding(.bottom, 16)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
@@ -139,7 +138,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
                     ZStack { parts }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
-                    ScrollView { column(stackedShelf: false).padding(.top, headerHeight).padding(.bottom, 24) }
+                    ScrollView { column(stackedShelf: false).padding(.top, 16).padding(.bottom, 24) }
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -156,11 +155,11 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
             Group {
                 if fillsShelf {
                     column(stackedShelf: true)
-                        .padding(.top, headerHeight)
+                        .padding(.top, 16)
                         .padding(.bottom, 16)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
-                    ScrollView { column(stackedShelf: true).padding(.top, headerHeight).padding(.bottom, 24) }
+                    ScrollView { column(stackedShelf: true).padding(.top, 16).padding(.bottom, 24) }
                 }
             }
             .environment(\.paneShape, .split(.details))
@@ -346,6 +345,7 @@ private struct PaneShelf<Cards: View>: View {
             .scrollTargetBehavior(.paging)
             .scrollIndicators(.hidden)
             .scrollPosition(id: Binding<Int?>(get: { index }, set: { if let i = $0 { pane?.setShelf(i) } }))
+            .clipped()
             .motion(Motion.card, value: index)
             PaneDots(count: parts.count, index: index) { pane?.setShelf($0) }
         }
@@ -474,26 +474,29 @@ struct PaneHalves: Layout {
 struct PaneLoadingPage: View {
     @Environment(\.paneShape) private var shape
     @Environment(\.paneHinge) private var hinge
-    @Environment(\.paneHeaderHeight) private var headerHeight
 
     var body: some View {
         Group {
             switch shape {
             case .tall:
-                VStack(alignment: .leading, spacing: 18) {
-                    block.aspectRatio(16 / 10, contentMode: .fit)
+                VStack(alignment: .leading, spacing: 16) {
+                    block
+                        .aspectRatio(16 / 10, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
                     lines.padding(.horizontal, 16)
                     Spacer(minLength: 0)
                 }
             case .wide:
                 HStack(spacing: 0) {
                     block
-                    lines.padding(16).padding(.top, headerHeight).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    lines.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             case .split:
                 PaneHalves(hinge: hinge) {
                     block
-                    lines.padding(16).padding(.top, headerHeight).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    lines.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             case .bar:
                 HStack(spacing: 12) {
@@ -520,8 +523,8 @@ struct PaneLoadingPage: View {
             Capsule().fill(Skeleton.fill).frame(width: 220, height: 16)
             Capsule().fill(Skeleton.fill).frame(width: 140, height: 10)
             HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 22).fill(Skeleton.fill).frame(height: 96)
-                RoundedRectangle(cornerRadius: 22).fill(Skeleton.fill).frame(height: 96)
+                RoundedRectangle(cornerRadius: 18).fill(Skeleton.fill).frame(height: 84)
+                RoundedRectangle(cornerRadius: 18).fill(Skeleton.fill).frame(height: 84)
             }
             .padding(.top, 8)
         }
@@ -532,7 +535,6 @@ struct PaneLoadingPage: View {
 struct PaneGonePage: View {
     var message: String = Copy.Pane.gone
     @Environment(\.paneShape) private var shape
-    @Environment(\.paneHeaderHeight) private var headerHeight
     @Environment(Pane.self) private var pane: Pane?
 
     var body: some View {
@@ -559,7 +561,6 @@ struct PaneGonePage: View {
                     .font(CobaltType.button)
             }
             .padding(24)
-            .padding(.top, headerHeight)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }

@@ -70,6 +70,14 @@ struct StageRewardPage: View {
         ) {
             if shape == .bar {
                 StageBarThumb(onAir: stage.onAir, symbol: Self.symbol(kind))
+            } else if shape == .tall {
+                StageCanvas(stage: stage)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Copy.Stage.previewA11y)
             } else {
                 StageCanvas(stage: stage)
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
@@ -329,6 +337,14 @@ struct StagePoolVideoPage: View {
         ) {
             if shape == .bar {
                 StageThumb(item: item, size: 40)
+            } else if shape == .tall {
+                StageCanvas(stage: stage)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Copy.Stage.previewA11y)
             } else {
                 StageCanvas(stage: stage)
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
@@ -363,16 +379,11 @@ struct StagePoolVideoPage: View {
             }
         } body: {
             HStack(spacing: 12) {
-                StageThumb(item: item, size: 88)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.title)
-                        .font(CobaltType.bodySemibold)
-                        .foregroundStyle(CobaltColor.text)
-                        .lineLimit(3)
-                    Text(Copy.Stage.videoLine(code: item.code, duration: item.duration))
-                        .font(CobaltType.captionSmall)
-                        .foregroundStyle(CobaltColor.caption)
-                }
+                StageThumb(item: item, size: 64)
+                Text(Copy.Stage.videoLine(code: item.code, duration: item.duration))
+                    .font(CobaltType.caption)
+                    .foregroundStyle(CobaltColor.caption)
+                    .monospacedDigit()
                 Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)

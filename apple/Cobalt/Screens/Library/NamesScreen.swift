@@ -220,6 +220,8 @@ struct NamesPostMenu: View {
     let postKey: String
     /// The shell's status line ("an example of Lia now").
     var showStatus: @MainActor (String) -> Void = { _ in }
+    /// Renders the trigger as a 50 pt glass circle matching `.cobaltIcon()` buttons in an `IconRow`.
+    var iconCircle = false
 
     var body: some View {
         let names = model.searchNames
@@ -241,8 +243,13 @@ struct NamesPostMenu: View {
                 NamePane.startNew(example: postKey, model: model, pane: pane)
             }
         } label: {
-            Label(Copy.Names.thisIsMenu, systemImage: Symbol.Names.thisIs)
+            if iconCircle {
+                CobaltIconMenuLabel(title: Copy.Names.thisIsMenu, systemImage: Symbol.Names.thisIs)
+            } else {
+                Label(Copy.Names.thisIsMenu, systemImage: Symbol.Names.thisIs)
+            }
         }
+        .iconName(Copy.Names.thisIsMenu)
     }
 
     private func mark(_ name: TaughtName, _ kind: NameMark?) {

@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// The pane's big buttons (Harmony, 2026-11-23): a 2×2 grid (one action fills the row; three are two on top and one
-/// full width below), each about 96 pt tall, a large icon top-leading and a bold
-/// label bottom-leading on filled glass. Up to four; pass the rest to `PanePage(more:)`. At accessibility text sizes the
-/// grid becomes a list of full-width rows, so the labels never clip.
+/// The pane's primary buttons: paired tiles (2 or 4) with equal row heights, and compact full-width rows whenever an
+/// action sits alone on its row (1 action, the 3rd of 3, or at accessibility text sizes) so a single action never
+/// stretches into a giant empty rectangle. Up to four; pass the rest to `PanePage(more:)`.
 struct PaneActionGrid: View {
     let actions: [PaneAction]
 
@@ -18,20 +17,24 @@ struct PaneActionGrid: View {
     }
 
     var body: some View {
-        if typeSize.isAccessibilitySize {
+        if typeSize.isAccessibilitySize || actions.count == 1 {
             VStack(spacing: 8) {
                 ForEach(actions) { action in
-                    button(action) { PaneActionRow(action: action) }
+                    button(action, cornerRadius: 14) { PaneActionRow(action: action) }
                 }
             }
         } else {
-            // rows of two; an odd one out takes the whole row (1: full width; 3: two on top, one below), so no hole
             VStack(spacing: 10) {
                 ForEach(Self.rows(actions.count), id: \.self) { row in
-                    HStack(spacing: 10) {
-                        ForEach(row, id: \.self) { index in
-                            button(actions[index]) { PaneActionTile(action: actions[index]) }
+                    if row.count == 1, let index = row.first {
+                        button(actions[index], cornerRadius: 14) { PaneActionRow(action: actions[index]) }
+                    } else {
+                        HStack(spacing: 10) {
+                            ForEach(row, id: \.self) { index in
+                                button(actions[index], cornerRadius: 18) { PaneActionTile(action: actions[index]) }
+                            }
                         }
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -44,7 +47,7 @@ struct PaneActionGrid: View {
     }
 
     @ViewBuilder
-    private func button(_ action: PaneAction, @ViewBuilder label: () -> some View) -> some View {
+    private func button(_ action: PaneAction, cornerRadius: CGFloat, @ViewBuilder label: () -> some View) -> some View {
         let off = action.off(offline: offline)
         Group {
             if action.choices.isEmpty {
@@ -56,7 +59,7 @@ struct PaneActionGrid: View {
                     .menuIndicator(.hidden)
             }
         }
-        .buttonStyle(PaneBigButtonStyle(destructive: action.role == .destructive))
+        .buttonStyle(PaneBigButtonStyle(destructive: action.role == .destructive, cornerRadius: cornerRadius))
         .disabled(off)
         .opacity(off ? 0.45 : 1)
         .accessibilityHint(action.needsServer && offline ? Copy.Pane.needsServer : "")
@@ -66,20 +69,22 @@ struct PaneActionGrid: View {
 private struct PaneActionTile: View {
     let action: PaneAction
 
+    private var tileMinHeight: CGFloat { Platform.isMac ? 62 : 70 }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Image(systemName: action.systemImage)
-                .font(.system(size: 26, weight: .semibold))
-                .frame(height: 30, alignment: .topLeading)
-            Spacer(minLength: 8)
+                .font(.system(size: Platform.isMac ? 20 : 22, weight: .semibold))
+                .frame(height: 26, alignment: .topLeading)
+            Spacer(minLength: 10)
             Text(action.title)
-                .font(Font.cobalt(15, .semibold, relativeTo: .body))
+                .font(Font.cobalt(Platform.isMac ? 13.5 : 14.5, .semibold, relativeTo: .body))
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .minimumScaleFactor(0.85)
         }
-        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
-        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: tileMinHeight, maxHeight: .infinity, alignment: .topLeading)
+        .padding(12)
     }
 }
 
@@ -87,29 +92,34 @@ private struct PaneActionRow: View {
     let action: PaneAction
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
             Image(systemName: action.systemImage)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: Platform.isMac ? 15 : 17, weight: .semibold))
             Text(action.title)
-                .font(Font.cobalt(15, .semibold, relativeTo: .body))
+                .font(Font.cobalt(Platform.isMac ? 13.5 : 14.5, .semibold, relativeTo: .body))
                 .multilineTextAlignment(.leading)
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, minHeight: Platform.isMac ? 42 : 48, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
     }
 }
 
 /// Filled glass in the house colours, pressed with the app's haptic.
 private struct PaneBigButtonStyle: ButtonStyle {
     let destructive: Bool
+    let cornerRadius: CGFloat
+
+    private var tint: Color {
+        destructive ? CobaltColor.error.opacity(0.14) : CobaltColor.elevated.opacity(0.85)
+    }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(destructive ? CobaltColor.errorText : CobaltColor.text)
-            .contentShape(.rect(cornerRadius: 22))
-            .glassEffect(.regular.tint(CobaltColor.elevated.opacity(0.85)).interactive(), in: .rect(cornerRadius: 22))
+            .contentShape(.rect(cornerRadius: cornerRadius))
+            .glassEffect(.regular.tint(tint).interactive(), in: .rect(cornerRadius: cornerRadius))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(Motion.press, value: configuration.isPressed)
             .haptic(.impact(weight: .light), trigger: configuration.isPressed) { $0 }

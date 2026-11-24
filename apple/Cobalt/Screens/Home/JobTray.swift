@@ -41,12 +41,23 @@ struct JobTray: View {
     /// +1 per stop, try again or dismiss on a card (a light tap).
     @State private var actionTicks = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(Pane.self) private var pane: Pane?
 
     private var queue: JobQueue { model.queue }
 
+    /// The job already visible in the screen pane (`.save(id)` or `.job(id)`): never mirror it in the floating tray beside it.
+    private var paneJobID: UUID? {
+        guard pane?.isVisible == true, let item = pane?.item else { return nil }
+        switch item {
+        case .save(let id), .job(let id): return UUID(uuidString: id)
+        default: return nil
+        }
+    }
+
     private var rows: [Job] {
         _ = tick
-        return queue.alongside
+        guard let shown = paneJobID else { return queue.alongside }
+        return queue.alongside.filter { $0.id != shown }
     }
 
     // MARK: body

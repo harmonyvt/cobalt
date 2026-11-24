@@ -221,6 +221,42 @@ struct IconRow<Content: View>: View {
     }
 }
 
+/// A glass circle label for an icon-only `Menu` placed beside `.cobaltIcon()` buttons in an `IconRow` (SwiftUI `Menu`
+/// ignores `PrimitiveButtonStyle`, so it cannot use `.buttonStyle(.cobaltIcon())` directly).
+struct CobaltIconMenuLabel: View {
+    let title: String
+    let systemImage: String
+    var size: CobaltIconButtonStyle.Size = .regular
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.isEnabled) private var isEnabled
+
+    private var diameter: CGFloat { size == .regular ? 50 : 34 }
+    private var symbolSize: CGFloat { size == .regular ? 20 : 15 }
+    private var wordsBack: Bool { typeSize.isAccessibilitySize }
+
+    var body: some View {
+        Group {
+            if wordsBack {
+                Label(title, systemImage: systemImage)
+                    .labelStyle(.titleAndIcon)
+                    .font(CobaltType.buttonSmall)
+            } else {
+                Image(systemName: systemImage)
+                    .font(.system(size: symbolSize, weight: .medium))
+            }
+        }
+        .foregroundStyle(CobaltColor.text)
+        .lineLimit(1)
+        .frame(minWidth: diameter, minHeight: diameter)
+        .padding(.horizontal, wordsBack ? 12 : 0)
+        .contentShape(.capsule)
+        .glassEffect(isEnabled ? .regular.interactive() : .regular, in: .capsule)
+        .opacity(isEnabled ? 1 : 0.45)
+        .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
+    }
+}
+
 extension View {
     /// The name of an icon-only control that is not a `.cobaltIcon()` button (a menu, a toggle, a segmented picker):
     /// VoiceOver reads it, the Mac shows it on hover.

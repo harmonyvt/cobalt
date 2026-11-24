@@ -18,6 +18,10 @@ struct DetailMenu: View {
     /// The pane's post page draws `rename`, `open in library`, `ask about this` and `delete everything` itself (the title
     /// row and the header's `more`); this menu then holds the rest.
     var paneDrawsEssentials = false
+    /// Override the menu's icon when placed alongside a pane header that already carries `ellipsis`.
+    var symbol: String = Symbol.Media.more
+    /// Renders the trigger as a 50 pt glass circle matching `.cobaltIcon()` buttons in an `IconRow`.
+    var iconCircle = false
 
     /// `crop…` and `repost frame…` (lane A7, `Screens/Tools`): the tool sheet that is up.
     @State private var tool: ToolSheet?
@@ -142,7 +146,7 @@ struct DetailMenu: View {
                 }
                 .disabled(deleting)
             }
-            if let made = model.emoteTarget(rendition: liveRendition ?? rendition, title: item.titleText) {
+            if !paneDrawsEssentials, let made = model.emoteTarget(rendition: liveRendition ?? rendition, title: item.titleText) {
                 Button(Copy.EmoteEditor.makeAnEmote, systemImage: Symbol.EmoteEditor.make) { emoting = made }
                     .disabled(deleting)
             }
@@ -176,9 +180,13 @@ struct DetailMenu: View {
                 .disabled(deleting || busy)
             }
         } label: {
-            Label(Copy.Media.more, systemImage: Symbol.Media.more)
+            if iconCircle {
+                CobaltIconMenuLabel(title: Copy.Media.more, systemImage: symbol)
+            } else {
+                Label(Copy.Media.more, systemImage: symbol)
+            }
         }
-        .accessibilityLabel(Copy.Media.more)
+        .iconName(Copy.Media.more)
         // a crop that became a tab selects itself (`MediaDetail`); a picture sent to Photos says so under the actions
         .toolSheet($tool, model: model, item: item) { line in if let line { controller.say(line) } }
         .modifier(LibraryImageCropPresenter(model: model, target: $cropping, done: { line in controller.say(line) }))

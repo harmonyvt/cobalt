@@ -22,7 +22,6 @@ struct TwitchStreamPage: View {
 
     @Environment(Pane.self) private var pane
     @Environment(\.paneShape) private var shape
-    @Environment(\.paneHeaderHeight) private var headerHeight
     @Environment(\.openURL) private var openURL
     @Environment(\.lifecycle) private var lifecycle
     @State private var choosingTV = false
@@ -155,12 +154,8 @@ struct TwitchStreamPage: View {
         switch shape {
         case .bar: barThumb
         case .tall:
-            // the header's buttons float over a black band, so nothing sits on the picture
-            VStack(spacing: 0) {
-                Color.black.frame(height: headerHeight)
-                playerOrTV(compact: true)
-            }
-            .background(Color.black)
+            playerOrTV(compact: true)
+                .background(Color.black)
         case .wide where fillsScreen:
             ZStack(alignment: .bottom) {
                 Color.black

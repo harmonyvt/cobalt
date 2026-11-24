@@ -18,7 +18,6 @@ struct SwarmPage: View {
 
     @Environment(Pane.self) private var pane
     @Environment(\.paneShape) private var shape
-    @Environment(\.paneHeaderHeight) private var headerHeight
     @Environment(\.lifecycle) private var lifecycle
     @State private var controller = SwarmController()
     @State private var step: SwarmStep?
@@ -131,7 +130,6 @@ struct SwarmPage: View {
             }
         }
         .padding(Metrics.gutter)
-        .padding(.top, shape == .bar ? 0 : headerHeight)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -190,6 +188,23 @@ struct SwarmPage: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(swarm.isWorking ? CobaltColor.text : CobaltColor.caption)
             }
+        case .tall:
+            ZStack {
+                CobaltColor.surface
+                if cells.isEmpty {
+                    Image(systemName: Symbol.Swarms.tab)
+                        .font(.system(size: 36, weight: .light))
+                        .foregroundStyle(CobaltColor.caption)
+                        .accessibilityHidden(true)
+                } else {
+                    SwarmAgentGrid(cells: cells, selected: agent, columns: columns(cells.count)) { agent = $0 }
+                        .padding(16)
+                }
+            }
+            .frame(minHeight: 140)
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
         default:
             ZStack {
                 CobaltColor.surface
@@ -203,8 +218,6 @@ struct SwarmPage: View {
                         .padding(16)
                 }
             }
-            .padding(.top, shape == .tall ? headerHeight : 0)
-            .background(CobaltColor.surface)
         }
     }
 

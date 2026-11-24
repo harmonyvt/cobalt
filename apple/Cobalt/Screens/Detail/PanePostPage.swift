@@ -232,7 +232,17 @@ struct PanePostContent: View {
     private func hero(_ c: DetailContext) -> some View {
         switch shape {
         case .tall:
-            DetailHero(c: c, maxHeight: typeSize.isAccessibilitySize ? 200 : 340)
+            let compact = pane.placement == .compact
+            let maxH: CGFloat = typeSize.isAccessibilitySize ? 180 : (compact ? 236 : 276)
+            ZStack {
+                CobaltColor.surface
+                DetailHero(c: c, maxHeight: maxH)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: maxH)
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
         case .wide:
             DetailHero(c: c, maxHeight: 520)
         case .split, .bar:
@@ -265,17 +275,22 @@ struct PanePostContent: View {
         VStack(alignment: .leading, spacing: 12) {
             DetailInfo(
                 item: c.item, rendition: c.rendition, missing: c.missingIndex,
-                shareLink: c.model.capabilities.shareLink(for:))
+                shareLink: c.model.capabilities.shareLink(for:), formInset: false)
+                .padding(.horizontal, 16)
             IconRow(alignment: .leading) {
                 DetailMenu(
                     controller: controller, item: c.item, rendition: c.rendition,
                     openInLibrary: { openInLibrary(c.item) }, askAbout: { askAbout(c.item) }, rename: { renaming = true },
-                    paneDrawsEssentials: true)
-                    .buttonStyle(.cobaltIcon())
-                // "this is…" (a search name's example): a menu, so an icon of the row rather than a pane action
+                    paneDrawsEssentials: true, symbol: "slider.horizontal.3", iconCircle: true)
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                // "this is…" (a search name's example): a menu, styled as a matching icon circle
                 if model.capabilities.names, !(fromAlbum || model.isHiddenPost(c.item)), let key = c.item.post?.id {
-                    NamesPostMenu(model: model, postKey: key) { shell.showStatus($0) }
-                        .buttonStyle(.cobaltIcon())
+                    NamesPostMenu(model: model, postKey: key, showStatus: { shell.showStatus($0) }, iconCircle: true)
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
+                        .menuIndicator(.hidden)
                 }
                 SevenTvUploadIcon(model: model, file: c.rendition.file, title: c.item.titleText)
                 EmoteEditorIcon(model: model, rendition: c.rendition, title: c.item.titleText)

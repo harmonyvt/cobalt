@@ -33,7 +33,7 @@ extension EnvironmentValues {
     @Entry var paneHinge: PaneHinge? = nil
     /// The server can't be reached: pane actions that need it (`PaneAction.needsServer`) are dimmed.
     @Entry var paneOffline = false
-    /// The height of the header the pane draws over the top of its page (its buttons float over the hero).
+    /// The height of the header when a page opts into a floating overlay header (0 when the pane draws its dedicated top bar).
     @Entry var paneHeaderHeight: CGFloat = 0
 }
 
@@ -71,4 +71,11 @@ struct PaneAction: Identifiable {
 struct PaneMoreKey: PreferenceKey {
     static let defaultValue: [PaneAction] = []
     static func reduce(value: inout [PaneAction], nextValue: () -> [PaneAction]) { value += nextValue() }
+}
+
+/// Whether the current page opts into floating the pane's header over full-bleed media (e.g. a stream filling the Duo's
+/// top screen). Default is `false`: `PaneChrome` reserves a dedicated top header bar above the page content.
+struct PaneFloatingHeaderKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }
