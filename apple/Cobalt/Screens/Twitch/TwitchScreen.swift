@@ -20,17 +20,35 @@ struct TwitchScreen: View {
 
     private var store: TwitchStore { model.twitch }
 
+    /// The channel whose chat this tab shows beside the pane (its display name once known).
+    private var besideName: String? {
+        guard let login = pane.twitchChatBeside else { return nil }
+        return (store.channel == login ? store.channelInfo?.displayName : nil) ?? login
+    }
+
     var body: some View {
         Group {
-            if let login = pane.twitchChatBeside {
-                TwitchBesideChat(login: login, model: model) { tabChat.browsing = true }
+            if pane.twitchChatBeside != nil {
+                TwitchBesideChat(model: model)
             } else {
                 TwitchChannelList(model: model, besideStream: pane.streamBesideTab) { tabChat.browsing = false }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(CobaltColor.bg)
-        .navigationTitle(Copy.Twitch.title)
+        .navigationTitle(besideName ?? Copy.Twitch.title)
+        // the chat beside a stream: the channel's name is the title and "channels" sits in the bar, so the lines get the
+        // whole height under it
+        .toolbar {
+            if besideName != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { tabChat.browsing = true } label: {
+                        Label(Copy.Twitch.channels, systemImage: Symbol.Twitch.channels)
+                    }
+                    .accessibilityIdentifier("twitch.channels")
+                }
+            }
+        }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -75,35 +93,13 @@ extension Pane {
 // MARK: - the chat beside the pane
 
 private struct TwitchBesideChat: View {
-    let login: String
     let model: AppModel
-    let showChannels: () -> Void
-
-    private var store: TwitchStore { model.twitch }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Text(name)
-                    .font(Font.cobalt(15, .semibold))
-                    .foregroundStyle(CobaltColor.text)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Button(action: showChannels) {
-                    Label(Copy.Twitch.channels, systemImage: Symbol.Twitch.channels)
-                }
-                .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                .accessibilityIdentifier("twitch.channels")
-            }
-            TwitchChatCard(model: model, delay: TwitchChatCard.tvDelay, fills: true)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-
-    private var name: String {
-        (store.channel == login ? store.channelInfo?.displayName : nil) ?? login
+        TwitchChatCard(model: model, delay: TwitchChatCard.tvDelay, fills: true)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 

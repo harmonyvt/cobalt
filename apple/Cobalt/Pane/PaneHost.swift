@@ -91,9 +91,18 @@ struct PaneHost<Content: View>: View {
         .hapticChange(.impact(weight: .light), trigger: inline ? placement.name : "off") { old, new in
             old != "off" && new != "off"                    // a posture change settling the pane somewhere new
         }
-        .onGeometryChange(for: CGSize.self) { $0.size } action: {
-            size = $0
-            pane.measure($0)
+        // Measured as if the keyboard were down: the keyboard takes height, and a Duo open wide (about 951 x 669) less a
+        // keyboard is under `phoneWideMinHeight`, so typing in the tab beside the pane (twitch chat) flipped the placement to
+        // compact and threw the pane up as a sheet. The window only changes shape on a fold, a rotation or a resize.
+        .background {
+            Color.clear
+                #if os(iOS)
+                .ignoresSafeArea(.keyboard)
+                #endif
+                .onGeometryChange(for: CGSize.self) { $0.size } action: {
+                    size = $0
+                    pane.measure($0)
+                }
         }
         .onChange(of: placement, initial: true) { _, now in if measured { pane.place(now) } }
         .onAppear {
