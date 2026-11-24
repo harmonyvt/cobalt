@@ -128,6 +128,11 @@ struct FocusLayer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.hapticsEnabled) private var haptics
     @Environment(\.homeHeight) private var homeHeight
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// The secondary actions draw their words on a phone (apple 04-PHASE4 4.3): no long press to learn what an icon does.
+    private var wordsOnButtons: Bool { FocusActionStyle.labelled(sizeClass: sizeClass, typeSize: typeSize) }
 
     // MARK: derived
 
@@ -786,7 +791,7 @@ struct FocusLayer: View {
             if let failure, !isRendering {
                 InlineStatus(message: failure.message) {
                     Button(action: failure.retry) { Label(Copy.tryAgain, systemImage: Symbol.retry) }
-                        .buttonStyle(.cobaltIcon(.small))
+                        .buttonStyle(.focusAction(.inline, size: .small, labelled: wordsOnButtons))
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -934,18 +939,31 @@ struct FocusLayer: View {
         return GlassEffectContainer(spacing: Self.gap) {
             VStack(spacing: Self.gap) {
                 if let primary = primaryChoice { primaryButton(primary).appear(lifted) }
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { ForEach(items, id: \.self) { secondaryButton($0) } }
+                if wordsOnButtons {
+                    // the phone: cells with their words, three to a line (a short last line keeps the cells' width)
                     VStack(spacing: 10) {
                         ForEach(Array(stride(from: 0, to: items.count, by: 3)), id: \.self) { i in
                             HStack(spacing: 10) {
                                 ForEach(Array(items[i..<min(i + 3, items.count)]), id: \.self) { secondaryButton($0) }
+                                ForEach(0..<(3 - min(3, items.count - i)), id: \.self) { _ in Color.clear.frame(maxWidth: .infinity, minHeight: 1) }
                             }
                         }
                     }
-                    VStack(spacing: 10) { ForEach(items, id: \.self) { secondaryButton($0) } }
+                    .frame(maxWidth: .infinity)
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) { ForEach(items, id: \.self) { secondaryButton($0) } }
+                        VStack(spacing: 10) {
+                            ForEach(Array(stride(from: 0, to: items.count, by: 3)), id: \.self) { i in
+                                HStack(spacing: 10) {
+                                    ForEach(Array(items[i..<min(i + 3, items.count)]), id: \.self) { secondaryButton($0) }
+                                }
+                            }
+                        }
+                        VStack(spacing: 10) { ForEach(items, id: \.self) { secondaryButton($0) } }
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
             }
         }
         // on the wide tiers the rows do not stretch across the whole column
@@ -1011,7 +1029,7 @@ struct FocusLayer: View {
                 } label: {
                     Label(Copy.LinkPair.copyDirectLink, systemImage: copied ? Symbol.checkmark : LinkForm.direct.symbol)
                 }
-                .buttonStyle(.cobaltIcon(state: copied ? .done : .idle))
+                .buttonStyle(.focusAction(state: copied ? .done : .idle, labelled: wordsOnButtons))
                 .symbolBounce(on: copied)
                 .accessibilityLabel(copied ? Copy.copied : Copy.LinkPair.directA11y)
                 .appear(lifted)
@@ -1020,16 +1038,16 @@ struct FocusLayer: View {
             Button { convert() } label: {
                 Label(choice == .convert ? Copy.convertToWebp : Copy.anotherWebp, systemImage: Symbol.convert)
             }
-            .buttonStyle(.cobaltIcon())
+            .buttonStyle(.focusAction(labelled: wordsOnButtons))
             .appear(lifted)
         case .crop:
             Button { openCrop() } label: { Label(cropBadge ?? CropCopy.crop, systemImage: CropCopy.symbol) }
-                .buttonStyle(.cobaltIcon())
+                .buttonStyle(.focusAction(labelled: wordsOnButtons))
                 .accessibilityHint(CropCopy.cropA11yHint)
                 .appear(lifted)
         case .publicShare:
             Button { pipeline.hostOriginal() } label: { Label(Copy.publicShare, systemImage: Symbol.publicShare) }
-                .buttonStyle(.cobaltIcon())
+                .buttonStyle(.focusAction(labelled: wordsOnButtons))
                 .accessibilityHint(Copy.hostOriginal)
                 .appear(lifted)
         case .savePhotos:
@@ -1037,7 +1055,7 @@ struct FocusLayer: View {
             Button { pipeline.saveToPhotos() } label: {
                 Label(photos.title, systemImage: photos.done ? photos.doneSymbol : Symbol.savePhotos)
             }
-            .buttonStyle(.cobaltIcon(state: photos.done ? .done : (pipeline.photos == .working ? .working : .idle)))
+            .buttonStyle(.focusAction(state: photos.done ? .done : (pipeline.photos == .working ? .working : .idle), labelled: wordsOnButtons))
             .symbolBounce(on: photos.done)
             // "in your cobalt album": a statement, not an action
             .allowsHitTesting(!photos.placed)
@@ -1047,12 +1065,12 @@ struct FocusLayer: View {
             // plain cobalt: no public hosting, so the system share sheet for the file on this device
             if let file = localVideo?.fileURL {
                 ShareLink(item: file) { Label(Copy.share, systemImage: Symbol.share) }
-                    .buttonStyle(.cobaltIcon())
+                    .buttonStyle(.focusAction(labelled: wordsOnButtons))
                     .appear(lifted)
             }
         case .close:
             Button(action: close) { Label(Copy.close, systemImage: Symbol.close) }
-                .buttonStyle(.cobaltIcon())
+                .buttonStyle(.focusAction(labelled: wordsOnButtons))
                 .appear(lifted)
         case .copyWebp, .copyVideo:
             EmptyView()
@@ -1100,7 +1118,7 @@ struct FocusLayer: View {
                 // being made cannot be stopped, so there is no button for it: closing leaves it going alongside.
                 if canCancelQueuedWebp, let id = model.queue.focusedID {
                     Button { Task { await model.queue.cancel(id) } } label: { Label(Copy.cancel, systemImage: Symbol.close) }
-                        .buttonStyle(.cobaltIcon(.small))
+                        .buttonStyle(.focusAction(.inline, size: .small, labelled: wordsOnButtons))
                         .accessibilityLabel(TrayCopy.cancelWebpA11y)
                         .transition(.opacity)
                 }
@@ -1125,7 +1143,11 @@ private struct TrimPanel: View {
     let onCrop: @MainActor () -> Void
     let onCancel: @MainActor () -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
+        let words = FocusActionStyle.labelled(sizeClass: sizeClass, typeSize: typeSize)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 // with the crop badge beside it the readout drops its "of 00:14.8" so neither is cut
@@ -1154,10 +1176,10 @@ private struct TrimPanel: View {
             let makeWebp = Button(Copy.makeWebp, systemImage: Symbol.makeWebp) { pipeline.makeWebp() }
                 .buttonStyle(.cobaltPrimary())
             let crop = Button { onCrop() } label: { Label(CropCopy.crop, systemImage: CropCopy.symbol) }
-                .buttonStyle(.cobaltIcon())
+                .buttonStyle(.focusAction(.inline, labelled: words))
                 .accessibilityHint(CropCopy.cropA11yHint)
             let cancel = Button { onCancel() } label: { Label(Copy.cancelTrim, systemImage: Symbol.close) }
-                .buttonStyle(.cobaltIcon())
+                .buttonStyle(.focusAction(.inline, labelled: words))
             GlassEffectContainer(spacing: 10) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 10) { makeWebp; if canCrop { crop }; cancel }
@@ -1763,51 +1785,77 @@ private struct ResultRow: View {
     var onCopyDirect: (() -> Void)?
     let onCopy: () -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var words: Bool { FocusActionStyle.labelled(sizeClass: sizeClass, typeSize: typeSize) }
+
     private var copyLabel: String {
         if onCopyDirect != nil { return Copy.LinkPair.copyShareLink }
         return kind == .webp ? Copy.copyWebpLink : Copy.copyVideoLink
     }
     private var shareLabel: String { kind == .webp ? Copy.shareWebpLink : Copy.shareVideoLink }
 
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: kind == .webp ? Symbol.webpBadge : Symbol.linkBadge)
-                .font(.system(size: 15, weight: .medium))
+    private var badge: some View {
+        Image(systemName: kind == .webp ? Symbol.webpBadge : Symbol.linkBadge)
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(CobaltColor.text)
+            .frame(width: 22)
+            .accessibilityHidden(true)
+    }
+
+    private var texts: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(kind == .webp ? Copy.webpLink : Copy.videoLink)
+                .font(CobaltType.bodySemibold)
                 .foregroundStyle(CobaltColor.text)
-                .frame(width: 22)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(kind == .webp ? Copy.webpLink : Copy.videoLink)
-                    .font(CobaltType.bodySemibold)
-                    .foregroundStyle(CobaltColor.text)
-                Text(meta ?? displayURL(url))
-                    .font(CobaltType.captionSmall)
-                    .foregroundStyle(CobaltColor.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .monospacedDigit()
+            Text(meta ?? displayURL(url))
+                .font(CobaltType.captionSmall)
+                .foregroundStyle(CobaltColor.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var buttons: some View {
+        IconRow(spacing: 8, alignment: words ? .leading : .trailing) {
+            Button(action: onCopy) {
+                Label(copyLabel, systemImage: copied ? Symbol.checkmark : Symbol.copyLink)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .combine)
-            IconRow(spacing: 8, alignment: .trailing) {
-                Button(action: onCopy) {
-                    Label(copyLabel, systemImage: copied ? Symbol.checkmark : Symbol.copyLink)
+            .buttonStyle(.focusAction(.inline, size: .small, state: copied ? .done : .idle, shortTitle: Copy.Capture.copyShort, labelled: words))
+            .symbolBounce(on: copied)
+            .accessibilityLabel(copied ? Copy.copied : copyLabel)
+            if let onCopyDirect {
+                Button(action: onCopyDirect) {
+                    Label(Copy.LinkPair.copyDirectLink, systemImage: copiedDirect ? Symbol.checkmark : Symbol.LinkPair.direct)
                 }
-                .buttonStyle(.cobaltIcon(.small, state: copied ? .done : .idle))
-                .symbolBounce(on: copied)
-                .accessibilityLabel(copied ? Copy.copied : copyLabel)
-                if let onCopyDirect {
-                    Button(action: onCopyDirect) {
-                        Label(Copy.LinkPair.copyDirectLink, systemImage: copiedDirect ? Symbol.checkmark : Symbol.LinkPair.direct)
-                    }
-                    .buttonStyle(.cobaltIcon(.small, state: copiedDirect ? .done : .idle))
-                    .symbolBounce(on: copiedDirect)
-                    .accessibilityLabel(copiedDirect ? Copy.copied : Copy.LinkPair.copyDirectLink)
-                }
-                ShareLink(item: url) { Label(shareLabel, systemImage: Symbol.share) }
-                    .buttonStyle(.cobaltIcon(.small))
+                .buttonStyle(.focusAction(.inline, size: .small, state: copiedDirect ? .done : .idle, shortTitle: Copy.Capture.directShort, labelled: words))
+                .symbolBounce(on: copiedDirect)
+                .accessibilityLabel(copiedDirect ? Copy.copied : Copy.LinkPair.copyDirectLink)
             }
-            .fixedSize()
+            ShareLink(item: url) { Label(shareLabel, systemImage: Symbol.share) }
+                .buttonStyle(.focusAction(.inline, size: .small, shortTitle: Copy.Capture.shareShort, labelled: words))
+        }
+    }
+
+    var body: some View {
+        Group {
+            if words {
+                // the phone: the buttons carry words, so they take a line of their own under the link's name
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) { badge; texts }
+                    buttons
+                }
+            } else {
+                HStack(spacing: 10) {
+                    badge
+                    texts
+                    buttons.fixedSize()
+                }
+            }
         }
         .padding(.leading, 14)
         .padding(.trailing, 8)

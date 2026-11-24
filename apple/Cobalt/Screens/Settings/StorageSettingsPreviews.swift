@@ -147,7 +147,7 @@ struct StorageDebugScreen: View {
 
 #Preview("on this mac · in settings") {
     PreviewHost(.offline, tab: .settings) { model in
-        SettingsScreen(model: model)
+        NavigationStack { SettingsScreen(model: model) }
             .task {
                 model.macFolder.setPreviewStatus(.init())
                 model.savePull.setPreviewStatus(.init(available: true, lastChecked: Date().addingTimeInterval(-120)))

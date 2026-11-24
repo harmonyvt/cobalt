@@ -19,6 +19,10 @@ extension Copy {
         static let includeWebps = "include webps"
         static let albumRow = "album"
         static let openSettings = "open settings"
+        // The Photos album is still named "cobalt" on purpose (`PhotosSync.albumTitle`). Lookup is by saved id, then by title, so
+        // renaming it to "capystore" would make every existing install create a second album and split its photos in two.
+        // Copy that names the album ("cobalt" here, in `inAlbum`, `footerAlbum` and `Copy.Queue.photosTitle`) must say the real
+        // name; only change all of them together with a migration that renames the album in place.
         static func albumCount(_ n: Int) -> String { "\u{201C}cobalt\u{201D} · \(n) added" }
         static func adding(_ done: Int, of total: Int) -> String { "adding \(done) of \(total)" }
         static func waiting(_ n: Int) -> String { "\(n) waiting" }

@@ -2,125 +2,132 @@
 import CobaltKit
 import SwiftUI
 
-/// iPhone's tab bar. The system's own "More" nests each tab's navigation stack inside its own, which drew a second back
-/// button and an empty title row above 7tv, chat and the others. So on an iPhone with more than five tabs the bar holds the
-/// first four and our "more" tab, whose content is ONE navigation stack: a list of the remaining tabs, each row pushing
-/// that tab's bare screen (no stack of its own) into this stack, so a screen's own pushes (a 7tv set, a chat thread) land in
-/// the same stack and the back button reads "more".
+/// The iPhone's tab bar (apple 04-PHASE4 4.1): four tabs, no "more". capture (the save screen), library, live (the OBS stage,
+/// twitch and 7tv under one picker) and tools (a list of the rest). Every root screen has the activity pill and the settings
+/// gear in its bar; settings is a sheet over whichever tab is up.
 ///
-/// `model.selectedTab` stays the source of truth. A tab in the bar is selected by writing it; a tab behind "more" is
-/// selected by pushing it onto `path` (the list row does it, or anything that writes `model.selectedTab`, through
-/// `model.tabSets`, which counts every write, so a request for the tab that was already selected still pushes it).
+/// `model.selectedTab` stays the one answer to "which screen is in front" (the studio's polling, the library's hidden album,
+/// the home screen's pastes read it), so it is kept true: `PhoneNavState.active` is the screen really showing (a live segment, the
+/// row the tools tab has pushed, the tools list itself) and is written into `selectedTab` the moment it changes. The other
+/// way round, anything that writes `selectedTab` (a deep link, a paste, a launch argument) moves the tabs there
+/// (`PhoneNavState.show`), counted by `model.tabSets` so a request for the screen that is already selected still lands.
 struct PhoneTabs<Screen: View>: View {
     let model: AppModel
-    /// The visible tabs in order, without the queue (a sheet on iPhone).
-    let tabs: [AppTab]
-    /// A tab's bare screen: no navigation stack around it (the library brings its own).
+    /// A screen's bare content: no navigation stack around it (the library brings its own). The shell's `tabScreen`.
     @ViewBuilder let screen: (AppTab) -> Screen
 
-    /// What the bar selects: one of its tabs, or "more".
-    enum Slot: Hashable {
-        case tab(AppTab)
-        case more
-    }
+    @State private var nav: PhoneNavState
+    @Environment(\.shell) private var shell
+    @Environment(Pane.self) private var pane: Pane?
 
-    /// Five tabs fit; with six or more the bar keeps four and "more".
-    static func split(_ tabs: [AppTab]) -> (bar: [AppTab], overflow: [AppTab]) {
-        tabs.count > 5 ? (Array(tabs.prefix(4)), Array(tabs.dropFirst(4))) : (tabs, [])
-    }
-
-    @State private var selection: Slot
-    @State private var path: [AppTab]
-
-    init(model: AppModel, tabs: [AppTab], @ViewBuilder screen: @escaping (AppTab) -> Screen) {
+    init(model: AppModel, @ViewBuilder screen: @escaping (AppTab) -> Screen) {
         self.model = model
-        self.tabs = tabs
         self.screen = screen
-        let overflow = Self.split(tabs).overflow
-        let tab = model.selectedTab
-        _selection = State(initialValue: overflow.contains(tab) ? .more : .tab(tab))
-        _path = State(initialValue: overflow.contains(tab) ? [tab] : [])
+        let nav = PhoneNavState()
+        nav.show(model.selectedTab)
         #if DEBUG
-        // `-previewMoreList 1` (simulator evidence): opens on the "more" tab's list, nothing pushed
-        if UserDefaults.standard.bool(forKey: "previewMoreList"), !overflow.isEmpty {
-            _selection = State(initialValue: .more)
-            _path = State(initialValue: [])
-        }
+        DebugHooks.applyPhonePreviewTab(to: nav)
         #endif
+        _nav = State(initialValue: nav)
     }
 
-    private var bar: [AppTab] { Self.split(tabs).bar }
-    private var overflow: [AppTab] { Self.split(tabs).overflow }
+    private var slots: [PhoneSlot] { PhoneNavState.slots(for: model) }
 
     var body: some View {
-        TabView(selection: $selection) {
-            ForEach(bar, id: \.self) { tab in
-                Tab(Copy.tab(tab), systemImage: icon(for: tab), value: Slot.tab(tab)) {
-                    root(tab)
+        @Bindable var nav = nav
+        TabView(selection: $nav.slot) {
+            ForEach(slots, id: \.self) { slot in
+                Tab(slot.title, systemImage: slot.symbol, value: slot) {
+                    root(slot)
                 }
-                .badge(badge(tab))
-            }
-            if !overflow.isEmpty {
-                Tab(Copy.more, systemImage: Symbol.moreTab, value: Slot.more) {
-                    moreStack
-                }
-                .badge(overflow.reduce(0) { $0 + badge($1) })
+                .badge(slot == .tools ? model.swarms.waitingCount : 0)
             }
         }
+        .environment(nav)
         // a running item in the screen pane closes to a bar over the tabs (apple/CONTRACT-PANE.md; `PaneHost` wraps this)
         .modifier(PaneBarAccessory(model: model))
-        .onChange(of: selection) { _, slot in
-            switch slot {
-            case .tab(let tab): model.selectedTab = tab
-            case .more: if let shown = path.last { model.selectedTab = shown }
-            }
+        .sheet(isPresented: $nav.settingsShown) { settingsSheet }
+        // the screen that shows is what `selectedTab` says: written the moment it changes (the old "more" left it stale)
+        .onChange(of: nav.active, initial: true) { _, active in
+            #if DEBUG
+            DebugHooks.log("phone.active=\(active.rawValue) slot=\(nav.slot.rawValue)")      // `-debugHooks 1`
+            #endif
+            if model.selectedTab != active { model.selectedTab = active }
         }
-        .onChange(of: path) { _, now in
-            if let shown = now.last { model.selectedTab = shown }
-        }
+        // something wrote `selectedTab` (a deep link, a paste, the studio card, a launch argument): show it
         .onChange(of: model.tabSets) { _, _ in follow(model.selectedTab) }
+        // the server lost a screen under the tab it was on
+        .onChange(of: model.capabilities) { _, _ in nav.settle(with: model) }
     }
 
-    /// What waits for the owner on a tab: the swarms that asked and the ones ready to apply.
-    private func badge(_ tab: AppTab) -> Int { tab == .swarms ? model.swarms.waitingCount : 0 }
-
-    /// Something wrote `model.selectedTab` (a deep link, a paste, the studio card, a launch argument): show it.
     private func follow(_ tab: AppTab) {
-        if overflow.contains(tab) {
-            if path != [tab] { path = [tab] }
-            selection = .more
-        } else if bar.contains(tab) {
-            selection = .tab(tab)
+        // the queue is a sheet: `QueueTabRedirect` opens it and selects capture
+        guard tab != .queue, tab != nav.active || tab == .settings else { return }
+        nav.show(tab)
+        // settings opened as a sheet leaves the tab where it was: `selectedTab` says so again
+        if model.selectedTab != nav.active { model.selectedTab = nav.active }
+    }
+
+    // MARK: the four roots
+
+    @ViewBuilder
+    private func root(_ slot: PhoneSlot) -> some View {
+        switch slot {
+        case .capture:
+            NavigationStack {
+                screen(.save)
+                    // the home screen's own `QueueToolbarItem` goes quiet: the pill and the gear are the shell's, in that order
+                    .environment(\.phoneHeaderOwnsActivity, true)
+                    .toolbar { PhoneRootToolbar(model: model) }
+            }
+        case .library:
+            // the library brings its own stack and ends its bar with `PhoneRootToolbar` (pill, gear)
+            screen(.library)
+        case .live:
+            NavigationStack {
+                LiveScreen(model: model) { segment in screen(segment.tab) }
+            }
+        case .tools:
+            @Bindable var nav = nav
+            NavigationStack(path: $nav.path) {
+                ToolsScreen(model: model)
+                    .navigationDestination(for: ToolsDestination.self) { destination in
+                        toolsScreen(destination)
+                    }
+            }
         }
     }
 
     @ViewBuilder
-    private func root(_ tab: AppTab) -> some View {
-        if tab == .library {
-            screen(tab)
-        } else {
-            NavigationStack { screen(tab) }
+    private func toolsScreen(_ destination: ToolsDestination) -> some View {
+        switch destination {
+        case .links: screen(.links)
+        case .assistants: AssistantsScreen(model: model) { half in screen(half.tab) }
+        case .editor: ToolsEditsScreen(model: model)
+        case .booru: screen(.booru)
+        case .names: screen(.names)
         }
     }
 
-    private var moreStack: some View {
-        NavigationStack(path: $path) {
-            List(overflow, id: \.self) { tab in
-                NavigationLink(value: tab) {
-                    Label(Copy.tab(tab), systemImage: icon(for: tab))
-                        .font(CobaltType.body)
+    // MARK: settings
+
+    /// The settings sheet: the whole screen in a large sheet, closed with `done`. It wears what the shell's other sheets wear, so
+    /// a screen pane opened from under it waits for it to go (one narrow screen).
+    private var settingsSheet: some View {
+        NavigationStack {
+            SettingsScreen(model: model)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(Copy.PhoneNav.done) { nav.settingsShown = false }
+                            .accessibilityIdentifier("phone.settings.done")
+                    }
                 }
-                .badge(badge(tab))
-                .listRowBackground(CobaltColor.row)
-            }
-            .scrollContentBackground(.hidden)
-            .background(CobaltColor.bg)
-            .navigationTitle(Copy.more)
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: AppTab.self) { tab in
-                screen(tab)
-            }
         }
+        .presentationDetents([.large])
+        .cobaltRoot(model: model)
+        .environment(\.shell, shell)
+        .coversPane(pane)
     }
 }
 #endif

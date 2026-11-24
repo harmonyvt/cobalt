@@ -1,5 +1,12 @@
 # CONTRACT-PANE: the screen pane, everywhere (2026-11-23)
 
+> **2026-11-25, compact width (apple 04-PHASE4).** The table below is the iPad's and the Mac's. On a compact width (the iPhone, a narrow iPad window) there is
+> no `span`: `pane.span` is not drawn, and the pane stays a `.large` system sheet; a `.fullScreenCover` is never stacked over a
+> sheet there. A post opened from the capture tab's recent saves or the library's grid is not opened in the pane at all: it is
+> pushed on the tab's navigation stack as the same `MediaDetail` (`MediaDetailRoute`, `.mediaDetailDestination()`), whose actions
+> are `PaneActionGrid` (shared with `PanePostPage` through `PostActionKit`, so no action is written twice). A sheet that has to
+> follow another sheet waits for its dismissal through `PaneAfterDismiss` / `PresentationSettled` (the two 450 ms sleeps are gone).
+
 Design (approved by Harmony): https://claude.ai/artifact/MPy1z28c1EuAUKjXmmeEdh ("Screen pane everywhere"). Harmony
 picked approach 1, the screen pane, **on the left**, and asked for it to be "first class across all suitable surfaces,
 not half baked". This contract is the build spec. Where it and the artifact differ, this file wins.

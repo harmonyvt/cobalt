@@ -19,19 +19,90 @@ extension PostFrameTarget {
 }
 
 /// Opens the "post" tool once when the editor came up from "open in editor for more" (`PostFrameStore.postToolRequested`).
+/// The editor's cover or window is still presenting when the request arrives, and a sheet asked for then would not show: the
+/// request is queued (`pending`) and promoted the moment the editor's presentation has settled (`PresentationSettled`:
+/// the hosting controller's `viewDidAppear`, which UIKit sends when the transition ends), not after a guessed delay.
 struct PostToolAutoOpen: ViewModifier {
     let model: AppModel
     let open: () -> Void
 
+    @State private var pending = false
+    @State private var settled = false
+
     func body(content: Content) -> some View {
-        content.onChange(of: model.postFrames.postToolRequested, initial: true) { _, requested in
-            guard requested else { return }
-            model.postFrames.postToolRequested = false
-            Task {
-                // the editor's cover or window is still settling: a sheet asked for in the same pass would not show
-                try? await Task.sleep(for: .milliseconds(450))
+        content
+            .background { PresentationSettled { settled = true } }
+            .onChange(of: model.postFrames.postToolRequested, initial: true) { _, requested in
+                guard requested else { return }
+                model.postFrames.postToolRequested = false
+                pending = true
+            }
+            .onChange(of: pending && settled, initial: true) { _, ready in
+                guard ready else { return }
+                pending = false
                 open()
             }
+    }
+}
+
+#if os(iOS)
+import UIKit
+
+/// Calls `settled` once the view controller it sits in has finished appearing (the end of a cover's or sheet's present
+/// transition). A view that appears in a window already on screen reports at once.
+private struct PresentationSettled: UIViewControllerRepresentable {
+    let settled: () -> Void
+
+    func makeUIViewController(context: Context) -> Probe {
+        let probe = Probe()
+        probe.settled = settled
+        return probe
+    }
+
+    func updateUIViewController(_ probe: Probe, context: Context) { probe.settled = settled }
+
+    final class Probe: UIViewController {
+        var settled: (() -> Void)?
+
+        override func loadView() {
+            let clear = UIView()
+            clear.backgroundColor = .clear
+            clear.isUserInteractionEnabled = false
+            view = clear
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            settled?()
         }
     }
 }
+#else
+import AppKit
+
+/// The editor is a window on the Mac: settled once its view is in one.
+private struct PresentationSettled: NSViewRepresentable {
+    let settled: () -> Void
+
+    func makeNSView(context: Context) -> Probe {
+        let probe = Probe()
+        probe.settled = settled
+        return probe
+    }
+
+    func updateNSView(_ probe: Probe, context: Context) { probe.settled = settled }
+
+    final class Probe: NSView {
+        var settled: (() -> Void)?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            let settled = settled
+            DispatchQueue.main.async { settled?() }
+        }
+    }
+}
+#endif

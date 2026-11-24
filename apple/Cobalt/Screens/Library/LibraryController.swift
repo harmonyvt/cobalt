@@ -89,9 +89,6 @@ struct SharePrepRow: Identifiable, Equatable {
 @MainActor @Observable
 final class LibraryController {
     let model: AppModel
-    /// How far the top bar has folded with the scroll (its own object: it changes every scrolled frame, and only the
-    /// bar reads it).
-    let fold = LibraryBarFold()
 
     // MARK: the stuck zoom back (owner, 2026-11-14)
 

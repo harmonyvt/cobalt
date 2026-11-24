@@ -35,6 +35,8 @@ struct PaneSelectionContent: View {
     @Bindable var controller: LibraryController
 
     @Environment(\.paneShape) private var shape
+    /// Work that waits for this page's sheet to finish going down (`PaneHost` owns the queue).
+    @Environment(\.paneAfterDismiss) private var afterDismiss
     @State private var pickingCollection = false
     @State private var deleting = false
     @State private var editNote: String?
@@ -279,14 +281,12 @@ struct PaneSelectionContent: View {
     }
 
     /// On the iPhone's sheet the library presents some things itself (the share sheet, the link picker, the confirm of
-    /// hiding): the sheet goes down first and the action runs once it is gone. Select mode and the ticks stay.
+    /// hiding): the sheet goes down first and the action runs once it is gone (queued in `PaneHost`, which promotes it from
+    /// its sheet's `onDismiss`: no guessed delay). Select mode and the ticks stay.
     private func afterCollapse(_ run: @escaping @MainActor () -> Void) {
-        guard compact else { run(); return }
+        guard compact, pane.item == .selection, pane.isVisible else { run(); return }
+        if let afterDismiss { afterDismiss.run(run) } else { run() }
         pane.close(ifShowing: .selection)
-        Task {
-            try? await Task.sleep(for: .milliseconds(450))
-            run()
-        }
     }
 
     /// What does not fit the grid: add to a link, the status choices, the trash.

@@ -11,6 +11,15 @@ import UserNotifications
 /// (the queue is a sheet there) and a "more" tab for the rest.
 public enum AppTab: String, Sendable, CaseIterable {
     case save, library, links, sevenTv, stage, twitch, booru, chat, swarms, names, queue, settings
+    /// The iPhone's "tools" tab at its list (nothing pushed): only the iPhone shell writes it, so `selectedTab` is true there
+    /// too (apple 04-PHASE4 4.1). Never a tab on the iPad or the Mac (`isAvailable` is false).
+    case tools
+
+    /// Every tab the iPad and the Mac can show: `.tools` is the iPhone's own, never one of them, so it is left out (and the
+    /// `allCases` tests that pin the tabs keep passing).
+    public static var allCases: [AppTab] {
+        [.save, .library, .links, .sevenTv, .stage, .twitch, .booru, .chat, .swarms, .names, .queue, .settings]
+    }
 
     /// Whether this server lets the tab show: the library needs `features.library`, links need `features.share_sets`,
     /// chat needs `features.chat`, the studio needs `features.stage`, search names need `features.names` (48.6).
@@ -25,6 +34,7 @@ public enum AppTab: String, Sendable, CaseIterable {
         // booru: Danbooru through the server, at most sensitive (APP-API-CONTRACT 72)
         case .booru: return caps.booru
         case .save, .queue, .settings: return true
+        case .tools: return false
         }
     }
 }

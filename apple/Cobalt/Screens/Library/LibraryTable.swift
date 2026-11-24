@@ -186,7 +186,6 @@ struct LibraryTable: View {
         }
         .offlineRemoveConfirm($removing, model: controller.model)
         .refreshable { controller.pullToRefresh() }
-        .libraryBarFold(controller.fold)
         .accessibilityLabel(Copy.postsA11y)
     }
 
@@ -318,7 +317,6 @@ struct LibraryList: View {
             #endif
             .offlineRemoveConfirm($removing, model: controller.model)
             .refreshable { controller.pullToRefresh() }
-            .libraryBarFold(controller.fold)
             .accessibilityLabel(Copy.postsA11y)
             .onChange(of: controller.reveal, initial: true) { _, request in
                 guard let request else { return }

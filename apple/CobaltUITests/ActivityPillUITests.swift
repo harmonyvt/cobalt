@@ -1,7 +1,7 @@
 import UIKit
 import XCTest
 
-/// The activity pill and its sheet (apple 03-PHASE3 3.4): the pill is in the top bar of the save, library, links, chat and studio
+/// The activity pill and its sheet (apple 03-PHASE3 3.4): the pill is in the top bar of the save, library, links, chat and live stage
 /// screens (`activity.pill`), a tap opens the activity and health sheet (`activity.sheet`) with its two segments, and the system
 /// segment (`activity.system`) is the health inspector.
 ///
@@ -81,10 +81,11 @@ final class ActivityPillUITests: XCTestCase {
         add(shot)
     }
 
-    /// Offline (`-previewPaneOffline YES`, debug only), a post's pane says in words which actions pause until the server is back
-    /// (the note under the grid and "needs network" on the tiles), instead of dimming them alone (apple 03-PHASE3 3.4.3).
+    /// Offline (`-previewPaneOffline YES`, debug only), a post's detail says in words which actions pause until the server is back
+    /// (the note under the grid and "needs network" on the tiles), instead of dimming them alone (apple 03-PHASE3 3.4.3). On the
+    /// iPhone the detail is the pushed `MediaDetail` (apple 04-PHASE4 4.2), whose grid is the pane's `PaneActionGrid`.
     func testOfflinePaneExplainsPausedActions() throws {
-        try XCTSkipIf(isPad, "the pane's compact sheet is checked on the iPhone")
+        try XCTSkipIf(isPad, "the unified detail is the iPhone's (the iPad's pane is covered by PaneTests)")
         let app = launch(tab: "library", extra: ["-previewPaneOffline", "YES"])
         let tiles = app.descendants(matching: .any).matching(identifier: "library.tile")
         XCTAssertTrue(tiles.firstMatch.waitForExistence(timeout: wait), "no library tile")
@@ -94,6 +95,7 @@ final class ActivityPillUITests: XCTestCase {
             if tile.exists, tile.isHittable { tile.tap(); opened = true; break }
         }
         XCTAssertTrue(opened, "no library tile to open")
+        XCTAssertTrue(find(app, "media.detail").waitForExistence(timeout: wait), "the tile did not push the unified detail")
         let note = app.staticTexts["offline. server actions pause until connected"]
         for _ in 0..<6 where !note.exists { app.swipeUp() }
         XCTAssertTrue(note.waitForExistence(timeout: wait), "the grid does not say why its actions are paused")

@@ -7,7 +7,6 @@ enum CardKind: Equatable {
     case progress
     case failure
     case image
-    case emote
 
     /// Every card sizes to its content: a card never has a gap the content does not fill.
     var minHeight: CGFloat { 0 }

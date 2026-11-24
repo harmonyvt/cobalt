@@ -1,7 +1,7 @@
 import CobaltKit
 import Foundation
 
-/// Copy for 7TV (APP-API-CONTRACT 57.7; all new, lowercase): the 7tv tab, the studio's shortcut row, the link sheet, the set
+/// Copy for 7TV (APP-API-CONTRACT 57.7; all new, lowercase): the 7tv tab, the live stage's shortcut row, the link sheet, the set
 /// screen, the emote sheet, the name clash sheet and the refusals. Plain values only, since `Cobalt/Design` is compiled into the extensions too.
 extension Copy {
     enum SevenTv {
@@ -329,7 +329,7 @@ extension Copy {
         static let addEmotes = "add emotes"
         static let pickASet = "pick a set on the left"
 
-        // the studio tab's row
+        // the live tab's 7tv row
         static let shortcutBody = "emote sets, search and uploads"
         static let shortcutNotLinked = "link 7tv to manage your emote sets"
         static let shortcutA11y = "open the 7tv tab"

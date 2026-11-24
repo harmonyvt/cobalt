@@ -69,13 +69,8 @@ struct PanePostContent: View {
     @State private var renaming = false
     @State private var managing = false
     @State private var subtitles = SubtitleSession()
-    /// File URLs for the system share sheet (empty: nothing is presented).
-    @State private var filesToShare: [URL] = []
-    /// `add to link…` is picking a link for this post (the library menu's action, now the page's).
-    @State private var addingToLink: LibraryLinkPicks?
-    /// `hide…` / `unhide` waiting on its confirm (`.hidden` or `.off`).
-    @State private var statusAsk: PostStatus?
-    @State private var creatingEdit = false
+    /// What the shared post actions put on screen (the share sheet, the link picker, the hide confirm).
+    @State private var actionState = PostActionState()
     @Environment(\.paneShape) private var shape
     @Environment(\.shell) private var shell
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -124,6 +119,15 @@ struct PanePostContent: View {
         model.capabilities.transcripts && item.post != nil && item.detailShape == .classic && selected.kind == .video
     }
 
+    /// The logic this page shares with `MediaDetail` (`PostActionKit`); the pane closes where the detail would pop.
+    private var kit: PostActionKit {
+        let pane = pane
+        return PostActionKit(
+            model: model, controller: controller, state: actionState, shell: shell, leave: { pane.close() },
+            compactGrid: pane.placement == .compact, leavesForLibrary: pane.placement == .compact, fromAlbum: fromAlbum,
+            isGone: { resolved == nil }, finishGone: finishGone, openLink: { pane.open(.link($0)) })
+    }
+
     // MARK: body
 
     var body: some View {
@@ -149,31 +153,11 @@ struct PanePostContent: View {
         .environment(\.heroKept, heroKept)
         // a hidden post is not in the app switcher's snapshot (the library's own cover does not reach the pane)
         .hiddenCover(whenHidden: fromAlbum || model.isHiddenPost(item))
-        .background { GalleryFileShare(fileURLs: $filesToShare) }
-        .detailDialogs(controller: controller, item: item) { ask in run(ask, item) }
+        .postActionPresenters(kit: kit, item: item)
+        .detailDialogs(controller: controller, item: item) { ask in kit.run(ask, item) }
         .makeSheet(controller: controller, item: item, model: model)
         .postFrameSheet(controller: controller, model: model)
         .renameAlert(item: item, isPresented: $renaming, model: model) { controller.notice = $0 }
-        .sheet(item: $addingToLink) { picks in
-            LinkPickerSheet(
-                store: model.shareSets, picks: picks.items.map { ShareSetPick(item: $0) },
-                maximum: model.capabilities.limits.shareSetMax, showsBadges: model.capabilities.privateLinks
-            ) { link, ids in addToLink(ids, link: link) }
-        }
-        .confirmationDialog(
-            statusAsk == .hidden ? Copy.Hidden.hideTitle : Copy.Hidden.unhideTitle,
-            isPresented: Binding(get: { statusAsk != nil }, set: { if !$0 { statusAsk = nil } }),
-            titleVisibility: .visible, presenting: statusAsk
-        ) { ask in
-            if ask == .hidden {
-                Button(Copy.Hidden.hideConfirm, role: .destructive) { setStatus(.hidden, item) }
-            } else {
-                Button(Copy.Hidden.unhide) { setStatus(.off, item) }
-            }
-            Button(Copy.Hidden.cancel, role: .cancel) {}
-        } message: { ask in
-            Text(ask == .hidden ? Copy.Hidden.hideMessage : Copy.Hidden.unhideMessage)
-        }
         .navigationDestination(isPresented: $managing) {
             PostSettingsPage(id: id, model: model, controller: controller, fallback: lastShown)
         }
@@ -202,22 +186,17 @@ struct PanePostContent: View {
 
     private func page(_ c: DetailContext) -> some View {
         let item = c.item
-        let actions = PostActions(c: c, share: share, shareLink: { filesToShare = [$0] }, leave: { pane.close() }, shellMakeWebp: { shell.makeWebp($0) })
         // On the iPhone's sheet the grid is what the library's context menu was: share, add to link, edit, delete
         // (the mockup, 2026-11-23); beside the tab it stays the plan's four, and those go to `more` with the rest.
-        let compact = pane.placement == .compact
-        let delete = deleteAction(item)
-        let arranged = PostActions.arrange(
-            plan: actions.all, compact: compact, addToLink: addToLinkAction(item), edit: editAction(item),
-            delete: compact ? delete : nil)
-        let grid = arranged.grid
+        let kit = kit
+        let arranged = kit.arranged(c)
         return PanePage(
             title: item.titleText, subtitle: subtitle(item), actions: headerActions(item),
-            more: moreActions(c, extra: arranged.rest, delete: compact ? nil : delete)
+            more: kit.moreActions(c, rest: arranged.rest, openInLibrary: kit.openInLibraryAction(item))
         ) {
             hero(c)
         } controls: {
-            controls(c, grid: grid)
+            controls(c, kit: kit)
         } body: {
             detailBody(c)
         } shelf: {
@@ -253,17 +232,11 @@ struct PanePostContent: View {
     // MARK: controls
 
     @ViewBuilder
-    private func controls(_ c: DetailContext, grid: [PaneAction]) -> some View {
+    private func controls(_ c: DetailContext, kit: PostActionKit) -> some View {
         VStack(spacing: 12) {
             RenditionTabs(item: c.item, selection: c.selection, maxSegments: 4)
             SubtitleStrip()
-            if controller.selecting, c.page != nil {
-                GallerySelectionBar(c: c, share: share)
-            } else if !grid.isEmpty {
-                PaneActionGrid(grid)
-                    .disabled(controller.isDeleting)
-            }
-            DetailStatus(controller: controller, item: c.item, leave: { pane.close() })
+            PostGridControls(c: c, kit: kit, leave: { pane.close() })
         }
         .motion(Motion.card, value: c.rendition.id)
     }
@@ -277,24 +250,17 @@ struct PanePostContent: View {
                 item: c.item, rendition: c.rendition, missing: c.missingIndex,
                 shareLink: c.model.capabilities.shareLink(for:), formInset: false)
                 .padding(.horizontal, 16)
-            IconRow(alignment: .leading) {
-                DetailMenu(
-                    controller: controller, item: c.item, rendition: c.rendition,
-                    openInLibrary: { openInLibrary(c.item) }, askAbout: { askAbout(c.item) }, rename: { renaming = true },
-                    paneDrawsEssentials: true, symbol: "slider.horizontal.3", iconCircle: true)
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
-                // "this is…" (a search name's example): a menu, styled as a matching icon circle
-                if model.capabilities.names, !(fromAlbum || model.isHiddenPost(c.item)), let key = c.item.post?.id {
-                    NamesPostMenu(model: model, postKey: key, showStatus: { shell.showStatus($0) }, iconCircle: true)
+            PostToolIcons(
+                c: c, hidden: fromAlbum || model.isHiddenPost(c.item),
+                leading: AnyView(
+                    DetailMenu(
+                        controller: controller, item: c.item, rendition: c.rendition,
+                        openInLibrary: { kit.openInLibrary(c.item) }, askAbout: { kit.askAbout(c.item) },
+                        rename: { renaming = true },
+                        paneDrawsEssentials: true, symbol: "slider.horizontal.3", iconCircle: true)
                         .menuStyle(.button)
                         .buttonStyle(.plain)
-                        .menuIndicator(.hidden)
-                }
-                SevenTvUploadIcon(model: model, file: c.rendition.file, title: c.item.titleText)
-                EmoteEditorIcon(model: model, rendition: c.rendition, title: c.item.titleText)
-            }
+                        .menuIndicator(.hidden)))
             .padding(.horizontal, 16)
         }
     }
@@ -348,113 +314,12 @@ struct PanePostContent: View {
     private func kindWord(_ item: MediaItem) -> String { item.kind.rawValue }
 
     private func headerActions(_ item: MediaItem) -> [PaneAction] {
+        let kit = kit
         var list = [PaneAction(Copy.Library2.rename, systemImage: Symbol.Library.rename, disabled: controller.isDeleting) { renaming = true }]
         if model.capabilities.chat, item.post != nil, !model.isHiddenPost(item) {
-            list.append(PaneAction(Copy.Chat.askAbout, systemImage: Symbol.chatAsk, needsServer: true) { askAbout(item) })
+            list.append(PaneAction(Copy.Chat.askAbout, systemImage: Symbol.chatAsk, needsServer: true) { kit.askAbout(item) })
         }
         return list
-    }
-
-    private func moreActions(_ c: DetailContext, extra: [PaneAction], delete: PaneAction?) -> [PaneAction] {
-        var list = extra
-        let item = c.item
-        if model.capabilities.library, item.post != nil, model.selectedTab != .library {
-            list.append(PaneAction(Copy.Media.openInLibrary, systemImage: Symbol.Media.openInLibrary) { openInLibrary(item) })
-        }
-        if let hide = hideAction(item) { list.append(hide) }
-        if let delete { list.append(delete) }
-        return list
-    }
-
-    // MARK: what the library's context menu had (it is gone on the iPhone)
-
-    /// `delete everything`, with its confirm.
-    private func deleteAction(_ item: MediaItem) -> PaneAction? {
-        guard controller.canDeleteEverything(item) else { return nil }
-        return PaneAction(
-            Copy.Media.deleteEverything, systemImage: Symbol.Media.deleteEverything, role: .destructive,
-            disabled: controller.isDeleting || controller.isBusy(item), id: "delete"
-        ) { controller.confirm = .deleteEverything }
-    }
-
-    /// `add to link…`: the link picker, as a sheet of this page.
-    private func addToLinkAction(_ item: MediaItem) -> PaneAction? {
-        let row = LibraryRow(item: item)
-        guard model.capabilities.shareSets, model.capabilities.shareSetEdit, row.shareable, !row.isHidden,
-              ShareSetPick(item: item).anyFileID != nil else { return nil }
-        return PaneAction(
-            Copy.LinkEdit.addToLinkMenu, systemImage: Symbol.LinkEdit.addToLink, needsServer: true, id: "add-to-link"
-        ) { addingToLink = LibraryLinkPicks(items: [item], endsSelecting: false) }
-    }
-
-    /// `edit`: a new editor project from this post's video.
-    private func editAction(_ item: MediaItem) -> PaneAction? {
-        guard model.editor.isAvailable, EditPicksButton.canEdit(LibraryRow(item: item)) else { return nil }
-        return PaneAction(
-            creatingEdit ? Copy.Editor.creating : Copy.Editor.edit, systemImage: Symbol.Editor.edit,
-            needsServer: true, disabled: creatingEdit, id: "edit"
-        ) { createEdit(item) }
-    }
-
-    /// `hide…` (asks first) and, in the hidden album, `unhide`.
-    private func hideAction(_ item: MediaItem) -> PaneAction? {
-        guard model.capabilities.hidden, item.post != nil else { return nil }
-        if fromAlbum || model.isHiddenPost(item) {
-            // queuesOffline: `setStatus` -> `controller.setPostStatus` -> `LibraryModel.setStatus`, which enqueues in the sync outbox
-            return PaneAction(
-                Copy.HiddenAlbum.menuUnhide, systemImage: Symbol.HiddenAlbum.unhide, needsServer: true,
-                queuesOffline: model.libraryQueuesEdits, id: "unhide"
-            ) { statusAsk = .off }
-        }
-        return PaneAction(
-            Copy.HiddenAlbum.menuHide, systemImage: Symbol.HiddenAlbum.hidden, needsServer: true,
-            queuesOffline: model.libraryQueuesEdits, id: "hide"
-        ) { statusAsk = .hidden }
-    }
-
-    private func addToLink(_ ids: [String], link: ShareSet) {
-        guard !ids.isEmpty else { return }
-        let store = model.shareSets
-        let shell = self.shell
-        let pane = self.pane
-        Task {
-            do {
-                let updated = try await store.addFiles(ids, to: link.id)
-                let id = updated.id
-                shell.showNote(StatusNote(
-                    text: Copy.LinkEdit.addedTo(ids.count, updated.displayTitle), actionTitle: Copy.LinkEdit.openAction
-                ) { pane.open(.link(id)) })
-            } catch {
-                shell.showStatus(Copy.LinkEdit.message(for: error))
-            }
-        }
-    }
-
-    private func setStatus(_ status: PostStatus, _ item: MediaItem) {
-        guard let post = item.post else { return }
-        Task {
-            let result = await controller.setPostStatus(status, post: post, key: controller.selected(in: item).id)
-            if result.changed { shell.showStatus(result.words(for: status)) }
-            if result.changed, status == .hidden { pane.close() }
-        }
-    }
-
-    private func createEdit(_ item: MediaItem) {
-        creatingEdit = true
-        Task {
-            defer { creatingEdit = false }
-            do {
-                let left = try await model.editor.create(from: [item])
-                EditorLauncher.shared.firstToast = EditPicksButton.firstToast(left)
-            } catch {
-                switch EditError.from(error) {
-                case .invalid(.empty): shell.showStatus(Copy.Editor.editNoVideo)
-                case .tooMany: shell.showStatus(Copy.Editor.tooManyProjects)
-                case .invalid(let problem): shell.showStatus(Copy.Editor.problem(problem))
-                default: shell.showStatus(Copy.Editor.couldntCreate)
-                }
-            }
-        }
     }
 
     // MARK: the bar
@@ -471,70 +336,11 @@ struct PanePostContent: View {
 
     // MARK: actions
 
-    /// Copies the files onto this device if they are not here, then presents the system sheet.
-    private func share(_ renditions: [Rendition]) {
-        Task {
-            guard !controller.preparingShare else { return }
-            controller.preparingShare = true
-            let urls = await controller.localFileURLs(for: renditions)
-            controller.preparingShare = false
-            guard !urls.isEmpty else { return }
-            filesToShare = urls
-        }
-    }
-
-    private func run(_ ask: DetailController.Confirm, _ item: MediaItem) {
-        Task {
-            switch ask {
-            case .deleteWebp(let id), .removeWebp(let id):
-                guard let r = item.rendition(id: id) else { return }
-                if case .deleteWebp = ask { await controller.deleteWebp(r, of: item, onServer: true) }
-                else { await controller.deleteWebp(r, of: item, onServer: false) }
-            case .deletePhoto(let index):
-                await controller.deletePhotos([index], of: item)
-            case .deletePhotos(let indices):
-                await controller.deletePhotos(indices, of: item)
-            case .deleteMade(let id):
-                guard let r = item.rendition(id: id) else { return }
-                await controller.deleteMade(r, of: item)
-            case .removeMedia:
-                if await controller.removeFromDevice(item) {
-                    if resolved == nil { finishGone() } else { pane.close() }
-                }
-            case .deleteEverything:
-                if case .popWithStatus(let message) = await controller.deleteEverything(item) {
-                    shell.showStatus(message)
-                    pane.close()
-                }
-            }
-        }
-    }
-
     /// Nothing of the media is left: the page says `deleted.` and the pane's close is the way out.
     private func finishGone() {
         guard !gone else { return }
         gone = true
         if let status = controller.exitStatus { shell.showStatus(status) }
-    }
-
-    private func askAbout(_ item: MediaItem) {
-        guard let post = item.post else { return }
-        Task {
-            do {
-                try await model.askAbout([post])
-                pane.close()
-            } catch {
-                shell.showStatus(Copy.Chat.message(for: error))
-            }
-        }
-    }
-
-    private func openInLibrary(_ item: MediaItem) {
-        guard let post = item.post else { return }
-        // on one narrow screen the pane is a sheet over the tab: it goes, or the library would light the post behind it
-        if pane.placement == .compact { pane.close() }
-        model.library.expandedPostID = post.id
-        model.selectedTab = .library
     }
 
     /// A search's "said at" for this post: play from there, subtitles on.

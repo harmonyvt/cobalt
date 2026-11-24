@@ -1,23 +1,23 @@
 import CobaltKit
 import Foundation
 
-/// Copy for the studio tab (APP-API-CONTRACT section 30; all new, lowercase): the header, the preview, the spotlight bar and
+/// Copy for the live stage (the OBS canvas, a segment of the live tab) (APP-API-CONTRACT section 30; all new, lowercase): the header, the preview, the spotlight bar and
 /// its pool sheet, the pool picker, the sliders, Twitch, the rewards, the redemptions feed and the links with the store lock.
-/// The code says "stage"; only the words on screen say "studio". Plain values only (counts, dates, CobaltKit types), since
+/// The code says "stage"; the words on screen say "live stage". Plain values only (counts, dates, CobaltKit types), since
 /// `Cobalt/Design` is compiled into the extensions too.
 extension Copy {
     enum Stage {
-        static let title = "studio"
+        static let title = "live stage"
 
         // MARK: loading
 
-        static let loading = "loading the studio…"
-        static let failedTitle = "can't load the studio"
+        static let loading = "loading the live stage…"
+        static let failedTitle = "can't load the live stage"
         static let retry = "try again"
         static let refresh = "refresh"
         static func failedBody(_ error: StageError) -> String {
             switch error {
-            case .off: return "the studio is off on this server"
+            case .off: return "the live stage is off on this server"
             case .unavailable: return "the server can't do that right now"
             case .offline: return "can't reach the server"
             default: return "something went wrong"
@@ -57,7 +57,7 @@ extension Copy {
         static let saveRetry = "retry"
         static let saveRevert = "revert"
         static let saveRetryHint = "sends the values that didn't save again"
-        static let saveRevertHint = "puts the studio back to what the server has"
+        static let saveRevertHint = "puts the live stage back to what the server has"
         /// The bar under the header after a write failed: why, and that the values on screen are not saved.
         static func saveFailedBar(_ error: StageError) -> String {
             "these changes didn't save · \(reasonLine(error))"
@@ -66,7 +66,7 @@ extension Copy {
             switch error {
             case .unavailable: return "the server can't do that right now"
             case .offline: return "can't reach the server"
-            case .off: return "the studio is off on this server"
+            case .off: return "the live stage is off on this server"
             default: return "something went wrong"
             }
         }
@@ -352,15 +352,15 @@ extension Copy {
 
         static let wallpaper = "wallpaper on this mac"
         static let wallpaperNote = "the canvas behind your desktop icons on every display, silent. it keeps going while the stream is off."
-        static let wallpaperMenu = "studio wallpaper"
+        static let wallpaperMenu = "live stage wallpaper"
 
         // MARK: refusals
 
-        /// The status line for a refused or failed studio call.
+        /// The status line for a refused or failed live stage call.
         static func message(for error: Error) -> String {
             switch StageError.from(error) {
             case .badRequest: return "that didn't work · check what you typed"
-            case .off: return "the studio is off on this server"
+            case .off: return "the live stage is off on this server"
             case .notFound: return "that file isn't in the pool any more"
             case .twitchOff: return "twitch isn't set up on this server"
             case .offAir: return "go live first"

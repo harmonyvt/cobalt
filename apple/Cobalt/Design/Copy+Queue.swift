@@ -99,6 +99,7 @@ extension Copy {
 
         // MARK: photos
 
+        // "cobalt" is the Photos album's real name, kept on purpose: see the note in `Copy+Sync.swift`.
         static let photosTitle = "adding to the cobalt album"
         /// "3 of 7".
         static func photosProgress(done: Int, total: Int) -> String { "\(done) of \(total)" }

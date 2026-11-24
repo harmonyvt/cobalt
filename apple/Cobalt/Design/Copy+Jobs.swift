@@ -119,7 +119,7 @@ extension Copy {
         }
         static func fileGone(_ name: String) -> String { "the file for \(name) is gone" }
 
-        // MARK: leaving cobalt with work that has no session yet (device line, an upload mid-way)
+        // MARK: leaving capystore with work that has no session yet (device line, an upload mid-way)
 
         static func leavingLinks(_ count: Int) -> (title: String, body: String) {
             count == 1

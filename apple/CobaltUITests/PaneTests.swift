@@ -5,15 +5,18 @@ import XCTest
 /// for the library, links, booru, swarms and twitch, an item opens in the pane, spans, unspans and closes; a running item
 /// (a twitch stream, a running swarm) closes to the bar and the bar opens it again; a relaunch restores the pane.
 ///
-/// iPad runs in landscape (the 440 pt column), iPhone is compact (a sheet, the cover when spanned). Every step is a
-/// screenshot, attached to the result and written to `apple/.build/pane-shots/<device>/<area>-<step>.png`.
+/// iPad runs in landscape (the 440 pt column and `pane.span`), iPhone is compact (a sheet, and no span: apple 04-PHASE4 4.2, so
+/// `pane.span` must be ABSENT there). On the iPhone a library tile is not a pane at all: a tap (or a hold and lift) pushes the one
+/// `MediaDetail` (`media.detail`) on the tab's stack. Every step is a screenshot, attached to the result and written to
+/// `apple/.build/pane-shots/<device>/<area>-<step>.png`.
 ///
 /// The iPhone's hold and select (owner, 2026-11-23; screenshots `hold-*` and `pill-*`): a hold on a library tile previews
-/// it and lifting the finger opens the pane, sliding off first cancels, and in select mode the pill expands (a tap on its
+/// it and lifting the finger pushes the detail, sliding off first cancels, and in select mode the pill expands (a tap on its
 /// count) into the selection sheet at `.medium`, where the grid behind stays tappable and the count follows it, and a swipe
 /// down collapses it to the pill with the ticks kept.
 ///
-/// Identifiers: `pane` (the container), `pane.span`, `pane.close`, `pane.bar` (Cobalt/Pane/PaneChrome.swift), and on the
+/// Identifiers: `pane` (the container), `pane.span` (iPad and Mac only), `pane.close`, `pane.bar` (Cobalt/Pane/PaneChrome.swift),
+/// `media.detail` (the pushed detail, Cobalt/Screens/Home/MediaDetail.swift), and on the
 /// rows `links.row`, `booru.tile`, `swarm.row`, `twitch.search`, `library.tile`, `library.select`,
 /// `library.select.count`. `-paneReset YES` starts without a saved
 /// pane (PaneHost, DEBUG), so one test's pane is not the next one's.
@@ -42,7 +45,8 @@ final class PaneTests: XCTestCase {
     // MARK: the areas
 
     func testLibrary() throws {
-        // the iPad's column and the iPhone's sheet: a tap opens the post in the pane on both (owner, 2026-11-23)
+        // the iPad's column: a tap opens the post in the pane; the iPhone pushes the one detail instead (04-PHASE4 4.2)
+        if !isPad { return try phoneLibraryPushesTheDetail() }
         try run(area: "library", tab: "library", ready: "library.tile", running: false) { app in
             let tiles = app.descendants(matching: .any).matching(identifier: "library.tile")
             for index in 0..<min(tiles.count, 16) {
@@ -155,7 +159,7 @@ final class PaneTests: XCTestCase {
 
     // MARK: hold and select (iPhone)
 
-    /// A hold previews the post, lifting the finger opens it in the pane with its grid (no context menu, no tap).
+    /// A hold previews the post, lifting the finger pushes its detail with the action grid (no context menu, no tap).
     func testIPhoneHoldReleaseOpensThePane() throws {
         guard !isPad else { throw XCTSkip("an iPhone gesture: the iPad keeps its context menu") }
         let app = launch(["-previewScenario", "happy", "-previewTab", "library", "-paneReset", "YES"])
@@ -164,16 +168,16 @@ final class PaneTests: XCTestCase {
         let tile = try XCTUnwrap(firstHittableTile(app), "no library tile to hold")
         shot("hold", "0-grid")
         pressWithShot(tile, hold: 2.4, shotAt: 1.4, area: "hold", step: "1-preview")
-        let pane = find(app, "pane")
-        XCTAssertTrue(pane.waitForExistence(timeout: wait), "lifting the finger did not open the post in the pane")
+        XCTAssertTrue(find(app, "media.detail").waitForExistence(timeout: wait), "lifting the finger did not push the post's detail")
+        XCTAssertFalse(find(app, "pane").exists, "the iPhone opened a pane sheet over the detail")
         settle()
         shot("hold", "2-open")
         XCTAssertTrue(
             app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'share'")).firstMatch.waitForExistence(timeout: 5),
-            "the post page has no share button in its grid")
-        // the sheet is the pane's: closing it returns to the grid
-        find(app, "pane.close").tap()
-        XCTAssertTrue(waitGone(find(app, "pane")), "the pane did not close")
+            "the detail has no share button in its grid")
+        // the detail is pushed: back returns to the grid
+        backFromDetail(app)
+        XCTAssertTrue(waitGone(find(app, "media.detail")), "the detail did not pop")
         settle()
         shot("hold", "3-closed")
         app.terminate()
@@ -191,12 +195,12 @@ final class PaneTests: XCTestCase {
         let away = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97))
         tile.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.0, thenDragTo: away)
         settle(2)
-        XCTAssertFalse(find(app, "pane").exists, "a hold dragged off the tile still opened the pane")
+        XCTAssertFalse(find(app, "pane").exists || find(app, "media.detail").exists, "a hold dragged off the tile still opened the post")
         shot("hold", "4-dragged-off")
         app.terminate()
     }
 
-    /// In select mode a hold previews and lifting opens the post; closing the sheet returns to the grid with the same
+    /// In select mode a hold previews and lifting pushes the post's detail; going back returns to the grid with the same
     /// ticks and the pill.
     func testIPhoneHoldInSelectModeKeepsThePicks() throws {
         guard !isPad else { throw XCTSkip("an iPhone gesture") }
@@ -209,11 +213,11 @@ final class PaneTests: XCTestCase {
         XCTAssertEqual(ticked, "2 picked")
         let tile = try XCTUnwrap(firstHittableTile(app), "no library tile to hold")
         pressWithShot(tile, hold: 2.4, shotAt: 1.4, area: "hold", step: "5-select-preview")
-        XCTAssertTrue(find(app, "pane").waitForExistence(timeout: wait), "lifting the finger did not open the post")
+        XCTAssertTrue(find(app, "media.detail").waitForExistence(timeout: wait), "lifting the finger did not open the post")
         settle()
         shot("hold", "6-select-open")
-        find(app, "pane.close").tap()
-        XCTAssertTrue(waitGone(find(app, "pane")), "the pane did not close")
+        backFromDetail(app)
+        XCTAssertTrue(waitGone(find(app, "media.detail")), "the detail did not pop")
         let count = find(app, "library.select.count")
         XCTAssertTrue(count.waitForExistence(timeout: wait), "the pill did not come back")
         XCTAssertEqual(count.label, "2 picked", "closing the post changed the picks")
@@ -293,17 +297,23 @@ final class PaneTests: XCTestCase {
         XCTAssertTrue(pane.waitForExistence(timeout: wait), "\(area): the item did not open in the pane")
         settle()
         shot(area, "1-open")
-        XCTAssertEqual(find(app, "pane.span").label, "fill the window", "\(area): span button should offer to span")
+        if isPad {
+            XCTAssertEqual(find(app, "pane.span").label, "fill the window", "\(area): span button should offer to span")
 
-        // span, unspan
-        find(app, "pane.span").tap()
-        XCTAssertTrue(waitLabel(find(app, "pane.span"), "back beside the tab"), "\(area): did not span")
-        settle()
-        shot(area, "2-span")
-        find(app, "pane.span").tap()
-        XCTAssertTrue(waitLabel(find(app, "pane.span"), "fill the window"), "\(area): did not unspan")
-        settle()
-        shot(area, "3-unspan")
+            // span, unspan
+            find(app, "pane.span").tap()
+            XCTAssertTrue(waitLabel(find(app, "pane.span"), "back beside the tab"), "\(area): did not span")
+            settle()
+            shot(area, "2-span")
+            find(app, "pane.span").tap()
+            XCTAssertTrue(waitLabel(find(app, "pane.span"), "fill the window"), "\(area): did not unspan")
+            settle()
+            shot(area, "3-unspan")
+        } else {
+            // the iPhone's pane is one sheet: no span (a cover stacked over a sheet), so no button and no ⌘⇧F
+            XCTAssertFalse(find(app, "pane.span").exists, "\(area): the iPhone offers span")
+            shot(area, "2-no-span")
+        }
 
         // close
         find(app, "pane.close").tap()
@@ -336,6 +346,36 @@ final class PaneTests: XCTestCase {
         settle(2.5)
         shot(area, running ? "6-relaunch" : "5-relaunch")
         app.terminate()
+    }
+
+    // MARK: the iPhone's one detail
+
+    /// A library tile on the iPhone pushes the unified `MediaDetail` (no pane, no span), and the back button returns to the grid.
+    private func phoneLibraryPushesTheDetail() throws {
+        let app = launch(["-previewScenario", "happy", "-previewTab", "library", "-paneReset", "YES"])
+        XCTAssertTrue(find(app, "library.tile").waitForExistence(timeout: wait), "library: the tab never showed its rows")
+        settle()
+        shot("library", "0-tab")
+        let tile = try XCTUnwrap(firstHittableTile(app), "library: no tile to open")
+        tile.tap()
+        XCTAssertTrue(find(app, "media.detail").waitForExistence(timeout: wait), "library: a tap did not push the detail")
+        XCTAssertFalse(find(app, "pane").exists, "library: the iPhone opened a pane sheet")
+        XCTAssertFalse(find(app, "pane.span").exists, "library: the iPhone offers span")
+        settle()
+        shot("library", "1-detail")
+        backFromDetail(app)
+        XCTAssertTrue(waitGone(find(app, "media.detail")), "library: back did not return to the grid")
+        XCTAssertTrue(find(app, "library.tile").waitForExistence(timeout: wait), "library: the grid is gone after back")
+        settle()
+        shot("library", "2-back")
+        app.terminate()
+    }
+
+    /// The pushed detail's back button (the navigation bar's leading one).
+    private func backFromDetail(_ app: XCUIApplication) {
+        let back = app.navigationBars.buttons.firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: wait), "the detail has no back button")
+        back.tap()
     }
 
     // MARK: helpers

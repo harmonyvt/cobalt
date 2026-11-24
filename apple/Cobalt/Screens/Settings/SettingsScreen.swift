@@ -1,68 +1,67 @@
 import CobaltKit
 import SwiftUI
 
-/// Settings: the server and its key (paste only, no text fields), how webps are made, how it feels.
-/// A native grouped `Form` with `LabeledContent` rows, a `Picker` and `Toggle`s; the paste actions
-/// are buttons inside their rows. A tab on iPhone and iPad, the `Settings` scene (⌘,) on the Mac.
+/// Settings (apple 04-PHASE4 4.1): a short hub of four groups, each a page pushed from it (`SettingsGroup`): account &
+/// server, downloads & storage, media & webp, live & integrations. Every section of the old flat list is on one of them.
+///
+/// Where it lives decides what is around it, so it works in each of these without help:
+/// - pushed into a navigation stack (the iPad's settings tab, the iPhone's "more" list): the hub is the stack's content;
+/// - inside the stack of a sheet (the gear in the iPhone's header): `NavigationStack { SettingsScreen(model:) }` plus its
+///   own Done button; the group pages push into that stack and the back button returns to the hub;
+/// - the Mac's `Settings` scene (⌘,) and the main window's detail, which have no stack: the Mac wraps the hub in its own.
+/// The group rows are destination links, not value links, so they work in a stack that holds a typed path of its own.
 struct SettingsScreen: View {
     let model: AppModel
 
-    @State private var keyError: String?
-    @State private var serverError: String?
-    @State private var featuresOpen = false
     @State private var account = AccountSettingsState()
+    #if DEBUG
+    /// `-previewSettingsGroup account|downloads|media|live` (simulator evidence): opens on that group's page.
+    @State private var openGroup: SettingsGroup? = UserDefaults.standard.string(forKey: "previewSettingsGroup").flatMap(SettingsGroup.init(rawValue:))
+    #endif
     @Environment(\.lifecycle) private var lifecycle
 
-    private var settings: CobaltKit.Settings { model.settings }
-    private var summary: ServerSummary { model.serverSummary }
-
     var body: some View {
+        #if os(macOS)
+        NavigationStack { content }
+        #else
+        content
+        #endif
+    }
+
+    @ViewBuilder
+    private var content: some View {
         #if DEBUG
         if let state = StorageDebug.state {
             StorageDebugScreen(model: model, state: state)
         } else {
-            form
+            hub
         }
         #else
-        form
+        hub
         #endif
     }
 
-    private var form: some View {
+    private var hub: some View {
         Form {
-            serverSection
-            // accounts (APP-API-CONTRACT 42.6): replaces the api key row on a server with `features.accounts`
-            AccountSettingsSection(model: model, state: account)
-            // made again when a key is pasted or reset, so it asks the server with the new key
-            McpSettingsSection(model: model).id(settings.hasAPIKey)
-            makingSection
-            SharingSettingsSection(model: model)
-            // "post frame" on save, per site (APP-API-CONTRACT 52.6)
-            PostFrameSettingsSection(model: model)
-            // private links (APP-API-CONTRACT 36.6): what new gallery links start as, and rotating every key
-            PrivateLinksSettingsSection(model: model).id(settings.hasAPIKey)
-            // hidden posts and auto-hide rules (APP-API-CONTRACT 37.7)
-            HiddenSettingsSection(model: model).id(settings.hasAPIKey)
-            shareSheetSection
-            StorageSettingsSection(model: model)
-            PhotosSettingsSection(model: model)
-            liveSection
-            menuBarSection
-            #if os(macOS)
-            // the "paste from anywhere" keys and the right-click service
-            QuickSaveSettingsSection(model: model)
-            #endif
-            // the on-device library and its glow: off until switched on here
-            LibrarySyncSettingsSection(model: model)
-            TelemetrySettingsSection(model: model)
-            feelSection
+            Section {
+                ForEach(SettingsGroup.allCases) { group in
+                    NavigationLink {
+                        SettingsGroupPage(model: model, group: group, account: account)
+                    } label: {
+                        hubRow(group)
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .labelStyle(SettingsRowLabelStyle())
         .font(CobaltType.body)
         .navigationTitle(Copy.settings)
-        // the account section's confirm, new key sheet and rename (on the form: a section's rows come and go)
-        .accountSettingsPresentations(model: model, state: account)
+        #if DEBUG
+        .navigationDestination(item: $openGroup) { group in
+            SettingsGroupPage(model: model, group: group, account: account)
+        }
+        #endif
         // back from system Settings (the owner may have changed photos access there) and first appearance
         .task { await model.photosSync.refresh() }
         // a key pasted since the library last refused it: opening Settings lifts the pull's auth pause and asks once more (13.8)
@@ -72,258 +71,68 @@ struct SettingsScreen: View {
         }
     }
 
-    // MARK: sections
-
-    private var serverSection: some View {
-        Section {
-            // the row keeps its words; paste and reset are small icons beside the value
-            row(Copy.api, Symbol.api) {
-                HStack(spacing: 8) {
-                    value(summary.host)
-                    Button { pasteServer() } label: { Label(Copy.pasteServerURL, systemImage: Symbol.paste) }
-                        .buttonStyle(.cobaltIcon(.small))
-                    Button(role: .destructive) { resetServer() } label: { Label(Copy.reset, systemImage: Symbol.reset) }
-                        .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText))
-                        .disabled(settings.serverURL == CobaltKit.Settings.defaultServer)
-                }
+    private func hubRow(_ group: SettingsGroup) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.title)
+                Text(group.detail).font(Font.cobalt(11.5)).foregroundStyle(.secondary)
             }
-            row(Copy.thisServer, Symbol.server) { value(Copy.serverKind(summary, checking: model.isCheckingServer)) }
-            if summary.kind != .unreachable, summary.kind != .notCobalt {
-                DisclosureGroup(isExpanded: $featuresOpen) {
-                    ForEach(Copy.serverFeatures(model.capabilities)) { feature in
-                        LabeledContent {
-                            Text(feature.on ? Copy.featureOn : Copy.featureOff)
-                                .font(Font.cobalt(12.5))
-                                .foregroundStyle(feature.on ? Color.primary : Color.secondary)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(feature.name)
-                                Text(feature.detail).font(Font.cobalt(11.5)).foregroundStyle(.secondary)
-                            }
-                        }
-                        .accessibilityElement(children: .combine)
-                    }
-                } label: {
-                    Label(Copy.serverFeaturesTitle, systemImage: Symbol.quality)
-                }
-            }
-            // a server with accounts signs in instead (settings › account below); the paste stays for every other server
-            if !model.capabilities.accounts {
-                row(Copy.apiKey, Symbol.key) {
-                    HStack(spacing: 8) {
-                        if !settings.hasAPIKey {
-                            value(Copy.noKey)
-                        } else if summary.key == .invalid {
-                            Text(Copy.keyRevoked).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
-                        } else {
-                            value(summary.keyName.map { Copy.keyLine(name: $0) } ?? Copy.keySet).lineLimit(1).minimumScaleFactor(0.8)
-                        }
-                        Button { pasteKey() } label: {
-                            Label(settings.hasAPIKey ? Copy.pasteNewKey : Copy.pasteKey, systemImage: Symbol.paste)
-                        }
-                        .buttonStyle(.cobaltIcon(.small))
-                    }
-                }
-            }
-            if let keyError { problem(keyError) }
-            if let serverError { problem(serverError) }
-        } header: {
-            header(Copy.groupServer)
-        } footer: {
-            if !model.capabilities.accounts { footer(Copy.keyFootnote) }
+        } icon: {
+            Image(systemName: group.symbol)
         }
-    }
-
-    private var makingSection: some View {
-        Section {
-            Picker(selection: Binding(get: { settings.webpQuality }, set: { settings.webpQuality = $0 })) {
-                ForEach(WebpQuality.allCases, id: \.self) { q in
-                    Text(Copy.qualityName(q)).tag(q)
-                }
-            } label: {
-                Label(Copy.webpQuality, systemImage: Symbol.quality)
-            }
-        } header: {
-            header(Copy.groupMaking)
-        }
-    }
-
-    /// "share sheet": whether sharing a link to cobalt carries on by itself after a short wait.
-    /// iPhone and iPad only: the Mac has no share sheet.
-    @ViewBuilder
-    private var shareSheetSection: some View {
-        #if os(iOS)
-        Section {
-            Toggle(isOn: Binding(get: { settings.shareFullSheet }, set: { settings.shareFullSheet = $0 })) {
-                Label(Copy.Sync.fullSheet, systemImage: "rectangle.expand.vertical")
-            }
-            // The countdown only runs on a sheet that opened as the full sheet (CONTRACT-SHARE-QUICK
-            // decision 7): with the quick card it has nothing to count down.
-            Toggle(isOn: Binding(get: { settings.autoContinue }, set: { settings.autoContinue = $0 })) {
-                Label(Copy.Sync.autoContinue, systemImage: Symbol.Sync.autoContinue)
-            }
-            .disabled(!settings.shareFullSheet)
-            Picker(selection: Binding(get: { settings.autoContinueSeconds }, set: { settings.autoContinueSeconds = $0 })) {
-                ForEach(CobaltKit.Settings.autoContinueChoices, id: \.self) { seconds in
-                    Text(Copy.Sync.seconds(seconds)).tag(seconds)
-                }
-            } label: {
-                Label(Copy.Sync.wait, systemImage: Symbol.Sync.wait)
-            }
-            .pickerStyle(.menu)
-            .disabled(!settings.shareFullSheet || !settings.autoContinue)
-        } header: {
-            header(Copy.Sync.shareGroup)
-        } footer: {
-            footer(settings.shareFullSheet ? Copy.Sync.autoContinueFooter : Copy.Sync.quickFooter)
-        }
-        #endif
-    }
-
-    /// "live activity": whether the island follows a run while cobalt is closed. Hidden on the Mac.
-    @ViewBuilder
-    private var liveSection: some View {
-        if let status = Copy.Live.status(model.liveStatus) {
-            Section {
-                row(Copy.Live.row, Symbol.liveActivity) { value(status) }
-            } footer: {
-                footer(Copy.Live.rowFooter)
-            }
-        }
-    }
-
-    /// The menu bar icon. Mac only: closing the window leaves capystore running while this is on.
-    @ViewBuilder
-    private var menuBarSection: some View {
-        #if os(macOS)
-        Section {
-            Toggle(isOn: Binding(
-                get: { settings.menuBarExtra },
-                set: { on in
-                    settings.menuBarExtra = on
-                    MenuBarPresence.shared.staysRunning = on
-                }
-            )) {
-                Label(Copy.MenuBar.showIcon, systemImage: Symbol.menuBar)
-            }
-        } header: {
-            header(Copy.MenuBar.section)
-        } footer: {
-            footer(Copy.MenuBar.showIconFooter)
-        }
-        #else
-        EmptyView()
-        #endif
-    }
-
-    private var feelSection: some View {
-        Section {
-            Toggle(isOn: Binding(get: { settings.haptics }, set: { settings.haptics = $0 })) {
-                Label(Copy.haptics, systemImage: Symbol.haptics)
-            }
-            // turning haptics on answers with one, so the owner feels what they turned on
-            .haptic(.impact(weight: .medium), trigger: settings.haptics) { $0 }
-            row(Copy.motion, Symbol.motion) { value(Copy.motionFollows) }
-        } header: {
-            header(Copy.groupFeel)
-        } footer: {
-            footer(Copy.settingsFooter)
-        }
-    }
-
-    /// A settings row: icon first, the title, and the value on the trailing edge.
-    private func row<V: View>(_ title: String, _ symbol: String, @ViewBuilder value: () -> V) -> some View {
-        LabeledContent {
-            value()
-        } label: {
-            Label(title, systemImage: symbol)
-        }
-    }
-
-    // MARK: pieces
-
-    private func header(_ text: String) -> some View {
-        Text(text).font(CobaltType.caption).textCase(nil)
-    }
-
-    private func footer(_ text: String) -> some View {
-        Text(text).font(CobaltType.captionSmall).lineSpacing(2)
-    }
-
-    private func problem(_ text: String) -> some View {
-        Text(text).font(Font.cobalt(12.5)).foregroundStyle(CobaltColor.errorText)
-    }
-
-    private func value(_ text: String) -> some View {
-        Text(text)
-            .font(Font.cobalt(12.5))
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.trailing)
-            .lineLimit(2)
-    }
-
-    // MARK: actions
-
-    private func pasteKey() {
-        keyError = nil
-        guard let text = Pasteboard.string() else { keyError = Copy.notAKey; return }
-        Task {
-            do {
-                try await model.setAPIKey(pasted: text)
-            } catch {
-                // a real key this device would not store is not "not a key"
-                keyError = (error as? KeyInputError) == .couldNotSave ? Copy.keyNotSaved : Copy.notAKey
-            }
-        }
-    }
-
-    private func pasteServer() {
-        serverError = nil
-        guard let text = Pasteboard.string() else { serverError = Copy.notAURL; return }
-        Task {
-            do { try await model.setServer(pasted: text) } catch { serverError = Copy.notAURL }
-        }
-    }
-
-    private func resetServer() {
-        serverError = nil
-        settings.resetServer()
-        Task {
-            do { try await model.setServer(pasted: CobaltKit.Settings.defaultServer.absoluteString) } catch { serverError = Copy.notAURL }
-        }
-    }
-}
-
-/// Icon first in a fixed-width column, so every row's title lines up (system Settings style).
-private struct SettingsRowLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 10) {
-            configuration.icon.frame(width: 24)
-            configuration.title
-        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("settings.group.\(group.rawValue)")
     }
 }
 
 #if DEBUG
 #Preview("settings · happy") {
-    PreviewHost(.happy, tab: .settings) { SettingsScreen(model: $0) }
+    PreviewHost(.happy, tab: .settings) { model in NavigationStack { SettingsScreen(model: model) } }
 }
 #Preview("settings · signed out (accounts)") {
-    PreviewHost(.signedOut, tab: .settings) { SettingsScreen(model: $0) }
+    PreviewHost(.signedOut, tab: .settings) { model in NavigationStack { SettingsScreen(model: model) } }
 }
 #Preview("settings · revoked key") {
-    PreviewHost(.revokedKey, tab: .settings) { SettingsScreen(model: $0) }
+    PreviewHost(.revokedKey, tab: .settings) { model in NavigationStack { SettingsScreen(model: model) } }
 }
 #Preview("settings · plain cobalt") {
-    PreviewHost(.plainCobalt, tab: .settings) { SettingsScreen(model: $0) }
+    PreviewHost(.plainCobalt, tab: .settings) { model in NavigationStack { SettingsScreen(model: model) } }
 }
 #Preview("settings · legacy fork") {
-    PreviewHost(.legacyFork, tab: .settings) { SettingsScreen(model: $0) }
+    PreviewHost(.legacyFork, tab: .settings) { model in NavigationStack { SettingsScreen(model: model) } }
 }
 #Preview("settings · offline") {
-    PreviewHost(.offline, tab: .settings) { SettingsScreen(model: $0) }
+    PreviewHost(.offline, tab: .settings) { model in NavigationStack { SettingsScreen(model: model) } }
 }
 #Preview("settings · empty store") {
-    PreviewHost(.emptyOrbit, tab: .settings) { SettingsScreen(model: $0) }
+    PreviewHost(.emptyOrbit, tab: .settings) { model in NavigationStack { SettingsScreen(model: model) } }
+}
+#Preview("settings · sheet with done") {
+    PreviewHost(.happy, tab: .settings) { model in
+        NavigationStack {
+            SettingsScreen(model: model)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("done") {} } }
+        }
+    }
+}
+#Preview("settings · account & server") {
+    PreviewHost(.happy, tab: .settings) { model in
+        NavigationStack { SettingsGroupPage(model: model, group: .account, account: AccountSettingsState()) }
+    }
+}
+#Preview("settings · downloads & storage") {
+    PreviewHost(.happy, tab: .settings) { model in
+        NavigationStack { SettingsGroupPage(model: model, group: .downloads, account: AccountSettingsState()) }
+    }
+}
+#Preview("settings · media & webp") {
+    PreviewHost(.happy, tab: .settings) { model in
+        NavigationStack { SettingsGroupPage(model: model, group: .media, account: AccountSettingsState()) }
+    }
+}
+#Preview("settings · live & integrations") {
+    PreviewHost(.happy, tab: .settings) { model in
+        NavigationStack { SettingsGroupPage(model: model, group: .live, account: AccountSettingsState()) }
+    }
 }
 #endif

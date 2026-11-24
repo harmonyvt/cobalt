@@ -21,6 +21,8 @@ struct LibraryScreen: View {
     /// The library's own width: beside the pane it is one column, and the shell's tier for it did not always come back
     /// to the window's when the pane closed (a half-width bar, no "…", at full width).
     @State private var ownWidth: CGFloat = 0
+    /// What the library's stack shows past the grid: the unified detail a tap pushes on the iPhone.
+    @State private var path = NavigationPath()
     #endif
 
     init(model: AppModel, tier: Tier) {
@@ -45,11 +47,23 @@ struct LibraryScreen: View {
     }
     #endif
 
+    #if os(iOS)
+    /// A tap on the iPhone pushes the unified detail onto the library's stack (owner, 2026-11-25: one detail, not the
+    /// pane's sheet). The iPad and the Mac keep the pane.
+    private var phonePush: (@MainActor (MediaDetailRoute) -> Void)? {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return nil }
+        return { route in path.append(route) }
+    }
+    #endif
+
     var body: some View {
         Group {
             #if os(iOS)
             // Always its own stack (the shell adds none), so the tier never changes this screen's identity.
-            NavigationStack { LibraryContent(model: model, tier: shownTier, controller: controller) }
+            NavigationStack(path: $path) {
+                LibraryContent(model: model, tier: shownTier, controller: controller, push: phonePush)
+                    .mediaDetailDestination(model: model)
+            }
                 // rebuilt when the zoom back from a video leaves the grid out of the stack (LibraryController.checkStackSoon)
                 .id(controller.stackID)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { ownWidth = $0 }
@@ -58,9 +72,9 @@ struct LibraryScreen: View {
                 }
             #else
             if tier == .compact {
-                NavigationStack { LibraryContent(model: model, tier: tier, controller: controller) }
+                NavigationStack { LibraryContent(model: model, tier: tier, controller: controller, push: nil) }
             } else {
-                LibraryContent(model: model, tier: tier, controller: controller)
+                LibraryContent(model: model, tier: tier, controller: controller, push: nil)
             }
             #endif
         }
@@ -95,6 +109,8 @@ private struct LibraryContent: View {
     let model: AppModel
     let tier: Tier
     @Bindable var controller: LibraryController
+    /// Pushes a post's detail onto the stack (the iPhone); nil where a post opens in the pane.
+    let push: (@MainActor (MediaDetailRoute) -> Void)?
 
     @Environment(\.shell) private var shell
     @Environment(Pane.self) private var pane: Pane?
@@ -220,16 +236,8 @@ private struct LibraryContent: View {
         model.capabilities.search ? Copy.Search.prompt : Copy.Library2.searchPrompt
     }
 
-    /// The iPhone puts its own search field in the top bar, so it folds away with the chips; the iPad and Mac keep the
-    /// system's field. By device, not tier: an iPad resized to compact keeps the same field (no identity change).
-    private var ownSearchField: Bool {
-        #if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .phone
-        #else
-        false
-        #endif
-    }
-
+    /// The iPhone's search is the system's drawer under the navigation bar (like the iPad's narrow window); the Mac and
+    /// the wide iPad put it in the toolbar. The field never moves with the scroll (the old iPhone-only fold is gone).
     private var searchPlacement: SearchFieldPlacement {
         #if os(iOS)
         tier == .compact ? .navigationBarDrawer(displayMode: .always) : .toolbar
@@ -267,16 +275,10 @@ private struct LibraryContent: View {
                     : library.showingHidden
                         ? (controller.hiddenLocked ? Copy.HiddenAlbum.chipName : Copy.HiddenAlbum.note(library.hiddenCount))
                         : Copy.libraryCounts(posts: library.postCount, files: library.fileCount))
-            .modifier(LibrarySearchable(
-                text: $library.query, placement: searchPlacement, prompt: searchPrompt, enabled: !ownSearchField))
+            .searchable(text: $library.query, placement: searchPlacement, prompt: searchPrompt)
             .toolbar { toolbar }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    #if os(iOS)
-                    if ownSearchField {
-                        LibrarySearchField(text: $library.query, prompt: searchPrompt, fold: controller.fold)
-                    }
-                    #endif
                     filterRow(unfiltered: unfiltered, shareIndex: shareIndex)
                     if controller.albumOpen {
                         HiddenAlbumNote(count: library.hiddenCount)
@@ -296,8 +298,6 @@ private struct LibraryContent: View {
                 .overlay(alignment: .bottom) { activityBar }
                 .motion(Motion.rows, value: library.searchState)
                 .motion(Motion.fade, value: library.loadingAll == nil)
-                // folds away with the scroll and comes back on the way up (`LibraryTopBar.swift`)
-                .modifier(LibraryBarFoldEffect(fold: controller.fold))
             }
             // select, by the thumb: the `select` pill, which grows into the panel with the picks and their actions
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -326,7 +326,7 @@ private struct LibraryContent: View {
             .motion(Motion.card, value: controller.peek?.id)
             .haptic(.impact(weight: .light), trigger: controller.peek?.id, enabled: haptics) { $0 != nil }
             .statusConfirm(controller: controller)
-            .modifier(LibraryPaneBridge(controller: controller, pane: pane))
+            .modifier(LibraryPaneBridge(controller: controller, pane: pane, push: push))
             // the freeze hunt (owner, 2026-11-14): the grid is back on screen after a detail
             .onAppear {
                 Breadcrumbs.add("library.appear")
@@ -431,9 +431,6 @@ private struct LibraryContent: View {
             // (only the dim animates: the tiles themselves change in place as they always did)
             .animation(Motion.fade) { $0.opacity(held ? 0.4 : 1) }
             .allowsHitTesting(!held)
-            // a different scroll view (or none): the top bar opens again
-            .onChange(of: phase) { controller.fold.reset() }
-            .onChange(of: library.viewMode) { controller.fold.reset() }
     }
 
     /// Whether the last search's rows stay on screen in place of the loading tiles: only while words are in the field and
@@ -541,9 +538,36 @@ private struct LibraryContent: View {
         #endif
     }
 
+    #if os(iOS)
+    /// The iPhone, not an iPad in a compact window: only the phone's bar is folded into one "…" menu.
+    private var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+    #endif
+
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         #if os(iOS)
+        if isPhone {
+            // the iPhone: one "…" menu with every secondary action, then the activity pill and the settings gear (the
+            // shell's header, `PhoneRootToolbar`), three trailing items at most, in select mode too. Nothing leading.
+            PhoneRootToolbar(model: model) {
+                LibraryPhoneMenu(model: model, controller: controller, toggleSelecting: toggleSelecting)
+            }
+        } else {
+            padToolbar
+        }
+        #else
+        ToolbarItem(placement: .navigation) { LibraryViewSwitcher(library: library) }
+        if model.capabilities.search, !controller.selecting {
+            ToolbarItem(placement: .navigation) { LibrarySkyMapButton(controller: controller) }
+        }
+        trailingToolbar
+        #endif
+    }
+
+    #if os(iOS)
+    /// The iPad's bar, as it was: the view buttons, sort, paste and file, the inspector toggle.
+    @ToolbarContentBuilder
+    private var padToolbar: some ToolbarContent {
         // Two plain buttons in one group, drawn as one glass capsule like the trailing group. A segmented `Picker` in a
         // toolbar item got a second glass capsule behind it on iOS 26 (the bar's and the control's own).
         ToolbarItemGroup(placement: .topBarLeading) {
@@ -554,16 +578,14 @@ private struct LibraryContent: View {
             // the sky map is a third way to look at the library (only where the search has embedded the posts)
             if model.capabilities.search, !controller.selecting { LibrarySkyMapButton(controller: controller) }
         }
-        #else
-        ToolbarItem(placement: .navigation) { LibraryViewSwitcher(library: library) }
-        if model.capabilities.search, !controller.selecting {
-            ToolbarItem(placement: .navigation) { LibrarySkyMapButton(controller: controller) }
-        }
-        #endif
-        #if os(iOS)
         // the queue is a sheet on iPhone and iPad (not a tab); select mode keeps its controls and drops this button
         if !controller.selecting { QueueToolbarItem(model: model) }
-        #endif
+        trailingToolbar
+    }
+    #endif
+
+    @ToolbarContentBuilder
+    private var trailingToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             // select lives in the pill at the bottom (`LibrarySelectPill`), not here
             if !sortLeads { sortMenu }
@@ -574,7 +596,7 @@ private struct LibraryContent: View {
                 .help(Copy.Library2.refresh)
             #endif
             #if os(iOS)
-            // the iPhone's bar is full: paste and file share one "more" menu there
+            // an iPad in a compact window: the bar is full, so paste and file share one "more" menu (the iPhone has its own)
             if tier == .compact {
                 LibraryAddMenu(showsFile: model.capabilities.showsFileButton)
             } else {
@@ -747,6 +769,8 @@ struct LibraryActivityBar: View {
 private struct LibraryPaneBridge: ViewModifier {
     @Bindable var controller: LibraryController
     let pane: Pane?
+    /// The iPhone's way to show a post: push the unified detail instead of opening the pane's sheet (nil elsewhere).
+    let push: (@MainActor (MediaDetailRoute) -> Void)?
 
     /// The pane sits beside the tab (a column, or one of two screens), not over it as a sheet.
     private var beside: Bool { pane.map { $0.placement != .compact } ?? false }
@@ -769,6 +793,16 @@ private struct LibraryPaneBridge: ViewModifier {
             // the select actions page reads the controller from the pane
             .task { pane?.provide(controller) }
             .onChange(of: controller.selection) { old, new in
+                // the iPhone: a tap (or a hold's release, the sky map, "said at") pushes the detail, and the library
+                // keeps no selection (the pane never shows the post, so nothing would clear it)
+                // (never `pane.open(.post)` from here on the iPhone; a post the pane already shows, opened elsewhere,
+                // falls through to the pane logic below, so nothing is presented twice)
+                if let push, let new, pane?.item != .post(new) {
+                    controller.selectionIsAutomatic = false
+                    if let post = controller.selectedItem?.post { push(MediaDetailRoute(post: post)) }
+                    controller.selection = nil
+                    return
+                }
                 guard let pane else { return }
                 if let new {
                     let automatic = controller.selectionIsAutomatic

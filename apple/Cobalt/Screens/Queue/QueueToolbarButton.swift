@@ -12,9 +12,15 @@ import SwiftUI
 /// The activity pill as a toolbar item, trailing. Add it to a screen's `.toolbar`.
 struct QueueToolbarItem: ToolbarContent {
     let model: AppModel
+    /// The iPhone's root screens get their pill (and the gear after it) from `PhoneRootToolbar`, set around the root by the
+    /// shell: a screen's own `QueueToolbarItem` then draws nothing, so the bar has one pill and the gear stays last.
+    @Environment(\.phoneHeaderOwnsActivity) private var headerOwnsActivity
 
+    @ToolbarContentBuilder
     var body: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) { ActivityPill(model: model) }
+        if !headerOwnsActivity {
+            ToolbarItem(placement: .topBarTrailing) { ActivityPill(model: model) }
+        }
     }
 }
 #endif

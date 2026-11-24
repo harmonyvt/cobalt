@@ -42,7 +42,7 @@ final class DockBadge {
             if activity == nil {
                 // `userInitiatedAllowingIdleSystemSleep`: App Nap stays off, the Mac may still sleep (the server keeps the line)
                 activity = ProcessInfo.processInfo.beginActivity(
-                    options: [.userInitiatedAllowingIdleSystemSleep], reason: "cobalt is following saves on the server")
+                    options: [.userInitiatedAllowingIdleSystemSleep], reason: "capystore is following saves on the server")
             }
         } else if let activity {
             ProcessInfo.processInfo.endActivity(activity)

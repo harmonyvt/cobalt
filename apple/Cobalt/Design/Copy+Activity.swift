@@ -293,7 +293,7 @@ extension Copy {
         static let containersGroup = "containers"
         static let syncGroup = "library sync"
         static let storageGroup = "offline storage"
-        static let stageGroup = "obs stage"
+        static let stageGroup = "live stage"
 
         // api edge
         static let edgeChecking = "checking…"
@@ -352,11 +352,11 @@ extension Copy {
         static let storageEmpty = "nothing kept on this device"
         static let manageStorage = "manage storage"
 
-        // obs stage
+        // live stage (obs)
         static func obsOnAir(_ count: Int) -> String { "● on air · \(count) obs connected" }
         static let obsOnAirNone = "● on air · no obs connected"
         static let obsOnAirUnknown = "● on air"
         static let obsOffAir = "○ off air"
-        static let obsOpen = "open the stage"
+        static let obsOpen = "open the live stage"
     }
 }

@@ -393,7 +393,7 @@ struct AppShell: View {
                 Group {
                     let tier = columnTier
                     switch model.selectedTab {
-                    case .save: HomeScreen(model: model, tier: tier)
+                    case .save, .tools: HomeScreen(model: model, tier: tier)
                     case .library: LibraryScreen(model: model, tier: tier)
                     case .links: NavigationStack { LinksScreen(model: model) }
                     case .chat: NavigationStack { ChatScreen(model: model, tier: tier) }
@@ -419,8 +419,8 @@ struct AppShell: View {
     private var iosTabs: some View {
         Group {
             if UIDevice.current.userInterfaceIdiom == .phone {
-                // iPhone: four tabs and our own "more" (one stack), never the system More (see `PhoneTabs`)
-                PhoneTabs(model: model, tabs: model.visibleTabs.filter { $0 != .queue }) { tab in
+                // iPhone: capture, library, live and tools, no "more" (see `PhoneTabs`)
+                PhoneTabs(model: model) { tab in
                     tabScreen(tab)
                 }
             } else {
@@ -463,6 +463,8 @@ struct AppShell: View {
         case .names: NamesScreen(model: model)
         case .queue: QueueScreen(model: model)
         case .settings: SettingsScreen(model: model)
+        // never asked for here: the iPhone's tools list is `ToolsScreen`, built by `PhoneTabs`
+        case .tools: ToolsScreen(model: model)
         }
     }
 
@@ -769,6 +771,7 @@ func icon(for tab: AppTab) -> String {
     case .names: return Symbol.Names.menu
     case .queue: return Symbol.queue
     case .settings: return Symbol.settings
+    case .tools: return Symbol.PhoneNav.tools
     }
 }
 

@@ -33,6 +33,8 @@ struct HomeScreen: View {
     @State private var stackTop: CGFloat = 0
     /// The two circles with their captions (global space): a tap there is theirs, not a planet's.
     @State private var circlesFrame: CGRect = .zero
+    /// The recent saves strip (phone; zero when it is not drawn): a tap there is the strip's, not a planet's.
+    @State private var stripFrame: CGRect = .zero
     /// A finger is down on the orbit: it holds still so a planet can be tapped deliberately.
     @GestureState private var holding = false
     @State private var failureToken = 0
@@ -40,8 +42,6 @@ struct HomeScreen: View {
     /// The width the home column itself gets (the pane and the sidebar already taken out).
     @State private var contentWidth: CGFloat = 0
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-    /// The 7tv circle has opened into its card. Closed when a save starts.
-    @State private var emoteOpen = false
 
     // the orbit's eased state, and the focus state
     @State private var orbit = OrbitDynamics()
@@ -179,8 +179,7 @@ struct HomeScreen: View {
     /// How far the orbit dims behind the capsule or the focused planet (it dims rather than shrinks).
     private var orbitDim: Double {
         switch stage {
-        // the 7tv card's glass blurred full-light planets into grey smudges behind the search: dim them like the capsule
-        case .idle: return emoteOpen ? 0.35 : 1
+        case .idle: return 1
         case .capsule, .failure, .picker: return 0.55
         // the orbit brightens as the planet goes home, so it is at full light when the planet is handed back
         case .focus: return focusClosing ? 1 : (focusLifted ? 0.4 : 0.55)
@@ -230,13 +229,15 @@ struct HomeScreen: View {
         }
     }
 
-    /// The planet: midpoint of the circles, in the orbit layer's own coordinates.
+    /// The planet: midpoint of the circles, in the orbit layer's own coordinates. On the phone the intake is a row of labelled
+    /// capsules (about 52 pt high, 16 pt off the bottom), so the planet sits at their middle.
     private var orbitCenter: CGPoint {
         guard contentFrame != .zero, orbitFrame != .zero else {
             return CGPoint(x: orbitFrame.width / 2, y: orbitFrame.height * 0.8)
         }
-        // 16 pt bottom padding + 4 + caption + gap + the circle's radius
-        return CGPoint(x: contentFrame.midX - orbitFrame.minX, y: contentFrame.maxY - 80 - orbitFrame.minY)
+        // circles: 16 pt bottom padding + 4 + caption + gap + the circle's radius; capsules: 16 + half their height
+        let fromBottom: CGFloat = tier == .compact ? 42 : 80
+        return CGPoint(x: contentFrame.midX - orbitFrame.minX, y: contentFrame.maxY - fromBottom - orbitFrame.minY)
     }
 
     /// Everything the orbit and this screen both need to ask about where the planets are.
@@ -250,6 +251,7 @@ struct HomeScreen: View {
     /// Where a tap is chrome's, not the orbit's (the circles and their captions, with slack).
     private func isChrome(_ point: CGPoint) -> Bool {
         if !trayFrame.isEmpty, trayFrame.insetBy(dx: -6, dy: -6).contains(point) { return true }
+        if !stripFrame.isEmpty, stripFrame.insetBy(dx: -6, dy: -6).contains(point) { return true }
         return !circlesFrame.isEmpty && circlesFrame.insetBy(dx: -14, dy: -12).contains(point)
     }
 
@@ -484,6 +486,9 @@ struct HomeScreen: View {
         // `-preview*` launch-argument automation (debug builds; Debug/PreviewAutomationModifiers.swift)
         .debugHomeAutomation(automation)
         #if os(iOS)
+        // A planet's detail keeps its own push: the zoom out of the planet and the player lent to it belong to the orbit, so a
+        // `MediaDetailRoute` (a plain push) would lose both. The recent saves strip has no planet to zoom from: its thumbnails
+        // are links to the unified route, which `.mediaDetailDestination` shows (the same `MediaDetail` the library pushes).
         .navigationDestination(item: $openedID) { id in
             if let media = model.store.media(id: baseID(id)) {
                 MediaDetail(model: model, item: model.mediaItem(for: media))
@@ -491,6 +496,7 @@ struct HomeScreen: View {
                     .navigationTransition(.zoom(sourceID: id, in: zoom))
             }
         }
+        .mediaDetailDestination(model: model)
         #else
         .sheet(item: $openedSheet) { item in
             if let media = model.store.media(id: baseID(item.id)) {
@@ -556,16 +562,18 @@ struct HomeScreen: View {
         return VStack(spacing: 12) {
             Spacer(minLength: 0)
             if trayStyle == .above { tray }
+            if tier == .compact, isIdle, !recentMedia.isEmpty {
+                RecentSavesStrip(model: model, media: recentMedia)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { stripFrame = $0 }
+                    .onDisappear { stripFrame = .zero }
+                    .transition(.opacity)
+            }
             GlassEffectContainer(spacing: 2) {
                 VStack(spacing: 12) {
                     if let kind = cardKind {
                         WorkCard(kind: kind, glassID: glassID, glass: glass, failureToken: failureToken) { cardContent }
-                    } else if isIdle, emoteOpen {
-                        WorkCard(kind: .emote, glassID: "seventv", glass: glass, failureToken: failureToken) {
-                            EmoteSearchCard(model: model) { emoteOpen = false }
-                        }
                     }
-                    if isIdle, !emoteOpen { circles }
+                    if isIdle { circles }
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { stackTop = $0 }
@@ -581,10 +589,6 @@ struct HomeScreen: View {
                 .simultaneousGesture(DragGesture(minimumDistance: 0).updating($holding) { _, state, _ in state = true })
         }
         .motion(Motion.morph, value: stage, reduced: .fade)
-        .motion(Motion.morph, value: emoteOpen, reduced: .fade)
-        .onChange(of: stage) { _, next in
-            if next != .idle { emoteOpen = false }
-        }
     }
 
     // MARK: pieces
@@ -601,19 +605,29 @@ struct HomeScreen: View {
             ? Copy.emptyOrbit : Copy.offline(count: usage.mediaCount, bytes: usage.bytes)
     }
 
+    /// The newest saves for the phone's strip (hidden posts stay out, like the orbit).
+    private var recentMedia: [StoredMedia] { Array(model.visibleStoredMedia.prefix(10)) }
+
+    /// Paste and the file source. On the phone: labelled capsules (paste, photos, files). Elsewhere: the glass circles with their
+    /// captions. 7tv search is not here: it lives with the live tools.
+    @ViewBuilder
     private var circles: some View {
-        HStack(alignment: .top, spacing: 28) {
-            CircleLabel(id: "paste", glass: glass, title: Copy.paste, systemImage: Symbol.paste, a11y: Copy.pasteA11y) { shell.paste() }
-            if model.capabilities.showsFileButton {
-                CircleLabel(id: "file", glass: glass, title: Copy.file, systemImage: Symbol.file, a11y: Copy.fileA11y, menu: true) {}
+        if tier == .compact {
+            CaptureControls(model: model, glass: glass)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { circlesFrame = $0 }
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 4)
+        } else {
+            HStack(alignment: .top, spacing: 28) {
+                CircleLabel(id: "paste", glass: glass, title: Copy.paste, systemImage: Symbol.paste, a11y: Copy.pasteA11y) { shell.paste() }
+                if model.capabilities.showsFileButton {
+                    CircleLabel(id: "file", glass: glass, title: Copy.file, systemImage: Symbol.file, a11y: Copy.fileA11y, menu: true) {}
+                }
             }
-            CircleLabel(id: "seventv", glass: glass, title: Copy.seventv, systemImage: Symbol.seventv, a11y: Copy.seventvA11y) {
-                emoteOpen = true
-            }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { circlesFrame = $0 }
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 4)
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { circlesFrame = $0 }
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, 4)
     }
 
     @ViewBuilder
@@ -622,7 +636,14 @@ struct HomeScreen: View {
         case .idle:
             if let photoImport { photoImportCard(photoImport) }
         case .fetching, .uploading, .saving, .reading:
-            if let story = pipeline.progressStory { ProgressCard(story: story) }
+            if let story = pipeline.progressStory {
+                // the phone's card is the one stepper (`JobStepperView`); the card's own dots stay for the wider tiers
+                if tier == .compact, let status = JobStatus(pipeline: pipeline, now: Date()) {
+                    CaptureJobCard(story: story, status: status)
+                } else {
+                    ProgressCard(story: story)
+                }
+            }
         case .failed(let f) where !keepsFocus(f) && !isBlocking(f):
             InlineStatus(message: TrayCopy.failure(f, lineMax: model.capabilities.limits.lineMax)) {
                 Button { pipeline.reset() } label: { Label(Copy.ok, systemImage: Symbol.checkmark) }.buttonStyle(.cobaltIcon(.small))

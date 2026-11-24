@@ -369,6 +369,11 @@ struct GalleryInfoCard: View {
     let tryAgain: () -> Void
     let makeAgain: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// The small retry buttons draw their words on a phone (apple 04-PHASE4 4.3).
+    private var words: Bool { FocusActionStyle.labelled(sizeClass: sizeClass, typeSize: typeSize) }
 
     var body: some View {
         let lines = facts.lines(lineMax: lineMax)
@@ -453,13 +458,13 @@ struct GalleryInfoCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 InlineStatus(message: message)
                 Button(action: retryItems) { Label(retry, systemImage: Symbol.Gallery.retry) }
-                    .buttonStyle(.cobaltIcon(.small))
+                    .buttonStyle(.focusAction(.inline, size: .small, labelled: words))
             }
         case .failed(let message):
             VStack(alignment: .leading, spacing: 8) {
                 InlineStatus(message: message)
                 Button(action: tryAgain) { Label(Copy.tryAgain, systemImage: Symbol.retry) }
-                    .buttonStyle(.cobaltIcon(.small))
+                    .buttonStyle(.focusAction(.inline, size: .small, labelled: words))
             }
         case .makeWaiting(let text):
             HStack(spacing: 8) {
@@ -487,7 +492,7 @@ struct GalleryInfoCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 InlineStatus(message: message)
                 Button(action: makeAgain) { Label(Copy.tryAgain, systemImage: Symbol.retry) }
-                    .buttonStyle(.cobaltIcon(.small))
+                    .buttonStyle(.focusAction(.inline, size: .small, labelled: words))
             }
         }
     }
@@ -523,6 +528,8 @@ struct GalleryControls: View {
     let open: () -> Void
     let done: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// +1 per make tile pressed (a light tap).
     @State private var chooseTicks = 0
 
@@ -639,7 +646,7 @@ struct GalleryControls: View {
                             .disabled(true)
                     }
                     Button(action: done) { Label(GalleryFocusCopy.done, systemImage: Symbol.checkmark) }
-                        .buttonStyle(.cobaltIcon())
+                        .buttonStyle(.focusAction(.inline, labelled: FocusActionStyle.labelled(sizeClass: sizeClass, typeSize: typeSize)))
                 } else {
                     Button(GalleryFocusCopy.done, systemImage: Symbol.checkmark, action: done)
                         .buttonStyle(.cobaltPrimary())

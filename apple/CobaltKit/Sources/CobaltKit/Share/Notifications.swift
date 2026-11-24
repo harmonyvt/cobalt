@@ -24,10 +24,10 @@ enum Notifications {
         }
     }
 
-    /// The `userInfo["url"]` the app delegate opens on tap. With the run's studio session when it has
+    /// The `userInfo["url"]` the app delegate opens on tap. With the run's save session (the server's `/studio/<sid>`) when it has
     /// one (`?session=<sid>`): a build re-signed without the app group cannot read the share sheet's job
     /// record, and the session is then all the app needs to follow the run (CONTRACT-SHARE-QUICK.md).
-    /// `trim`: the run is a "trim in cobalt" handoff (`&trim=1`), for the same reason.
+    /// `trim`: the run is a "trim in capystore" handoff (`&trim=1`), for the same reason.
     static func url(forJob id: UUID, session: String? = nil, trim: Bool = false) -> String {
         let plain = "cobalt-apple://job/\(id.uuidString)"
         guard let session, !session.isEmpty else { return plain }
@@ -83,13 +83,13 @@ enum Notifications {
     static let instantPrefix = "instant-"
     static func instantIdentifier(_ job: UUID) -> String { instantPrefix + job.uuidString.lowercased() }
 
-    /// "saving to cobalt" with the link's label under it: posted by the share extension the moment it has
-    /// queued the save. Quiet (passive, no sound): the real news is Hark's "saved". Opens cobalt.
+    /// "saving to capystore" with the link's label under it: posted by the share extension the moment it has
+    /// queued the save. Quiet (passive, no sound): the real news is Hark's "saved". Opens capystore.
     static func instantSavingRequest(job: UUID, label: String) -> UNNotificationRequest {
         instantSavingRequest(job: job, title: "saving to capystore", body: label)
     }
 
-    /// The same quiet notification with its own words: a gallery's choice reads `saving 10 photos to cobalt` with
+    /// The same quiet notification with its own words: a gallery's choice reads `saving 10 photos to capystore` with
     /// `making a slideshow webp · <label>` under it (CONTRACT-GALLERY.md 1.12).
     static func instantSavingRequest(job: UUID, title: String, body: String) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
@@ -102,7 +102,7 @@ enum Notifications {
     }
 
     /// The save request was refused or never answered: this process is the only one that knows (no
-    /// session exists, so the server will not say). Opens cobalt.
+    /// session exists, so the server will not say). Opens capystore.
     static func instantFailedRequest(link: URL?, status: Int?) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
         content.title = "capystore couldn't start that save"
@@ -184,7 +184,7 @@ enum Notifications {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
     }
 
-    /// The app is in front: every "saving to cobalt" the extension left has said what it had to say.
+    /// The app is in front: every "saving to capystore" the extension left has said what it had to say.
     static func clearInstantSaving() {
         guard runsInApp else { return }
         let center = UNUserNotificationCenter.current()
@@ -201,7 +201,7 @@ enum Notifications {
 
     /// Asked in context, never on a plain run: when the owner closes a run that
     /// still has work in flight, or the share sheet closes mid-render, which is when "your webp is
-    /// ready" / "cobalt is still making your webp" have a reason to exist. Full alerts, not
+    /// ready" / "capystore is still making your webp" have a reason to exist. Full alerts, not
     /// provisional (owner's call). Only asks while the answer is undetermined; the system shows
     /// its prompt once, and a later call after "don't allow" does nothing. The app's `AlertsPromptSheet` can also ask
     /// shortly after launch, but only from its "turn on" button, never by itself.
