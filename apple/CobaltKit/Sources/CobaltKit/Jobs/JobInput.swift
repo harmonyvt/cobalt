@@ -126,7 +126,10 @@ public struct Job: Identifiable {
 
     public var isFailed: Bool {
         if case .failed = pipeline.state { return true }
-        if case .gallery = pipeline.state, case .failed? = pipeline.galleryRun?.phase { return true }
+        if case .gallery = pipeline.state {
+            if case .failed? = pipeline.galleryRun?.phase { return true }
+            if via == .make, case .failed? = pipeline.galleryRun?.make { return true }
+        }
         return false
     }
 
@@ -134,7 +137,9 @@ public struct Job: Identifiable {
     public var isFinished: Bool {
         switch pipeline.state {
         case .ready, .done, .savedLocally, .image: return true
-        case .gallery: return pipeline.galleryIsSettled && pipeline.galleryRun?.isSaved == true
+        case .gallery:
+            if via == .make, case .failed? = pipeline.galleryRun?.make { return false }
+            return pipeline.galleryIsSettled && pipeline.galleryRun?.isSaved == true
         default: return false
         }
     }

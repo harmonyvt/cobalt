@@ -53,12 +53,18 @@ struct PaneAction: Identifiable {
     /// `needsServer: true`; with the engine off it is false and the action is paused like any other.
     var queuesOffline: Bool
     var isDisabled: Bool
+    /// Work is in flight for this action: the tile swaps its icon for a progress spinner and ignores taps.
+    var isWorking: Bool
     /// Not empty: the action opens these as a menu instead of running `perform` (`share`: file, share link, direct link).
     var choices: [PaneAction]
+    /// Not empty: a short tap runs `perform`, while pressing and holding reveals these choices above the tile and
+    /// releasing on one runs it (`copy share link` → `share` / `direct`).
+    var holdChoices: [PaneAction]
     let perform: @MainActor () -> Void
 
     init(_ title: String, systemImage: String, role: ButtonRole? = nil, needsServer: Bool = false, queuesOffline: Bool = false,
-         disabled: Bool = false, id: String? = nil, choices: [PaneAction] = [], perform: @escaping @MainActor () -> Void) {
+         disabled: Bool = false, working: Bool = false, id: String? = nil, choices: [PaneAction] = [],
+         holdChoices: [PaneAction] = [], perform: @escaping @MainActor () -> Void) {
         self.id = id ?? title
         self.title = title
         self.systemImage = systemImage
@@ -66,7 +72,9 @@ struct PaneAction: Identifiable {
         self.needsServer = needsServer
         self.queuesOffline = queuesOffline
         self.isDisabled = disabled
+        self.isWorking = working
         self.choices = choices
+        self.holdChoices = holdChoices
         self.perform = perform
     }
 

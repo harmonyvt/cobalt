@@ -102,6 +102,9 @@ public final class Pipeline: Identifiable {
     /// media instead of being placed by session (CONTRACT-MEDIA 4.3). Set by `AppModel.makeWebp(for:)`
     /// right after the run begins; cleared with the run.
     public internal(set) var targetMediaID: String?
+    /// The library post key this run belongs to when its session was reopened (e.g. an animated webp of
+    /// a photo whose original session expired): lets locally stored made files join that post immediately.
+    public internal(set) var targetPostKey: String?
 
     /// The run's media once anything is stored: the target when the store has it, else the media of
     /// this run's stored original, else of its session. Nil until then. Reads the store, so a view
@@ -390,6 +393,7 @@ public final class Pipeline: Identifiable {
         origin = nil
         opensOnTrim = false
         targetMediaID = nil
+        targetPostKey = nil
         lastRenderRequest = nil
         galleryRun = nil
         self.input = input

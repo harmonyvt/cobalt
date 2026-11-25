@@ -257,6 +257,7 @@ extension AppModel {
     /// `delete everything` is disabled meanwhile (the server's 409 covers runs started elsewhere).
     public func isBusy(_ item: MediaItem) -> Bool {
         let localID = item.local?.id
+        let postID = item.post?.id
         var sessions = item.local?.sessionIDs ?? []
         if let post = item.post {
             sessions.insert(post.id)
@@ -265,20 +266,24 @@ extension AppModel {
         let storedIDs = Set(item.local?.renditions.map(\.id) ?? [])
         func relates(_ p: Pipeline) -> Bool {
             if let localID, p.targetMediaID == localID { return true }
+            if let postID, p.targetPostKey == postID { return true }
             if let sid = p.sessionID, sessions.contains(sid) { return true }
             if let stored = p.stored, storedIDs.contains(stored.id) { return true }
             return false
         }
-        if relates(pipeline) {
-            if case .idle = pipeline.state {
-                if pipeline.keepRequest != nil || pipeline.hostRequest != nil { return true }
-            } else if case .gallery = pipeline.state, pipeline.galleryIsSettled {
-                // a saved gallery on screen is not work in flight
-            } else {
-                return true
+        func isRunning(_ p: Pipeline) -> Bool {
+            if case .idle = p.state {
+                return p.keepRequest != nil || p.hostRequest != nil
             }
+            if case .gallery = p.state, p.galleryIsSettled {
+                // a saved gallery on screen is not work in flight
+                return false
+            }
+            return true
         }
-        return ctx.background.runs.contains { relates($0) }
+        if relates(pipeline), isRunning(pipeline) { return true }
+        if queue.jobs.contains(where: { $0.isLive && relates($0.pipeline) }) { return true }
+        return ctx.background.runs.contains { relates($0) && isRunning($0) }
     }
 
     // MARK: - Deleting

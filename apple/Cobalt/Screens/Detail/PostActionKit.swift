@@ -346,14 +346,15 @@ struct PaneActionMenuItems: View {
 
     var body: some View {
         ForEach(actions) { action in
-            if action.choices.isEmpty {
+            let subchoices = action.choices.isEmpty ? action.holdChoices : action.choices
+            if subchoices.isEmpty {
                 Button(role: action.role) { action.perform() } label: {
                     Label(action.title, systemImage: action.systemImage)
                 }
-                .disabled(action.off(offline: offline))
+                .disabled(action.off(offline: offline) || action.isWorking)
             } else {
-                Menu(action.title, systemImage: action.systemImage) { PaneChoiceItems(choices: action.choices) }
-                    .disabled(action.off(offline: offline))
+                Menu(action.title, systemImage: action.systemImage) { PaneChoiceItems(choices: subchoices) }
+                    .disabled(action.off(offline: offline) || action.isWorking)
             }
         }
     }

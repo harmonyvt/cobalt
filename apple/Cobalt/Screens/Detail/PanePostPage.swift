@@ -400,29 +400,16 @@ struct PostActions {
     }
 
     private func classicAction(_ choice: DetailActions.Choice, _ a: DetailActions, primary: Bool) -> PaneAction? {
-        let copied = controller.copiedID == r.id
-        let form = copied ? (controller.copiedForm ?? .share) : nil
         switch choice {
         case .copyWebpLink:
             guard let url = r.publicURL else { return nil }
-            let paired = model.capabilities.hasLinkPair(url)
-            return PaneAction(
-                copied && form != .direct ? Copy.Media.copied : (paired ? Copy.LinkPair.copyShareLink : Copy.Media.copyWebpLink),
-                systemImage: copied ? Symbol.Media.copied : Symbol.Media.copyLink, id: "copy-webp"
-            ) { controller.copy(url, for: r.id) }
+            return copyLinkAction(url: url, singleTitle: Copy.Media.copyWebpLink, id: "copy-webp")
         case .copyVideoLink:
             guard let url = a.videoLink else { return nil }
-            let paired = model.capabilities.hasLinkPair(url)
-            return PaneAction(
-                copied && form != .direct ? Copy.Media.copied : (paired ? Copy.LinkPair.copyShareLink : Copy.Media.copyVideoLink),
-                systemImage: copied && form != .direct ? Symbol.Media.copied : Symbol.Media.copyLink, id: "copy-video"
-            ) { controller.copy(url, for: r.id) }
+            return copyLinkAction(url: url, singleTitle: Copy.Media.copyVideoLink, id: "copy-video")
         case .copyVideoDirect:
-            guard let url = a.videoLink else { return nil }
-            return PaneAction(
-                copied && form == .direct ? Copy.Media.copied : Copy.LinkPair.copyDirectLink,
-                systemImage: copied && form == .direct ? Symbol.Media.copied : Symbol.LinkPair.direct, id: "copy-direct"
-            ) { controller.copy(url, for: r.id, form: .direct) }
+            // Direct link lives in the hold-press picker on `copy share link`.
+            return nil
         case .makeWebp, .anotherWebp:
             let title = choice == .anotherWebp && !primary ? Copy.Media.anotherWebp
                 : (item.webpCount > 0 ? Copy.Media.makeAnotherWebp : Copy.Media.makeAWebp)
@@ -452,22 +439,18 @@ struct PostActions {
         let a = GalleryActions(c: c)
         let plan = a.plan
         var out: [PaneAction] = []
-        if let primary = plan.primary, let action = galleryPrimary(primary) { out.append(action) }
+        if let primary = plan.primary, let action = galleryPrimary(primary, a) { out.append(action) }
         for choice in plan.secondary {
             if let action = gallerySecondary(choice) { out.append(action) }
         }
         return out
     }
 
-    private func galleryPrimary(_ choice: GalleryActions.Primary) -> PaneAction? {
+    private func galleryPrimary(_ choice: GalleryActions.Primary, _ a: GalleryActions) -> PaneAction? {
         switch choice {
         case .copyLink:
             guard let url = r.publicURL else { return nil }
-            let done = controller.copiedID == r.id
-            return PaneAction(
-                done ? Copy.Media.copied : Copy.Gallery.copyPhotoLink,
-                systemImage: done ? Symbol.Media.copied : Symbol.Media.copyLink, id: "copy-link"
-            ) { controller.copy(url, for: r.id) }
+            return copyLinkAction(url: url, singleTitle: a.linkTitle, id: "copy-link")
         case .share:
             return shareAction(disabled: controller.preparingShare)
         case .savePhotos:
@@ -492,15 +475,36 @@ struct PostActions {
                 if controller.makeWebp(ofItem: r, in: item) { leave() }
             }
         case .animatedWebp:
-            let done = controller.animating[r.id] == .done
+            let state = controller.animatedWebpStep(for: r, in: item)
             return PaneAction(
-                Copy.Gallery.animatedWebp, systemImage: done ? Symbol.checkmark : Symbol.Gallery.animatedWebp,
-                needsServer: true, disabled: controller.animating[r.id] == .working, id: "animated-webp"
+                Copy.Gallery.animatedWebp, systemImage: state == .done ? Symbol.checkmark : Symbol.Gallery.animatedWebp,
+                needsServer: true, disabled: state == .working, working: state == .working, id: "animated-webp"
             ) { Task { await controller.makeAnimatedWebp(of: r, in: item) } }
         }
     }
 
     // MARK: shared
+
+    /// `copy share link`: a short tap copies the share link; pressing and holding reveals `share` and `direct` above
+    /// the tile and releasing on either copies that form. Falls back to a plain single-link button when unpaired.
+    private func copyLinkAction(url: URL, singleTitle: String, id: String) -> PaneAction {
+        let done = controller.copiedID == r.id
+        let paired = model.capabilities.hasLinkPair(url)
+        let holdChoices: [PaneAction] = paired ? [
+            PaneAction("share", systemImage: Symbol.LinkPair.share, id: "\(id)-share") {
+                controller.copy(url, for: r.id, form: .share)
+            },
+            PaneAction("direct", systemImage: Symbol.LinkPair.direct, id: "\(id)-direct") {
+                controller.copy(url, for: r.id, form: .direct)
+            },
+        ] : []
+        return PaneAction(
+            done ? Copy.Media.copied : (paired ? Copy.LinkPair.copyShareLink : singleTitle),
+            systemImage: done ? Symbol.Media.copied : Symbol.Media.copyLink,
+            id: id,
+            holdChoices: holdChoices
+        ) { controller.copy(url, for: r.id, form: .share) }
+    }
 
     /// `share`: the file, its share link or its direct link (a menu when there is more than one).
     private func shareAction(disabled: Bool) -> PaneAction? {

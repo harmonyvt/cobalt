@@ -372,13 +372,14 @@ extension Pipeline {
     /// straight to the server; `.retry` asks it to fetch the missing items again and follows that save to its end.
     func startGallery(
         _ work: JobQueue.GalleryWork, session sid: String, items: [GalleryItem], media info: MediaInfo?, link: URL?,
-        mediaID: String?, failures: [Int: String]
+        mediaID: String?, postKey: String? = nil, failures: [Int: String]
     ) {
         let linkInfo = link.flatMap { LinkInfo($0) }
         begin(input: linkInfo.map { .link($0) })
         sessionID = sid
         media = info
         targetMediaID = mediaID
+        targetPostKey = postKey
         var run = GalleryRun(total: max(items.count, 1))
         run.failures = failures
         run.done = max(0, run.total - failures.count)
@@ -646,16 +647,17 @@ extension Pipeline {
             let local = try await client.download(.libraryItem(id: itemID), to: store.inboxURL(for: name), progress: { _ in })
             let spec = Self.madeSpec(for: m, result: r)
             // a make that replaces one: the old record and its Files copy leave first (R8), so the name is free
-            for old in store.videos where old.madeKind == kind && old.libraryID != itemID && (old.sessionID == sid || old.mediaID == mediaID) {
+            let groupSession = targetPostKey ?? sid
+            for old in store.videos where old.madeKind == kind && old.libraryID != itemID && (old.sessionID == sid || old.sessionID == groupSession || (mediaID != nil && old.mediaID == mediaID)) {
                 await store.replaceMade(old.id)
             }
             let info = MediaInfo(name: (name as NSString).deletingPathExtension, duration: r.seconds, width: r.width, height: r.height, bytes: r.bytes, isImage: isImage)
             let link: URL?
             if case .link(let l)? = input { link = l.url } else { link = nil }
             _ = try await store.add(
-                file: local, kind: kindOnDisk, media: info, sessionID: sid, link: link, remoteURL: nil, move: true,
-                mediaID: targetMediaID, keep: ctx.settings.keepVideosOnDevice, role: role, madeFrom: m.items, madeSpec: spec,
-                libraryID: itemID)
+                file: local, kind: kindOnDisk, media: info, sessionID: groupSession, link: link, remoteURL: nil, move: true,
+                publicURL: r.url, mediaID: targetMediaID, keep: ctx.settings.keepVideosOnDevice, role: role, madeFrom: m.items,
+                madeSpec: spec, libraryID: itemID)
         } catch {
             Telemetry.log(.warn, .store, "made file not kept on device", data: Telemetry.errorData(error))
         }

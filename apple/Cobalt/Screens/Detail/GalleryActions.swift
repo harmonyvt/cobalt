@@ -33,7 +33,7 @@ struct GalleryActions: View {
     private var canSave: Bool { RenditionPhotos.canSave(r) }
     private var placement: PhotosPlacement { controller.placement(of: r, in: item) }
 
-    private var linkTitle: String {
+    var linkTitle: String {
         switch r.kind {
         case .item(_, let type):
             switch type {
@@ -231,7 +231,7 @@ struct GalleryActions: View {
                 if controller.makeWebp(ofItem: r, in: item) { leave() }
             }
         case .animatedWebp:
-            let state = controller.animating[r.id] ?? .idle
+            let state = controller.animatedWebpStep(for: r, in: item)
             DetailChoiceButton(
                 title: Copy.Gallery.animatedWebp, symbol: state == .done ? Symbol.checkmark : Symbol.Gallery.animatedWebp,
                 working: state == .working, done: state == .done ? Copy.saved : nil

@@ -535,6 +535,7 @@ public final class OfflineStore {
         take(found.bySession[post.id])
         if let sid = post.session?.id { take(found.bySession[sid]) }
         for file in post.files {
+            take(found.byLibraryID[file.id])
             if let url = file.url { take(found.byWebpURL[url]); continue }
             // `MediaItem.isSameWebp`: a webp file with no link matches by the name its link ends in
             if file.role == .webp, let name = file.mediaName { take(found.byWebpName[name]) }
@@ -1830,6 +1831,7 @@ private actor PreviewGate {
 private struct MediaIndex {
     var byID: [String: Int] = [:]
     var bySession: [String: Int] = [:]
+    var byLibraryID: [String: Int] = [:]
     var byWebpURL: [URL: Int] = [:]
     var byWebpName: [String: Int] = [:]
 
@@ -1837,6 +1839,9 @@ private struct MediaIndex {
         for (i, m) in list.enumerated() {
             if byID[m.id] == nil { byID[m.id] = i }
             for sid in m.sessionIDs where bySession[sid] == nil { bySession[sid] = i }
+            for r in m.renditions {
+                if let libID = r.libraryID, byLibraryID[libID] == nil { byLibraryID[libID] = i }
+            }
             for webp in m.webps {
                 guard let url = webp.remoteURL else { continue }
                 if byWebpURL[url] == nil { byWebpURL[url] = i }

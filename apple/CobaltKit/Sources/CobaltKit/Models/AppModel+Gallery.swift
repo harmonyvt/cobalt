@@ -58,7 +58,8 @@ extension AppModel {
             MediaInfo(name: item.titleText, duration: nil, width: $0.width, height: $0.height, bytes: nil, isImage: true)
         }
         queue.addGallery(
-            .make(m), session: session.id, items: items, media: info, link: item.link ?? item.post?.link, mediaID: item.local?.id)
+            .make(m), session: session.id, items: items, media: info, link: item.link ?? item.post?.link,
+            mediaID: item.local?.id, postKey: item.post?.id)
     }
 
     // MARK: - The animated webp of one photo
@@ -79,18 +80,42 @@ extension AppModel {
         }
     }
 
+    /// The live queue job currently making an animated webp of `rendition` in `item`, if any.
+    public func animatedWebpJob(for rendition: Rendition, in item: MediaItem) -> Job? {
+        let index = rendition.itemIndex ?? 0
+        let localID = item.local?.id
+        let postID = item.post?.id
+        var sessions = item.local?.sessionIDs ?? []
+        if let post = item.post {
+            sessions.insert(post.id)
+            if let id = post.session?.id { sessions.insert(id) }
+        }
+        return queue.jobs.last { job in
+            let p = job.pipeline
+            guard let make = p.galleryRun?.make, make.isActive,
+                  case .slideshow(let plan)? = make.request, plan.isStill, plan.items == [index]
+            else { return false }
+            if let localID, p.targetMediaID == localID { return true }
+            if let postID, p.targetPostKey == postID { return true }
+            if let sid = p.sessionID, sessions.contains(sid) { return true }
+            return false
+        }
+    }
+
     /// "animated webp": the photo as an animated webp of itself (2 frames of the same picture), so Discord lets people
     /// favourite it (APP-API-CONTRACT 18.14). It is a make of one photo, a job of the queue like the combine sheet's: the
     /// tray shows it and its result joins this media as an `animated webp` tab. A post whose session is over is reopened
     /// first (`POST /library/items/<id>/studio`: a photo session, ready in a few seconds).
-    public func makeAnimatedWebp(of rendition: Rendition, in item: MediaItem) async throws {
+    @discardableResult
+    public func makeAnimatedWebp(of rendition: Rendition, in item: MediaItem) async throws -> Job {
         guard canMakeAnimatedWebp(of: rendition, in: item), let file = rendition.file else { throw PipelineFailure.unsupported }
+        if let active = animatedWebpJob(for: rendition, in: item) { return active }
         let index = rendition.itemIndex ?? 0
         let m = GalleryMake.slideshow(SlideshowPlan.still(index: index, quality: .high))
         let known = item.post?.session?.id ?? item.post?.id ?? item.local?.sessionIDs.first
         if let known, let job = queue.galleryJob(session: known) {
             await job.pipeline.make(m)
-            return
+            return job
         }
         let sid: String
         if let session = gallerySession(of: item) {
@@ -103,8 +128,9 @@ extension AppModel {
             thumb: rendition.posterURL ?? rendition.local?.posterURL)
         let info = MediaInfo(
             name: item.titleText, duration: nil, width: photo.width, height: photo.height, bytes: nil, isImage: true)
-        queue.addGallery(
-            .make(m), session: sid, items: [photo], media: info, link: item.link ?? item.post?.link, mediaID: item.local?.id)
+        return queue.addGallery(
+            .make(m), session: sid, items: [photo], media: info, link: item.link ?? item.post?.link,
+            mediaID: item.local?.id, postKey: item.post?.id)
     }
 
     /// Opens a studio session on a stored photo and waits for it to be ready (the server probes it in seconds; a busy
@@ -141,7 +167,7 @@ extension AppModel {
         let info = MediaInfo(name: item.titleText, duration: nil, width: nil, height: nil, bytes: nil, isImage: true)
         queue.addGallery(
             .retry(missing), session: session.id, items: galleryItems(of: item), media: info,
-            link: item.link ?? item.post?.link, mediaID: item.local?.id, failures: failures)
+            link: item.link ?? item.post?.link, mediaID: item.local?.id, postKey: item.post?.id, failures: failures)
     }
 
     /// "make a webp" of one video or gif item (the detail's per-item button): the home tab, the focus on this media with the
