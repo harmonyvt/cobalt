@@ -141,6 +141,7 @@ struct LibraryMediaJoin: Sendable {
     let localTitles: [String: String]
     private var byID: [String: Int] = [:]
     private var bySession: [String: Int] = [:]
+    private var byLibraryID: [String: Int] = [:]
     private var byWebpURL: [URL: Int] = [:]
     private var byWebpName: [String: Int] = [:]
 
@@ -150,6 +151,9 @@ struct LibraryMediaJoin: Sendable {
         for (i, m) in media.enumerated() {
             if byID[m.id] == nil { byID[m.id] = i }
             for sid in m.sessionIDs where bySession[sid] == nil { bySession[sid] = i }
+            for r in m.renditions {
+                if let libID = r.libraryID, byLibraryID[libID] == nil { byLibraryID[libID] = i }
+            }
             for webp in m.webps {
                 guard let url = webp.remoteURL else { continue }
                 if byWebpURL[url] == nil { byWebpURL[url] = i }
@@ -165,6 +169,7 @@ struct LibraryMediaJoin: Sendable {
         take(bySession[post.id])
         if let sid = post.session?.id { take(bySession[sid]) }
         for file in post.files {
+            take(byLibraryID[file.id])
             if let url = file.url { take(byWebpURL[url]); continue }
             // `MediaItem.isSameWebp`: a webp file with no link matches by the name its link ends in
             if file.role == .webp, let name = file.mediaName { take(byWebpName[name]) }

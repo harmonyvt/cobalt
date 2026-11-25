@@ -219,14 +219,10 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
         return .webp
     }
 
-    /// The newest animated webp (a slideshow webp counts), else the newest made video, else the first item, else the video
+    /// The newest animated webp (a slideshow webp or animated still webp counts), else the newest made video, else the first item, else the video
     /// (CONTRACT-MEDIA 1.4, CONTRACT-GALLERY 1.22).
     public var face: Rendition {
-        let animated = renditions.filter { r in
-            if case .webp = r.kind { return true }
-            if case .slideshow(_, .webp) = r.kind { return true }
-            return false
-        }.max { $0.createdAt < $1.createdAt }
+        let animated = renditions.filter { $0.isWebp || $0.isAnimatedMade }.max { $0.createdAt < $1.createdAt }
         if let animated { return animated }
         if let slideshow = renditions.last(where: { if case .slideshow = $0.kind { return true } else { return false } }) { return slideshow }
         return items.first ?? renditions[0]
@@ -260,11 +256,14 @@ public struct MediaItem: Sendable, Equatable, Identifiable {
     }
 
     /// A local media and a library post are one item when any local session is the post's id or its
-    /// session's id, or any local webp's public URL is one of the post's files (CONTRACT-MEDIA 4.2).
+    /// session's id, any local rendition carries a library file id of the post, or any local webp's public URL
+    /// is one of the post's files (CONTRACT-MEDIA 4.2).
     /// Never by link: a carousel's items share one, and a post shared again later is a new media.
     public static func joins(_ local: StoredMedia, _ post: LibraryPost) -> Bool {
         let sessions = Set([post.id, post.session?.id].compactMap { $0 })
         if !local.sessionIDs.isDisjoint(with: sessions) { return true }
+        let fileIDs = Set(post.files.map(\.id))
+        if local.renditions.contains(where: { $0.libraryID.map(fileIDs.contains) == true }) { return true }
         return local.webps.contains { webp in webp.remoteURL.map { url in post.files.contains { isSameWebp($0, url) } } ?? false }
     }
 

@@ -234,16 +234,20 @@ struct PaneSaveContent: View {
     }
 
     private func copyActions(for url: URL) -> [PaneAction] {
-        let paired = pipeline.shareLink(for: url) != url
-        var out = [PaneAction(
-            paired ? Copy.LinkPair.copyShareLink : Copy.copyLink, systemImage: Symbol.copyLink, id: "copy-share"
-        ) { Pasteboard.copy(pipeline.shareLink(for: url).absoluteString) }]
-        if paired {
-            out.append(PaneAction(Copy.LinkPair.copyDirectLink, systemImage: Symbol.LinkPair.direct, id: "copy-direct") {
+        let share = pipeline.shareLink(for: url)
+        let paired = share != url
+        let holdChoices: [PaneAction] = paired ? [
+            PaneAction("share", systemImage: Symbol.LinkPair.share, id: "copy-share-choice") {
+                Pasteboard.copy(share.absoluteString)
+            },
+            PaneAction("direct", systemImage: Symbol.LinkPair.direct, id: "copy-direct-choice") {
                 Pasteboard.copy(url.absoluteString)
-            })
-        }
-        return out
+            },
+        ] : []
+        return [PaneAction(
+            paired ? Copy.LinkPair.copyShareLink : Copy.copyLink, systemImage: Symbol.copyLink,
+            id: "copy-share", holdChoices: holdChoices
+        ) { Pasteboard.copy(share.absoluteString) }]
     }
 
     private func failed(_ facts: JobCardFacts) -> some View {

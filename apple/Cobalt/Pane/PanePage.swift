@@ -205,6 +205,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
                 controls
             }
             .padding(.horizontal, 16)
+            .zIndex(1)
             details
             PaneShelf(stacked: stackedShelf) { shelf }
         }

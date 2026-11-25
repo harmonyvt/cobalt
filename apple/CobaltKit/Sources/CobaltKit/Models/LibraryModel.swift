@@ -84,6 +84,7 @@ public final class LibraryModel {
     @ObservationIgnored let ctx: PipelineContext
     @ObservationIgnored let defaults: UserDefaults
     @ObservationIgnored var cursor: String?
+    @ObservationIgnored var pendingRefresh = false
     @ObservationIgnored var redownloadTasks: [String: Task<StoredVideo, Error>] = [:]
     /// The debounce, request and waking retry of the current query; cancelled by the next keystroke.
     @ObservationIgnored var searchTask: Task<Void, Never>?
@@ -301,25 +302,32 @@ public final class LibraryModel {
     /// Today's `GET /library` page. Also the path after `GET /sync` falls back (a 404, or a
     /// pull that failed with nothing on the device to show).
     func refreshFromServer() async {
-        guard !isLoading else { return }
+        if isLoading {
+            pendingRefresh = true
+            await settle()
+            if Task.isCancelled || !pendingRefresh || isLoading { return }
+        }
         isLoading = true
         defer { isLoading = false }
-        let started = Date()
-        do {
-            let client = ctx.client
-            if ctx.capabilities.titles { await ctx.titles.flush(client: client) }       // titles that failed to send, before the page reads them
-            let epoch = statusEpoch
-            let page = try await ctx.libraryPage(cursor: nil, limit: Self.pageSize)
-            apply(page, replacing: true)
-            if epoch == statusEpoch, !statusInFlight { recentlyHidden = []; recentlyUnhidden = [] }       // asked after the last change: it is the truth
-            failure = nil
-            FinderLibraryEvents.noteRefresh()
-            // quiet, and not waited for: the refresh is done when the library page is
-            hiddenSyncTask = Task { [weak self] in await self?.syncHiddenIndex() }
-        } catch {
-            if let f = pipelineFailure(from: error, during: .saving) { failure = f }
-        }
-        LaunchTiming.noteLibraryLoad(ms: LaunchTiming.millis(from: started), posts: posts.count, source: "library")
+        repeat {
+            pendingRefresh = false
+            let started = Date()
+            do {
+                let client = ctx.client
+                if ctx.capabilities.titles { await ctx.titles.flush(client: client) }       // titles that failed to send, before the page reads them
+                let epoch = statusEpoch
+                let page = try await ctx.libraryPage(cursor: nil, limit: Self.pageSize)
+                apply(page, replacing: true)
+                if epoch == statusEpoch, !statusInFlight { recentlyHidden = []; recentlyUnhidden = [] }       // asked after the last change: it is the truth
+                failure = nil
+                FinderLibraryEvents.noteRefresh()
+                // quiet, and not waited for: the refresh is done when the library page is
+                hiddenSyncTask = Task { [weak self] in await self?.syncHiddenIndex() }
+            } catch {
+                if let f = pipelineFailure(from: error, during: .saving) { failure = f }
+            }
+            LaunchTiming.noteLibraryLoad(ms: LaunchTiming.millis(from: started), posts: posts.count, source: "library")
+        } while pendingRefresh
     }
 
     public func loadMore() async {

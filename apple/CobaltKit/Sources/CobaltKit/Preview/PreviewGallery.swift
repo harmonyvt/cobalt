@@ -485,8 +485,9 @@ extension PreviewClient {
             "sound=\(plan.sound.rawValue)", "quality=\(plan.quality?.rawValue ?? "-")", "width=\(plan.width.map(String.init) ?? "-")",
             "focused=\(focused)",
         ].joined(separator: " "))
-        guard live.count >= 2 else { throw CobaltError.api(code: "error.studio.not_gallery", httpStatus: 409) }
-        guard plan.items.count >= 2, Set(plan.items).count == plan.items.count,
+        let minCount = plan.isStill ? 1 : 2
+        guard live.count >= minCount else { throw CobaltError.api(code: "error.studio.not_gallery", httpStatus: 409) }
+        guard plan.items.count >= minCount, Set(plan.items).count == plan.items.count,
               plan.items.allSatisfy({ i in live.contains { $0.id == i } })
         else { throw CobaltError.api(code: "error.webp.invalid_params", httpStatus: 400) }
         switch plan.check(live) {
@@ -531,7 +532,9 @@ extension PreviewClient {
         case .image(let plan):
             spec = (try? JSONSerialization.data(withJSONObject: ["kind": "gallery", "layout": plan.layout.rawValue, "items": plan.items], options: [.sortedKeys])) ?? Data()
         case .slideshow(let plan):
-            spec = (try? JSONSerialization.data(withJSONObject: ["format": plan.format.rawValue, "items": plan.items, "fade": plan.fade], options: [.sortedKeys])) ?? Data()
+            var body: [String: Any] = ["format": plan.format.rawValue, "items": plan.items, "fade": plan.fade]
+            if plan.isStill { body["still"] = true }
+            spec = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])) ?? Data()
         }
         let duration = makeDuration(m, items: [])
         var job = ""

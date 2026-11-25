@@ -151,6 +151,7 @@ enum PreviewData {
         if scenario.isGallery {
             caps.gallery = true
             caps.galleryMake = scenario != .galleryNoMake
+            caps.stillWebp = caps.galleryMake
             caps.visibility = true
             caps.line = true
         }

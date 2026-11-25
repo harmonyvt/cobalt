@@ -78,8 +78,10 @@ final class DetailController {
     var copiedForm: LinkForm?
     var photos: [Rendition.ID: Step] = [:]
     var hosting: Step = .idle
-    /// `animated webp` (APP-API-CONTRACT 18.14): the reopen and the ask, by rendition. The make itself is a job of the tray.
+    /// `animated webp` (APP-API-CONTRACT 18.14): reopening and brief completion state, by rendition.
     var animating: [Rendition.ID: Step] = [:]
+    /// The queue job making each rendition's animated webp, so the button stays working until the job settles.
+    var animatingJobs: [Rendition.ID: Job.ID] = [:]
     /// A switch that failed, in words, by rendition: shown under the public link row until the next try.
     var visibilityFailed: [Rendition.ID: String] = [:]
     /// Renditions whose last switch off could not clear the public link from the server's cache.

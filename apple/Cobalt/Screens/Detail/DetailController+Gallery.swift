@@ -260,19 +260,137 @@ extension DetailController {
         model.canMakeAnimatedWebp(of: r, in: item)
     }
 
-    /// Asks for the photo's animated webp: the job goes to the tray and its tab lands on this media when it is done. The
-    /// button stays busy while an expired post is reopened, then says `done` for a moment.
+    /// The live or tracked job making an animated webp for `r` in `item`.
+    func animatedWebpJob(for r: Rendition, in item: MediaItem) -> Job? {
+        if let id = animatingJobs[r.id], let job = model.queue.job(id) { return job }
+        return model.animatedWebpJob(for: r, in: item)
+    }
+
+    /// The true state of the `animated webp` button for `r`: working while reopening or while the server make job is
+    /// active, done briefly after the file actually lands, idle otherwise.
+    func animatedWebpStep(for r: Rendition, in item: MediaItem) -> Step {
+        if animating[r.id] == .working { return .working }
+        if let make = animatedWebpJob(for: r, in: item)?.pipeline.galleryRun?.make, make.isActive { return .working }
+        return animating[r.id] ?? .idle
+    }
+
+    /// Live status line while an animated webp is being created for any photo in `item`.
+    func animatedWebpStatus(for item: MediaItem) -> String? {
+        for r in item.renditions {
+            if let make = animatedWebpJob(for: r, in: item)?.pipeline.galleryRun?.make, make.isActive {
+                switch make {
+                case .queued(_, let ahead) where ahead > 0:
+                    return "making animated webp · \(ahead) ahead"
+                default:
+                    return "making animated webp…"
+                }
+            }
+            if animating[r.id] == .working {
+                return "making animated webp…"
+            }
+        }
+        return nil
+    }
+
+    /// Asks for the photo's animated webp and follows the job until it lands or fails, refreshing the post and
+    /// switching to the new `animated webp` tab as soon as it is ready.
     func makeAnimatedWebp(of r: Rendition, in item: MediaItem) async {
-        guard animating[r.id] != .working else { return }
+        guard animatedWebpStep(for: r, in: item) != .working else { return }
         notice = nil
         animating[r.id] = .working
         do {
-            try await model.makeAnimatedWebp(of: r, in: item)
-            animating[r.id] = .done
-            say(DetailWords.animatedWebpAsked)
+            let job = try await model.makeAnimatedWebp(of: r, in: item)
+            animatingJobs[r.id] = job.id
+            await watchAnimatedWebp(job: job, renditionID: r.id)
         } catch {
+            animatingJobs[r.id] = nil
             animating[r.id] = nil
             notice = Self.words(error)
+        }
+    }
+
+    private func watchAnimatedWebp(job: Job, renditionID: Rendition.ID) async {
+        while !Task.isCancelled {
+            guard model.queue.job(job.id) != nil else {
+                animatingJobs[renditionID] = nil
+                animating[renditionID] = nil
+                return
+            }
+            let make = job.pipeline.galleryRun?.make ?? .none
+            switch make {
+            case .waiting, .sending, .queued, .making:
+                await waitForMakeChange(job: job)
+            case .done(_, let result):
+                await model.library.refresh()
+                animatingJobs[renditionID] = nil
+                animating[renditionID] = .done
+                if let itemID = result.itemID {
+                    selectedID = "m:\(itemID)"
+                }
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(2))
+                    if self?.animating[renditionID] == .done { self?.animating[renditionID] = nil }
+                }
+                return
+            case .failed(_, let failure):
+                animatingJobs[renditionID] = nil
+                animating[renditionID] = nil
+                notice = Self.words(failure)
+                return
+            case .none:
+                animatingJobs[renditionID] = nil
+                animating[renditionID] = nil
+                return
+            }
+        }
+    }
+
+    private func waitForMakeChange(job: Job) async {
+        final class Gate: @unchecked Sendable {
+            private let lock = NSLock()
+            private var continuation: CheckedContinuation<Void, Never>?
+            private var fired = false
+
+            func install(_ continuation: CheckedContinuation<Void, Never>) {
+                lock.lock()
+                if fired {
+                    lock.unlock()
+                    continuation.resume()
+                } else {
+                    self.continuation = continuation
+                    lock.unlock()
+                }
+            }
+
+            func fire() {
+                lock.lock()
+                fired = true
+                let cont = continuation
+                continuation = nil
+                lock.unlock()
+                cont?.resume()
+            }
+        }
+
+        let gate = Gate()
+        let queue = model.queue
+        let pipeline = job.pipeline
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                withObservationTracking {
+                    _ = pipeline.galleryRun
+                    _ = queue.jobs.count
+                } onChange: {
+                    Task { @MainActor in gate.fire() }
+                }
+                gate.install(continuation)
+                // If the state already settled before tracking installed, wake immediately.
+                if Task.isCancelled || queue.job(job.id) == nil || pipeline.galleryRun?.make.isActive != true {
+                    gate.fire()
+                }
+            }
+        } onCancel: {
+            gate.fire()
         }
     }
 

@@ -31,6 +31,15 @@ struct DetailStatus: View {
             case .idle:
                 if let notice = controller.notice {
                     problem(notice, retry: false)
+                } else if let status = controller.animatedWebpStatus(for: item) {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(status)
+                            .font(Font.cobalt(12, .regular, relativeTo: .footnote))
+                            .foregroundStyle(CobaltColor.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .accessibilityElement(children: .combine)
                 } else if let flash = controller.flash {
                     Text(flash)
                         .font(Font.cobalt(12, .regular, relativeTo: .caption)).foregroundStyle(CobaltColor.caption)

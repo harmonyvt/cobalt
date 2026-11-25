@@ -77,6 +77,7 @@ public final class JobQueue {
         var media: MediaInfo?
         var link: URL?
         var mediaID: String?
+        var postKey: String?
         var failures: [Int: String]
     }
 
@@ -243,7 +244,7 @@ public final class JobQueue {
     @discardableResult
     public func addGallery(
         _ work: GalleryWork, session: String, items: [GalleryItem], media: MediaInfo?, link: URL?, mediaID: String?,
-        failures: [Int: String] = [:]
+        postKey: String? = nil, failures: [Int: String] = [:]
     ) -> Job {
         pruneFinished()
         let id = UUID()
@@ -256,11 +257,12 @@ public final class JobQueue {
         addCounter += 1
         var m = Meta(input: nil, options: JobOptions())
         m.addedMonotonic = addCounter
-        m.gallery = GalleryJobSpec(work: work, session: session, items: items, media: media, link: link, mediaID: mediaID, failures: failures)
+        m.gallery = GalleryJobSpec(
+            work: work, session: session, items: items, media: media, link: link, mediaID: mediaID, postKey: postKey, failures: failures)
         meta[id] = m
         let job = Job(id: id, pipeline: p, origin: .app, addedAt: ctx.clock.now(), via: .make)
         jobs.append(job)
-        p.startGallery(work, session: session, items: items, media: media, link: link, mediaID: mediaID, failures: failures)
+        p.startGallery(work, session: session, items: items, media: media, link: link, mediaID: mediaID, postKey: postKey, failures: failures)
         Telemetry.log(.info, .pipeline, "job added", data: tele([
             "input": "gallery", "via": "make", "batch": 1,
         ]))
@@ -272,7 +274,9 @@ public final class JobQueue {
     /// second one).
     public func galleryJob(session: String) -> Job? {
         jobs.first { job in
-            guard job.pipeline.sessionID == session, case .gallery = job.pipeline.state else { return false }
+            guard (job.pipeline.sessionID == session || job.pipeline.targetPostKey == session),
+                  case .gallery = job.pipeline.state
+            else { return false }
             return job.pipeline.galleryRun != nil
         }
     }
@@ -505,7 +509,7 @@ public final class JobQueue {
             job.pipeline.reset()
             addGallery(
                 spec.work, session: spec.session, items: known.isEmpty ? spec.items : known, media: spec.media, link: spec.link,
-                mediaID: spec.mediaID, failures: spec.failures)
+                mediaID: spec.mediaID, postKey: spec.postKey, failures: spec.failures)
             return
         }
         guard job.isFailed else { return }
