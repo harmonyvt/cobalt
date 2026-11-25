@@ -43,13 +43,23 @@ extension Copy {
         static let openOnTwitch = "open on twitch"
         static let playingElsewhere = "playing on the other screen"
 
-        // MARK: delay (70.4)
+        // MARK: delay & player mode (70.4)
 
         static func seconds(_ s: Double) -> String { String(format: "%.1f s", s) }
         static func delay(_ s: Double) -> String { seconds(s) }
         static func behind(_ s: Double) -> String { "\(seconds(s)) behind" }
         static let jumpToLive = "jump to live"
         static let catchingUp = "catching up…"
+        static let playerMode = "player"
+        static let playerLowLatency = "low latency"
+        static let playerEmbed = "twitch embed"
+        static let playerEmbedShort = "embed"
+        static let usingEmbed = "using embed"
+        static let quality = "quality"
+        static let mute = "mute"
+        static let unmute = "unmute"
+        static let audioOnly = "audio only"
+        static let loadingStream = "loading stream…"
 
         // MARK: on a tv (70.5)
 

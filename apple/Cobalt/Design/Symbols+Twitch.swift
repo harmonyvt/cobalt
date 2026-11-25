@@ -32,5 +32,12 @@ extension Symbol {
         static let undim = "sun.max"
         static let chatOnTV = "text.bubble"
         static let mirror = "rectangle.on.rectangle"
+        // low-latency native player & mode switch
+        static let lowLatency = "bolt.fill"
+        static let embed = "globe"
+        static let quality = "slider.horizontal.3"
+        static let muted = "speaker.slash.fill"
+        static let unmuted = "speaker.wave.2.fill"
+        static let audioOnly = "waveform"
     }
 }
