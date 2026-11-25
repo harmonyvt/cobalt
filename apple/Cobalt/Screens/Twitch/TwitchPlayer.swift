@@ -1,28 +1,31 @@
+@preconcurrency import AVFoundation
 import CobaltKit
+import QuartzCore
 import SwiftUI
 import WebKit
 
-// The stream (APP-API-CONTRACT 70, 70.4): Twitch's own interactive embed player (`Twitch.Player`, embed/v1.js) in a web view,
-// never the raw video. Twitch only plays an embed whose page is on a domain named in `parent`, so the page is loaded as if it
-// came from the web app's domain.
+// The stream (APP-API-CONTRACT 70, 70.4): two playback engines share one app-wide host (`TwitchPlayerHost.shared`), and the
+// owner can switch between them at any time:
 //
-// One player for the whole app (`TwitchPlayerHost.shared`): a `TwitchPlayer` view adopts its web view, so moving the stream
-// between layouts or to the TV window reparents it without a reload. The page reports Twitch's own "latency to broadcaster"
-// every second; the host keeps the best it has seen and jumps back to live when the stream drifts behind it.
-// The embed's "Log in" opens twitch.tv's sign-in in a popup (window.open): the popup opens in a sheet over the player, in a
-// web view made from the configuration WebKit hands over, so it shares the player's cookies. When the sign-in closes it
-// (or the owner does), the player reloads signed in, and subscriptions apply.
+// 1. Low latency (default): pure-Swift `#EXT-X-TWITCH-PREFETCH` -> MPEG-TS demuxer -> `AVSampleBufferDisplayLayer` +
+//    `AVSampleBufferAudioRenderer` (`TwitchNativeEngine`). Zero third-party deps, sub-2 s latency, and automatic fallback to
+//    the Twitch embed if a channel needs an unsupported codec or Twitch enforces an integrity check.
+// 2. Twitch embed: Twitch's interactive `Twitch.Player` (`embed/v1.js`) in a `WKWebView`, loaded first-party as
+//    `www.twitch.tv` so WebKit shares sign-in cookies (falling back to the web app's domain if first-party doesn't come up
+//    within `firstPartyWait`).
 //
-// Signed in needs the page to be first party to Twitch. WebKit blocks every third-party cookie, so on the web app's domain
-// the embed (player.twitch.tv, a frame of another site) never sees the sign-in's twitch.tv cookies: it asks to log in again
-// after every reload (the sign-in loop of 2026-11-22). The page is therefore loaded as www.twitch.tv (`parent` too), where
-// the embed is same-site and reads the sign-in. If the embed is not ready on that page within `firstPartyWait` (15 s), the app falls
-// back to the web app's domain for the rest of the run: the stream plays, only signed out.
+// One player for the whole app (`TwitchPlayerHost.shared`): a `TwitchPlayer` view adopts the active view (native display layer
+// or web view), so moving the stream between layouts or to the TV window reparents it without a reload.
 //
-// The app leaving the screen (iOS background, Mac hidden) stops the stream, page and stats timer included, unless capystore's
-// TV window is showing it; it starts again on return if a view still wants it. Five minutes stopped with no view wanting
-// it, or a memory warning, lets the web view itself go (a new one is built on the next claim). The Twitch sign-in is in the
-// default website data store, not the view, so it survives that.
+// The app leaving the screen (iOS background, Mac hidden) stops the stream unless capystore's TV window is showing it; it
+// starts again on return if a view still wants it. Five minutes stopped with no view wanting it, or a memory warning, lets
+// unused views go (rebuilt on the next claim). The Twitch sign-in stays in the default website data store, so it survives
+// both restarts and mode switches (and native playback reads its `auth-token` cookie when present).
+
+enum TwitchPlayerMode: String, CaseIterable, Sendable {
+    case lowLatency
+    case embed
+}
 
 enum TwitchEmbed {
     /// Where the page is loaded as: first party to Twitch, so the embed sees the sign-in's cookies.
@@ -101,39 +104,112 @@ enum TwitchEmbed {
     }
 }
 
-/// The app's one Twitch player. Views adopt its web view with `TwitchPlayer(channel:)`; the latest view to appear holds it,
-/// and when that view goes the one before it takes it back (the TV window can borrow the stream from the phone this way).
+/// Platform view backed by an `AVSampleBufferDisplayLayer` for low-latency native playback.
+#if os(iOS)
+final class TwitchNativeVideoView: UIView {
+    override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
+
+    var displayLayer: AVSampleBufferDisplayLayer {
+        // Guaranteed by `layerClass`.
+        layer as! AVSampleBufferDisplayLayer
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        displayLayer.videoGravity = .resizeAspect
+        displayLayer.backgroundColor = UIColor.black.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
+#else
+final class TwitchNativeVideoView: NSView {
+    let displayLayer = AVSampleBufferDisplayLayer()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        let root = CALayer()
+        root.backgroundColor = NSColor.black.cgColor
+        displayLayer.videoGravity = .resizeAspect
+        displayLayer.backgroundColor = NSColor.black.cgColor
+        root.addSublayer(displayLayer)
+        layer = root
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        displayLayer.frame = bounds
+        CATransaction.commit()
+    }
+}
+#endif
+
+/// The app's one Twitch player. Views adopt its active surface with `TwitchPlayer(channel:)`; the latest view to appear holds
+/// it, and when that view goes the one before it takes it back (the TV window can borrow the stream from the phone this way).
 /// With no view left the stream stops.
 @MainActor @Observable
 final class TwitchPlayerHost: LifecycleAware, Purgeable {
     static let shared = TwitchPlayerHost()
 
-    /// How long a stopped stream with no view wanting it keeps its web view (and WebKit's page process) around.
+    /// How long a stopped stream with no view wanting it keeps its views (and WebKit's page process) around.
     static let releaseAfter: Duration = .seconds(300)
 
     /// How far behind its best the stream may drift before it counts as behind (seconds).
     static let behindBy: Double = 2.5
     /// Seconds in a row the stream must be behind before an automatic jump to live.
-    static let autoAfter = 8
+    static let autoAfterSeconds: TimeInterval = 8
     /// Least time between two automatic jumps (seconds).
     static let autoCooldown: TimeInterval = 45
 
+    private static let modeKey = "twitch.player.mode"
+    private static let qualityKey = "twitch.player.quality"
+
+    /// The owner's chosen mode, persisted across runs.
+    private(set) var preferredMode: TwitchPlayerMode
+    /// The engine actually running for the current channel (differs from `preferredMode` only during auto-fallback).
+    private(set) var activeMode: TwitchPlayerMode
+    /// True when low-latency playback failed on this channel and the host automatically switched to the Twitch embed.
+    private(set) var fellBackToEmbed = false
+
     /// The channel playing now, nil while stopped.
     private(set) var channel: String?
-    /// Twitch's latency to the broadcaster in seconds, nil until the stream plays.
+    /// Latency to the broadcaster in seconds, nil until the stream plays.
     private(set) var delay: Double?
     /// The lowest delay seen on this channel: what this stream can do.
     private(set) var bestDelay: Double?
     private(set) var isPlaying = false
+    private(set) var isLoading = false
+    private(set) var isBuffering = false
     private(set) var isOffline = false
+    private(set) var isMuted = false
+    private(set) var isLowLatencyStream = false
     /// True from a jump to live until the delay settles.
     private(set) var isCatchingUp = false
-    /// The view holding the web view now.
+    /// Available quality variants when running in low-latency native mode.
+    private(set) var variants: [TwitchVariant] = []
+    private(set) var selectedVariantID: String?
+    /// The view holding the player surface now.
     private(set) var holder: UUID?
     /// Jump to live by itself when the stream drifts behind (on by default).
     var autoCatchUp = true
     /// The popup the embed opened (Twitch's sign-in), shown in a sheet by the holding view.
     private(set) var popup: TwitchPopup?
+
+    var selectedVariant: TwitchVariant? {
+        variants.first { $0.id == selectedVariantID }
+    }
+
+    var isAudioOnly: Bool {
+        activeMode == .lowLatency && selectedVariant?.isAudioOnly == true
+    }
 
     /// Seconds behind live more than this stream's best, nil until known.
     var behind: Double? {
@@ -144,6 +220,13 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
 
     /// The web view while there is one; `webView` builds it on demand.
     @ObservationIgnored private var made: WKWebView?
+    /// The native display-layer view while there is one; `nativeView` builds it on demand.
+    @ObservationIgnored private var madeNative: TwitchNativeVideoView?
+    @ObservationIgnored private var nativeEngine: TwitchNativeEngine?
+    @ObservationIgnored private var nativeSessionID: UInt64 = 0
+    @ObservationIgnored private var nativeStartTask: Task<Void, Never>?
+    @ObservationIgnored private var preferredQualityID: String?
+
     @ObservationIgnored private let proxy: TwitchMessageProxy
     @ObservationIgnored private var releaseTask: Task<Void, Never>?
     /// The app is off screen and the stream was stopped for it.
@@ -151,7 +234,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     /// The channel to play again when the app is back (the one stopped for the background, or one asked for meanwhile).
     @ObservationIgnored private var resumeChannel: String?
     @ObservationIgnored private var claims: [UUID] = []
-    @ObservationIgnored private var behindRun = 0
+    @ObservationIgnored private var behindSince: Date?
     @ObservationIgnored private var lastJump: Date = .distantPast
     @ObservationIgnored private var jumpCheck: Task<Void, Never>?
     @ObservationIgnored private var stopTask: Task<Void, Never>?
@@ -163,6 +246,12 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     @ObservationIgnored private var readyCheck: Task<Void, Never>?
 
     private init() {
+        let savedMode = UserDefaults.standard.string(forKey: Self.modeKey)
+            .flatMap(TwitchPlayerMode.init(rawValue:)) ?? .lowLatency
+        self.preferredMode = savedMode
+        self.activeMode = savedMode
+        self.preferredQualityID = UserDefaults.standard.string(forKey: Self.qualityKey)
+
         let proxy = TwitchMessageProxy()
         self.proxy = proxy
         proxy.host = self
@@ -170,7 +259,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         AppLifecycle.shared.register(purgeable: self)
     }
 
-    /// The app's one player web view, built on first need and again after it was let go (`releaseWebView`).
+    /// The app's one player web view, built on first need and again after it was let go (`releaseResources`).
     var webView: WKWebView {
         if let made { return made }
         let view = WKWebView(frame: .zero, configuration: TwitchEmbed.configuration(handler: proxy))
@@ -187,9 +276,17 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         return view
     }
 
+    /// The app's one native sample-buffer video view, built on first need and again after `releaseResources`.
+    var nativeView: TwitchNativeVideoView {
+        if let madeNative { return madeNative }
+        let view = TwitchNativeVideoView(frame: .zero)
+        madeNative = view
+        return view
+    }
+
     // MARK: holders
 
-    /// A view wants the stream. The newest claim holds the web view.
+    /// A view wants the stream. The newest claim holds the player surface.
     func claim(_ id: UUID, channel: String) {
         stopTask?.cancel()
         stopTask = nil
@@ -201,7 +298,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         play(channel)
     }
 
-    /// A view went. The claim before it takes the web view back; with none left the stream stops shortly after (a layout
+    /// A view went. The claim before it takes the player back; with none left the stream stops shortly after (a layout
     /// change removes one view and adds another in the same moment, so this waits a beat).
     func release(_ id: UUID) {
         claims.removeAll { $0 == id }
@@ -215,7 +312,48 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         }
     }
 
-    // MARK: playback
+    // MARK: mode & playback controls
+
+    /// Switch between native low-latency playback and Twitch's embed, persisting the choice.
+    func setMode(_ mode: TwitchPlayerMode) {
+        preferredMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
+        fellBackToEmbed = false
+
+        guard activeMode != mode else { return }
+        let current = channel
+        if activeMode == .lowLatency {
+            stopNative()
+        } else {
+            stopEmbed()
+        }
+        activeMode = mode
+        reset()
+        if let current {
+            startActive(current)
+        }
+    }
+
+    func selectVariant(_ id: String) {
+        guard activeMode == .lowLatency else { return }
+        preferredQualityID = id
+        UserDefaults.standard.set(id, forKey: Self.qualityKey)
+        selectedVariantID = id
+        let engine = nativeEngine
+        Task { await engine?.selectVariant(id: id) }
+    }
+
+    func setMuted(_ muted: Bool) {
+        isMuted = muted
+        if activeMode == .lowLatency {
+            let engine = nativeEngine
+            Task { await engine?.setMuted(muted) }
+        }
+    }
+
+    func toggleMute() {
+        setMuted(!isMuted)
+    }
 
     func play(_ channel: String) {
         let c = TwitchEmbed.safe(channel)
@@ -226,18 +364,87 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             return
         }
         guard c != self.channel else { return }
+        // Switching to a fresh channel resets any per-channel fallback so the owner's preferred mode runs again.
+        if fellBackToEmbed {
+            fellBackToEmbed = false
+            if activeMode != preferredMode {
+                if activeMode == .embed { stopEmbed() } else { stopNative() }
+                activeMode = preferredMode
+            }
+        }
         self.channel = c
         reset()
+        startActive(c)
+    }
+
+    private func startActive(_ channel: String) {
+        switch activeMode {
+        case .lowLatency:
+            startNative(channel)
+        case .embed:
+            startEmbed(channel)
+        }
+    }
+
+    private func startNative(_ channel: String) {
+        stopEmbed()
+        nativeStartTask?.cancel()
+        nativeSessionID &+= 1
+        let sessionID = nativeSessionID
+        let rendererBox = TwitchVideoRendererBox(nativeView.displayLayer.sampleBufferRenderer)
+        let engine = ensureNativeEngine()
+        let muted = isMuted
+        let preferredQuality = preferredQualityID
+        isLoading = true
+
+        nativeStartTask = Task { [weak self] in
+            guard let self else { return }
+            let authToken = await self.twitchAuthToken()
+            guard !Task.isCancelled, self.nativeSessionID == sessionID,
+                  self.activeMode == .lowLatency, self.channel == channel else { return }
+            await engine.setEventHandler { [weak self] event in
+                Task { @MainActor [weak self] in
+                    self?.receiveNative(event, sessionID: sessionID)
+                }
+            }
+            await engine.attach(videoRenderer: rendererBox)
+            await engine.setMuted(muted)
+            await engine.start(channel: channel, authToken: authToken, preferredVariantID: preferredQuality)
+        }
+    }
+
+    private func stopNative() {
+        nativeStartTask?.cancel()
+        nativeStartTask = nil
+        nativeSessionID &+= 1
+        let engine = nativeEngine
+        Task { await engine?.stop() }
+    }
+
+    private func ensureNativeEngine() -> TwitchNativeEngine {
+        if let nativeEngine { return nativeEngine }
+        let engine = TwitchNativeEngine()
+        nativeEngine = engine
+        return engine
+    }
+
+    /// Reads Twitch's `auth-token` cookie from WebKit's persistent store without instantiating a `WKWebView`.
+    private func twitchAuthToken() async -> String? {
+        let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
+        return cookies.first(where: { $0.name == "auth-token" && $0.domain.contains("twitch.tv") })?.value
+    }
+
+    private func startEmbed(_ channel: String) {
         if pageLoaded {
-            webView.evaluateJavaScript("window.cobaltSetChannel && window.cobaltSetChannel(\"\(c)\")")
+            webView.evaluateJavaScript("window.cobaltSetChannel && window.cobaltSetChannel(\"\(channel)\")")
         } else {
             pageLoaded = true
-            load(c)
+            loadEmbed(channel)
         }
     }
 
     /// Loads the player page for `channel`: as www.twitch.tv while that works, else on the web app's domain.
-    private func load(_ channel: String) {
+    private func loadEmbed(_ channel: String) {
         let base = firstParty ? TwitchEmbed.firstParty : TwitchEmbed.fallback
         embedReady = false
         readyCheck?.cancel()
@@ -246,57 +453,87 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         guard firstParty else { return }
         readyCheck = Task { [weak self] in
             try? await Task.sleep(for: TwitchEmbed.firstPartyWait)
-            guard let self, !Task.isCancelled, !self.embedReady, self.firstParty, self.channel == channel,
-                  !self.suspended else { return }
+            guard let self, !Task.isCancelled, !self.embedReady, self.firstParty,
+                  self.activeMode == .embed, self.channel == channel, !self.suspended else { return }
             self.firstParty = false
-            self.load(channel)
+            self.loadEmbed(channel)
         }
     }
 
-    /// Blanks the page, which ends the embed and its stats timer. A web view nobody wants goes after `releaseAfter`.
-    func stop() {
-        channel = nil
+    private func stopEmbed() {
         pageLoaded = false
         readyCheck?.cancel()
         readyCheck = nil
-        reset()
         made?.loadHTMLString("<html><body style=\"background:#000\"></body></html>", baseURL: nil)
+    }
+
+    /// Stops whichever engine is active. Views nobody wants go after `releaseAfter`.
+    func stop() {
+        channel = nil
+        stopEmbed()
+        stopNative()
+        reset()
         scheduleRelease()
     }
 
-    /// The pane's one play / pause button (the embed has its own controls too).
+    /// The pane's play / pause button (and native HUD play / pause).
     func setPaused(_ paused: Bool) {
         guard channel != nil else { return }
-        made?.evaluateJavaScript(paused ? "window.cobaltPause && window.cobaltPause()" : "window.cobaltPlay && window.cobaltPlay()")
-    }
-
-    /// Back to the live edge: pause and play, and if the stream is still behind a few seconds later, reload the player.
-    func jumpToLive() {
-        guard channel != nil else { return }
-        lastJump = .now
-        behindRun = 0
-        isCatchingUp = true
-        made?.evaluateJavaScript("window.cobaltJumpToLive && window.cobaltJumpToLive()")
-        jumpCheck?.cancel()
-        jumpCheck = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(6))
-            guard let self, !Task.isCancelled else { return }
-            if self.isBehind {
-                _ = try? await self.made?.evaluateJavaScript("window.cobaltRebuild && window.cobaltRebuild()")
-                try? await Task.sleep(for: .seconds(6))
-                guard !Task.isCancelled else { return }
-                // still behind after a reload: this is as close as the stream gets now, so it becomes the new best
-                if self.isBehind, let delay = self.delay { self.bestDelay = delay }
-            }
-            self.isCatchingUp = false
+        switch activeMode {
+        case .lowLatency:
+            isPlaying = !paused
+            let engine = nativeEngine
+            Task { await engine?.setPaused(paused) }
+        case .embed:
+            made?.evaluateJavaScript(paused ? "window.cobaltPause && window.cobaltPause()" : "window.cobaltPlay && window.cobaltPlay()")
         }
     }
 
-    /// Loads the channel's page again (after a sign-in, so the embed picks it up).
+    /// Back to the live edge.
+    func jumpToLive() {
+        guard channel != nil else { return }
+        lastJump = .now
+        behindSince = nil
+        isCatchingUp = true
+        jumpCheck?.cancel()
+
+        switch activeMode {
+        case .lowLatency:
+            let engine = nativeEngine
+            Task { await engine?.jumpToLive() }
+            jumpCheck = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(4))
+                guard let self, !Task.isCancelled else { return }
+                if self.isBehind, let delay = self.delay { self.bestDelay = delay }
+                self.isCatchingUp = false
+            }
+        case .embed:
+            made?.evaluateJavaScript("window.cobaltJumpToLive && window.cobaltJumpToLive()")
+            jumpCheck = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(6))
+                guard let self, !Task.isCancelled else { return }
+                if self.isBehind {
+                    _ = try? await self.made?.evaluateJavaScript("window.cobaltRebuild && window.cobaltRebuild()")
+                    try? await Task.sleep(for: .seconds(6))
+                    guard !Task.isCancelled else { return }
+                    // still behind after a reload: this is as close as the stream gets now, so it becomes the new best
+                    if self.isBehind, let delay = self.delay { self.bestDelay = delay }
+                }
+                self.isCatchingUp = false
+            }
+        }
+    }
+
+    /// Reloads the active engine for the current channel (e.g. after a sign-in).
     func reload() {
         guard let channel else { return }
         reset()
-        load(channel)
+        switch activeMode {
+        case .lowLatency:
+            startNative(channel)
+        case .embed:
+            loadEmbed(channel)
+        }
     }
 
     // MARK: the app's state
@@ -310,8 +547,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     }
 
     /// Stops the stream for the background, remembering the channel. Not while capystore's TV window shows it: the owner
-    /// is watching on the TV with the phone locked. (Picture in picture of the web video is not tracked: WebKit says
-    /// nothing about it, so it stops too.)
+    /// is watching on the TV with the phone locked.
     private func suspend() {
         guard !suspended else { return }
         #if os(iOS)
@@ -331,33 +567,44 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         if let channel, !claims.isEmpty { play(channel) }
     }
 
-    /// A memory warning, or the app leaving the screen, lets an unwanted web view go at once.
+    /// A memory warning, or the app leaving the screen, lets unwanted views go at once.
     func purge(_ level: PurgeLevel) {
-        releaseWebView()
+        releaseResources()
     }
 
     private func scheduleRelease() {
         releaseTask?.cancel()
         releaseTask = nil
-        guard claims.isEmpty, made != nil else { return }
+        guard claims.isEmpty, (made != nil || madeNative != nil || nativeEngine != nil) else { return }
         releaseTask = Task { [weak self] in
             try? await Task.sleep(for: TwitchPlayerHost.releaseAfter)
             guard !Task.isCancelled else { return }
-            self?.releaseWebView()
+            self?.releaseResources()
         }
     }
 
-    /// Lets the web view go when nothing wants it: no view, no channel, no sign-in open. `webView` builds a new one.
-    private func releaseWebView() {
-        guard claims.isEmpty, channel == nil, popup == nil, let view = made else { return }
+    /// Lets unused views and engines go when nothing wants them: no view, no channel, no sign-in open.
+    private func releaseResources() {
+        guard claims.isEmpty, channel == nil, popup == nil else { return }
         releaseTask?.cancel()
         releaseTask = nil
-        made = nil
-        pageLoaded = false
-        view.stopLoading()
-        view.configuration.userContentController.removeScriptMessageHandler(forName: TwitchEmbed.handler)
-        view.uiDelegate = nil
-        view.removeFromSuperview()
+
+        if let view = made {
+            made = nil
+            pageLoaded = false
+            view.stopLoading()
+            view.configuration.userContentController.removeScriptMessageHandler(forName: TwitchEmbed.handler)
+            view.uiDelegate = nil
+            view.removeFromSuperview()
+        }
+        if let native = madeNative {
+            madeNative = nil
+            native.removeFromSuperview()
+        }
+        if let engine = nativeEngine {
+            nativeEngine = nil
+            Task { await engine.stop() }
+        }
     }
 
     // MARK: popups
@@ -381,17 +628,85 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         delay = nil
         bestDelay = nil
         isPlaying = false
+        isLoading = false
+        isBuffering = false
         isOffline = false
+        isLowLatencyStream = false
         isCatchingUp = false
-        behindRun = 0
+        variants = []
+        selectedVariantID = nil
+        behindSince = nil
         jumpCheck?.cancel()
         jumpCheck = nil
     }
 
-    // MARK: the page
+    private func recordDelay(_ d: Double) {
+        delay = d
+        bestDelay = min(bestDelay ?? d, d)
+        if isCatchingUp, !isBehind {
+            isCatchingUp = false
+            jumpCheck?.cancel()
+        }
+        if isBehind {
+            let now = Date.now
+            let since = behindSince ?? now
+            behindSince = since
+            if autoCatchUp, !isCatchingUp,
+               now.timeIntervalSince(since) >= Self.autoAfterSeconds,
+               now.timeIntervalSince(lastJump) >= Self.autoCooldown {
+                jumpToLive()
+            }
+        } else {
+            behindSince = nil
+        }
+    }
+
+    // MARK: native engine events
+
+    private func receiveNative(_ event: TwitchNativeEvent, sessionID: UInt64) {
+        guard sessionID == nativeSessionID, activeMode == .lowLatency else { return }
+        switch event {
+        case .loading:
+            isLoading = true
+            isOffline = false
+        case .variants(let list, let selectedID):
+            variants = list
+            selectedVariantID = selectedID
+        case .playing:
+            isPlaying = true
+            isLoading = false
+            isBuffering = false
+            isOffline = false
+        case .paused:
+            isPlaying = false
+        case .offline:
+            isOffline = true
+            isPlaying = false
+            isLoading = false
+            isBuffering = false
+            delay = nil
+        case .stats(let stats):
+            isLowLatencyStream = stats.isLowLatency
+            isBuffering = stats.isBuffering
+            if let d = stats.delay, d > 0, isPlaying {
+                recordDelay(d)
+            }
+        case .failed:
+            // Native playback could not run for this stream: fall back to the Twitch embed for this session without
+            // overwriting `preferredMode`, so the next channel tries low latency again.
+            guard let current = channel else { return }
+            stopNative()
+            fellBackToEmbed = true
+            activeMode = .embed
+            reset()
+            startEmbed(current)
+        }
+    }
+
+    // MARK: the embed page
 
     fileprivate func receive(_ body: Any) {
-        guard let m = body as? [String: Any], let e = m["e"] as? String else { return }
+        guard activeMode == .embed, let m = body as? [String: Any], let e = m["e"] as? String else { return }
         switch e {
         case "ready": embedReady = true
         case "playing": isPlaying = true; isOffline = false; embedReady = true
@@ -401,14 +716,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         case "stats":
             let paused = (m["paused"] as? Bool) ?? false
             guard let d = (m["delay"] as? NSNumber)?.doubleValue, d > 0, !paused else { return }
-            delay = d
-            bestDelay = min(bestDelay ?? d, d)
-            if isCatchingUp, !isBehind { isCatchingUp = false; jumpCheck?.cancel() }
-            behindRun = isBehind ? behindRun + 1 : 0
-            if autoCatchUp, !isCatchingUp, behindRun >= Self.autoAfter,
-               Date.now.timeIntervalSince(lastJump) >= Self.autoCooldown {
-                jumpToLive()
-            }
+            recordDelay(d)
         default: break
         }
     }
@@ -486,43 +794,280 @@ private struct TwitchPopupWeb: NSViewRepresentable {
 #endif
 
 /// The player for one channel. It adopts the app's one player, so the same channel keeps playing through layout changes and
-/// a new channel switches in place. `showsDelay` adds the delay badge (tap: jump to live).
+/// a new channel switches in place. `showsDelay` adds the top-bar pills (mode toggle + delay badge) and native HUD controls.
 struct TwitchPlayer: View {
     let channel: String
     var showsDelay = true
 
     @State private var id = UUID()
+    @State private var showsNativeControls = false
+    @State private var hideControlsTask: Task<Void, Never>?
     private var host: TwitchPlayerHost { .shared }
+
+    private var isHolder: Bool { host.holder == id }
+    private var isNative: Bool { host.activeMode == .lowLatency }
 
     // Session replay (APP-API-CONTRACT 58): media is always masked.
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            TwitchPlayerSlot(holds: host.holder == id)
+        ZStack {
+            TwitchPlayerSlot(holds: isHolder, mode: host.activeMode)
                 .background(Color.black)
                 .mediaMask()
                 .overlay {
-                    if host.holder != nil, host.holder != id {
+                    if host.holder != nil, !isHolder {
                         Text(Copy.Twitch.playingElsewhere)
                             .font(Font.cobalt(13, .medium))
                             .foregroundStyle(.white.opacity(0.7))
                     }
                 }
-            if showsDelay, host.holder == id {
-                TwitchDelayBadge(host: host).padding(8)
+
+            // Native-only interactive tap layer & state overlays. Never present in embed mode so Twitch's iframe receives all input.
+            if isHolder, isNative {
+                if showsDelay {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { toggleNativeControls() }
+                }
+                nativeCenterStatus
+            }
+
+            if showsDelay, isHolder {
+                VStack(spacing: 0) {
+                    HStack(alignment: .top, spacing: 8) {
+                        TwitchModeMenu(host: host)
+                        Spacer(minLength: 8)
+                        TwitchDelayBadge(host: host)
+                    }
+                    .padding(8)
+
+                    Spacer(minLength: 0)
+
+                    if isNative, (showsNativeControls || (!host.isPlaying && !host.isLoading && !host.isOffline)) {
+                        TwitchNativeControlBar(host: host) {
+                            scheduleHideControls()
+                        }
+                        .padding(8)
+                        .transition(.opacity)
+                    }
+                }
             }
         }
+        .animation(.easeOut(duration: 0.18), value: showsNativeControls)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(channel)'s stream")
         // only the view holding the player shows its sign-in sheet
-        .sheet(item: Binding(get: { host.holder == id ? host.popup : nil },
-                             set: { if $0 == nil, host.holder == id { host.dismissPopup() } })) { popup in
+        .sheet(item: Binding(get: { isHolder ? host.popup : nil },
+                             set: { if $0 == nil, isHolder { host.dismissPopup() } })) { popup in
             TwitchPopupSheet(popup: popup) { host.dismissPopup() }
         }
         .onAppear { host.claim(id, channel: channel) }
-        .onDisappear { host.release(id) }
-        .onChange(of: channel) { _, new in
-            if host.holder == id { host.play(new) }
+        .onDisappear {
+            hideControlsTask?.cancel()
+            hideControlsTask = nil
+            host.release(id)
         }
+        .onChange(of: channel) { _, new in
+            if isHolder { host.play(new) }
+        }
+    }
+
+    @ViewBuilder
+    private var nativeCenterStatus: some View {
+        if host.isOffline {
+            Text(Copy.Twitch.offline)
+                .font(Font.cobalt(12, .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(.black.opacity(0.6), in: Capsule())
+        } else if host.isLoading || host.isBuffering {
+            ProgressView()
+                .tint(.white)
+                .padding(10)
+                .background(.black.opacity(0.45), in: Circle())
+        } else if host.isAudioOnly {
+            HStack(spacing: 6) {
+                Image(systemName: Symbol.Twitch.audioOnly)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(Copy.Twitch.audioOnly)
+                    .font(Font.cobalt(12, .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(.black.opacity(0.55), in: Capsule())
+        }
+    }
+
+    private func toggleNativeControls() {
+        showsNativeControls.toggle()
+        if showsNativeControls {
+            scheduleHideControls()
+        } else {
+            hideControlsTask?.cancel()
+            hideControlsTask = nil
+        }
+    }
+
+    private func scheduleHideControls() {
+        hideControlsTask?.cancel()
+        hideControlsTask = Task {
+            try? await Task.sleep(for: .seconds(3.5))
+            guard !Task.isCancelled else { return }
+            if host.isPlaying {
+                showsNativeControls = false
+            }
+        }
+    }
+}
+
+/// Compact capsule in the top-leading corner of the player: switches between low-latency native playback and Twitch's embed,
+/// and exposes native quality + mute controls.
+struct TwitchModeMenu: View {
+    let host: TwitchPlayerHost
+
+    private var pillIcon: String {
+        host.activeMode == .lowLatency ? Symbol.Twitch.lowLatency : Symbol.Twitch.embed
+    }
+
+    private var pillLabel: String {
+        if host.activeMode == .lowLatency {
+            return Copy.Twitch.playerLowLatency
+        }
+        return host.fellBackToEmbed ? Copy.Twitch.usingEmbed : Copy.Twitch.playerEmbedShort
+    }
+
+    var body: some View {
+        Menu {
+            Section(Copy.Twitch.playerMode) {
+                Button {
+                    host.setMode(.lowLatency)
+                } label: {
+                    if host.activeMode == .lowLatency {
+                        Label(Copy.Twitch.playerLowLatency, systemImage: "checkmark")
+                    } else {
+                        Label(Copy.Twitch.playerLowLatency, systemImage: Symbol.Twitch.lowLatency)
+                    }
+                }
+                Button {
+                    host.setMode(.embed)
+                } label: {
+                    if host.activeMode == .embed {
+                        Label(Copy.Twitch.playerEmbed, systemImage: "checkmark")
+                    } else {
+                        Label(Copy.Twitch.playerEmbed, systemImage: Symbol.Twitch.embed)
+                    }
+                }
+            }
+
+            if host.activeMode == .lowLatency, !host.variants.isEmpty {
+                Menu {
+                    ForEach(host.variants) { variant in
+                        Button {
+                            host.selectVariant(variant.id)
+                        } label: {
+                            if variant.id == host.selectedVariantID {
+                                Label(variant.shortLabel, systemImage: "checkmark")
+                            } else {
+                                Text(variant.shortLabel)
+                            }
+                        }
+                    }
+                } label: {
+                    Label(host.selectedVariant?.shortLabel ?? Copy.Twitch.quality, systemImage: Symbol.Twitch.quality)
+                }
+            }
+
+            if host.activeMode == .lowLatency {
+                Divider()
+                Button {
+                    host.toggleMute()
+                } label: {
+                    Label(
+                        host.isMuted ? Copy.Twitch.unmute : Copy.Twitch.mute,
+                        systemImage: host.isMuted ? Symbol.Twitch.unmuted : Symbol.Twitch.muted
+                    )
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: pillIcon)
+                    .font(.system(size: 10, weight: .bold))
+                Text(pillLabel)
+                    .font(Font.cobalt(11, .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.black.opacity(0.55), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Copy.Twitch.playerMode)
+        .accessibilityValue(pillLabel)
+        .help(Copy.Twitch.playerMode)
+    }
+}
+
+/// Translucent bottom HUD strip shown on tap in low-latency native mode.
+private struct TwitchNativeControlBar: View {
+    let host: TwitchPlayerHost
+    let onInteract: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button {
+                host.setPaused(host.isPlaying)
+                onInteract()
+            } label: {
+                Image(systemName: host.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
+
+            Button {
+                host.toggleMute()
+                onInteract()
+            } label: {
+                Image(systemName: host.isMuted ? Symbol.Twitch.muted : Symbol.Twitch.unmuted)
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(host.isMuted ? Copy.Twitch.unmute : Copy.Twitch.mute)
+
+            Spacer(minLength: 0)
+
+            if !host.variants.isEmpty {
+                Menu {
+                    ForEach(host.variants) { variant in
+                        Button {
+                            host.selectVariant(variant.id)
+                            onInteract()
+                        } label: {
+                            if variant.id == host.selectedVariantID {
+                                Label(variant.shortLabel, systemImage: "checkmark")
+                            } else {
+                                Text(variant.shortLabel)
+                            }
+                        }
+                    }
+                } label: {
+                    Text(host.selectedVariant?.shortLabel ?? Copy.Twitch.quality)
+                        .font(Font.cobalt(11, .semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.white.opacity(0.14), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Copy.Twitch.quality)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.black.opacity(0.6), in: Capsule())
     }
 }
 
@@ -561,11 +1106,12 @@ struct TwitchDelayBadge: View {
     }
 }
 
-/// Where the shared web view sits while this view holds it. Holding is decided by `TwitchPlayer` (appear and disappear);
-/// the slot only moves the web view in.
+/// Where the shared player view (native display layer or web view) sits while this view holds it. Holding is decided by
+/// `TwitchPlayer` (appear and disappear); the slot only moves the active view in and removes the inactive one.
 #if os(iOS)
 private struct TwitchPlayerSlot: UIViewRepresentable {
     let holds: Bool
+    let mode: TwitchPlayerMode
 
     func makeUIView(context: Context) -> UIView {
         let slot = UIView()
@@ -575,19 +1121,25 @@ private struct TwitchPlayerSlot: UIViewRepresentable {
     }
 
     func updateUIView(_ slot: UIView, context: Context) {
-        // only a holder asks for the web view, so a slot left on screen never rebuilds one that was let go
+        // only a holder asks for the active view, so a slot left on screen never rebuilds one that was let go
         guard holds else { return }
-        let web = TwitchPlayerHost.shared.webView
-        guard web.superview !== slot else { return }
-        web.removeFromSuperview()
-        web.frame = slot.bounds
-        web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        slot.addSubview(web)
+        let target: UIView = mode == .lowLatency
+            ? TwitchPlayerHost.shared.nativeView
+            : TwitchPlayerHost.shared.webView
+        for sub in slot.subviews where sub !== target {
+            sub.removeFromSuperview()
+        }
+        guard target.superview !== slot else { return }
+        target.removeFromSuperview()
+        target.frame = slot.bounds
+        target.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        slot.addSubview(target)
     }
 }
 #else
 private struct TwitchPlayerSlot: NSViewRepresentable {
     let holds: Bool
+    let mode: TwitchPlayerMode
 
     func makeNSView(context: Context) -> NSView {
         let slot = NSView()
@@ -597,14 +1149,19 @@ private struct TwitchPlayerSlot: NSViewRepresentable {
     }
 
     func updateNSView(_ slot: NSView, context: Context) {
-        // only a holder asks for the web view, so a slot left on screen never rebuilds one that was let go
+        // only a holder asks for the active view, so a slot left on screen never rebuilds one that was let go
         guard holds else { return }
-        let web = TwitchPlayerHost.shared.webView
-        guard web.superview !== slot else { return }
-        web.removeFromSuperview()
-        web.frame = slot.bounds
-        web.autoresizingMask = [.width, .height]
-        slot.addSubview(web)
+        let target: NSView = mode == .lowLatency
+            ? TwitchPlayerHost.shared.nativeView
+            : TwitchPlayerHost.shared.webView
+        for sub in slot.subviews where sub !== target {
+            sub.removeFromSuperview()
+        }
+        guard target.superview !== slot else { return }
+        target.removeFromSuperview()
+        target.frame = slot.bounds
+        target.autoresizingMask = [.width, .height]
+        slot.addSubview(target)
     }
 }
 #endif
