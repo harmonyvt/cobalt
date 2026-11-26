@@ -10,6 +10,9 @@ import SwiftUI
 struct TwitchEmotePicker: View {
     let store: TwitchStore
     let canAddToSet: Bool
+    var emotesOverride: TwitchEmoteList? = nil
+    var recentOverride: [ChatEmote]? = nil
+    var channelNameOverride: String? = nil
     let onAddEmote: (ChatEmote) -> Void
     let onPick: (ChatEmote) -> Void
 
@@ -24,7 +27,9 @@ struct TwitchEmotePicker: View {
         var locked: Set<String>
     }
 
-    private var channelName: String { store.channelInfo?.displayName ?? store.channel ?? "" }
+    private var activeEmotes: TwitchEmoteList { emotesOverride ?? store.emotes }
+    private var activeRecents: [ChatEmote] { recentOverride ?? store.recentEmotesHere }
+    private var channelName: String { channelNameOverride ?? store.channelInfo?.displayName ?? store.channel ?? "" }
 
     private static let tile: CGFloat = 34
     private let columns = [GridItem(.adaptive(minimum: 52, maximum: 72), spacing: 4)]
@@ -34,10 +39,10 @@ struct TwitchEmotePicker: View {
         let needle = filter.trimmingCharacters(in: .whitespaces)
         var out: [Shown] = []
         if needle.isEmpty {
-            let recent = store.recentEmotesHere
+            let recent = activeRecents
             if !recent.isEmpty { out.append(Shown(id: Self.recentID, title: Copy.Twitch.emotesRecent, emotes: recent, locked: [])) }
         }
-        for s in store.emotes.sections(matching: needle) {
+        for s in activeEmotes.sections(matching: needle) {
             out.append(Shown(id: s.id, title: title(s.kind), emotes: s.emotes, locked: s.locked))
         }
         return out
@@ -56,7 +61,7 @@ struct TwitchEmotePicker: View {
     private var emptyText: String {
         if !filter.trimmingCharacters(in: .whitespaces).isEmpty { return Copy.Twitch.emotesNone }
         // the sections arrive with the first emote list; until then they are still loading
-        return store.emotes.sections.isEmpty ? Copy.Twitch.emotesLoading : Copy.Twitch.emotesEmpty
+        return activeEmotes.sections.isEmpty ? Copy.Twitch.emotesLoading : Copy.Twitch.emotesEmpty
     }
 
     var body: some View {
