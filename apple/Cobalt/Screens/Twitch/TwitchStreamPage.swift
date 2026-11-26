@@ -1,54 +1,61 @@
 import CobaltKit
 import SwiftUI
 
-// A twitch stream in the screen pane (apple/CONTRACT-PANE.md section 5; APP-API-CONTRACT 70). The player is the hero, the
-// live chat is the shelf, laid out per room:
-// - the pane beside the twitch tab (Duo held wide, iPad / Mac column): the chat moves to the tab, the right-hand panel
-//   (`TwitchScreen`, `Pane.twitchChatBeside`), and the pane keeps the player and its buttons;
-// - the pane on the Duo's top screen (held tall or half folded): the stream fills that whole screen, its buttons float over
-//   the black band under the picture, and the chat is the twitch tab on the bottom screen (a chat button opens it);
-// - spanned wide (iPad, Mac): the player over its buttons on the left, the chat the full height of the right half;
-// - spanned over two screens: the player on one, the buttons over the chat filling the other.
-// `keepsRunning`: the page tells the pane the stream is at work in every shape, so closing it leaves the bar, and the bar
-// is the same stream playing in a small window with one play / pause button. Stopping is a button on the page.
+// A twitch stream in the screen pane (apple/CONTRACT-PANE.md section 5; APP-API-CONTRACT 70).
+//
+// One consistent watch surface in every posture and state — always composed of the same three parts:
+//   1. the video / TV stage (`TwitchPlayer` or `TwitchTVCard`),
+//   2. the unified stream bar (channel identity, live viewers/game, and the same compact glass icon controls, always attached
+//      to the stage), and
+//   3. full-height edge-to-edge live chat (`TwitchChatCard`, zero nested scroll views, composer pinned at the bottom).
+//
+// Layout across postures (`TwitchWatchLayout`):
+// - folded iPhone / Duo wide `screen` / iPad & Mac column: stacked (16:9 stage -> stream bar -> full-height chat);
+// - Duo tall `screen` / landscape iPhone sheet / iPad & Mac `span`: side-by-side (stage + stream bar left, chat right);
+// - Duo `span` (`.split`): across the physical hinge via `PaneHalves` (stage + stream bar on screen 1, full-height chat on
+//   screen 2);
+// - closed while running (`.bar`): live mini-player thumb, channel title/subtitle, and play/pause.
 //
 // The app has one stream: the player is `TwitchPlayerHost.shared` (its web view moves between pages without a reload) and
 // the chat is `model.twitch` (`TwitchStore`), so a page rebuilt for another shape (screen, span, bar) picks both up where
-// they were. The page opens the channel when it appears; the lane's `PaneKeeps` lets go of the chat when the pane moved on.
+// they were. The page opens the channel when it appears; the pane's `PaneKeepAlive` lets go of the chat when the pane moves on.
 
 struct TwitchStreamPage: View {
     let login: String
     let model: AppModel
 
     @Environment(Pane.self) private var pane
+    @Environment(\.paneItem) private var paneItem
     @Environment(\.paneShape) private var shape
+    @Environment(\.paneHinge) private var hinge
+    @Environment(\.paneOffline) private var offline
     @Environment(\.openURL) private var openURL
     @Environment(\.lifecycle) private var lifecycle
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var choosingTV = false
+    @State private var containerSize: CGSize = .zero
 
     private var store: TwitchStore { model.twitch }
     private var host: TwitchPlayerHost { .shared }
     private var item: PaneItem { .stream(login) }
     /// The store holds this channel (not the one before it, while a new one opens).
     private var holdsChannel: Bool { store.channel == login }
+    private var isLive: Bool { holdsChannel && store.stream != nil }
 
     var body: some View {
-        PanePage(
-            title: title, subtitle: subtitle, actions: actions,
-            wideStyle: fillsScreen ? .heroOnly : .columns, fillsShelf: shape != .tall
-        ) {
-            hero
-        } controls: {
-            controls
-        } body: {
-            clipNote
-        } shelf: {
-            if !chatElsewhere {
-                PaneCard(Copy.Twitch.chat) {
-                    TwitchChatCard(model: model, delay: chatDelay, fills: shape != .tall)
-                }
+        Group {
+            switch shape {
+            case .bar:
+                bar
+            case .split:
+                split
+            case .tall, .wide:
+                singleContainer
             }
         }
+        .preference(key: PaneMoreKey.self, value: moreActions)
+        .preference(key: PaneFloatingHeaderKey.self, value: false)
+        .onChange(of: title, initial: true) { pane.reportTitle(title, for: paneItem) }
         .onAppear {
             store.open(login)
             pane.setRunning(true, for: item)
@@ -74,21 +81,151 @@ struct TwitchStreamPage: View {
         #endif
     }
 
-    // MARK: where things go
+    // MARK: layouts
 
-    /// The pane is one whole screen of a Duo held tall or half folded (the hinge across it): the stream takes all of it.
-    private var fillsScreen: Bool {
-        guard shape == .wide, pane.state == .screen, case .twoScreens(axis: .horizontal, hinge: _) = pane.placement else { return false }
-        return true
+    /// Single-pane container (`.tall` or `.wide`): switches cleanly between stacked and side-by-side based on geometry.
+    private var singleContainer: some View {
+        let layout = TwitchWatchLayout.resolve(isWideShape: shape == .wide, size: containerSize)
+        return Group {
+            switch layout {
+            case .stacked(let videoMaxHeight):
+                VStack(spacing: 0) {
+                    stackedStage(maxHeight: videoMaxHeight)
+                    TwitchStreamBar(
+                        title: title, subtitle: subtitle, isLive: isLive,
+                        clipNote: clipText, clipFailed: store.clipState == .failed,
+                        isPlaying: host.isPlaying,
+                        jumpDisabled: host.delay == nil || host.isCatchingUp,
+                        isCatchingUp: host.isCatchingUp,
+                        canClip: store.canClip, clipState: store.clipState, offline: offline,
+                        onTV: onTV,
+                        onPlayPause: { host.setPaused(host.isPlaying) },
+                        onJumpToLive: { host.jumpToLive() },
+                        onClip: makeClip,
+                        onTVTap: { choosingTV = true },
+                        onStop: stop)
+                    hairline(horizontal: true)
+                    chatPanel
+                }
+            case .sideBySide(let chatWidth):
+                HStack(spacing: 0) {
+                    mediaPanel
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    hairline(horizontal: false)
+                    chatPanel
+                        .frame(width: chatWidth)
+                        .frame(maxHeight: .infinity)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { containerSize = $0 }
+        .task(id: store.clipState) { await clearClipStateSoon() }
     }
 
-    /// The twitch tab beside the pane shows this stream's chat.
-    private var chatInTab: Bool { pane.twitchChatBeside == login }
+    /// Spanned across two physical screens (Duo wide or Duo tall): stage + stream bar on screen 1, full-height chat on screen 2.
+    private var split: some View {
+        PaneHalves(hinge: hinge) {
+            mediaPanel
+                .environment(\.paneShape, .split(.media))
+            chatPanel
+                .environment(\.paneShape, .split(.details))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: store.clipState) { await clearClipStateSoon() }
+    }
 
-    /// The pane draws no chat: the tab beside it has it, or the stream fills the screen.
-    private var chatElsewhere: Bool { chatInTab || fillsScreen }
+    /// Media half for side-by-side and dual-screen split layouts: full-area video stage with the unified stream bar docked below it.
+    private var mediaPanel: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                onTV ? CobaltColor.bg : Color.black
+                playerOrTV(compact: false)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            hairline(horizontal: true)
+            TwitchStreamBar(
+                title: title, subtitle: subtitle, isLive: isLive,
+                clipNote: clipText, clipFailed: store.clipState == .failed,
+                isPlaying: host.isPlaying,
+                jumpDisabled: host.delay == nil || host.isCatchingUp,
+                isCatchingUp: host.isCatchingUp,
+                canClip: store.canClip, clipState: store.clipState, offline: offline,
+                onTV: onTV,
+                onPlayPause: { host.setPaused(host.isPlaying) },
+                onJumpToLive: { host.jumpToLive() },
+                onClip: makeClip,
+                onTVTap: { choosingTV = true },
+                onStop: stop)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
-    // MARK: words
+    @ViewBuilder
+    private func stackedStage(maxHeight: CGFloat?) -> some View {
+        if onTV {
+            playerOrTV(compact: true)
+                .background(CobaltColor.bg)
+        } else {
+            ZStack {
+                Color.black
+                player
+            }
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: maxHeight)
+            .clipped()
+        }
+    }
+
+    private var chatPanel: some View {
+        TwitchChatCard(model: model, delay: chatDelay)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Minimized running bar over the tabs: live mini-player thumb, channel title/subtitle, and one play/pause button.
+    private var bar: some View {
+        HStack(spacing: 12) {
+            ZStack { barThumb }
+                .frame(width: 40, height: 40)
+                .clipShape(.rect(cornerRadius: 8))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(CobaltType.bodySemibold)
+                    .foregroundStyle(CobaltColor.text)
+                    .lineLimit(1)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(CobaltType.captionSmall)
+                        .foregroundStyle(CobaltColor.caption)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            Button { host.setPaused(host.isPlaying) } label: {
+                Image(systemName: host.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            #if os(iOS)
+            .controlSize(.large)
+            #endif
+            .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 48)
+    }
+
+    private func hairline(horizontal: Bool) -> some View {
+        Rectangle()
+            .fill(CobaltColor.hairline)
+            .frame(width: horizontal ? nil : 0.5, height: horizontal ? 0.5 : nil)
+            .accessibilityHidden(true)
+    }
+
+    // MARK: words & actions
 
     private var title: String {
         (holdsChannel ? store.channelInfo?.displayName : nil) ?? login
@@ -102,42 +239,24 @@ struct TwitchStreamPage: View {
         return store.channelInfo != nil ? Copy.Twitch.offline : nil
     }
 
-    // MARK: actions
-
-    /// The header's two icon buttons: where it is on twitch, and stop.
-    private var actions: [PaneAction] {
+    /// Secondary actions handed to `PaneChrome`'s header `⋯` menu.
+    private var moreActions: [PaneAction] {
         var out: [PaneAction] = []
         if let url = URL(string: "https://www.twitch.tv/\(login)") {
             out.append(PaneAction(Copy.Twitch.openOnTwitch, systemImage: Symbol.Twitch.open) { openURL(url) })
         }
-        out.append(PaneAction(Copy.Twitch.stop, systemImage: "stop.fill") { stop() })
         return out
     }
 
-    /// The big buttons: play / pause, back to live, a clip, the TV.
-    private var gridActions: [PaneAction] {
-        var out = [playPause]
-        out.append(PaneAction(
-            Copy.Twitch.jumpToLive, systemImage: Symbol.Twitch.jumpToLive, disabled: host.delay == nil || host.isCatchingUp
-        ) { host.jumpToLive() })
-        if store.canClip {
-            out.append(PaneAction(
-                Copy.Twitch.clip, systemImage: Symbol.Twitch.clip, needsServer: true, disabled: store.clipState == .making
-            ) {
-                Task { await store.clip { url in _ = model.queue.add([.link(url)], via: .paste) } }
-            })
-        }
-        #if os(iOS)
-        out.append(PaneAction(Copy.Twitch.watchOnTV, systemImage: Symbol.Twitch.tv) { choosingTV = true })
-        #endif
-        return out
+    private func makeClip() {
+        Task { await store.clip { url in _ = model.queue.add([.link(url)], via: .paste) } }
     }
 
-    private var playPause: PaneAction {
-        PaneAction(
-            host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play,
-            systemImage: host.isPlaying ? "pause.fill" : "play.fill", id: "playpause"
-        ) { host.setPaused(host.isPlaying) }
+    private func clearClipStateSoon() async {
+        guard store.clipState == .saved || store.clipState == .failed else { return }
+        try? await Task.sleep(for: .seconds(4))
+        guard !Task.isCancelled else { return }
+        store.acknowledgeClip()
     }
 
     /// Ends the stream: the chat closes, the player stops, and the pane hides (no bar: nothing is running).
@@ -146,84 +265,6 @@ struct TwitchStreamPage: View {
         host.stop()
         pane.setRunning(false, for: item)
         pane.close()
-    }
-
-    // MARK: slots
-
-    @ViewBuilder private var hero: some View {
-        switch shape {
-        case .bar: barThumb
-        case .tall:
-            playerOrTV(compact: true)
-                .background(Color.black)
-        case .wide where fillsScreen:
-            ZStack(alignment: .bottom) {
-                Color.black
-                playerOrTV(compact: false)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                overlayControls
-            }
-        case .wide, .split:
-            ZStack {
-                Color.black
-                playerOrTV(compact: false)
-            }
-        }
-    }
-
-    /// The buttons over the bottom of a stream filling the screen: the big buttons as icons, the chat (on the twitch tab)
-    /// when it is not up already, open on twitch, and stop.
-    private var overlayControls: some View {
-        VStack(spacing: 8) {
-            clipNote
-            HStack(spacing: 10) {
-                ForEach(overlayActions) { PaneIconButton(action: $0) }
-            }
-        }
-        .padding(.bottom, 14)
-        .padding(.horizontal, 12)
-    }
-
-    private var overlayActions: [PaneAction] {
-        var out = gridActions
-        if !chatInTab {
-            out.append(PaneAction(Copy.Twitch.showChat, systemImage: Symbol.Twitch.chat) {
-                pane.provided(TwitchTabChat.self)?.browsing = false
-                model.selectedTab = .twitch
-            })
-        }
-        return out + actions
-    }
-
-    @ViewBuilder private var controls: some View {
-        if shape == .bar {
-            Button { host.setPaused(host.isPlaying) } label: {
-                Image(systemName: host.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 15, weight: .semibold))
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            #if os(iOS)
-            .controlSize(.large)
-            #endif
-            .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
-        } else {
-            PaneActionGrid(gridActions)
-        }
-    }
-
-    @ViewBuilder private var clipNote: some View {
-        if let note = clipText {
-            Text(note)
-                .font(CobaltType.caption)
-                .foregroundStyle(store.clipState == .failed ? CobaltColor.errorText : CobaltColor.success)
-                .padding(.horizontal, 16)
-                .task(id: store.clipState) {
-                    guard store.clipState == .saved || store.clipState == .failed else { return }
-                    try? await Task.sleep(for: .seconds(4))
-                    store.acknowledgeClip()
-                }
-        }
     }
 
     private var clipText: String? {
@@ -284,6 +325,152 @@ struct TwitchStreamPage: View {
     private var chatDelay: TimeInterval { TwitchChatCard.tvDelay }
 }
 
+// MARK: - unified stream bar
+
+/// The one consistent control and identity bar for watching Twitch across every posture:
+/// collapses to a single row when wide (`TwitchWatchLayout.isInlineStreamBar`), or two crisp rows when compact.
+private struct TwitchStreamBar: View {
+    let title: String
+    let subtitle: String?
+    let isLive: Bool
+    let clipNote: String?
+    let clipFailed: Bool
+    let isPlaying: Bool
+    let jumpDisabled: Bool
+    let isCatchingUp: Bool
+    let canClip: Bool
+    let clipState: TwitchStore.ClipState
+    let offline: Bool
+    let onTV: Bool
+    let onPlayPause: () -> Void
+    let onJumpToLive: () -> Void
+    let onClip: () -> Void
+    let onTVTap: () -> Void
+    let onStop: () -> Void
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var width: CGFloat = 0
+
+    private var inline: Bool {
+        TwitchWatchLayout.isInlineStreamBar(width: width, accessibilityText: typeSize.isAccessibilitySize)
+    }
+
+    private var clipButtonState: IconButtonState {
+        switch clipState {
+        case .making: .working
+        case .saved: .done
+        case .idle, .failed: .idle
+        }
+    }
+
+    var body: some View {
+        Group {
+            if inline {
+                HStack(spacing: 12) {
+                    identity
+                    Spacer(minLength: 0)
+                    controls(spreadStop: false)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    identity
+                    if typeSize.isAccessibilitySize {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            controls(spreadStop: false)
+                        }
+                    } else {
+                        controls(spreadStop: true)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CobaltColor.bg)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+
+    private var identity: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                if isLive {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 7, height: 7)
+                        .accessibilityHidden(true)
+                }
+                Text(title)
+                    .font(Font.cobalt(16, .semibold, relativeTo: .headline))
+                    .foregroundStyle(CobaltColor.text)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            if let clipNote {
+                Text(clipNote)
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(clipFailed ? CobaltColor.errorText : CobaltColor.success)
+                    .lineLimit(1)
+            } else if let subtitle {
+                Text(subtitle)
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(CobaltColor.caption)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func controls(spreadStop: Bool) -> some View {
+        GlassEffectContainer(spacing: 4) {
+            HStack(spacing: 4) {
+                Button(action: onPlayPause) {
+                    Label(isPlaying ? Copy.Twitch.pause : Copy.Twitch.play,
+                          systemImage: isPlaying ? "pause.fill" : "play.fill")
+                }
+                .buttonStyle(.cobaltIcon(.small, prominent: true))
+                .accessibilityIdentifier("twitch.playpause")
+
+                Button(action: onJumpToLive) {
+                    Label(Copy.Twitch.jumpToLive, systemImage: Symbol.Twitch.jumpToLive)
+                }
+                .buttonStyle(.cobaltIcon(.small, state: isCatchingUp ? .working : .idle))
+                .disabled(jumpDisabled)
+                .accessibilityIdentifier("twitch.jumpToLive")
+
+                if canClip {
+                    Button(action: onClip) {
+                        Label(Copy.Twitch.clip, systemImage: Symbol.Twitch.clip)
+                    }
+                    .buttonStyle(.cobaltIcon(.small, state: clipButtonState))
+                    .disabled(offline || clipState == .making)
+                    .accessibilityHint(offline ? Copy.Pane.needsNetwork : "")
+                    .accessibilityIdentifier("twitch.clip")
+                }
+
+                #if os(iOS)
+                Button(action: onTVTap) {
+                    Label(Copy.Twitch.watchOnTV, systemImage: Symbol.Twitch.tv)
+                }
+                .buttonStyle(.cobaltIcon(.small, tint: onTV ? TwitchTVPalette.tv : nil))
+                .accessibilityIdentifier("twitch.tv")
+                #endif
+
+                if spreadStop {
+                    Spacer(minLength: 4)
+                }
+
+                Button(role: .destructive, action: onStop) {
+                    Label(Copy.Twitch.stop, systemImage: "stop.fill")
+                }
+                .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.errorText))
+                .accessibilityIdentifier("twitch.stop")
+            }
+        }
+    }
+}
+
 /// What a stream keeps for as long as the pane holds it, whatever shape its page is drawn in (`Pane.keepAlive`): the chat
 /// connection and the TV's watch. A page rebuilt for another shape (screen, span, bar, a peek over it) picks it up again,
 /// so neither is closed and reopened (the TV window would flicker); both end when the pane lets go of the stream.
@@ -318,12 +505,11 @@ private final class TwitchWatch: PaneKeptObject {
     }
 }
 
-/// The chat as the shelf's card: a fixed height in a column that scrolls, or the rest of the room (`fills`). Also the
-/// twitch tab's chat beside the pane (`TwitchScreen`).
+/// Edge-to-edge live chat inside the stream pane, with 7TV "add to a set" presented as a sheet over the pane so the stream
+/// stays mounted and playing underneath.
 struct TwitchChatCard: View {
     let model: AppModel
     let delay: TimeInterval
-    var fills = false
 
     /// Video-only AirPlay runs the TV behind the phone: chat waits to match (70.5).
     static var tvDelay: TimeInterval {
@@ -334,10 +520,6 @@ struct TwitchChatCard: View {
         #endif
     }
 
-    @Environment(\.paneShape) private var shape
-    /// "add to a set" from the chat: a standard sheet over the pane, so the stream page stays mounted (and playing) under it.
-    /// (A push inside the pane's `NavigationStack` would cover the pane's own header, which is the root page's overlay, and the
-    /// stack has no back button; opening `.emoteAddToSet` would replace the stream.)
     @State private var addingToSet: SevenTvAddToSetModel?
 
     var body: some View {
@@ -346,19 +528,9 @@ struct TwitchChatCard: View {
             SevenTvEmoteHits.remember(hit)
             addingToSet = model.sevenTv.addToSetPicker(emote: hit)
         }
-        .frame(height: fills ? nil : height)
-        .frame(maxHeight: fills ? .infinity : nil)
-        .clipShape(.rect(cornerRadius: 14))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(item: $addingToSet) { picker in
             SevenTvAddToSetSheet(picker: picker)
-        }
-    }
-
-    private var height: CGFloat {
-        switch shape {
-        case .tall, .bar: 460
-        case .wide: 520
-        case .split: 600
         }
     }
 }
@@ -377,14 +549,26 @@ private struct TwitchPageHost: View {
     }
 }
 
-#Preview("twitch · tall", traits: .fixedLayout(width: 440, height: 900)) {
+#Preview("twitch · folded portrait", traits: .fixedLayout(width: 402, height: 800)) {
     TwitchPageHost(shape: .tall)
 }
-#Preview("twitch · wide", traits: .fixedLayout(width: 1000, height: 560)) {
+#Preview("twitch · landscape phone", traits: .fixedLayout(width: 874, height: 380)) {
+    TwitchPageHost(shape: .tall)
+}
+#Preview("twitch · duo wide screen", traits: .fixedLayout(width: 475, height: 669)) {
+    TwitchPageHost(shape: .tall)
+}
+#Preview("twitch · duo wide span", traits: .fixedLayout(width: 951, height: 669)) {
+    TwitchPageHost(shape: .split(.media), hinge: PaneHinge(axis: .vertical, position: 475))
+}
+#Preview("twitch · duo tall screen", traits: .fixedLayout(width: 669, height: 475)) {
     TwitchPageHost(shape: .wide)
 }
-#Preview("twitch · split", traits: .fixedLayout(width: 1080, height: 800)) {
-    TwitchPageHost(shape: .split(.media), hinge: PaneHinge(axis: .vertical, position: 540))
+#Preview("twitch · duo tall span", traits: .fixedLayout(width: 669, height: 951)) {
+    TwitchPageHost(shape: .split(.media), hinge: PaneHinge(axis: .horizontal, position: 475))
+}
+#Preview("twitch · pad / mac span", traits: .fixedLayout(width: 1100, height: 700)) {
+    TwitchPageHost(shape: .wide)
 }
 #Preview("twitch · bar", traits: .fixedLayout(width: 402, height: 64)) {
     TwitchPageHost(shape: .bar)
