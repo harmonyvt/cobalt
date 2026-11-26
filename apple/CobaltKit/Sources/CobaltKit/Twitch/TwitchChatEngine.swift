@@ -49,9 +49,15 @@ public actor TwitchChatEngine {
     /// The account's IRC login failed: read-only from here (a token without chat scopes, or an expired one).
     private var authRefused = false
 
+    static let cosmeticBatchSize = 8
+    static let cosmeticQueueMax = 64
+    static let cosmeticCoalesce: Duration = .milliseconds(80)
+
     private var events: URLSessionWebSocketTask?
     private var eventsLoop: Task<Void, Never>?
     private var eventsAttempts = 0
+    private var eventsReady = false
+    private var subscribedSetID: String?
 
     private var roomID: String?
     private var sevenTvSetID: String?
@@ -70,11 +76,20 @@ public actor TwitchChatEngine {
     private var emoteList = TwitchEmoteList()
     /// The text and Twitch emote ranges of each line still shown, so lines can be split again when 7TV's emotes arrive.
     private var raw: [String: (String, [TwitchEmoteRange])] = [:]
+    /// The raw Twitch badge refs of each line still shown, so lines get their badges once global/channel sets arrive.
+    private var rawBadges: [String: [TwitchBadgeRef]] = [:]
     /// 7TV cosmetics by id, and which cosmetic each login wears.
     private var paintsByID: [String: SevenTvPaint] = [:]
     private var badgesByID: [String: ChatBadge] = [:]
     private var wornPaint: [String: String] = [:]
     private var wornBadge: [String: String] = [:]
+    /// Logins whose paint/badge was set live by EventAPI, so an older in-flight GQL batch never overwrites it.
+    private var eventPaintLogins: Set<String> = []
+    private var eventBadgeLogins: Set<String> = []
+    /// Twitch user IDs already queued or fetched via 7TV v3 GQL, plus pending `(userID, login)` pairs (newest at tail).
+    private var seenCosmeticUsers: Set<String> = []
+    private var pendingCosmeticLookups: [(userID: String, login: String)] = []
+    private var cosmeticTask: Task<Void, Never>?
     /// What USERSTATE says about the signed-in user here (for the lines this device sends).
     private var myColor: UInt32?
     private var myBadges: [TwitchBadgeRef] = []
@@ -99,16 +114,21 @@ public actor TwitchChatEngine {
         connectIRC()
         Task { await self.loadGlobals() }
         Task { await self.loadHistory() }
+        if let credentials {
+            queueCosmeticLookup(userID: credentials.userID, login: credentials.login.lowercased())
+        }
     }
 
     public func stop() {
         stopped = true
         ircLoop?.cancel()
         eventsLoop?.cancel()
+        cosmeticTask?.cancel()
         irc?.cancel(with: .goingAway, reason: nil)
         events?.cancel(with: .goingAway, reason: nil)
         irc = nil
         events = nil
+        cosmeticTask = nil
         continuation.finish()
     }
 
@@ -134,8 +154,9 @@ public actor TwitchChatEngine {
         if let replyTo, let parent = snapshot.lines.last(where: { $0.id == replyTo }) {
             reply = .init(login: parent.login, displayName: parent.displayName, text: parent.plainText)
         }
+        let myLogin = credentials.login.lowercased()
         var line = TwitchChatLine(
-            id: id, kind: .message, login: credentials.login, displayName: myDisplayName ?? credentials.login,
+            id: id, kind: .message, login: myLogin, displayName: myDisplayName ?? credentials.login,
             color: myColor, badges: resolve(myBadges), fragments: [], timestamp: Date(), mentionsMe: false, mine: true,
             replyTo: reply)
         if trimmed.hasPrefix("/me ") {
@@ -145,6 +166,7 @@ public actor TwitchChatEngine {
             line.fragments = ChatFragmenter.fragments(text: trimmed, ranges: [], named: named)
         }
         raw[id] = (trimmed.hasPrefix("/me ") ? String(trimmed.dropFirst(4)) : trimmed, [])
+        rawBadges[id] = myBadges
         append(line)
         return true
     }
@@ -218,10 +240,7 @@ public actor TwitchChatEngine {
             task.cancel(with: .goingAway, reason: nil)
         case "ROOMSTATE":
             applyRoomState(m.tags)
-            if roomID == nil, let id = m.tags["room-id"], !id.isEmpty {
-                roomID = id
-                Task { await self.loadChannel(id) }
-            }
+            setRoomID(m.tags["room-id"])
         case "JOIN":
             // only our own JOIN arrives (no membership capability): we are in
             attempts = 0
@@ -257,6 +276,12 @@ public actor TwitchChatEngine {
         }
     }
 
+    private func setRoomID(_ id: String?) {
+        guard roomID == nil, let id, !id.isEmpty else { return }
+        roomID = id
+        Task { await self.loadChannel(id) }
+    }
+
     private func applyRoomState(_ tags: [String: String]) {
         var room = snapshot.room
         if let v = tags["slow"], let n = Int(v) { room.slowSeconds = n }
@@ -271,6 +296,7 @@ public actor TwitchChatEngine {
 
     private func privmsg(_ m: IRCMessage, login: TwitchCredentials?) {
         guard var text = m.trailing, let nick = m.nick?.lowercased() else { return }
+        setRoomID(m.tags["room-id"])
         var kind = TwitchChatLine.Kind.message
         // `\u{1}ACTION …\u{1}` is /me
         if text.hasPrefix("\u{1}ACTION "), text.hasSuffix("\u{1}") {
@@ -291,15 +317,18 @@ public actor TwitchChatEngine {
             }
         }
         let shifted = reply == nil ? ranges : shift(ranges, original: m.trailing ?? "", now: text)
+        let badgeRefs = TwitchIRC.badges(m.tags["badges"])
         let line = TwitchChatLine(
             id: id, kind: kind, login: nick, displayName: m.tags["display-name"].flatMap { $0.isEmpty ? nil : $0 } ?? nick,
-            color: TwitchIRC.color(m.tags["color"]), badges: resolve(TwitchIRC.badges(m.tags["badges"])),
+            color: TwitchIRC.color(m.tags["color"]), badges: resolve(badgeRefs),
             fragments: ChatFragmenter.fragments(text: text, ranges: shifted, named: named),
             timestamp: m.tags["tmi-sent-ts"].flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
             mentionsMe: login.map { ChatFragmenter.mentions(text, login: $0.login) } ?? false,
             mine: login.map { $0.login.lowercased() == nick } ?? false,
             replyTo: reply)
         raw[id] = (text, shifted)
+        if !badgeRefs.isEmpty { rawBadges[id] = badgeRefs }
+        if let userID = m.tags["user-id"] { queueCosmeticLookup(userID: userID, login: nick) }
         append(line)
     }
 
@@ -314,18 +343,22 @@ public actor TwitchChatEngine {
     }
 
     private func usernotice(_ m: IRCMessage, login: TwitchCredentials?) {
+        setRoomID(m.tags["room-id"])
         let said = m.tags["system-msg"] ?? ""
         let text = m.trailing ?? ""
         let nick = (m.tags["login"] ?? m.nick ?? "").lowercased()
         let id = m.tags["id"] ?? UUID().uuidString
         let ranges = TwitchIRC.emoteRanges(m.tags["emotes"])
+        let badgeRefs = TwitchIRC.badges(m.tags["badges"])
         let line = TwitchChatLine(
             id: id, kind: .notice(said), login: nick, displayName: m.tags["display-name"] ?? nick,
-            color: TwitchIRC.color(m.tags["color"]), badges: resolve(TwitchIRC.badges(m.tags["badges"])),
+            color: TwitchIRC.color(m.tags["color"]), badges: resolve(badgeRefs),
             fragments: text.isEmpty ? [] : ChatFragmenter.fragments(text: text, ranges: ranges, named: named),
             timestamp: m.tags["tmi-sent-ts"].flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
             mentionsMe: false, mine: false, replyTo: nil)
         if !text.isEmpty { raw[id] = (text, ranges) }
+        if !badgeRefs.isEmpty { rawBadges[id] = badgeRefs }
+        if let userID = m.tags["user-id"], !nick.isEmpty { queueCosmeticLookup(userID: userID, login: nick) }
         append(line)
     }
 
@@ -349,7 +382,10 @@ public actor TwitchChatEngine {
         snapshot.lines.append(line)
         if snapshot.lines.count > Self.lineLimit {
             let drop = snapshot.lines.count - Self.lineLimit
-            for gone in snapshot.lines.prefix(drop) { raw[gone.id] = nil }
+            for gone in snapshot.lines.prefix(drop) {
+                raw[gone.id] = nil
+                rawBadges[gone.id] = nil
+            }
             snapshot.lines.removeFirst(drop)
         }
         markDirty()
@@ -357,6 +393,21 @@ public actor TwitchChatEngine {
 
     private func resolve(_ refs: [TwitchBadgeRef]) -> [ChatBadge] {
         refs.compactMap { channelBadges["\($0.set)/\($0.version)"] ?? twitchBadges["\($0.set)/\($0.version)"] }
+    }
+
+    /// Re-resolves Twitch badges for every line on screen (lines from history or early IRC that arrived before badge maps).
+    private func reapplyBadges() {
+        var changed = false
+        for i in snapshot.lines.indices {
+            let id = snapshot.lines[i].id
+            guard let refs = rawBadges[id] else { continue }
+            let next = resolve(refs)
+            if next != snapshot.lines[i].badges {
+                snapshot.lines[i].badges = next
+                changed = true
+            }
+        }
+        if changed { markDirty() }
     }
 
     // MARK: - publishing
@@ -422,19 +473,26 @@ public actor TwitchChatEngine {
 
     private func loadGlobals() async {
         async let seven: Void = loadSevenTvGlobal()
-        async let badges: Void = loadTwitchBadges(path: "chat/badges/global", channel: false)
+        async let badges: Void = loadGlobalTwitchBadges()
         async let mine: Void = loadUserEmotes(broadcasterID: nil)
-        _ = await (seven, badges, mine)
+        if credentials == nil {
+            async let channelGQL: Void = loadChannelBadgesGQL()
+            _ = await (seven, badges, mine, channelGQL)
+        } else {
+            _ = await (seven, badges, mine)
+        }
     }
 
     private func loadChannel(_ id: String) async {
+        // start 7TV EventAPI immediately instead of waiting on Helix pagination
+        connectEvents()
+        queueCosmeticLookup(userID: id, login: channel)
         async let seven: Void = loadSevenTvChannel(id)
-        async let badges: Void = loadTwitchBadges(path: "chat/badges", query: [("broadcaster_id", id)], channel: true)
+        async let badges: Void = loadChannelTwitchBadges(id)
         // again with the channel, so its follower emotes come too (Helix lists those only when asked for a broadcaster)
         async let mine: Void = loadUserEmotes(broadcasterID: id)
         async let theirs: Void = loadChannelTwitchEmotes(id)
         _ = await (seven, badges, mine, theirs)
-        connectEvents()
     }
 
     private func loadSevenTvGlobal() async {
@@ -456,21 +514,65 @@ public actor TwitchChatEngine {
         channelEmotes = map
         sevenTvSetID = user.emoteSet?.id
         rebuildEmotes()
+        await subscribeEmoteSetIfReady()
     }
 
-    private func loadTwitchBadges(path: String, query: [(String, String)] = [], channel: Bool) async {
-        guard let page: HelixWire.Page<HelixWire.BadgeSet> = await helix(path, query: query) else { return }
+    private func loadGlobalTwitchBadges() async {
+        var map = await loadHelixBadges(path: "chat/badges/global")
+        if map.isEmpty {
+            map = await loadGlobalBadgesGQL()
+        }
+        guard !map.isEmpty else { return }
+        twitchBadges = map
+        reapplyBadges()
+    }
+
+    private func loadChannelTwitchBadges(_ id: String) async {
+        var map = await loadHelixBadges(path: "chat/badges", query: [("broadcaster_id", id)])
+        if map.isEmpty, channelBadges.isEmpty {
+            map = await fetchChannelBadgesGQL().badges
+        }
+        guard !map.isEmpty else { return }
+        channelBadges = map
+        reapplyBadges()
+    }
+
+    private func loadChannelBadgesGQL() async {
+        let result = await fetchChannelBadgesGQL()
+        if !result.badges.isEmpty {
+            channelBadges = result.badges
+            reapplyBadges()
+        }
+        if let id = result.roomID { setRoomID(id) }
+    }
+
+    private func loadHelixBadges(path: String, query: [(String, String)] = []) async -> [String: ChatBadge] {
+        guard let page: HelixWire.Page<HelixWire.BadgeSet> = await helix(path, query: query) else { return [:] }
         var map: [String: ChatBadge] = [:]
         for set in page.data ?? [] {
             for v in set.versions {
-                guard let s = v.imageUrl2x, let url = URL(string: s) else { continue }
-                map["\(set.setId)/\(v.id)"] = ChatBadge(id: "\(set.setId)/\(v.id)", title: v.title ?? set.setId, url: url)
+                guard let url = v.bestURL else { continue }
+                let key = "\(set.setId)/\(v.id)"
+                map[key] = ChatBadge(id: key, title: v.title ?? set.setId, url: url)
             }
         }
-        if channel { channelBadges = map } else { twitchBadges = map }
-        // lines that came before the badges get theirs now
-        guard !snapshot.lines.isEmpty else { return }
-        markDirty()
+        return map
+    }
+
+    private func loadGlobalBadgesGQL() async -> [String: ChatBadge] {
+        guard let body = TwitchBadgeGQL.globalRequestBody(),
+              let data = await post(TwitchBadgeGQL.url, body: body, headers: ["Client-ID": TwitchStreamResolver.webClientID]),
+              let response = try? JSONDecoder().decode(TwitchBadgeGQL.GlobalResponse.self, from: data)
+        else { return [:] }
+        return TwitchBadgeGQL.map(response.data?.badges ?? [])
+    }
+
+    private func fetchChannelBadgesGQL() async -> (roomID: String?, badges: [String: ChatBadge]) {
+        guard let body = TwitchBadgeGQL.channelRequestBody(login: channel),
+              let data = await post(TwitchBadgeGQL.url, body: body, headers: ["Client-ID": TwitchStreamResolver.webClientID]),
+              let response = try? JSONDecoder().decode(TwitchBadgeGQL.ChannelResponse.self, from: data)
+        else { return (nil, [:]) }
+        return (response.data?.user?.id, TwitchBadgeGQL.map(response.data?.user?.broadcastBadges ?? []))
     }
 
     private func loadUserEmotes(broadcasterID: String?) async {
@@ -534,10 +636,81 @@ public actor TwitchChatEngine {
         markDirty()
     }
 
+    // MARK: - 7TV GraphQL batch cosmetic lookups (history + chatters without active presence)
+
+    private func queueCosmeticLookup(userID: String, login: String) {
+        let lower = login.lowercased()
+        guard !stopped, !userID.isEmpty, !lower.isEmpty,
+              userID.allSatisfy({ $0.isASCII && $0.isNumber }),
+              seenCosmeticUsers.insert(userID).inserted
+        else { return }
+        pendingCosmeticLookups.append((userID: userID, login: lower))
+        if pendingCosmeticLookups.count > Self.cosmeticQueueMax {
+            let drop = pendingCosmeticLookups.count - Self.cosmeticQueueMax
+            for old in pendingCosmeticLookups.prefix(drop) {
+                seenCosmeticUsers.remove(old.userID)
+            }
+            pendingCosmeticLookups.removeFirst(drop)
+        }
+        guard cosmeticTask == nil else { return }
+        cosmeticTask = Task { [weak self] in
+            guard let self else { return }
+            await self.drainCosmeticLookups()
+        }
+    }
+
+    private func drainCosmeticLookups() async {
+        // brief coalesce so history lines or a burst of messages share one batch request
+        try? await Task.sleep(for: Self.cosmeticCoalesce)
+        while !stopped, !pendingCosmeticLookups.isEmpty, !Task.isCancelled {
+            let count = min(Self.cosmeticBatchSize, pendingCosmeticLookups.count)
+            // pop from the tail so the newest (visible) chatters resolve first
+            let batch = Array(pendingCosmeticLookups.suffix(count).reversed())
+            pendingCosmeticLookups.removeLast(count)
+            await fetchCosmeticBatch(batch)
+        }
+        cosmeticTask = nil
+        if !stopped, !pendingCosmeticLookups.isEmpty {
+            cosmeticTask = Task { [weak self] in
+                guard let self else { return }
+                await self.drainCosmeticLookups()
+            }
+        }
+    }
+
+    private func fetchCosmeticBatch(_ batch: [(userID: String, login: String)]) async {
+        guard let body = SevenTvChatWire.cosmeticsQueryBody(userIDs: batch.map(\.userID)),
+              let data = await post(SevenTvChatWire.gqlURL, body: body),
+              let response = try? SevenTvChatWire.decoder().decode(SevenTvChatWire.GQLCosmeticsResponse.self, from: data),
+              let users = response.data, !stopped
+        else { return }
+        var changed = false
+        for (idx, item) in batch.enumerated() {
+            guard let style = users["u\(idx)"]??.style else { continue }
+            if !eventPaintLogins.contains(item.login),
+               let pData = style.paint, let pid = pData.id, !pid.isEmpty,
+               let paint = SevenTvChatWire.paint(pData, id: pid) {
+                paintsByID[pid] = paint
+                wornPaint[item.login] = pid
+                changed = true
+            }
+            if !eventBadgeLogins.contains(item.login),
+               let bData = style.badge, let bid = bData.id, !bid.isEmpty,
+               let badge = SevenTvChatWire.badge(bData, id: bid) {
+                badgesByID[bid] = badge
+                wornBadge[item.login] = bid
+                changed = true
+            }
+        }
+        if changed { applyCosmetics() }
+    }
+
     // MARK: - 7TV EventAPI (paints, badges, live set changes)
 
     private func connectEvents() {
         guard !stopped, events == nil, roomID != nil else { return }
+        eventsReady = false
+        subscribedSetID = nil
         let task = session.webSocketTask(with: SevenTvChatWire.events)
         events = task
         task.resume()
@@ -563,6 +736,8 @@ public actor TwitchChatEngine {
         } catch {}
         guard !stopped, events === task else { return }
         events = nil
+        eventsReady = false
+        subscribedSetID = nil
         eventsAttempts += 1
         let wait = min(60, 2 << min(eventsAttempts, 5))
         try? await Task.sleep(for: .seconds(wait))
@@ -574,13 +749,17 @@ public actor TwitchChatEngine {
         case 1:
             // hello: ask for this channel's cosmetics and its set's changes
             eventsAttempts = 0
+            eventsReady = true
             guard let room = roomID else { return }
             let channelCondition = ["ctx": "channel", "platform": "TWITCH", "id": room]
             var subs = [
                 SevenTvChatWire.subscribe(type: "cosmetic.*", condition: channelCondition),
                 SevenTvChatWire.subscribe(type: "entitlement.*", condition: channelCondition),
             ]
-            if let set = sevenTvSetID { subs.append(SevenTvChatWire.subscribe(type: "emote_set.update", condition: ["object_id": set])) }
+            if let set = sevenTvSetID {
+                subscribedSetID = set
+                subs.append(SevenTvChatWire.subscribe(type: "emote_set.update", condition: ["object_id": set]))
+            }
             for s in subs { try? await task.send(.string(s)) }
         case 0:
             guard let type = env.d?.type, let body = env.d?.body else { return }
@@ -593,9 +772,15 @@ public actor TwitchChatEngine {
         }
     }
 
+    private func subscribeEmoteSetIfReady() async {
+        guard eventsReady, let task = events, let set = sevenTvSetID, subscribedSetID != set else { return }
+        subscribedSetID = set
+        try? await task.send(.string(SevenTvChatWire.subscribe(type: "emote_set.update", condition: ["object_id": set])))
+    }
+
     private func dispatch(type: String, body: SevenTvChatWire.Body) {
         switch type {
-        case "cosmetic.create":
+        case "cosmetic.create", "cosmetic.update":
             guard let obj = body.object, let id = obj.id ?? obj.data?.id, let data = obj.data else { return }
             switch (obj.kind ?? "").uppercased() {
             case "PAINT": if let p = SevenTvChatWire.paint(data, id: id) { paintsByID[id] = p }
@@ -608,11 +793,20 @@ public actor TwitchChatEngine {
             let removing = type == "entitlement.delete"
             switch (obj.kind ?? "").uppercased() {
             case "PAINT":
+                eventPaintLogins.insert(login)
                 if removing { if wornPaint[login] == ref { wornPaint[login] = nil } } else { wornPaint[login] = ref }
             case "BADGE":
+                eventBadgeLogins.insert(login)
                 if removing { if wornBadge[login] == ref { wornBadge[login] = nil } } else { wornBadge[login] = ref }
             default: return
             }
+            applyCosmetics()
+        case "entitlement.reset":
+            guard let login = body.object?.user?.twitchLogin else { return }
+            eventPaintLogins.insert(login)
+            eventBadgeLogins.insert(login)
+            wornPaint[login] = nil
+            wornBadge[login] = nil
             applyCosmetics()
         case "emote_set.update":
             var changed = false
@@ -654,6 +848,19 @@ public actor TwitchChatEngine {
         return data
     }
 
+    private func post(_ url: URL, body: Data, headers: [String: String] = [:]) async -> Data? {
+        MainThreadGuard.assertOffMain()
+        var req = URLRequest(url: url, timeoutInterval: 20)
+        req.httpMethod = "POST"
+        req.httpBody = body
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        guard let (data, response) = try? await session.data(for: req),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+        else { return nil }
+        return data
+    }
+
     private func helix<T: Decodable>(_ path: String, query: [(String, String)] = []) async -> T? {
         guard let credentials else { return nil }
         guard var comps = URLComponents(url: HelixWire.base.appendingPathComponent(path), resolvingAgainstBaseURL: false) else { return nil }
@@ -662,5 +869,33 @@ public actor TwitchChatEngine {
               let data = await get(url, headers: ["Client-Id": credentials.clientID, "Authorization": "Bearer \(credentials.token)"])
         else { return nil }
         return try? HelixWire.decoder().decode(T.self, from: data)
+    }
+
+    // MARK: - testing hooks
+
+    func currentSnapshot() -> TwitchChatSnapshot { snapshot }
+
+    func ingestIRCForTesting(_ rawLine: String) {
+        guard let m = TwitchIRC.parse(rawLine) else { return }
+        switch m.command {
+        case "PRIVMSG": privmsg(m, login: credentials)
+        case "USERNOTICE": usernotice(m, login: credentials)
+        default: break
+        }
+    }
+
+    func loadBadgesForTesting(roomID: String? = nil) async {
+        await loadGlobalTwitchBadges()
+        if let roomID {
+            await loadChannelTwitchBadges(roomID)
+        }
+    }
+
+    func flushCosmeticsForTesting() async {
+        if let task = cosmeticTask { await task.value }
+    }
+
+    func dispatchEventForTesting(type: String, body: SevenTvChatWire.Body) {
+        dispatch(type: type, body: body)
     }
 }
