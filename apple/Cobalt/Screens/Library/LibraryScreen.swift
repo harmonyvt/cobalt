@@ -266,6 +266,9 @@ private struct LibraryContent: View {
         let shownPhase: LibraryPhase = holding ? .rows : phase
         // split in two: one chain this long is past the type checker's time limit on the Mac
         let core = content(rows: shownRows, phase: shownPhase, shareIndex: shareIndex, held: holding)
+            #if os(iOS)
+            .background(LibrarySurface.canvas.ignoresSafeArea())
+            #endif
             .modifier(LibraryHoldRows(rows: rows, showing: phase == .rows, album: library.showingHidden, held: $heldRows))
             .navigationTitle(Copy.library)
             #if os(iOS)
@@ -311,11 +314,10 @@ private struct LibraryContent: View {
                         }
                     }
                 }
-                // one hairline along the bar's bottom edge says "working": the whole library paging in (with its
-                // progress), or the server still searching. The status line above it keeps only the answer.
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(CobaltColor.hairline).frame(height: 0.5).allowsHitTesting(false)
-                }
+                #if os(iOS)
+                .background { LibrarySurface.topEdgeVeil.ignoresSafeArea(edges: .top) }
+                #endif
+                // a subtle bottom sweep says "working": the whole library paging in (with its progress), or the server still searching
                 .overlay(alignment: .bottom) { activityBar }
                 .motion(Motion.rows, value: library.searchState)
                 .motion(Motion.fade, value: library.loadingAll == nil)
@@ -475,43 +477,39 @@ private struct LibraryContent: View {
 
     // MARK: the filter row
 
-    /// One row of filters: the kind chips scroll, and the links menu chip + `select` button stay pinned at the
-    /// trailing end behind a hairline, keeping the bottom of the masonry completely clear while browsing.
+    /// One floating row of Liquid Glass filters: the kind chips scroll with a soft trailing fade, and the links menu
+    /// chip + `select` button stay pinned at the trailing end without a flat gray bar or stiff pipe divider.
     @ViewBuilder
     private func filterRow(unfiltered: [LibraryRow], shareIndex: ShareSetIndex, hasRows: Bool, canSelect: Bool) -> some View {
         let kinds = model.capabilities.gallery || model.capabilities.hidden
         let links = model.capabilities.shareSets && !model.shareSets.sets.isEmpty && !library.showingHidden
-        if kinds || links || hasRows {
+        let showsTrailing = links || hasRows
+        if kinds || showsTrailing {
             HStack(spacing: 0) {
                 if kinds {
                     LibraryKindChips(
-                        model: model, extra: debugExtra,
+                        model: model, extra: debugExtra, trailingFade: showsTrailing,
                         pickAll: { kind, share in pickKind(kind, thenShare: share) })
                     .equatable()
                 } else {
                     Spacer(minLength: 0)
                 }
-                if links || hasRows {
-                    if kinds {
-                        Rectangle()
-                            .fill(CobaltColor.caption.opacity(0.3))
-                            .frame(width: 1, height: 18)
-                            .accessibilityHidden(true)
-                    }
-                    HStack(spacing: 6) {
-                        if links {
-                            LibraryShareMenu(model: model, rows: unfiltered, index: shareIndex, filter: $controller.shareFilter)
-                        }
-                        if hasRows {
-                            LibrarySelectButton(disabled: !canSelect, action: toggleSelecting)
+                if showsTrailing {
+                    GlassEffectContainer(spacing: 6) {
+                        HStack(spacing: 6) {
+                            if links {
+                                LibraryShareMenu(model: model, rows: unfiltered, index: shareIndex, filter: $controller.shareFilter)
+                            }
+                            if hasRows {
+                                LibrarySelectButton(disabled: !canSelect, action: toggleSelecting)
+                            }
                         }
                     }
-                    .padding(.leading, kinds ? 8 : 12)
+                    .padding(.leading, kinds ? 4 : 12)
                     .padding(.trailing, 12)
                     .padding(.vertical, 6)
                 }
             }
-            .background(.bar)
         }
     }
 
@@ -813,8 +811,7 @@ struct LibraryStatusLine: View {
             .lineLimit(1)
             .contentTransition(.opacity)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 5)
-            .background(.bar)
+            .padding(.vertical, 4)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.updatesFrequently)
             .transition(.opacity)
@@ -986,14 +983,14 @@ struct LibrarySkeletonRows: View {
                 ForEach(Self.titles.indices, id: \.self) { i in
                     HStack(spacing: 10) {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Skeleton.fill)
+                            .fill(LibrarySurface.ghostFill)
                             .frame(width: 44, height: 44)
                         VStack(alignment: .leading, spacing: 7) {
-                            Capsule().fill(Skeleton.fill).frame(width: text * Self.titles[i], height: 10)
-                            Capsule().fill(Skeleton.fill).frame(width: text * 0.32, height: 7)
+                            Capsule().fill(LibrarySurface.ghostFill).frame(width: text * Self.titles[i], height: 10)
+                            Capsule().fill(LibrarySurface.ghostFill).frame(width: text * 0.32, height: 7)
                         }
                         Spacer(minLength: 0)
-                        Capsule().fill(Skeleton.fill).frame(width: 36, height: 7)
+                        Capsule().fill(LibrarySurface.ghostFill).frame(width: 36, height: 7)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)

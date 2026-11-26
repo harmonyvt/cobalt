@@ -64,9 +64,9 @@ struct LibraryMosaic: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.horizontalSizeClass) private var sizeClass
 
-    private var gap: Double { tier == .compact ? 7 : 10 }
-    private static let margin: Double = 12
-    private static let topInset: Double = 8
+    private var gap: Double { tier == .compact ? 5 : 7 }
+    private var margin: Double { tier == .compact ? 8 : 12 }
+    private static let topInset: Double = 6
 
     /// Scroll viewport height and prefetch watermark, read without triggering SwiftUI invalidation.
     final class ViewportBox {
@@ -103,8 +103,9 @@ struct LibraryMosaic: View {
     /// count changed. Fast-paths in O(1) when the `rows` array storage is identical (zero per-render `rows.map` work).
     private func layout(width: Double) -> MosaicLayout {
         let gap = self.gap
+        let margin = self.margin
         let columns = MasonryPlan.duoColumns(
-            width: width, minTile: minTile, gap: gap, margin: Self.margin,
+            width: width, minTile: minTile, gap: gap, margin: margin,
             accessibility: typeSize.isAccessibilitySize,
             isRegular: sizeClass == .regular || Platform.isMac)
         if let fast = layoutCache.fastHit(skeleton: skeleton, rows: rows, width: width, columns: columns, gap: gap) {
@@ -118,7 +119,7 @@ struct LibraryMosaic: View {
             layoutCache.record(rows: rows, layout: cached)
             return cached
         }
-        let plan = MasonryPlan.make(aspects: key.aspects, width: width, columns: columns, gap: gap, margin: Self.margin)
+        let plan = MasonryPlan.make(aspects: key.aspects, width: width, columns: columns, gap: gap, margin: margin)
         // slots come in index order, so each column's tiles stay top to bottom
         var byColumn = [[MosaicTile]](repeating: [], count: plan.columns)
         for slot in plan.slots where byColumn.indices.contains(slot.column) {
@@ -192,7 +193,7 @@ struct LibraryMosaic: View {
     }
 
     /// Whether the scroll view's width is known (and leaves room for a column): before it, the plan has no real sizes.
-    private var hasWidth: Bool { width > 0 && Double(width) > 2 * Self.margin }
+    private var hasWidth: Bool { width > 0 && Double(width) > 2 * margin }
 
     /// The columns: one `LazyVStack` each, so only the tiles on screen are built and measured.
     private func columns(_ layout: MosaicLayout, numbers: [String: Int]) -> some View {
@@ -208,7 +209,7 @@ struct LibraryMosaic: View {
                 .frame(width: plan.columnWidth)
             }
         }
-        .padding(.horizontal, Self.margin)
+        .padding(.horizontal, margin)
         .padding(.top, Self.topInset)
         .frame(maxHeight: .infinity, alignment: .top)
     }

@@ -20,9 +20,8 @@ struct LibrarySelectButton: View {
             .fixedSize()
             .padding(.horizontal, 11)
             .frame(minHeight: 30)
-            .background(Capsule().fill(CobaltColor.elevated))
-            .overlay(Capsule().strokeBorder(CobaltColor.hairline, lineWidth: 0.5))
             .contentShape(Capsule())
+            .libraryGlassPill()
         }
         .buttonStyle(.plain)
         .opacity(disabled ? 0.38 : 1)
@@ -51,64 +50,63 @@ struct LibrarySelectTopBar: View {
         let shareable = rows.filter(\.shareable)
         let allPicked = !shareable.isEmpty && shareable.allSatisfy { controller.picked.contains($0.id) }
 
-        HStack(spacing: 8) {
-            Button(action: toggle) {
-                HStack(spacing: 4) {
-                    Image(systemName: Symbol.close)
-                        .font(.system(size: 10.5, weight: .bold))
-                    Text(Copy.Library2.doneSelecting)
-                        .font(Font.cobalt(12, .semibold, relativeTo: .caption))
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                Button(action: toggle) {
+                    HStack(spacing: 4) {
+                        Image(systemName: Symbol.close)
+                            .font(.system(size: 10.5, weight: .bold))
+                        Text(Copy.Library2.doneSelecting)
+                            .font(Font.cobalt(12, .semibold, relativeTo: .caption))
+                    }
+                    .foregroundStyle(CobaltColor.text)
+                    .padding(.horizontal, 11)
+                    .frame(height: 30)
+                    .contentShape(Capsule())
+                    .libraryGlassPill()
                 }
-                .foregroundStyle(CobaltColor.text)
-                .padding(.horizontal, 10)
-                .frame(height: 28)
-                .background(Capsule().fill(CobaltColor.elevated))
-                .overlay(Capsule().strokeBorder(CobaltColor.hairline, lineWidth: 0.5))
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            #if os(macOS)
-            .keyboardShortcut(.cancelAction)
-            #endif
-            .accessibilityLabel(Copy.Library2.stopSelecting)
-            .accessibilityIdentifier("library.select.stop")
+                .buttonStyle(.plain)
+                #if os(macOS)
+                .keyboardShortcut(.cancelAction)
+                #endif
+                .accessibilityLabel(Copy.Library2.stopSelecting)
+                .accessibilityIdentifier("library.select.stop")
 
-            Text(Copy.Library2.pickedCount(count))
-                .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
-                .foregroundStyle(count == 0 ? CobaltColor.caption : CobaltColor.text)
-                .monospacedDigit()
-                .contentTransition(.numericText())
-                .lineLimit(1)
-                // layout checks (apple/CobaltUITests) read the count here: "2 picked"
-                .accessibilityIdentifier("library.select.count")
+                Text(Copy.Library2.pickedCount(count))
+                    .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
+                    .foregroundStyle(count == 0 ? CobaltColor.caption : CobaltColor.text)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    // layout checks (apple/CobaltUITests) read the count here: "2 picked"
+                    .accessibilityIdentifier("library.select.count")
 
-            Spacer(minLength: 8)
+                Spacer(minLength: 8)
 
-            Button {
-                withAnimation(Motion.rows) { controller.toggleAll(rows) }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: allPicked ? Symbol.Library.selectNone : Symbol.Library.selectAll)
-                        .font(.system(size: 11, weight: .semibold))
-                    Text(allPicked ? Copy.Library2.noneShort : Copy.Library2.all)
-                        .font(Font.cobalt(12, .semibold, relativeTo: .caption))
+                Button {
+                    withAnimation(Motion.rows) { controller.toggleAll(rows) }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: allPicked ? Symbol.Library.selectNone : Symbol.Library.selectAll)
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(allPicked ? Copy.Library2.noneShort : Copy.Library2.all)
+                            .font(Font.cobalt(12, .semibold, relativeTo: .caption))
+                    }
+                    .foregroundStyle(CobaltColor.text)
+                    .padding(.horizontal, 11)
+                    .frame(height: 30)
+                    .contentShape(Capsule())
+                    .libraryGlassPill()
                 }
-                .foregroundStyle(CobaltColor.text)
-                .padding(.horizontal, 10)
-                .frame(height: 28)
-                .background(Capsule().fill(CobaltColor.elevated))
-                .overlay(Capsule().strokeBorder(CobaltColor.hairline, lineWidth: 0.5))
-                .contentShape(Capsule())
+                .buttonStyle(.plain)
+                .opacity(shareable.isEmpty ? 0.38 : 1)
+                .disabled(shareable.isEmpty)
+                .accessibilityLabel(allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll)
             }
-            .buttonStyle(.plain)
-            .opacity(shareable.isEmpty ? 0.38 : 1)
-            .disabled(shareable.isEmpty)
-            .accessibilityLabel(allPicked ? Copy.Library2.selectNone : Copy.Library2.selectAll)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        .background(.bar)
     }
 }
 
@@ -239,7 +237,7 @@ struct LibraryPickedSheet: View {
                                 .foregroundStyle(CobaltColor.caption)
                                 .padding(.horizontal, 8)
                                 .frame(height: 24)
-                                .background(Capsule().fill(CobaltColor.elevated.opacity(0.85)))
+                                .background(LibrarySurface.quietFill, in: Capsule())
                                 .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -251,7 +249,7 @@ struct LibraryPickedSheet: View {
                                 .font(.system(size: 11, weight: .bold))
                                 .foregroundStyle(CobaltColor.text)
                                 .frame(width: 26, height: 24)
-                                .background(Capsule().fill(CobaltColor.elevated.opacity(0.85)))
+                                .background(LibrarySurface.quietFill, in: Capsule())
                                 .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -673,7 +671,7 @@ private struct SelectGridTile: View {
     private var fill: Color {
         switch tone {
         case .primary: CobaltColor.text
-        case .neutral: CobaltColor.elevated
+        case .neutral: LibrarySurface.quietFill
         case .privacyActive: CobaltColor.collectionSetBack
         case .collection: CobaltColor.collectionBack
         case .addLink: CobaltColor.focus.opacity(0.14)

@@ -19,11 +19,14 @@ struct LibraryKindChips: View, Equatable {
     let model: AppModel
     /// Synthetic rows a preview adds (DEBUG); empty in the app.
     var extra: [LibraryRow] = []
+    /// Softens the trailing edge when pinned controls sit to the right (replaces a hard vertical divider pipe).
+    var trailingFade = false
     /// A chip's long press: tick every post of that kind (`false`), or tick them and share (`true`). Nil offers neither.
     var pickAll: (@MainActor (LibraryKindFilter, Bool) -> Void)?
 
     nonisolated static func == (a: LibraryKindChips, b: LibraryKindChips) -> Bool {
-        a.model === b.model && a.extra == b.extra && (a.pickAll == nil) == (b.pickAll == nil)
+        a.model === b.model && a.extra == b.extra && a.trailingFade == b.trailingFade
+            && (a.pickAll == nil) == (b.pickAll == nil)
     }
 
     private var library: LibraryModel { model.library }
@@ -46,18 +49,32 @@ struct LibraryKindChips: View, Equatable {
     var body: some View {
         let counts = counts
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                if model.capabilities.gallery {
-                    ForEach(LibraryKindFilter.allCases, id: \.self) { kind in
-                        chip(kind, count: counts.map { $0[kind] ?? 0 })
+            GlassEffectContainer(spacing: 6) {
+                HStack(spacing: 6) {
+                    if model.capabilities.gallery {
+                        ForEach(LibraryKindFilter.allCases, id: \.self) { kind in
+                            chip(kind, count: counts.map { $0[kind] ?? 0 })
+                        }
                     }
+                    if model.capabilities.hidden { hiddenChip }
                 }
-                if model.capabilities.hidden { hiddenChip }
             }
-            .padding(.horizontal, 12)
+            .padding(.leading, 12)
+            .padding(.trailing, trailingFade ? 18 : 12)
             .padding(.vertical, 6)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .mask {
+            if trailingFade {
+                HStack(spacing: 0) {
+                    Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 22)
+                }
+            } else {
+                Rectangle()
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Library2.kindFilter)
         .haptic(.selection, trigger: model.library.kindFilter)
@@ -78,8 +95,9 @@ struct LibraryKindChips: View, Equatable {
                     .font(.system(size: 12, weight: .semibold))
                 if let count {
                     Text("\(count)")
-                        .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
+                        .font(Font.cobalt(11.5, selected ? .semibold : .medium, relativeTo: .caption))
                         .monospacedDigit()
+                        .opacity(selected ? 0.94 : 0.72)
                         .transition(.opacity)
                 } else if countsLoading {
                     // the count's room, held while the library loads: the chip does not grow when the number lands
@@ -91,9 +109,8 @@ struct LibraryKindChips: View, Equatable {
             .fixedSize()
             .padding(.horizontal, 12)
             .frame(minWidth: 40, minHeight: 30)
-            .background(Capsule().fill(selected ? CobaltColor.text : CobaltColor.elevated))
-            .overlay(Capsule().strokeBorder(selected ? Color.clear : CobaltColor.hairline, lineWidth: 0.5))
             .contentShape(Capsule())
+            .libraryGlassPill(selected: selected)
         }
         .buttonStyle(.plain)
         .help(Copy.Library2.name(kind))
@@ -121,8 +138,7 @@ struct LibraryKindChips: View, Equatable {
 
     private func countPlaceholder(selected: Bool) -> some View {
         Capsule()
-            // a shade darker than the chip itself (the chip is already the skeleton grey)
-            .fill(selected ? CobaltColor.onText.opacity(0.35) : Color.primary.opacity(0.12))
+            .fill(selected ? CobaltColor.onText.opacity(0.32) : Color.primary.opacity(0.14))
             .frame(width: 22, height: 8)
             .skeletonShimmer()
             .accessibilityHidden(true)
@@ -136,7 +152,7 @@ struct LibraryKindChips: View, Equatable {
         library.posts.isEmpty && (library.isLoading || library.loadingAll != nil) ? nil : library.hiddenCount
     }
 
-    /// Black fill, white text when on (in the dark theme a thin light ring keeps the black chip on the dark bar).
+    /// Deep obsidian glass with white ink when on.
     private var hiddenChip: some View {
         @Bindable var library = model.library
         let selected = library.showingHidden
@@ -148,8 +164,9 @@ struct LibraryKindChips: View, Equatable {
                     .font(.system(size: 12, weight: .semibold))
                 if let hiddenCount {
                     Text("\(hiddenCount)")
-                        .font(Font.cobalt(11.5, selected ? .semibold : .regular, relativeTo: .caption))
+                        .font(Font.cobalt(11.5, selected ? .semibold : .medium, relativeTo: .caption))
                         .monospacedDigit()
+                        .opacity(selected ? 0.94 : 0.72)
                         .transition(.opacity)
                 } else if countsLoading {
                     countPlaceholder(selected: selected)
@@ -160,9 +177,8 @@ struct LibraryKindChips: View, Equatable {
             .fixedSize()
             .padding(.horizontal, 12)
             .frame(minWidth: 40, minHeight: 30)
-            .background(Capsule().fill(selected ? Color.black : CobaltColor.elevated))
-            .overlay(Capsule().strokeBorder(selected ? Color.white.opacity(0.28) : CobaltColor.hairline, lineWidth: selected ? 1 : 0.5))
             .contentShape(Capsule())
+            .libraryGlassPill(selected: selected, tint: selected ? .black : nil)
         }
         .buttonStyle(.plain)
         .help(Copy.HiddenAlbum.chipName)

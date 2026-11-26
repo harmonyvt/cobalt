@@ -17,7 +17,7 @@ struct HiddenLockedCard: View {
                     .font(.system(size: 30, weight: .semibold))
                     .foregroundStyle(CobaltColor.caption)
                     .frame(width: 72, height: 72)
-                    .background(CobaltColor.elevated, in: Circle())
+                    .glassEffect(.regular, in: .circle)
                     .accessibilityHidden(true)
                 Text(Copy.HiddenAlbum.lockedTitle)
                     .font(Font.cobalt(17, .semibold, relativeTo: .headline))
@@ -67,8 +67,7 @@ struct HiddenAlbumNote: View {
             .monospacedDigit()
             .contentTransition(.numericText())
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .background(.bar)
+            .padding(.vertical, 5)
             .accessibilityAddTraits(.isHeader)
     }
 }
@@ -91,7 +90,7 @@ struct HiddenAlbumEmpty: View {
 struct HiddenCover: View {
     var body: some View {
         ZStack {
-            CobaltColor.bg.ignoresSafeArea()
+            LibrarySurface.canvas.ignoresSafeArea()
             Image(systemName: Symbol.HiddenAlbum.lock)
                 .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(CobaltColor.caption)
@@ -160,11 +159,11 @@ struct HiddenByBadge: View {
     var body: some View {
         Text(Copy.HiddenAlbum.by(by))
             .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
-            .foregroundStyle(CobaltColor.badgeInk)
+            .foregroundStyle(.white.opacity(0.92))
             .lineLimit(1)
             .fixedSize()
-            .padding(.horizontal, 6.5)
-            .frame(height: 20)
+            .padding(.horizontal, 6)
+            .frame(height: 18)
             .background(TileBadgeSurface.fill, in: Capsule())
             .overlay(Capsule().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
             .accessibilityLabel(Copy.HiddenAlbum.byA11y(by))

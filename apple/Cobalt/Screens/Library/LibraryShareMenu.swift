@@ -108,9 +108,8 @@ struct LibraryShareMenu: View {
         .foregroundStyle(on ? CobaltColor.onText : tint(filter))
         .padding(.horizontal, 12)
         .frame(minWidth: 40, minHeight: 30)
-        .background(Capsule().fill(on ? CobaltColor.text : CobaltColor.elevated))
-        .overlay(Capsule().strokeBorder(on ? Color.clear : CobaltColor.hairline, lineWidth: 0.5))
         .contentShape(Capsule())
+        .libraryGlassPill(selected: on)
         .motion(Motion.chip, value: filter)
     }
 
