@@ -27,6 +27,8 @@ final class TwitchDualPiPContentViewController: AVPictureInPictureVideoCallViewC
     private var layoutMode: TwitchDualStageMode = .focusInset
     private var isAdoptingViews = false
 
+    var onViewsAdopted: (() -> Void)?
+
     private let insetBorderView: UIView = {
         let v = UIView()
         v.isUserInteractionEnabled = false
@@ -47,6 +49,13 @@ final class TwitchDualPiPContentViewController: AVPictureInPictureVideoCallViewC
         preferredContentSize = CGSize(width: 1920, height: 1080)
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if isAdoptingViews {
+            ensureAdoptedAndLaidOut()
+        }
+    }
+
     func configure(
         primaryView: TwitchNativeVideoView,
         secondaryView: TwitchNativeVideoView,
@@ -59,8 +68,7 @@ final class TwitchDualPiPContentViewController: AVPictureInPictureVideoCallViewC
         self.layoutMode = layoutMode
         preferredContentSize = CGSize(width: 1920, height: 1080)
         if isAdoptingViews {
-            adoptVideoViewsIfNeeded()
-            layoutVideoViews()
+            ensureAdoptedAndLaidOut()
         }
     }
 
@@ -76,9 +84,18 @@ final class TwitchDualPiPContentViewController: AVPictureInPictureVideoCallViewC
     /// Moves both `TwitchNativeVideoView`s into the PiP view hierarchy right as PiP starts.
     func beginAdoptingVideoViews() {
         isAdoptingViews = true
+        ensureAdoptedAndLaidOut()
+    }
+
+    /// Re-verifies both video views are mounted inside the PiP view hierarchy and laid out to current bounds.
+    func ensureAdoptedAndLaidOut() {
+        guard isAdoptingViews else { return }
         loadViewIfNeeded()
-        adoptVideoViewsIfNeeded()
+        let adopted = adoptVideoViewsIfNeeded()
         layoutVideoViews()
+        if adopted {
+            onViewsAdopted?()
+        }
     }
 
     /// Releases both `TwitchNativeVideoView`s once PiP has stopped so the in-app stage can re-adopt them cleanly.
@@ -100,29 +117,46 @@ final class TwitchDualPiPContentViewController: AVPictureInPictureVideoCallViewC
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         if isAdoptingViews {
-            layoutVideoViews()
+            ensureAdoptedAndLaidOut()
         }
     }
 
-    private func adoptVideoViewsIfNeeded() {
-        guard let primaryView, let secondaryView else { return }
+    @discardableResult
+    private func adoptVideoViewsIfNeeded() -> Bool {
+        guard let primaryView, let secondaryView else { return false }
+        var didAdopt = false
         if primaryView.superview !== view {
             primaryView.removeFromSuperview()
+            primaryView.translatesAutoresizingMaskIntoConstraints = true
             primaryView.autoresizingMask = []
+            primaryView.isHidden = false
+            primaryView.alpha = 1
             view.insertSubview(primaryView, at: 0)
+            didAdopt = true
         }
         if secondaryView.superview !== view {
             secondaryView.removeFromSuperview()
+            secondaryView.translatesAutoresizingMaskIntoConstraints = true
             secondaryView.autoresizingMask = []
+            secondaryView.isHidden = false
+            secondaryView.alpha = 1
             view.insertSubview(secondaryView, at: 1)
+            didAdopt = true
         }
-        view.bringSubviewToFront(insetBorderView)
+        if didAdopt, view.subviews.last !== insetBorderView {
+            view.bringSubviewToFront(insetBorderView)
+        }
+        return didAdopt
     }
 
     private func layoutVideoViews() {
         guard let primaryView, let secondaryView else { return }
         let bounds = view.bounds
         guard bounds.width > 1, bounds.height > 1 else { return }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
 
         switch layoutMode {
         case .focusInset:
@@ -132,7 +166,9 @@ final class TwitchDualPiPContentViewController: AVPictureInPictureVideoCallViewC
 
             hero.layer.cornerRadius = 0
             hero.clipsToBounds = true
-            hero.frame = bounds
+            if hero.frame != bounds {
+                hero.frame = bounds
+            }
 
             let margin: CGFloat = max(8, (bounds.width * 0.03).rounded())
             let insetSize = TwitchDualLayout.insetSize(
@@ -150,13 +186,21 @@ final class TwitchDualPiPContentViewController: AVPictureInPictureVideoCallViewC
             inset.layer.cornerRadius = 10
             inset.layer.cornerCurve = .continuous
             inset.clipsToBounds = true
-            inset.frame = insetFrame
+            if inset.frame != insetFrame {
+                inset.frame = insetFrame
+            }
 
-            view.bringSubviewToFront(hero)
-            view.bringSubviewToFront(inset)
-            insetBorderView.frame = insetFrame
+            if insetBorderView.frame != insetFrame {
+                insetBorderView.frame = insetFrame
+            }
             insetBorderView.isHidden = false
-            view.bringSubviewToFront(insetBorderView)
+            let desiredOrder: [UIView] = [hero, inset, insetBorderView]
+            let managedOrder = view.subviews.filter { $0 === hero || $0 === inset || $0 === insetBorderView }
+            if managedOrder != desiredOrder {
+                view.bringSubviewToFront(hero)
+                view.bringSubviewToFront(inset)
+                view.bringSubviewToFront(insetBorderView)
+            }
 
         case .split5050:
             insetBorderView.isHidden = true
@@ -169,12 +213,16 @@ final class TwitchDualPiPContentViewController: AVPictureInPictureVideoCallViewC
             switch TwitchDualLayout.splitAxis(for: bounds.size) {
             case .horizontal:
                 let halfW = (bounds.width - spacing) / 2
-                primaryView.frame = CGRect(x: 0, y: 0, width: halfW, height: bounds.height)
-                secondaryView.frame = CGRect(x: halfW + spacing, y: 0, width: halfW, height: bounds.height)
+                let pFrame = CGRect(x: 0, y: 0, width: halfW, height: bounds.height)
+                let sFrame = CGRect(x: halfW + spacing, y: 0, width: halfW, height: bounds.height)
+                if primaryView.frame != pFrame { primaryView.frame = pFrame }
+                if secondaryView.frame != sFrame { secondaryView.frame = sFrame }
             case .vertical:
                 let halfH = (bounds.height - spacing) / 2
-                primaryView.frame = CGRect(x: 0, y: 0, width: bounds.width, height: halfH)
-                secondaryView.frame = CGRect(x: 0, y: halfH + spacing, width: bounds.width, height: halfH)
+                let pFrame = CGRect(x: 0, y: 0, width: bounds.width, height: halfH)
+                let sFrame = CGRect(x: 0, y: halfH + spacing, width: bounds.width, height: halfH)
+                if primaryView.frame != pFrame { primaryView.frame = pFrame }
+                if secondaryView.frame != sFrame { secondaryView.frame = sFrame }
             }
         }
     }
@@ -184,8 +232,11 @@ final class TwitchDualPiPContentViewController: AVPictureInPictureVideoCallViewC
 @MainActor
 final class TwitchDualPiPController {
     private(set) var isPossible = false
+    private(set) var isStarting = false
     private(set) var isActive = false
     private(set) var isStopping = false
+
+    var isOwningViews: Bool { isActive || isStarting }
 
     var onPossibleChange: ((Bool) -> Void)?
     var onWillStart: (() -> Void)?
@@ -193,6 +244,7 @@ final class TwitchDualPiPController {
     var onDidStop: ((_ restoredUI: Bool) -> Void)?
     var onFailedToStart: ((Error) -> Void)?
     var onRestoreUI: ((@escaping @MainActor (Bool) -> Void) -> Void)?
+    var onViewsAdopted: (() -> Void)?
 
     private var controller: AVPictureInPictureController?
     private let contentController = TwitchDualPiPContentViewController()
@@ -208,6 +260,9 @@ final class TwitchDualPiPController {
 
     init() {
         delegateProxy.owner = self
+        contentController.onViewsAdopted = { [weak self] in
+            self?.onViewsAdopted?()
+        }
     }
 
     deinit {
@@ -215,7 +270,7 @@ final class TwitchDualPiPController {
     }
 
     /// Attaches dual-stream PiP to `sourceView` and configures the live `TwitchNativeVideoView` pair.
-    /// Never swaps controller while PiP is actively running.
+    /// Never swaps controller while PiP is starting or actively running.
     func attach(
         sourceView: UIView,
         primaryView: TwitchNativeVideoView,
@@ -230,8 +285,8 @@ final class TwitchDualPiPController {
             focusedSlot: focusedSlot,
             layoutMode: layoutMode
         )
-        // Guard: never tear down or swap content source while PiP is active.
-        guard !isActive else { return }
+        // Guard: never tear down or swap content source while PiP is starting or active.
+        guard !isActive && !isStarting else { return }
         if attachedSourceView === sourceView, controller != nil { return }
         detach()
 
@@ -290,6 +345,7 @@ final class TwitchDualPiPController {
         contentController.endAdoptingVideoViews()
         controller = nil
         attachedSourceView = nil
+        isStarting = false
         isActive = false
         isStopping = false
         if isPossible {
@@ -302,19 +358,24 @@ final class TwitchDualPiPController {
 
     fileprivate func handleWillStart() {
         restoredUIForCurrentStop = false
+        isStarting = true
         isStopping = false
-        contentController.beginAdoptingVideoViews()
+        // Notify host BEFORE reparenting so in-app slot surfaces immediately stop reclaiming the video views.
         onWillStart?()
+        contentController.beginAdoptingVideoViews()
     }
 
     fileprivate func handleDidStart() {
+        isStarting = false
         isActive = true
         isStopping = false
+        contentController.ensureAdoptedAndLaidOut()
         onDidStart?()
     }
 
     fileprivate func handleFailedToStart(_ error: Error) {
         contentController.endAdoptingVideoViews()
+        isStarting = false
         isActive = false
         isStopping = false
         onFailedToStart?(error)
@@ -327,6 +388,7 @@ final class TwitchDualPiPController {
     fileprivate func handleDidStop() {
         let restored = restoredUIForCurrentStop
         restoredUIForCurrentStop = false
+        isStarting = false
         isActive = false
         isStopping = false
         contentController.endAdoptingVideoViews()
@@ -348,14 +410,22 @@ final class TwitchDualPiPController {
 private final class DualPiPDelegateProxy: NSObject, AVPictureInPictureControllerDelegate, @unchecked Sendable {
     weak var owner: TwitchDualPiPController?
 
+    private func runOnMain(_ work: @escaping @MainActor () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated(work)
+        } else {
+            Task { @MainActor in work() }
+        }
+    }
+
     func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleWillStart()
         }
     }
 
     func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleDidStart()
         }
     }
@@ -364,19 +434,19 @@ private final class DualPiPDelegateProxy: NSObject, AVPictureInPictureController
         _ pictureInPictureController: AVPictureInPictureController,
         failedToStartPictureInPictureWithError error: Error
     ) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleFailedToStart(error)
         }
     }
 
     func pictureInPictureControllerWillStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleWillStop()
         }
     }
 
     func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleDidStop()
         }
     }
@@ -386,7 +456,7 @@ private final class DualPiPDelegateProxy: NSObject, AVPictureInPictureController
         restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
     ) {
         nonisolated(unsafe) let finish = completionHandler
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             guard let owner = self?.owner else {
                 finish(true)
                 return

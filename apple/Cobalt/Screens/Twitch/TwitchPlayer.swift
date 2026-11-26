@@ -257,6 +257,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
     private(set) var isAirPlayProbing = false
     /// True while Picture-in-Picture (single, iOS dual PiP, or macOS floating panel) is active.
     private(set) var isPiPActive = false
+    /// True while Picture-in-Picture is transitioning from `willStart` to `didStart`.
+    private(set) var isPiPStarting = false
+    /// True whenever PiP owns the live `AVSampleBufferDisplayLayer` views (during start transition OR while active).
+    var isPiPOwningViews: Bool { isPiPActive || isPiPStarting || hasPiPClaim }
     /// True when the system reports single-stream PiP can start on the attached display layer.
     private(set) var isPiPPossible = false
     /// True when dual-stream PiP (iOS `AVPictureInPictureVideoCallViewController` or macOS floating panel) can start.
@@ -411,6 +415,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         }
         pipController.onWillStart = { [weak self] in
             guard let self else { return }
+            self.isPiPStarting = true
             self.hasPiPClaim = true
             self.stopTask?.cancel()
             self.stopTask = nil
@@ -424,11 +429,14 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         }
         pipController.onDidStart = { [weak self] in
             guard let self else { return }
+            self.isPiPStarting = false
             self.isPiPActive = true
+            self.notifyNativeViewReparented(for: .primary)
             Breadcrumbs.add("twitch.pip.start")
         }
         pipController.onFailedToStart = { [weak self] _ in
             guard let self else { return }
+            self.isPiPStarting = false
             self.hasPiPClaim = false
             self.isPiPActive = false
             AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
@@ -436,6 +444,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         }
         pipController.onDidStop = { [weak self] restoredUI in
             guard let self else { return }
+            self.isPiPStarting = false
             self.isPiPActive = false
             self.hasPiPClaim = false
             AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
@@ -472,8 +481,14 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         dualPiPController.onPossibleChange = { [weak self] possible in
             self?.isDualPiPPossible = possible
         }
+        dualPiPController.onViewsAdopted = { [weak self] in
+            guard let self else { return }
+            self.notifyNativeViewReparented(for: .primary)
+            self.notifyNativeViewReparented(for: .secondary)
+        }
         dualPiPController.onWillStart = { [weak self] in
             guard let self else { return }
+            self.isPiPStarting = true
             self.hasPiPClaim = true
             self.stopTask?.cancel()
             self.stopTask = nil
@@ -492,11 +507,21 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         }
         dualPiPController.onDidStart = { [weak self] in
             guard let self else { return }
+            self.isPiPStarting = false
             self.isPiPActive = true
+            let primaryEngine = self.nativeEngine
+            let secondaryEngine = self.secondaryNativeEngine
+            Task {
+                await primaryEngine?.setVideoOutputEnabled(true)
+                await secondaryEngine?.setVideoOutputEnabled(true)
+            }
+            self.notifyNativeViewReparented(for: .primary)
+            self.notifyNativeViewReparented(for: .secondary)
             Breadcrumbs.add("twitch.dual.pip.start")
         }
         dualPiPController.onFailedToStart = { [weak self] _ in
             guard let self else { return }
+            self.isPiPStarting = false
             self.hasPiPClaim = false
             self.isPiPActive = false
             AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
@@ -504,6 +529,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         }
         dualPiPController.onDidStop = { [weak self] restoredUI in
             guard let self else { return }
+            self.isPiPStarting = false
             self.isPiPActive = false
             self.hasPiPClaim = false
             AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
@@ -514,6 +540,20 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
                 } else {
                     self.setPaused(true)
                 }
+            }
+            // If a background layout swap replaced `dualPiPSourceView` while PiP was active, re-bind now that PiP stopped.
+            if self.isDualStream, let source = self.dualPiPSourceView, source.window != nil {
+                self.dualPiPController.attach(
+                    sourceView: source,
+                    primaryView: self.nativeView,
+                    secondaryView: self.secondaryNativeView,
+                    focusedSlot: self.dualMixer.focusedSlot,
+                    layoutMode: self.dualStageMode
+                )
+            }
+            if restoredUI || !self.claims.isEmpty {
+                self.notifyNativeViewReparented(for: .primary)
+                self.notifyNativeViewReparented(for: .secondary)
             }
             self.syncPiPAndNowPlaying()
         }
@@ -536,6 +576,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         isDualPiPPossible = true
         dualFloatingPanel.onDidOpen = { [weak self] in
             guard let self else { return }
+            self.isPiPStarting = false
             self.hasPiPClaim = true
             self.isPiPActive = true
             self.stopTask?.cancel()
@@ -547,6 +588,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         }
         dualFloatingPanel.onDidClose = { [weak self] restoredUI in
             guard let self else { return }
+            self.isPiPStarting = false
             self.isPiPActive = false
             self.hasPiPClaim = false
             AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
@@ -604,7 +646,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
     /// Switches between single-stream and dual-stream PiP strictly while PiP is inactive.
     func registerDualPiPSourceView(_ view: UIView?) {
         dualPiPSourceView = view
-        guard isDualStream, let view, !isPiPActive else { return }
+        guard isDualStream, let view, !isPiPOwningViews else { return }
         pipController.setAutoStartFromInline(false)
         dualPiPController.attach(
             sourceView: view,
@@ -1074,7 +1116,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         }
 
         #if os(iOS)
-        if !isPiPActive, let source = dualPiPSourceView {
+        if !isPiPOwningViews, let source = dualPiPSourceView {
             pipController.setAutoStartFromInline(false)
             dualPiPController.attach(
                 sourceView: source,
@@ -1112,7 +1154,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
 
         #if os(iOS)
         // Guard: switch dual -> single PiP controller strictly while PiP is inactive.
-        if !isPiPActive {
+        if !isPiPOwningViews {
             dualPiPController.detach()
             pipController.attach(to: nativeView.displayLayer)
         }
@@ -1398,7 +1440,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         nativeSessionID &+= 1
         let sessionID = nativeSessionID
         let displayLayer = nativeView.displayLayer
-        if !isDualStream && !isPiPActive {
+        if !isDualStream && !isPiPOwningViews {
             pipController.attach(to: displayLayer)
         }
         let rendererBox = TwitchVideoRendererBox(displayLayer.sampleBufferRenderer)
@@ -1661,6 +1703,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
             if pipController.isActive { pipController.stop() }
             #endif
         }
+        isPiPStarting = false
         hasPiPClaim = false
         AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
         backgroundVideoOffTask?.cancel()
@@ -2088,15 +2131,20 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         guard !suspended else { return }
         if keepsAliveInBackground {
             if isDualStream {
-                dualMixer.handleBackgrounded(isPiPActive: isPiPActive || hasPiPClaim)
+                dualMixer.handleBackgrounded(isPiPActive: isPiPOwningViews)
             }
             #if os(iOS)
-            if activeMode == .lowLatency && !isAirPlayingVideo && !TwitchTV.shared.onTV && !isPiPActive && !hasPiPClaim {
+            if isPiPOwningViews {
+                notifyNativeViewReparented(for: .primary)
+                if isDualStream {
+                    notifyNativeViewReparented(for: .secondary)
+                }
+            } else if activeMode == .lowLatency && !isAirPlayingVideo && !TwitchTV.shared.onTV {
                 backgroundVideoOffTask?.cancel()
                 backgroundVideoOffTask = Task { [weak self] in
                     try? await Task.sleep(for: .milliseconds(450))
                     guard let self, !Task.isCancelled, self.isInBackground,
-                          !self.isPiPActive, !self.hasPiPClaim, !TwitchTV.shared.onTV else { return }
+                          !self.isPiPOwningViews, !TwitchTV.shared.onTV else { return }
                     let primary = self.nativeEngine
                     let secondary = self.secondaryNativeEngine
                     await primary?.setVideoOutputEnabled(false)
@@ -2153,7 +2201,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
     /// A memory warning, or the app leaving the screen, lets unwanted views go at once (never touching active PiP or
     /// background audio).
     func purge(_ level: PurgeLevel) {
-        if isDualStream {
+        if isDualStream && level == .memoryWarning {
             applyThermalThrottling(shouldThrottle: true)
         }
         releaseResources()
@@ -2578,7 +2626,7 @@ struct TwitchPlayer: View {
                 mode: host.activeMode,
                 airPlayActive: host.isAirPlayingVideo,
                 airPlayProbing: host.isAirPlayProbing,
-                pipActive: host.isPiPActive
+                pipActive: host.isPiPOwningViews
             )
                 .background(Color.black)
                 .mediaMask()
@@ -3075,8 +3123,8 @@ private struct TwitchPlayerSlot: UIViewRepresentable {
             primary = host.webView
         }
 
-        // Never yank `nativeView` out of Picture-in-Picture while PiP is hosting its `AVSampleBufferDisplayLayer`.
-        let holdNativeForPiP = pipActive && primary === host.nativeView
+        // Never yank `nativeView` out of Picture-in-Picture while PiP is starting or hosting its `AVSampleBufferDisplayLayer`.
+        let holdNativeForPiP = (pipActive || host.isPiPOwningViews) && primary === host.nativeView
 
         for sub in slot.subviews where sub !== primary && sub !== backing {
             sub.removeFromSuperview()
@@ -3139,7 +3187,7 @@ private struct TwitchPlayerSlot: NSViewRepresentable {
         let target: NSView = mode == .lowLatency
             ? host.nativeView
             : host.webView
-        let holdNativeForPiP = pipActive && target === host.nativeView
+        let holdNativeForPiP = (pipActive || host.isPiPOwningViews) && target === host.nativeView
 
         for sub in slot.subviews where sub !== target {
             sub.removeFromSuperview()
@@ -3165,7 +3213,7 @@ private struct TwitchPlayerSlot: NSViewRepresentable {
 
 #if os(iOS)
 /// Embeds a single `TwitchNativeVideoView` (Slot A or Slot B) in `TwitchDualStage` while holding a live claim.
-/// Never yanks the view away while dual PiP owns both `AVSampleBufferDisplayLayer` views.
+/// Never yanks the view away while dual PiP is starting or owns both `AVSampleBufferDisplayLayer` views.
 struct TwitchNativeSlotSurface: UIViewRepresentable {
     let slot: TwitchDualSlot
     let holds: Bool
@@ -3185,7 +3233,7 @@ struct TwitchNativeSlotSurface: UIViewRepresentable {
         for sub in container.subviews where sub !== target {
             sub.removeFromSuperview()
         }
-        guard !pipActive else { return }
+        guard !pipActive, !host.isPiPOwningViews else { return }
         if target.superview !== container {
             target.removeFromSuperview()
             target.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -3254,7 +3302,7 @@ struct TwitchNativeSlotSurface: NSViewRepresentable {
         for sub in container.subviews where sub !== target {
             sub.removeFromSuperview()
         }
-        guard !pipActive else { return }
+        guard !pipActive, !host.isPiPOwningViews else { return }
         if target.superview !== container {
             target.removeFromSuperview()
             target.autoresizingMask = [.width, .height]

@@ -13,6 +13,7 @@ import Foundation
 @MainActor
 final class TwitchPiPController {
     private(set) var isPossible = false
+    private(set) var isStarting = false
     private(set) var isActive = false
     private(set) var isStopping = false
 
@@ -46,6 +47,7 @@ final class TwitchPiPController {
     /// Attaches a PiP controller to `layer` if supported and not already bound to the same layer.
     func attach(to layer: AVSampleBufferDisplayLayer) {
         guard Self.isSupported else { return }
+        guard !isActive && !isStarting else { return }
         if attachedLayer === layer, controller != nil { return }
         detach()
 
@@ -88,6 +90,7 @@ final class TwitchPiPController {
         }
         controller = nil
         attachedLayer = nil
+        isStarting = false
         isActive = false
         isStopping = false
         if isPossible {
@@ -135,17 +138,20 @@ final class TwitchPiPController {
 
     fileprivate func handleWillStart() {
         restoredUIForCurrentStop = false
+        isStarting = true
         isStopping = false
         onWillStart?()
     }
 
     fileprivate func handleDidStart() {
+        isStarting = false
         isActive = true
         isStopping = false
         onDidStart?()
     }
 
     fileprivate func handleFailedToStart(_ error: Error) {
+        isStarting = false
         isActive = false
         isStopping = false
         onFailedToStart?(error)
@@ -158,6 +164,7 @@ final class TwitchPiPController {
     fileprivate func handleDidStop() {
         let restored = restoredUIForCurrentStop
         restoredUIForCurrentStop = false
+        isStarting = false
         isActive = false
         isStopping = false
         onDidStop?(restored)
@@ -190,6 +197,14 @@ private final class PiPDelegateProxy: NSObject,
     private var cachedUserPaused = false
     weak var owner: TwitchPiPController?
 
+    private func runOnMain(_ work: @escaping @MainActor () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated(work)
+        } else {
+            Task { @MainActor in work() }
+        }
+    }
+
     func setUserPaused(_ paused: Bool) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -207,13 +222,13 @@ private final class PiPDelegateProxy: NSObject,
     // MARK: AVPictureInPictureControllerDelegate
 
     func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleWillStart()
         }
     }
 
     func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleDidStart()
         }
     }
@@ -222,19 +237,19 @@ private final class PiPDelegateProxy: NSObject,
         _ pictureInPictureController: AVPictureInPictureController,
         failedToStartPictureInPictureWithError error: Error
     ) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleFailedToStart(error)
         }
     }
 
     func pictureInPictureControllerWillStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleWillStop()
         }
     }
 
     func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleDidStop()
         }
     }
@@ -244,7 +259,7 @@ private final class PiPDelegateProxy: NSObject,
         restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
     ) {
         nonisolated(unsafe) let finish = completionHandler
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             guard let owner = self?.owner else {
                 finish(true)
                 return
@@ -261,7 +276,7 @@ private final class PiPDelegateProxy: NSObject,
         _ pictureInPictureController: AVPictureInPictureController,
         setPlaying playing: Bool
     ) {
-        Task { @MainActor [weak self] in
+        runOnMain { [weak self] in
             self?.owner?.handleSetPlaying(playing)
         }
     }

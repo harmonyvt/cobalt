@@ -319,35 +319,44 @@ struct TwitchStreamPage: View {
             isWideShape: shape == .wide || (!pane.sitsBesideTab && containerSize.width >= TwitchWatchLayout.sideBySideMinWidth),
             size: containerSize
         )
-        switch baseLayout {
-        case .sideBySide:
-            let chatWidth = !pane.sitsBesideTab
-                ? TwitchWatchLayout.singleFocusChatWidth(for: containerSize.width)
-                : TwitchWatchLayout.chatWidth(for: containerSize.width)
-            let condensed = isDualStream || (keyboardOpen && containerSize.height < 360)
-            HStack(spacing: 0) {
-                mediaPanel(condensed: condensed)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                hairline(horizontal: false)
-                chatPanel
-                    .frame(width: chatWidth)
-                    .frame(maxHeight: .infinity)
-            }
-        case .stacked:
-            let maxH = stackedStageMaxHeight
-            let condenseBar = isDualStream || TwitchWatchLayout.compactOverlayStreamBar(
+        let isSideBySide: Bool = {
+            if case .sideBySide = baseLayout { return true }
+            return false
+        }()
+        let chatWidth = !pane.sitsBesideTab
+            ? TwitchWatchLayout.singleFocusChatWidth(for: containerSize.width)
+            : TwitchWatchLayout.chatWidth(for: containerSize.width)
+        let condensed = isSideBySide
+            ? (isDualStream || (keyboardOpen && containerSize.height < 360))
+            : (isDualStream || TwitchWatchLayout.compactOverlayStreamBar(
                 isStacked: true,
                 isTabletop: false,
                 keyboardOpen: keyboardOpen
-            )
+            ))
+        let maxH = isSideBySide ? nil : stackedStageMaxHeight
+        let layout = isSideBySide
+            ? AnyLayout(HStackLayout(spacing: 0))
+            : AnyLayout(VStackLayout(spacing: 0))
+
+        // Keeping a single structural tree under `AnyLayout` preserves `TwitchDualStage`, `TwitchPlayer`,
+        // and `chatPanel` identity across portrait/landscape rotations with zero black flash or chat teardown.
+        layout {
             VStack(spacing: 0) {
-                videoStage(compactControls: condenseBar, maxHeight: maxH)
-                if !condenseBar {
+                videoStage(compactControls: condensed, maxHeight: maxH)
+                if !condensed {
+                    if isSideBySide {
+                        hairline(horizontal: true)
+                    }
                     streamBar
                 }
-                hairline(horizontal: true)
-                chatPanel
             }
+            .frame(maxWidth: .infinity, maxHeight: isSideBySide ? .infinity : nil)
+
+            hairline(horizontal: !isSideBySide)
+
+            chatPanel
+                .frame(width: isSideBySide ? chatWidth : nil)
+                .frame(maxWidth: isSideBySide ? nil : .infinity, maxHeight: .infinity)
         }
     }
 
@@ -852,7 +861,7 @@ private struct TwitchDualBarThumb: View {
     var body: some View {
         ZStack {
             Color.black
-            if host.isPiPActive {
+            if host.isPiPOwningViews {
                 Image(systemName: Symbol.Twitch.pipEnter)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.85))
@@ -860,7 +869,7 @@ private struct TwitchDualBarThumb: View {
                 TwitchNativeSlotSurface(
                     slot: host.dualMixer.focusedSlot,
                     holds: host.holds(holderID),
-                    pipActive: host.isPiPActive
+                    pipActive: host.isPiPOwningViews
                 )
                 .allowsHitTesting(false)
             }

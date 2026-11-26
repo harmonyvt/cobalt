@@ -116,9 +116,9 @@ struct TwitchDualStage: View {
                 .allowsHitTesting(false)
             #endif
 
-            if !holds {
+            if host.holder != nil && !holds {
                 placeholderView(symbol: Symbol.Twitch.tv, title: Copy.Twitch.playingElsewhere, buttonTitle: nil, action: nil)
-            } else if host.isPiPActive {
+            } else if host.isPiPOwningViews {
                 #if os(iOS)
                 placeholderView(
                     symbol: Symbol.Twitch.pipEnter,
@@ -191,18 +191,12 @@ struct TwitchDualStage: View {
     @ViewBuilder
     private var split5050Canvas: some View {
         let axis = TwitchDualLayout.splitAxis(for: stageSize)
-        Group {
-            if axis == .horizontal {
-                HStack(spacing: 2) {
-                    splitTile(for: .primary)
-                    splitTile(for: .secondary)
-                }
-            } else {
-                VStack(spacing: 2) {
-                    splitTile(for: .primary)
-                    splitTile(for: .secondary)
-                }
-            }
+        let layout = axis == .horizontal
+            ? AnyLayout(HStackLayout(spacing: 2))
+            : AnyLayout(VStackLayout(spacing: 2))
+        layout {
+            splitTile(for: .primary)
+            splitTile(for: .secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -237,7 +231,7 @@ struct TwitchDualStage: View {
 
         return ZStack {
             Color.black
-            TwitchNativeSlotSurface(slot: slot, holds: holds, pipActive: host.isPiPActive)
+            TwitchNativeSlotSurface(slot: slot, holds: holds, pipActive: host.isPiPOwningViews)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
 
