@@ -843,14 +843,14 @@ struct TwitchPlayer: View {
                     .allowsHitTesting(false)
 
                     VStack(spacing: 0) {
-                        MediaGlassGroup(spacing: 8) {
-                            HStack(alignment: .top, spacing: 8) {
+                        MediaGlassGroup(spacing: 6) {
+                            HStack(spacing: 6) {
                                 TwitchModeMenu(host: host)
-                                Spacer(minLength: 8)
                                 TwitchDelayBadge(host: host)
                             }
                         }
-                        .padding(8)
+                        .padding(.top, 8)
+                        .padding(.horizontal, 60)
 
                         Spacer(minLength: 0)
 
@@ -1130,18 +1130,27 @@ struct TwitchDelayBadge: View {
 /// Where the shared player view (native display layer or web view) sits while this view holds it. Holding is decided by
 /// `TwitchPlayer` (appear and disappear); the slot only moves the active view in and removes the inactive one.
 #if os(iOS)
+private final class TwitchPlayerSlotView: UIView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        for sub in subviews where sub.frame != bounds {
+            sub.frame = bounds
+        }
+    }
+}
+
 private struct TwitchPlayerSlot: UIViewRepresentable {
     let holds: Bool
     let mode: TwitchPlayerMode
 
-    func makeUIView(context: Context) -> UIView {
-        let slot = UIView()
+    func makeUIView(context: Context) -> TwitchPlayerSlotView {
+        let slot = TwitchPlayerSlotView()
         slot.backgroundColor = .black
         slot.clipsToBounds = true
         return slot
     }
 
-    func updateUIView(_ slot: UIView, context: Context) {
+    func updateUIView(_ slot: TwitchPlayerSlotView, context: Context) {
         // only a holder asks for the active view, so a slot left on screen never rebuilds one that was let go
         guard holds else { return }
         let target: UIView = mode == .lowLatency
@@ -1150,26 +1159,38 @@ private struct TwitchPlayerSlot: UIViewRepresentable {
         for sub in slot.subviews where sub !== target {
             sub.removeFromSuperview()
         }
-        guard target.superview !== slot else { return }
-        target.removeFromSuperview()
-        target.frame = slot.bounds
-        target.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        slot.addSubview(target)
+        if target.superview !== slot {
+            target.removeFromSuperview()
+            target.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            slot.addSubview(target)
+        }
+        if target.frame != slot.bounds {
+            target.frame = slot.bounds
+        }
     }
 }
 #else
+private final class TwitchPlayerSlotView: NSView {
+    override func layout() {
+        super.layout()
+        for sub in subviews where sub.frame != bounds {
+            sub.frame = bounds
+        }
+    }
+}
+
 private struct TwitchPlayerSlot: NSViewRepresentable {
     let holds: Bool
     let mode: TwitchPlayerMode
 
-    func makeNSView(context: Context) -> NSView {
-        let slot = NSView()
+    func makeNSView(context: Context) -> TwitchPlayerSlotView {
+        let slot = TwitchPlayerSlotView()
         slot.wantsLayer = true
         slot.layer?.backgroundColor = NSColor.black.cgColor
         return slot
     }
 
-    func updateNSView(_ slot: NSView, context: Context) {
+    func updateNSView(_ slot: TwitchPlayerSlotView, context: Context) {
         // only a holder asks for the active view, so a slot left on screen never rebuilds one that was let go
         guard holds else { return }
         let target: NSView = mode == .lowLatency
@@ -1178,11 +1199,14 @@ private struct TwitchPlayerSlot: NSViewRepresentable {
         for sub in slot.subviews where sub !== target {
             sub.removeFromSuperview()
         }
-        guard target.superview !== slot else { return }
-        target.removeFromSuperview()
-        target.frame = slot.bounds
-        target.autoresizingMask = [.width, .height]
-        slot.addSubview(target)
+        if target.superview !== slot {
+            target.removeFromSuperview()
+            target.autoresizingMask = [.width, .height]
+            slot.addSubview(target)
+        }
+        if target.frame != slot.bounds {
+            target.frame = slot.bounds
+        }
     }
 }
 #endif

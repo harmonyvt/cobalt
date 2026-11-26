@@ -96,9 +96,27 @@ public struct MPEGTSDemuxer: Sendable {
     public private(set) var highestContinuousPTS: Int64 = 0
 
     private var buffer = Data()
-    private var videoPES = Data()
+    private var videoPESHeaderBuf = Data()
+    private var parsingVideoPESHeader = false
+    private var hasActiveVideoPES = false
+
+    // Continuous H.264 Annex-B elementary stream buffer and Access Unit assembler.
+    // Twitch's MPEG-TS muxer does not align PES boundaries to H.264 Access Unit boundaries:
+    // the tail of frame N routinely arrives at the start of PES packet N+1 before frame N+1's AUD.
+    private var videoES = Data()
+    private var videoESBaseOffset: Int64 = 0
+    private var videoESWriteOffset: Int64 = 0
+    private var videoStartCodeScanPos = 0
+    private var currentNALUStart: Int?
+    private var pendingVideoTimestamps: [(esOffset: Int64, pts90k: Int64, dts90k: Int64)] = []
+
+    private var currentAUAVCC = Data()
+    private var currentAUIsKeyframe = false
+    private var currentAUHasVCL = false
+    private var currentAUPTS: Int64?
+    private var currentAUDTS: Int64?
+
     private var audioPES = Data()
-    private var hasVideoPES = false
     private var hasAudioPES = false
 
     // Shared 90 kHz timeline state (keeps video and audio locked across wraps and discontinuities).
@@ -181,11 +199,13 @@ public struct MPEGTSDemuxer: Sendable {
     /// Flushes any remaining in-progress video and audio PES packets at the end of a segment.
     public mutating func flushSegment() -> [DemuxedSample] {
         var out: [DemuxedSample] = []
-        if hasVideoPES, !videoPES.isEmpty {
-            emitVideoPES(videoPES, into: &out)
+        if parsingVideoPESHeader {
+            tryFinishVideoPESHeader(into: &out)
         }
-        videoPES.removeAll(keepingCapacity: true)
-        hasVideoPES = false
+        drainVideoES(flushAll: true, into: &out)
+        videoPESHeaderBuf.removeAll(keepingCapacity: true)
+        parsingVideoPESHeader = false
+        hasActiveVideoPES = false
 
         if hasAudioPES, !audioPES.isEmpty {
             emitAudioPES(audioPES, into: &out)
@@ -226,14 +246,16 @@ public struct MPEGTSDemuxer: Sendable {
         }
         if let videoPID, pid == videoPID {
             if pusi {
-                if hasVideoPES, !videoPES.isEmpty {
-                    emitVideoPES(videoPES, into: &out)
-                }
-                videoPES.removeAll(keepingCapacity: true)
-                hasVideoPES = true
-            }
-            if hasVideoPES {
-                videoPES.append(payloadPtr, count: payloadLen)
+                videoPESHeaderBuf.removeAll(keepingCapacity: true)
+                videoPESHeaderBuf.append(payloadPtr, count: payloadLen)
+                parsingVideoPESHeader = true
+                hasActiveVideoPES = false
+                tryFinishVideoPESHeader(into: &out)
+            } else if parsingVideoPESHeader {
+                videoPESHeaderBuf.append(payloadPtr, count: payloadLen)
+                tryFinishVideoPESHeader(into: &out)
+            } else if hasActiveVideoPES {
+                appendVideoESBytes(payloadPtr, count: payloadLen, into: &out)
             }
             return
         }
@@ -413,41 +435,197 @@ public struct MPEGTSDemuxer: Sendable {
         return (cPTS, cDTS)
     }
 
-    // MARK: - H.264 Annex-B -> AVCC
+    // MARK: - H.264 Annex-B -> AVCC (continuous Access Unit assembly across PES boundaries)
 
-    private mutating func emitVideoPES(_ pes: Data, into out: inout [DemuxedSample]) {
-        guard let header = parsePESHeader(pes), header.payloadOffset < pes.count else { return }
-        let es = pes.subdata(in: header.payloadOffset..<pes.count)
+    private mutating func tryFinishVideoPESHeader(into out: inout [DemuxedSample]) {
+        let count = videoPESHeaderBuf.count
+        guard count >= 9 else { return }
 
-        var avcc = Data()
-        avcc.reserveCapacity(es.count + 16)
-        var isKeyframe = false
+        var prefixOK = false
+        var ptsDtsFlags: UInt8 = 0
+        var payloadOffset = 0
+        videoPESHeaderBuf.withUnsafeBytes { raw in
+            guard let b = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            prefixOK = (b[0] == 0x00 && b[1] == 0x00 && b[2] == 0x01)
+            ptsDtsFlags = (b[7] >> 6) & 0x03
+            payloadOffset = 9 + Int(b[8])
+        }
 
-        Self.forEachAnnexBNALU(in: es) { naluBytes in
-            guard !naluBytes.isEmpty else { return }
-            let nalType = naluBytes[0] & 0x1F
-            switch nalType {
-            case 7: // SPS
-                latestSPS = Data(naluBytes)
-            case 8: // PPS
-                latestPPS = Data(naluBytes)
-            case 5: // IDR slice
-                isKeyframe = true
-                Self.appendAVCCNALU(naluBytes, to: &avcc)
-            case 1, 2, 3, 4: // Non-IDR VCL slices
-                Self.appendAVCCNALU(naluBytes, to: &avcc)
-            default:
-                // Skip AUD (9), SEI (6), filler (12), etc.
-                break
+        guard prefixOK else {
+            parsingVideoPESHeader = false
+            hasActiveVideoPES = false
+            videoPESHeaderBuf.removeAll(keepingCapacity: true)
+            return
+        }
+        guard count >= payloadOffset else { return }
+
+        if ptsDtsFlags == 0x02 || ptsDtsFlags == 0x03 {
+            if let header = parsePESHeader(videoPESHeaderBuf) {
+                pendingVideoTimestamps.append((
+                    esOffset: videoESWriteOffset,
+                    pts90k: header.pts90k,
+                    dts90k: header.dts90k
+                ))
             }
         }
 
-        guard !avcc.isEmpty else { return }
+        var headerBuf = Data()
+        swap(&headerBuf, &videoPESHeaderBuf)
+        parsingVideoPESHeader = false
+        hasActiveVideoPES = true
+
+        if payloadOffset < count {
+            headerBuf.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+                appendVideoESBytes(base + payloadOffset, count: count - payloadOffset, into: &out)
+            }
+        }
+    }
+
+    private mutating func appendVideoESBytes(
+        _ ptr: UnsafePointer<UInt8>, count: Int, into out: inout [DemuxedSample]
+    ) {
+        guard count > 0 else { return }
+        videoES.append(ptr, count: count)
+        videoESWriteOffset += Int64(count)
+        drainVideoES(flushAll: false, into: &out)
+    }
+
+    private mutating func drainVideoES(flushAll: Bool, into out: inout [DemuxedSample]) {
+        var es = Data()
+        swap(&es, &videoES)
+        let total = es.count
+        var i = videoStartCodeScanPos
+
+        es.withUnsafeBytes { raw in
+            guard let ptr = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            let limit = flushAll ? (total - 2) : (total - 3)
+            while i < limit {
+                if ptr[i] == 0x00 && ptr[i + 1] == 0x00 {
+                    if ptr[i + 2] == 0x01 {
+                        if let start = currentNALUStart {
+                            let globalOff = videoESBaseOffset + Int64(start)
+                            processVideoNALU(ptr: ptr, start: start, rawEnd: i, globalOffset: globalOff, into: &out)
+                        }
+                        i += 3
+                        currentNALUStart = i
+                        continue
+                    } else if i + 3 < total && ptr[i + 2] == 0x00 && ptr[i + 3] == 0x01 {
+                        if let start = currentNALUStart {
+                            let globalOff = videoESBaseOffset + Int64(start)
+                            processVideoNALU(ptr: ptr, start: start, rawEnd: i, globalOffset: globalOff, into: &out)
+                        }
+                        i += 4
+                        currentNALUStart = i
+                        continue
+                    }
+                }
+                i += 1
+            }
+
+            if flushAll, let start = currentNALUStart, start < total {
+                let globalOff = videoESBaseOffset + Int64(start)
+                processVideoNALU(ptr: ptr, start: start, rawEnd: total, globalOffset: globalOff, into: &out)
+            }
+        }
+
+        if flushAll {
+            emitCurrentVideoAU(into: &out)
+            es.removeAll(keepingCapacity: true)
+            videoESBaseOffset = videoESWriteOffset
+            videoStartCodeScanPos = 0
+            currentNALUStart = nil
+            pendingVideoTimestamps.removeAll(keepingCapacity: true)
+        } else if let start = currentNALUStart {
+            if start > 0 {
+                es.removeSubrange(0..<start)
+                videoESBaseOffset += Int64(start)
+                videoStartCodeScanPos = max(0, i - start)
+                currentNALUStart = 0
+            } else {
+                videoStartCodeScanPos = max(0, i)
+            }
+        } else if i > 0 {
+            let drop = min(i, es.count)
+            es.removeSubrange(0..<drop)
+            videoESBaseOffset += Int64(drop)
+            videoStartCodeScanPos = 0
+        }
+
+        swap(&es, &videoES)
+    }
+
+    private mutating func processVideoNALU(
+        ptr: UnsafePointer<UInt8>, start: Int, rawEnd: Int, globalOffset: Int64, into out: inout [DemuxedSample]
+    ) {
+        var end = rawEnd
+        while end > start && ptr[end - 1] == 0x00 { end -= 1 }
+        guard end > start else { return }
+
+        let nalType = ptr[start] & 0x1F
+        let hasNewPESTimestamp = pendingVideoTimestamps.first.map { $0.esOffset <= globalOffset } ?? false
+
+        if currentAUHasVCL {
+            let startsNewAU: Bool
+            switch nalType {
+            case 9, 7, 8, 6: // AUD, SPS, PPS, SEI after VCL always starts a new Access Unit
+                startsNewAU = true
+            case 1, 2, 3, 4, 5: // VCL slice: first_mb_in_slice == 0 (MSB of byte 1 is 1) or new PES timestamp
+                let isFirstMacroblock = (end - start >= 2) && ((ptr[start + 1] & 0x80) != 0)
+                startsNewAU = isFirstMacroblock || hasNewPESTimestamp
+            default:
+                startsNewAU = false
+            }
+            if startsNewAU {
+                emitCurrentVideoAU(into: &out)
+            }
+        }
+
+        if currentAUPTS == nil {
+            var matched: (esOffset: Int64, pts90k: Int64, dts90k: Int64)?
+            while let first = pendingVideoTimestamps.first, first.esOffset <= globalOffset {
+                matched = pendingVideoTimestamps.removeFirst()
+            }
+            if let matched {
+                currentAUPTS = matched.pts90k
+                currentAUDTS = matched.dts90k
+            }
+        }
+
+        let nalu = UnsafeBufferPointer(start: ptr + start, count: end - start)
+        switch nalType {
+        case 7: // SPS
+            latestSPS = Data(nalu)
+        case 8: // PPS
+            latestPPS = Data(nalu)
+        case 5: // IDR slice
+            currentAUIsKeyframe = true
+            currentAUHasVCL = true
+            Self.appendAVCCNALU(nalu, to: &currentAUAVCC)
+        case 1, 2, 3, 4: // Non-IDR VCL slices
+            currentAUHasVCL = true
+            Self.appendAVCCNALU(nalu, to: &currentAUAVCC)
+        default:
+            // AUD (9), SEI (6), filler (12), etc.: handled above for AU boundary / PTS tracking.
+            break
+        }
+    }
+
+    private mutating func emitCurrentVideoAU(into out: inout [DemuxedSample]) {
+        defer {
+            currentAUAVCC.removeAll(keepingCapacity: true)
+            currentAUIsKeyframe = false
+            currentAUHasVCL = false
+            currentAUPTS = nil
+            currentAUDTS = nil
+        }
+        guard currentAUHasVCL, !currentAUAVCC.isEmpty, let pts = currentAUPTS else { return }
+        let dts = currentAUDTS ?? pts
         out.append(.video(DemuxedVideoFrame(
-            avccData: avcc,
-            pts90k: header.pts90k,
-            dts90k: header.dts90k,
-            isKeyframe: isKeyframe,
+            avccData: currentAUAVCC,
+            pts90k: pts,
+            dts90k: dts,
+            isKeyframe: currentAUIsKeyframe,
             sps: latestSPS,
             pps: latestPPS
         )))
