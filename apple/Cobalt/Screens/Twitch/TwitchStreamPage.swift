@@ -259,6 +259,12 @@ struct TwitchStreamPage: View {
                     choosingTV = true
                 }
                 #endif
+                Button(
+                    host.activeMode == .lowLatency ? Copy.Twitch.playerEmbed : Copy.Twitch.playerLowLatency,
+                    systemImage: host.activeMode == .lowLatency ? Symbol.Twitch.embed : Symbol.Twitch.lowLatency
+                ) {
+                    host.setMode(host.activeMode == .lowLatency ? .embed : .lowLatency)
+                }
                 Button(Copy.Twitch.jumpToLive, systemImage: Symbol.Twitch.jumpToLive) {
                     host.jumpToLive()
                 }
@@ -718,6 +724,12 @@ struct TwitchStreamPage: View {
         } else {
             out.append(PaneAction(Copy.Twitch.addSecondStream, systemImage: Symbol.Twitch.addStream) {
                 pickingSecondStream = true
+            })
+            out.append(PaneAction(
+                host.activeMode == .lowLatency ? Copy.Twitch.playerEmbed : Copy.Twitch.playerLowLatency,
+                systemImage: host.activeMode == .lowLatency ? Symbol.Twitch.embed : Symbol.Twitch.lowLatency
+            ) {
+                host.setMode(host.activeMode == .lowLatency ? .embed : .lowLatency)
             })
             if let url = URL(string: "https://www.twitch.tv/\(login)") {
                 out.append(PaneAction(Copy.Twitch.openOnTwitch, systemImage: Symbol.Twitch.open) { openURL(url) })

@@ -385,6 +385,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
     /// The embed said it is ready since the page last loaded.
     @ObservationIgnored private var embedReady = false
     @ObservationIgnored private var readyCheck: Task<Void, Never>?
+    /// Cached Twitch `auth-token` cookie so channel switches start instantly without waiting on WebKit XPC.
+    @ObservationIgnored private var cachedAuthToken: String?
+    @ObservationIgnored private var hasCachedAuthToken = false
 
     private init() {
         let savedMode = UserDefaults.standard.string(forKey: Self.modeKey)
@@ -959,7 +962,15 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
             resumeSecondaryChannel = nil
             return
         }
-        guard c != self.channel else { return }
+        if c == self.channel {
+            // Self-heal if this channel was re-claimed after a layout swap or teardown left no active native session.
+            if activeMode == .lowLatency, !isAirPlayingVideo, !userPaused, !isOffline,
+               (nativeEngine == nil || nativeEventTask == nil) {
+                reset()
+                startNative(c)
+            }
+            return
+        }
         // Switching to a fresh channel resets any per-channel fallback so the owner's preferred mode runs again.
         if fellBackToEmbed {
             fellBackToEmbed = false
@@ -973,6 +984,17 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
         resolvedMasterURL = nil
         reset()
         startActive(c)
+    }
+
+    /// Called when `TwitchPlayerSlot` or `TwitchNativeSlotSurface` reparents a live `TwitchNativeVideoView`
+    /// across containers (e.g. fold/unfold `layout.swap`, `span`, or `pane.bar -> pane.screen`).
+    func notifyNativeViewReparented(for slot: TwitchDualSlot = .primary) {
+        guard activeMode == .lowLatency, !isAirPlayingVideo else { return }
+        let engine = slot == .primary ? nativeEngine : secondaryNativeEngine
+        guard let engine else { return }
+        Task {
+            await engine.recoverVideoRenderer()
+        }
     }
 
     /// Starts or promotes into dual-stream mode (`primary` in Slot A + `secondary` in Slot B).
@@ -1551,9 +1573,48 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
     }
 
     /// Reads Twitch's `auth-token` cookie from WebKit's persistent store without instantiating a `WKWebView`.
-    private func twitchAuthToken() async -> String? {
-        let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
-        return cookies.first(where: { $0.name == "auth-token" && $0.domain.contains("twitch.tv") })?.value
+    /// Uses an in-memory cache for instant channel switches and bounds the WebKit XPC lookup so a stalled
+    /// `WKHTTPCookieStore` can never freeze native startup before `TwitchNativeEngine` starts its watchdog.
+    private func twitchAuthToken(timeout: Duration = .milliseconds(1200)) async -> String? {
+        if hasCachedAuthToken {
+            let cached = cachedAuthToken
+            refreshCachedAuthToken()
+            return cached
+        }
+        return await withCheckedContinuation { continuation in
+            final class ResumeGate: @unchecked Sendable {
+                var resumed = false
+            }
+            let gate = ResumeGate()
+            let timer = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled, !gate.resumed else { return }
+                gate.resumed = true
+                Breadcrumbs.add("twitch.auth_cookie.timeout")
+                continuation.resume(returning: self?.cachedAuthToken)
+            }
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { [weak self] cookies in
+                let token = cookies.first(where: { $0.name == "auth-token" && $0.domain.contains("twitch.tv") })?.value
+                Task { @MainActor in
+                    self?.cachedAuthToken = token
+                    self?.hasCachedAuthToken = true
+                    timer.cancel()
+                    guard !gate.resumed else { return }
+                    gate.resumed = true
+                    continuation.resume(returning: token)
+                }
+            }
+        }
+    }
+
+    private func refreshCachedAuthToken() {
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { [weak self] cookies in
+            let token = cookies.first(where: { $0.name == "auth-token" && $0.domain.contains("twitch.tv") })?.value
+            Task { @MainActor in
+                self?.cachedAuthToken = token
+                self?.hasCachedAuthToken = true
+            }
+        }
     }
 
     private func startEmbed(_ channel: String) {
@@ -2175,6 +2236,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
     func dismissPopup() {
         guard popup != nil else { return }
         popup = nil
+        hasCachedAuthToken = false
         reload()
     }
 
@@ -2484,19 +2546,29 @@ private struct TwitchPopupWeb: NSViewRepresentable {
 #endif
 
 /// The player for one channel. It adopts the app's one player, so the same channel keeps playing through layout changes and
-/// a new channel switches in place. `showsDelay` adds the top-bar pills (mode toggle + delay badge) and native HUD controls.
+/// a new channel switches in place. `showsDelay` adds the auto-hiding HUD (mode toggle, delay badge, and native controls).
 struct TwitchPlayer: View {
     let channel: String
     var showsDelay = true
 
     @Environment(Pane.self) private var pane: Pane?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var id = UUID()
     @State private var showsNativeControls = false
+    @State private var isHovering = false
+    @State private var showsTransientEmbedPill = false
     @State private var hideControlsTask: Task<Void, Never>?
+    @State private var hideEmbedPillTask: Task<Void, Never>?
     private var host: TwitchPlayerHost { .shared }
 
     private var isHolder: Bool { host.holder == id }
     private var isNative: Bool { host.activeMode == .lowLatency }
+    private var showsNativeHUD: Bool {
+        isNative && (showsNativeControls || isHovering || (!host.isPlaying && !host.isLoading && !host.isOffline))
+    }
+    private var showsTopPills: Bool {
+        showsNativeHUD || (!isNative && (showsTransientEmbedPill || isHovering))
+    }
 
     // Session replay (APP-API-CONTRACT 58): media is always masked.
     var body: some View {
@@ -2531,27 +2603,45 @@ struct TwitchPlayer: View {
             if showsDelay, isHolder {
                 ZStack {
                     VStack(spacing: 0) {
-                        MediaEdgeVignette(edge: .top, height: 64, intensity: 0.34)
+                        if showsTopPills {
+                            MediaEdgeVignette(edge: .top, height: 64, intensity: 0.34)
+                                .transition(.opacity)
+                        }
                         Spacer(minLength: 0)
-                        if isNative, (showsNativeControls || (!host.isPlaying && !host.isLoading && !host.isOffline)) {
+                        if showsNativeHUD {
                             MediaEdgeVignette(edge: .bottom, height: 80, intensity: 0.42)
+                                .transition(.opacity)
                         }
                     }
                     .allowsHitTesting(false)
 
                     VStack(spacing: 0) {
-                        MediaGlassGroup(spacing: 6) {
-                            HStack(spacing: 6) {
-                                TwitchModeMenu(host: host)
-                                TwitchDelayBadge(host: host)
+                        if showsTopPills {
+                            MediaGlassGroup(spacing: 6) {
+                                HStack(spacing: 6) {
+                                    Spacer(minLength: 0)
+                                    TwitchModeMenu(host: host) {
+                                        if isNative {
+                                            scheduleHideControls()
+                                        } else {
+                                            flashEmbedPill()
+                                        }
+                                    }
+                                    TwitchDelayBadge(host: host) {
+                                        if isNative {
+                                            scheduleHideControls()
+                                        }
+                                    }
+                                }
                             }
+                            .padding(.top, 4)
+                            .padding(.horizontal, 10)
+                            .transition(.opacity)
                         }
-                        .padding(.top, 8)
-                        .padding(.horizontal, 60)
 
                         Spacer(minLength: 0)
 
-                        if isNative, (showsNativeControls || (!host.isPlaying && !host.isLoading && !host.isOffline)) {
+                        if showsNativeHUD {
                             TwitchNativeControlBar(host: host) {
                                 scheduleHideControls()
                             }
@@ -2562,7 +2652,15 @@ struct TwitchPlayer: View {
                 }
             }
         }
-        .animation(.easeOut(duration: 0.18), value: showsNativeControls)
+        .onHover { hovering in
+            guard showsDelay else { return }
+            isHovering = hovering
+            if !hovering && showsNativeControls && host.isPlaying {
+                scheduleHideControls()
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: showsTopPills)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: showsNativeHUD)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(channel)'s stream")
         // only the view holding the player shows its sign-in sheet
@@ -2581,10 +2679,35 @@ struct TwitchPlayer: View {
         .onDisappear {
             hideControlsTask?.cancel()
             hideControlsTask = nil
+            hideEmbedPillTask?.cancel()
+            hideEmbedPillTask = nil
+            isHovering = false
             host.release(id)
         }
         .onChange(of: channel) { _, new in
             if isHolder { host.play(new) }
+        }
+        .onChange(of: host.isPlaying) { _, playing in
+            if playing && showsNativeControls {
+                scheduleHideControls()
+            }
+        }
+        .onChange(of: host.activeMode) { _, mode in
+            if mode == .embed {
+                showsNativeControls = false
+                hideControlsTask?.cancel()
+                hideControlsTask = nil
+                flashEmbedPill()
+            } else {
+                showsTransientEmbedPill = false
+                hideEmbedPillTask?.cancel()
+                hideEmbedPillTask = nil
+            }
+        }
+        .onChange(of: host.fellBackToEmbed) { _, fellBack in
+            if fellBack {
+                flashEmbedPill()
+            }
         }
     }
 
@@ -2653,17 +2776,31 @@ struct TwitchPlayer: View {
         hideControlsTask = Task {
             try? await Task.sleep(for: .seconds(3.5))
             guard !Task.isCancelled else { return }
-            if host.isPlaying {
+            if host.isPlaying && !isHovering {
                 showsNativeControls = false
+            }
+        }
+    }
+
+    private func flashEmbedPill() {
+        guard showsDelay else { return }
+        showsTransientEmbedPill = true
+        hideEmbedPillTask?.cancel()
+        hideEmbedPillTask = Task {
+            try? await Task.sleep(for: .seconds(3.5))
+            guard !Task.isCancelled else { return }
+            if !isHovering {
+                showsTransientEmbedPill = false
             }
         }
     }
 }
 
-/// Compact capsule in the top-leading corner of the player: switches between low-latency native playback and Twitch's embed,
-/// and exposes native quality + mute controls.
+/// Compact Clear Liquid Glass capsule in the auto-hiding player HUD: switches between low-latency native playback and
+/// Twitch's embed, and exposes native quality + mute controls.
 struct TwitchModeMenu: View {
     let host: TwitchPlayerHost
+    var onInteract: (() -> Void)? = nil
 
     private var pillIcon: String {
         host.activeMode == .lowLatency ? Symbol.Twitch.lowLatency : Symbol.Twitch.embed
@@ -2681,6 +2818,7 @@ struct TwitchModeMenu: View {
             Section(Copy.Twitch.playerMode) {
                 Button {
                     host.setMode(.lowLatency)
+                    onInteract?()
                 } label: {
                     if host.activeMode == .lowLatency {
                         Label(Copy.Twitch.playerLowLatency, systemImage: "checkmark")
@@ -2690,6 +2828,7 @@ struct TwitchModeMenu: View {
                 }
                 Button {
                     host.setMode(.embed)
+                    onInteract?()
                 } label: {
                     if host.activeMode == .embed {
                         Label(Copy.Twitch.playerEmbed, systemImage: "checkmark")
@@ -2704,6 +2843,7 @@ struct TwitchModeMenu: View {
                     ForEach(host.variants) { variant in
                         Button {
                             host.selectVariant(variant.id)
+                            onInteract?()
                         } label: {
                             if variant.id == host.selectedVariantID {
                                 Label(variant.shortLabel, systemImage: "checkmark")
@@ -2721,6 +2861,7 @@ struct TwitchModeMenu: View {
                 Divider()
                 Button {
                     host.toggleMute()
+                    onInteract?()
                 } label: {
                     Label(
                         host.isMuted ? Copy.Twitch.unmute : Copy.Twitch.mute,
@@ -2739,6 +2880,8 @@ struct TwitchModeMenu: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .mediaGlassCapsule()
+            .frame(minHeight: Metrics.hit)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Copy.Twitch.playerMode)
@@ -2833,6 +2976,8 @@ private struct TwitchNativeControlBar: View {
                             .padding(.horizontal, 10)
                             .frame(minHeight: 32)
                             .mediaGlassCapsule()
+                            .frame(minHeight: Metrics.hit)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(Copy.Twitch.quality)
@@ -2849,11 +2994,13 @@ private struct TwitchNativeControlBar: View {
 /// "2.1 s" while near live; "4.8 s behind · jump to live" when the stream drifted. Tap to jump.
 struct TwitchDelayBadge: View {
     let host: TwitchPlayerHost
+    var onInteract: (() -> Void)? = nil
 
     var body: some View {
         if let delay = host.delay {
             Button {
                 host.jumpToLive()
+                onInteract?()
             } label: {
                 HStack(spacing: 5) {
                     Circle()
@@ -2871,6 +3018,8 @@ struct TwitchDelayBadge: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .mediaGlassCapsule()
+                .frame(minHeight: Metrics.hit)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(host.isBehind ? Copy.Twitch.behind(delay) : Copy.Twitch.delay(delay))
@@ -2947,6 +3096,9 @@ private struct TwitchPlayerSlot: UIViewRepresentable {
                 primary.removeFromSuperview()
                 primary.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 slot.addSubview(primary)
+                if primary === host.nativeView {
+                    host.notifyNativeViewReparented(for: .primary)
+                }
             } else if backing != nil {
                 slot.bringSubviewToFront(primary)
             }
@@ -2997,6 +3149,9 @@ private struct TwitchPlayerSlot: NSViewRepresentable {
                 target.removeFromSuperview()
                 target.autoresizingMask = [.width, .height]
                 slot.addSubview(target)
+                if target === host.nativeView {
+                    host.notifyNativeViewReparented(for: .primary)
+                }
             }
             if target.frame != slot.bounds {
                 target.frame = slot.bounds
@@ -3025,7 +3180,8 @@ struct TwitchNativeSlotSurface: UIViewRepresentable {
 
     func updateUIView(_ container: UIView, context: Context) {
         guard holds else { return }
-        let target = TwitchPlayerHost.shared.nativeView(for: slot)
+        let host = TwitchPlayerHost.shared
+        let target = host.nativeView(for: slot)
         for sub in container.subviews where sub !== target {
             sub.removeFromSuperview()
         }
@@ -3034,6 +3190,7 @@ struct TwitchNativeSlotSurface: UIViewRepresentable {
             target.removeFromSuperview()
             target.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             container.addSubview(target)
+            host.notifyNativeViewReparented(for: slot)
         }
         if target.frame != container.bounds {
             target.frame = container.bounds
@@ -3092,7 +3249,8 @@ struct TwitchNativeSlotSurface: NSViewRepresentable {
 
     func updateNSView(_ container: NSView, context: Context) {
         guard holds else { return }
-        let target = TwitchPlayerHost.shared.nativeView(for: slot)
+        let host = TwitchPlayerHost.shared
+        let target = host.nativeView(for: slot)
         for sub in container.subviews where sub !== target {
             sub.removeFromSuperview()
         }
@@ -3101,6 +3259,7 @@ struct TwitchNativeSlotSurface: NSViewRepresentable {
             target.removeFromSuperview()
             target.autoresizingMask = [.width, .height]
             container.addSubview(target)
+            host.notifyNativeViewReparented(for: slot)
         }
         if target.frame != container.bounds {
             target.frame = container.bounds
