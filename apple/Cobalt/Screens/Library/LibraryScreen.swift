@@ -126,6 +126,8 @@ private struct LibraryContent: View {
     /// The last rows a search showed, kept on screen (dimmed) while the next words are still being searched, so each
     /// keystroke does not flash the tiles away to grey and back.
     @State private var heldRows: [LibraryRow] = []
+    /// Memoizes `ShareSetIndex` across body passes so scrolling/selecting never rebuilds the index dictionary.
+    @State private var shareIndexCache = ShareSetIndexCache()
     #if DEBUG
     @Environment(\.libraryDebugRows) private var debugRows
     @Environment(\.hiddenPreviewUnlocked) private var previewUnlocked
@@ -281,7 +283,21 @@ private struct LibraryContent: View {
             .toolbar { toolbar }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    filterRow(unfiltered: unfiltered, shareIndex: shareIndex)
+                    if controller.selecting {
+                        LibrarySelectTopBar(
+                            controller: controller,
+                            rows: rows,
+                            toggle: toggleSelecting
+                        )
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    } else {
+                        filterRow(
+                            unfiltered: unfiltered,
+                            shareIndex: shareIndex,
+                            hasRows: !rows.isEmpty,
+                            canSelect: rows.contains(where: \.shareable)
+                        )
+                    }
                     if controller.albumOpen {
                         HiddenAlbumNote(count: library.hiddenCount)
                     }
@@ -297,36 +313,37 @@ private struct LibraryContent: View {
                 }
                 // one hairline along the bar's bottom edge says "working": the whole library paging in (with its
                 // progress), or the server still searching. The status line above it keeps only the answer.
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(CobaltColor.hairline).frame(height: 0.5).allowsHitTesting(false)
+                }
                 .overlay(alignment: .bottom) { activityBar }
                 .motion(Motion.rows, value: library.searchState)
                 .motion(Motion.fade, value: library.loadingAll == nil)
             }
-            // select, by the thumb: the `select` pill, which grows into the panel with the picks and their actions
+            // bottom Liquid Glass selection sheet: picked items + thumb-reachable action grid
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !rows.isEmpty {
-                    LibrarySelectPill(
-                        model: model, controller: controller, rows: rows, toggle: toggleSelecting,
-                        makeLink: { Task { await controller.makeLinkAndEnd(rows) } },
-                        file: { target in Task { await controller.makeLinkAndEnd(rows, into: target) } },
-                        share: { Task { await controller.shareAndEnd(rows) } })
+                if controller.selecting {
+                    LibraryPickedSheet(
+                        model: model,
+                        controller: controller,
+                        rows: rows,
+                        tier: tier,
+                        makeLink: { Task { await controller.makeLinkAndEnd(controller.freshRows(from: rows)) } },
+                        file: { target in Task { await controller.makeLinkAndEnd(controller.freshRows(from: rows), into: target) } },
+                        share: { Task { await controller.shareAndEnd(rows) } }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .motion(Motion.rows, value: controller.selecting)
-            // hold a tile or a pick to see its media; lifting the finger closes it
-            .overlay {
-                if let row = controller.peek, !paneBeside {
-                    LibraryPeek(row: row)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                }
-            }
+            // hold a tile or a pick to see its media; isolated so peeking never re-evaluates the masonry grid
+            .overlay { LibraryPeekOverlay(controller: controller, paneBeside: paneBeside, haptics: haptics) }
             // a search with room for the pane opens its best match beside the results: the query and the top hit both in view
             .onChange(of: library.searchState) { _, state in
                 guard paneBeside, !controller.selecting, case .results(let count, _) = state, count > 0,
                       let best = rows.first else { return }
                 controller.openAutomatically(best.item)
             }
-            .motion(Motion.card, value: controller.peek?.id)
-            .haptic(.impact(weight: .light), trigger: controller.peek?.id, enabled: haptics) { $0 != nil }
             .statusConfirm(controller: controller)
             .modifier(LibraryPaneBridge(controller: controller, pane: pane, push: push))
             // the freeze hunt (owner, 2026-11-14): the grid is back on screen after a detail
@@ -373,18 +390,8 @@ private struct LibraryContent: View {
             #endif
             .modifier(LibraryClickRows(controller: controller, rows: rows))
             .background { GalleryFileShare(fileURLs: $controller.filesToShare) }
-            // centred over a light scrim: at the bottom it sat under the floating tab bar
-            .overlay {
-                if controller.preparingShare, !controller.sharePrep.isEmpty {
-                    ZStack {
-                        Color.black.opacity(0.28).ignoresSafeArea()
-                            .transition(.opacity)
-                        LibrarySharePrepCard(controller: controller) { controller.shareCancelled = true }
-                            .transition(.scale(scale: 0.94).combined(with: .opacity))
-                    }
-                }
-            }
-            .motion(Motion.card, value: controller.preparingShare)
+            // centred over a light scrim; isolated so share prep updates never re-evaluate the grid
+            .overlay { LibrarySharePrepOverlay(controller: controller) }
         core
             // a tick, select mode on and off, and the share sheet ready: felt as well as seen (Settings › haptics)
             .haptic(.selection, trigger: controller.picked, enabled: haptics)
@@ -468,32 +475,40 @@ private struct LibraryContent: View {
 
     // MARK: the filter row
 
-    /// One row of filters (2026-11-15; it was two): the kind chips scroll, and the links menu chip stays pinned at the
-    /// trailing end behind a hairline, so the one filter that names an owner's set or collection is always in reach.
+    /// One row of filters: the kind chips scroll, and the links menu chip + `select` button stay pinned at the
+    /// trailing end behind a hairline, keeping the bottom of the masonry completely clear while browsing.
     @ViewBuilder
-    private func filterRow(unfiltered: [LibraryRow], shareIndex: ShareSetIndex) -> some View {
+    private func filterRow(unfiltered: [LibraryRow], shareIndex: ShareSetIndex, hasRows: Bool, canSelect: Bool) -> some View {
         let kinds = model.capabilities.gallery || model.capabilities.hidden
         let links = model.capabilities.shareSets && !model.shareSets.sets.isEmpty && !library.showingHidden
-        if kinds || links {
+        if kinds || links || hasRows {
             HStack(spacing: 0) {
                 if kinds {
                     LibraryKindChips(
                         model: model, extra: debugExtra,
                         pickAll: { kind, share in pickKind(kind, thenShare: share) })
                     .equatable()
+                } else {
+                    Spacer(minLength: 0)
                 }
-                if links {
+                if links || hasRows {
                     if kinds {
                         Rectangle()
                             .fill(CobaltColor.caption.opacity(0.3))
                             .frame(width: 1, height: 18)
                             .accessibilityHidden(true)
                     }
-                    LibraryShareMenu(model: model, rows: unfiltered, index: shareIndex, filter: $controller.shareFilter)
-                        .padding(.leading, kinds ? 8 : 12)
-                        .padding(.trailing, 12)
-                        .padding(.vertical, 6)
-                    if !kinds { Spacer(minLength: 0) }
+                    HStack(spacing: 6) {
+                        if links {
+                            LibraryShareMenu(model: model, rows: unfiltered, index: shareIndex, filter: $controller.shareFilter)
+                        }
+                        if hasRows {
+                            LibrarySelectButton(disabled: !canSelect, action: toggleSelecting)
+                        }
+                    }
+                    .padding(.leading, kinds ? 8 : 12)
+                    .padding(.trailing, 12)
+                    .padding(.vertical, 6)
                 }
             }
             .background(.bar)
@@ -505,7 +520,7 @@ private struct LibraryContent: View {
     /// The links and collections the tiles badge (empty while the server makes no share links).
     private var shareIndex: ShareSetIndex {
         guard model.capabilities.shareSets else { return .empty }
-        return ShareSetIndex(sets: model.shareSets.sets, collections: model.shareSets.collections)
+        return shareIndexCache.index(sets: model.shareSets.sets, collections: model.shareSets.collections)
     }
 
     /// The shelf over the mosaic: while not selecting or searching (iPhone, iPad and Mac alike). While the library or the
@@ -688,6 +703,65 @@ private struct LibraryContent: View {
     }
 }
 
+/// Isolated overlay reading `controller.peek` so holding a tile never invalidates `LibraryContent` or the mosaic grid.
+private struct LibraryPeekOverlay: View {
+    let controller: LibraryController
+    let paneBeside: Bool
+    let haptics: Bool
+
+    var body: some View {
+        ZStack {
+            if let row = controller.peek, !paneBeside {
+                LibraryPeek(row: row)
+                    .transition(.opacity)
+            }
+        }
+        .motion(Motion.card, value: controller.peek?.id)
+        .haptic(.impact(weight: .light), trigger: controller.peek?.id, enabled: haptics) { $0 != nil }
+    }
+}
+
+/// Isolated overlay reading `controller.preparingShare` / `sharePrep` so share progress ticks never re-evaluate the grid.
+private struct LibrarySharePrepOverlay: View {
+    let controller: LibraryController
+
+    var body: some View {
+        ZStack {
+            if controller.preparingShare, !controller.sharePrep.isEmpty {
+                Color.black.opacity(0.28).ignoresSafeArea()
+                    .transition(.opacity)
+                LibrarySharePrepCard(controller: controller) { controller.shareCancelled = true }
+                    .transition(.scale(scale: 0.94).combined(with: .opacity))
+            }
+        }
+        .motion(Motion.card, value: controller.preparingShare)
+    }
+}
+
+/// Memoizes `ShareSetIndex` across body passes (not observed) using O(1) CoW storage pointer checks.
+private final class ShareSetIndexCache {
+    private var lastSets: [ShareSet] = []
+    private var lastCollections: [ShareCollection] = []
+    private var cached: ShareSetIndex?
+
+    func index(sets: [ShareSet], collections: [ShareCollection]) -> ShareSetIndex {
+        if let cached, sets.count == lastSets.count, collections.count == lastCollections.count {
+            let sameSets = sets.withUnsafeBufferPointer { a in
+                lastSets.withUnsafeBufferPointer { b in a.baseAddress == b.baseAddress }
+            }
+            let sameCollections = collections.withUnsafeBufferPointer { a in
+                lastCollections.withUnsafeBufferPointer { b in a.baseAddress == b.baseAddress }
+            }
+            if sameSets && sameCollections { return cached }
+        }
+        let built = ShareSetIndex(sets: sets, collections: collections)
+        lastSets = sets
+        lastCollections = collections
+        cached = built
+        return built
+    }
+}
+
 /// Remembers the rows on screen (whenever there are any) as the ones a search in flight keeps showing; forgets them when
 /// the hidden album opens or closes. Its own modifier: the screen's body chain is at the type checker's limit.
 private struct LibraryHoldRows: ViewModifier {
@@ -696,11 +770,24 @@ private struct LibraryHoldRows: ViewModifier {
     let album: Bool
     @Binding var held: [LibraryRow]
 
+    private struct Signature: Equatable {
+        let count: Int
+        let firstID: String?
+        let midID: String?
+        let lastID: String?
+    }
+
     func body(content: Content) -> some View {
-        let ids: [String] = showing ? rows.map(\.id) : []
+        let sig = showing
+            ? Signature(
+                count: rows.count,
+                firstID: rows.first?.id,
+                midID: rows.isEmpty ? nil : rows[rows.count / 2].id,
+                lastID: rows.last?.id)
+            : Signature(count: 0, firstID: nil, midID: nil, lastID: nil)
         content
-            .onChange(of: ids) { _, now in
-                if !now.isEmpty { held = rows }
+            .onChange(of: sig) { _, now in
+                if now.count > 0 { held = rows }
             }
             .onChange(of: album) { held = [] }
     }
@@ -781,12 +868,8 @@ private struct LibraryPaneBridge: ViewModifier {
             .onChange(of: beside, initial: true) { _, now in
                 controller.compact = !now
                 guard let pane else { return }
-                if now {
-                    // back beside the tab (unfolded, rotated) while selecting: the actions page comes back if nothing is in the way
-                    if controller.selecting { openActions(pane) }
-                } else {
-                    // the pane lost its side position (rotation to a narrow window, a fold): the actions are the pill's again,
-                    // and a peek in flight is the overlay's
+                if !now {
+                    // the pane lost its side position (rotation to a narrow window, a fold): a peek in flight is the overlay's
                     pane.close(ifShowing: .selection)
                     if pane.isPeeking { pane.endPeek() }
                 }
@@ -823,28 +906,19 @@ private struct LibraryPaneBridge: ViewModifier {
                 guard let pane, !pane.isPeeking else { return }
                 var shown: String?
                 if let route, route.isVisible, case .post(let id)? = route.item { shown = id }
-                // the actions page with no select mode behind it (a restored route, or select ended elsewhere) has nothing to do
-                if let route, route.isVisible, route.item == .selection, !controller.selecting { pane.close(ifShowing: .selection) }
+                // select actions live in LibrarySelectTopBar + LibraryPickedSheet everywhere; close any stale restored route
+                if let route, route.isVisible, route.item == .selection { pane.close(ifShowing: .selection) }
                 if controller.selection != shown { controller.selection = shown }
             }
             .onChange(of: controller.selecting) { _, selecting in
                 guard let pane else { return }
-                // beside the tab the page opens with select mode; on one narrow screen it is the pill's to expand. Either
-                // way, leaving select mode takes it away
-                if !selecting { pane.close(ifShowing: .selection) } else if beside { openActions(pane) }
+                // close any stale selection pane route; select actions live in the top grid + bottom picked sheet everywhere
+                if !selecting { pane.close(ifShowing: .selection) }
             }
             .onChange(of: controller.peek?.id) { _, id in
                 guard let pane, beside else { return }
                 if let id { pane.peek(id) } else { pane.endPeek() }
             }
-    }
-
-    /// Select mode began: the actions page opens beside the tab. It never takes the place of a running stream, and the
-    /// owner pressing `select` replaces a post they had open; when a running item is in the way the pill's `N picked` capsule
-    /// brings the page back on a tap.
-    private func openActions(_ pane: Pane) {
-        if pane.openIfIdle(.selection) { return }
-        if !pane.isRunning, !pane.isPeeking { pane.open(.selection) }
     }
 }
 

@@ -58,7 +58,6 @@ struct LibraryKindChips: View, Equatable {
             .padding(.vertical, 6)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .background(.bar)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Library2.kindFilter)
         .haptic(.selection, trigger: model.library.kindFilter)
@@ -93,6 +92,7 @@ struct LibraryKindChips: View, Equatable {
             .padding(.horizontal, 12)
             .frame(minWidth: 40, minHeight: 30)
             .background(Capsule().fill(selected ? CobaltColor.text : CobaltColor.elevated))
+            .overlay(Capsule().strokeBorder(selected ? Color.clear : CobaltColor.hairline, lineWidth: 0.5))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -161,7 +161,7 @@ struct LibraryKindChips: View, Equatable {
             .padding(.horizontal, 12)
             .frame(minWidth: 40, minHeight: 30)
             .background(Capsule().fill(selected ? Color.black : CobaltColor.elevated))
-            .overlay(Capsule().strokeBorder(Color.white.opacity(selected ? 0.28 : 0), lineWidth: 1))
+            .overlay(Capsule().strokeBorder(selected ? Color.white.opacity(0.28) : CobaltColor.hairline, lineWidth: selected ? 1 : 0.5))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)

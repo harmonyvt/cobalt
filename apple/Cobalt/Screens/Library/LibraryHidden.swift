@@ -163,10 +163,10 @@ struct HiddenByBadge: View {
             .foregroundStyle(CobaltColor.badgeInk)
             .lineLimit(1)
             .fixedSize()
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 6.5)
             .frame(height: 20)
-            .background(CobaltColor.badgeBack, in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+            .background(TileBadgeSurface.fill, in: Capsule())
+            .overlay(Capsule().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
             .accessibilityLabel(Copy.HiddenAlbum.byA11y(by))
     }
 }

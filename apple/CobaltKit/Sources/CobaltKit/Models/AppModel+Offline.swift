@@ -25,6 +25,7 @@ extension AppModel {
     /// A media at a glance: how much is kept, the combined progress while anything downloads or waits, and whether
     /// any rendition failed. `downloading` carries the bytes so far and the total (nil while a size is unknown).
     public func offlineState(of item: MediaItem) -> (offline: MediaOffline, downloading: TransferProgress?, failed: Bool) {
+        guard !offlineDownloads.states.isEmpty else { return (item.offline, nil, false) }
         var active = false
         var failed = false
         var bytes: Int64 = 0

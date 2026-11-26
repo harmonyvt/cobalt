@@ -44,7 +44,6 @@ Cobalt/Screens/Library/LibraryController.swift: if let url = face.local?.fileURL
 Cobalt/Screens/Library/LibraryDeleteSheet.swift: if let poster = r.local?.posterURL, fm.fileExists(atPath: poster.path) { # 8.17 baseline, move off main
 Cobalt/Screens/Library/LibraryDeleteSheet.swift: let fm = FileManager.default # 8.17 baseline, move off main
 Cobalt/Screens/Library/LibraryDeleteSheet.swift: } else if let file = r.local?.fileURL, r.isStillPicture || r.isWebp, fm.fileExists(atPath: file.path) { # 8.17 baseline, move off main
-Cobalt/Screens/Library/LibraryPeek.swift: let kept = face.local?.fileURL.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } # 8.17 baseline, move off main
 Cobalt/Screens/PostFrame/PostFrameCards.swift: guard let data, let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil } # 8.17 baseline, move off main
 Cobalt/Screens/PostFrame/PostFrameCards.swift: return CGImageSourceCreateImageAtIndex(source, 0, nil) # 8.17 baseline, move off main
 Cobalt/Screens/Tools/ToolsDebug.swift: guard let path = defaults.string(forKey: "previewToolPhoto"), let data = FileManager.default.contents(atPath: path) else { return } # 8.17 baseline, move off main

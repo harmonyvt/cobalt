@@ -173,12 +173,19 @@ struct FacePicture: View {
     var showsGlyph = true
     var glyphSize: CGFloat = 26
     var gradient = 0
+    var contentMode: ContentMode = .fill
+    /// Called with decoded `width / height` whenever a picture is ready (used by `LibraryPeek` for metadata-less media).
+    var onDecodedAspect: ((CGFloat) -> Void)? = nil
     @Binding var failed: Bool
+
+    private let chain: [LibraryPictureSource]
     @State private var image: ImageBox?
+    @State private var loadedKey: LoadKey?
 
     init(
         item: MediaItem, maxPixel: Int, reload: Int = 0, showsGlyph: Bool = true, glyphSize: CGFloat = 26,
-        gradient: Int = 0, failed: Binding<Bool> = .constant(false)
+        gradient: Int = 0, contentMode: ContentMode = .fill, onDecodedAspect: ((CGFloat) -> Void)? = nil,
+        failed: Binding<Bool> = .constant(false)
     ) {
         self.item = item
         self.maxPixel = maxPixel
@@ -186,9 +193,19 @@ struct FacePicture: View {
         self.showsGlyph = showsGlyph
         self.glyphSize = glyphSize
         self.gradient = gradient
+        self.contentMode = contentMode
+        self.onDecodedAspect = onDecodedAspect
         _failed = failed
-        // a picture this device already decoded is there in the first frame (no grey flash on scrolling back)
-        _image = State(initialValue: LibraryPictureCache.shared.first(in: FaceChain.sources(for: item), maxPixel: maxPixel))
+        let sources = FaceChain.sources(for: item)
+        self.chain = sources
+        // a picture this device already decoded is there in the first frame (no grey flash on scrolling back or peeking)
+        if let hit = LibraryPictureCache.shared.best(in: sources, maxPixel: maxPixel) {
+            _image = State(initialValue: hit.box)
+            _loadedKey = State(initialValue: hit.exact ? LoadKey(chain: sources, maxPixel: maxPixel, reload: reload) : nil)
+        } else {
+            _image = State(initialValue: nil)
+            _loadedKey = State(initialValue: nil)
+        }
     }
 
     private struct LoadKey: Hashable {
@@ -201,12 +218,15 @@ struct FacePicture: View {
     var body: some View { mediaBody.mediaMask() }
 
     @ViewBuilder private var mediaBody: some View {
-        let chain = FaceChain.sources(for: item)
+        let key = LoadKey(chain: chain, maxPixel: maxPixel, reload: reload)
         Rectangle()
             .fill(FrameGradient.fill(gradient))
             .overlay {
                 if let image {
-                    Image(decorative: image.image, scale: 1).resizable().scaledToFill().transition(.opacity)
+                    Image(decorative: image.image, scale: 1)
+                        .resizable()
+                        .aspectRatio(contentMode: contentMode)
+                        .transition(.opacity)
                 } else if failed && showsGlyph {
                     Image(systemName: Symbol.Library.pictureFailed)
                         .font(.system(size: glyphSize, weight: .regular))
@@ -215,11 +235,24 @@ struct FacePicture: View {
                 }
             }
             .clipped()
-            .animation(.easeOut(duration: 0.2), value: image != nil)
-            .task(id: LoadKey(chain: chain, maxPixel: maxPixel, reload: reload)) {
+            .animation(.easeOut(duration: 0.18), value: image != nil)
+            .task(id: key) {
+                if let existing = image, loadedKey == key, reload == 0 {
+                    reportAspect(existing)
+                    return
+                }
                 guard !chain.isEmpty else {
                     image = nil
+                    loadedKey = key
                     failed = false
+                    return
+                }
+                // re-check synchronously in case a prefetch or another tile decoded it between init and task start
+                if reload == 0, let hit = LibraryPictureCache.shared.first(in: chain, maxPixel: maxPixel) {
+                    image = hit
+                    loadedKey = key
+                    failed = false
+                    reportAspect(hit)
                     return
                 }
                 if image == nil || reload > 0 { failed = false }
@@ -228,13 +261,21 @@ struct FacePicture: View {
                     if Task.isCancelled { return }
                     if let box {
                         image = box
+                        loadedKey = key
                         failed = false
+                        reportAspect(box)
                         return
                     }
                 }
-                image = nil
-                failed = true
+                if image == nil { failed = true }
+                loadedKey = key
             }
+    }
+
+    private func reportAspect(_ box: ImageBox) {
+        guard let onDecodedAspect else { return }
+        let w = box.image.width, h = box.image.height
+        if w > 0, h > 0 { onDecodedAspect(CGFloat(w) / CGFloat(h)) }
     }
 }
 
@@ -290,8 +331,14 @@ struct LibraryTitleText: View {
     }
 }
 
+/// Shared translucent dark pill fill for tile badges: clean over both bright and dark media without harsh white rings.
+enum TileBadgeSurface {
+    static let fill = Color.black.opacity(0.56)
+    static let stroke = Color.white.opacity(0.12)
+}
+
 /// A gallery's count: the stack glyph and the number of items (the board `Library-Mixed`). On a tile it is the dark
-/// badge top right (the place a video's type word has); in a row it is the quiet capsule beside the webp one.
+/// badge top right; in a row it is the quiet capsule beside the webp one.
 struct GalleryCountBadge: View {
     enum Style { case tile, row }
 
@@ -305,14 +352,14 @@ struct GalleryCountBadge: View {
                 Image(systemName: Symbol.Gallery.gallery).font(.system(size: 9, weight: .semibold))
                 Text("\(count)").monospacedDigit()
             }
-            .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
-            .foregroundStyle(CobaltColor.badgeInk)
+            .font(Font.cobalt(10, .medium, relativeTo: .caption2))
+            .foregroundStyle(.white.opacity(0.95))
             .lineLimit(1)
             .fixedSize()
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(CobaltColor.badgeBack, in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+            .padding(.horizontal, 6.5)
+            .frame(height: 20)
+            .background(TileBadgeSurface.fill, in: Capsule())
+            .overlay(Capsule().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
             .accessibilityHidden(true)
         case .row:
             HStack(spacing: 3) {
@@ -376,10 +423,10 @@ struct LibraryPickMark: View {
             Text("\(number)")
                 .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundStyle(CobaltColor.onText)
-                .frame(minWidth: 20, minHeight: 20)
-                .padding(.horizontal, number > 9 ? 3 : 0)
+                .frame(minWidth: 21, minHeight: 21)
+                .padding(.horizontal, number > 9 ? 3.5 : 0)
                 .background(CobaltColor.text, in: Capsule())
-                .overlay(Capsule().strokeBorder(CobaltColor.onText.opacity(0.8), lineWidth: 1.5))
+                .overlay(Capsule().strokeBorder(CobaltColor.onText.opacity(0.85), lineWidth: 1.25))
                 .accessibilityHidden(true)
         } else {
             mark
@@ -388,11 +435,11 @@ struct LibraryPickMark: View {
 
     private var mark: some View {
         Image(systemName: ticked ? Symbol.Gallery.ticked : Symbol.Gallery.unticked)
-            .font(.system(size: 17, weight: .semibold))
+            .font(.system(size: 18, weight: .semibold))
             .symbolRenderingMode(.palette)
             .foregroundStyle(
                 ticked ? CobaltColor.onText : (onPhoto ? Color.white : CobaltColor.text),
-                ticked ? CobaltColor.text : (onPhoto ? Color.black.opacity(0.3) : CobaltColor.text.opacity(0.3)))
+                ticked ? CobaltColor.text : (onPhoto ? Color.black.opacity(0.36) : CobaltColor.text.opacity(0.3)))
             .accessibilityHidden(true)
     }
 }
@@ -413,6 +460,38 @@ struct OfflineSpokenValue: ViewModifier {
     }
 }
 
+/// Deferred VoiceOver value for mosaic tiles: formats dates, sizes and offline state only when assistive technology
+/// (VoiceOver or Switch Control) is active, avoiding per-tile string/Date allocations during scrolling.
+struct LibraryTileSpokenValue: ViewModifier {
+    let row: LibraryRow
+    let share: ShareStatus
+    let failed: Bool
+    let model: AppModel
+
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
+
+    func body(content: Content) -> some View {
+        if voiceOver || switchControl {
+            content.accessibilityValue(spokenValue)
+        } else {
+            content
+        }
+    }
+
+    private var spokenValue: String {
+        var parts = [
+            LibraryRowCopy.meta(row, now: Date()),
+            row.isPublic ? Copy.Library2.publicBadgeA11y : Copy.Library2.privateBadgeA11y,
+        ]
+        if let by = row.hiddenBy { parts.append(Copy.HiddenAlbum.byA11y(by)) }
+        if let offline = OfflineMark(item: row.item, model: model).spoken { parts.append(offline) }
+        if let shared = Copy.Library2.sharedA11y(share) { parts.append(shared) }
+        if failed { parts.append(Copy.Library2.pictureFailed) }
+        return parts.joined(separator: ", ")
+    }
+}
+
 /// What the library draws for one media's offline state. `none` and `cached` draw nothing, so the default stays
 /// quiet: the cache is plumbing, and a file that may leave on its own is not "offline".
 enum OfflineMark: Equatable {
@@ -428,31 +507,32 @@ enum OfflineMark: Equatable {
     /// A download beats a failure, a failure beats a wait, and a wait beats the settled state.
     @MainActor
     init(item: MediaItem, model: AppModel) {
-        // each rendition's state once; the sums are `AppModel.offlineState(of: MediaItem)`'s, over the same states
-        var running = false, waiting = false, failed = false
-        for rendition in item.renditions {
-            switch model.offlineState(of: rendition) {
-            case .downloading: running = true
-            case .waiting: waiting = true
-            case .failed: failed = true
-            default: break
+        // Fast-path: when no downloads are active or failed (the 99% steady state), skip per-rendition lookups entirely.
+        if !model.offlineDownloads.states.isEmpty {
+            var running = false, waiting = false, failed = false
+            for rendition in item.renditions {
+                switch model.offlineState(of: rendition) {
+                case .downloading: running = true
+                case .waiting: waiting = true
+                case .failed: failed = true
+                default: break
+                }
+            }
+            if running {
+                self = .downloading(model.offlineState(of: item).downloading.flatMap(OfflineWords.fraction))
+                return
+            } else if failed {
+                self = .failed
+                return
+            } else if waiting {
+                self = .waiting
+                return
             }
         }
-        // the item's progress also counts renditions that only wait, so a download needs one that runs
-        if running {
-            // 0...1 when the total is known and positive: the media's summed progress (`offlineState(of: item)` sums the
-            // renditions that run and wait), through the download's status (`OfflineWords.fraction`)
-            self = .downloading(model.offlineState(of: item).downloading.flatMap(OfflineWords.fraction))
-        } else if failed {
-            self = .failed
-        } else if waiting {
-            self = .waiting
-        } else {
-            switch item.offline {
-            case .all: self = .kept
-            case .some: self = .partly
-            case .none: self = .quiet
-            }
+        switch item.offline {
+        case .all: self = .kept
+        case .some: self = .partly
+        case .none: self = .quiet
         }
     }
 
@@ -537,10 +617,10 @@ struct OfflineBadge: View {
     }
 
     private func tile(_ mark: OfflineMark) -> some View {
-        glyph(mark, size: 14, ink: mark == .failed ? Self.failedInk : CobaltColor.badgeInk)
+        glyph(mark, size: 13, ink: mark == .failed ? Self.failedInk : .white.opacity(0.95))
             .frame(width: 20, height: 20)
-            .background(CobaltColor.badgeBack, in: Circle())
-            .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+            .background(TileBadgeSurface.fill, in: Circle())
+            .overlay(Circle().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
     }
 
     private func row(_ mark: OfflineMark) -> some View {
