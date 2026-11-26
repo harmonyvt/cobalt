@@ -58,6 +58,9 @@ extension Copy {
         static let unmute = "unmute"
         static let audioOnly = "audio only"
         static let loadingStream = "loading stream…"
+        static let pipEnter = "picture in picture"
+        static let pipExit = "exit picture in picture"
+        static let inPiP = "playing in picture in picture"
 
         // MARK: on a tv (70.5)
 
@@ -77,6 +80,8 @@ extension Copy {
         static func chatDelayChoice(_ s: Int) -> String { s == 0 ? "don't wait" : "\(s) s" }
         static let pickTV = "pick a tv"
         static let onTV = "on the tv"
+        static let airPlaying = "playing on airplay"
+        static let airPlay = "airplay"
         static let dim = "dim"
         static let undim = "undim"
         static let chatOnTV = "chat on tv"

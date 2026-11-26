@@ -33,6 +33,7 @@ final class HeroVideo {
     /// Shapes measured this launch, by clip: a clip opened again starts at its real shape.
     private static var shapes: [String: CGFloat] = [:]
 
+    @ObservationIgnored private let audioClaimID = "hero.video.\(UUID().uuidString)"
     @ObservationIgnored private var url: URL?
     /// The orbit lent this player: leaving gives it back (muted, playing) instead of emptying it.
     @ObservationIgnored private var borrowed = false
@@ -97,7 +98,7 @@ final class HeroVideo {
     func setMuted(_ muted: Bool) {
         guard let player else { return }
         player.isMuted = muted
-        if muted { AudioPolicy.release() } else { AudioPolicy.playback() }
+        if muted { AudioPolicy.release(id: audioClaimID) } else { AudioPolicy.playback(id: audioClaimID) }
     }
 
     // MARK: leaving
@@ -121,6 +122,7 @@ final class HeroVideo {
                 player.replaceCurrentItem(with: nil)
             }
         }
+        AudioPolicy.release(id: audioClaimID)
         player = nil
         borrowed = false
         phase = .idle
@@ -253,7 +255,6 @@ final class HeroKept: PaneKeptObject {
         Breadcrumbs.add("video.leave", ["phase": .string(String(describing: video.phase)), "muted": .bool(muted), "kept": .bool(true)])
         transport.detach()
         video.stop()
-        if !muted { AudioPolicy.release() }
         muted = true
     }
 
@@ -462,7 +463,6 @@ struct HeroVideoBox: View {
         if let lent, video.player === lent.player { transport.resumeIfPausedByUser() }
         transport.detach()
         video.stop()
-        if !muted { AudioPolicy.release() }
         muted = true
         bridge = nil
     }

@@ -24,25 +24,70 @@ public struct TwitchNativeStats: Sendable, Equatable {
     public let rate: Float
     /// True while rebuffering.
     public let isBuffering: Bool
+    /// True once the render synchronizer clock has started rendering frames/audio.
+    public let isClockStarted: Bool
+    /// True when buffering has persisted long enough to trigger automatic recovery.
+    public let isStalled: Bool
 
-    public init(delay: Double?, bufferSeconds: Double, isLowLatency: Bool, rate: Float, isBuffering: Bool) {
+    public init(
+        delay: Double?,
+        bufferSeconds: Double,
+        isLowLatency: Bool,
+        rate: Float,
+        isBuffering: Bool,
+        isClockStarted: Bool = false,
+        isStalled: Bool = false
+    ) {
         self.delay = delay
         self.bufferSeconds = bufferSeconds
         self.isLowLatency = isLowLatency
         self.rate = rate
         self.isBuffering = isBuffering
+        self.isClockStarted = isClockStarted
+        self.isStalled = isStalled
     }
 }
 
 public enum TwitchNativeEvent: Sendable, Equatable {
     case loading
+    /// Signed Usher master playlist URL for this session (used for Video-Only AirPlay `AVPlayer` handoff).
+    case streamURL(URL)
     case variants([TwitchVariant], selectedID: String)
     case playing
     case paused
+    /// Explicit user-intent pause state (separate from rebuffering or temporary OS interruptions).
+    case userPausedChanged(Bool)
     case offline
     case stats(TwitchNativeStats)
     /// Native playback could not run for this stream (caller should fall back to Twitch's embed).
     case failed(String)
+}
+
+/// Volume ramp curve used for single-stream mute transitions and Wave-2 dual-stream audio focus crossfades.
+public enum TwitchVolumeRampCurve: Sendable, Equatable {
+    case linear
+    case equalPower
+
+    /// Interpolates gain in `0...1` at normalized progress `t ∈ [0, 1]`.
+    /// `.equalPower` uses `cos(π/2 * t)` on fade-out and `sin(π/2 * t)` on fade-in so `g_out² + g_in² = 1`.
+    public func interpolate(from start: Float, to end: Float, progress: Double) -> Float {
+        let t = max(0.0, min(1.0, progress))
+        let s = max(0.0, min(1.0, start))
+        let e = max(0.0, min(1.0, end))
+        if abs(e - s) < 0.00001 { return e }
+        switch self {
+        case .linear:
+            return s + Float(t) * (e - s)
+        case .equalPower:
+            if e < s {
+                let gain = Float(cos(.pi * 0.5 * t))
+                return e + (s - e) * gain
+            } else {
+                let gain = Float(sin(.pi * 0.5 * t))
+                return s + (e - s) * gain
+            }
+        }
+    }
 }
 
 // MARK: - SampleBuffer helpers (public for unit testing)
@@ -225,8 +270,8 @@ private final class ChunkedStreamSession: NSObject, URLSessionDataDelegate, @unc
     private var entries: [Int: Entry] = [:]
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 30
+        config.timeoutIntervalForRequest = 8
+        config.timeoutIntervalForResource = 20
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         config.httpMaximumConnectionsPerHost = 6
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
@@ -234,7 +279,7 @@ private final class ChunkedStreamSession: NSObject, URLSessionDataDelegate, @unc
 
     func stream(url: URL) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream(bufferingPolicy: .unbounded) { continuation in
-            var req = URLRequest(url: url, timeoutInterval: 15)
+            var req = URLRequest(url: url, timeoutInterval: 8)
             req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
             let task = session.dataTask(with: req)
             let id = task.taskIdentifier
@@ -315,11 +360,11 @@ private actor OverlappedSegmentFetch {
         self.segment = segment
     }
 
-    func start(streamer: ChunkedStreamSession) {
+    func start(stream: @escaping @Sendable (URL) -> AsyncThrowingStream<Data, Error>) {
         let url = segment.url
         readerTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                for try await chunk in streamer.stream(url: url) {
+                for try await chunk in stream(url) {
                     guard let self, !Task.isCancelled else { return }
                     await self.append(chunk)
                 }
@@ -393,11 +438,16 @@ private final class SampleBufferPipeline: @unchecked Sendable {
     private var pendingAudio: [CMSampleBuffer] = []
     private var awaitingKeyframe = true
     private var audioOnly = false
+    private var videoOutputEnabled = true
 
+    private var activeGeneration: UInt64 = 0
     private var clockStarted = false
     private var isPaused = false
+    private var isInterrupted = false
     private var isBuffering = false
+    private var bufferingSince: ContinuousClock.Instant?
     private var isMuted = false
+    private var volume: Float = 1.0
     private var isLowLatency = true
     private var firstSamplePTS: Double?
     private var highestVideoPTS: Double?
@@ -409,8 +459,9 @@ private final class SampleBufferPipeline: @unchecked Sendable {
     private var serverClockOffset: TimeInterval = 0
     private var pendingSegmentPDT: Date?
 
-    private var onPlayingChange: (@Sendable (Bool) -> Void)?
+    private var onPlayingChange: (@Sendable (Bool, UInt64) -> Void)?
     private var audioRequestRegistered = false
+    private var observers: [NSObjectProtocol] = []
 
     init() {
         audioRenderer.audioTimePitchAlgorithm = .timeDomain
@@ -418,10 +469,33 @@ private final class SampleBufferPipeline: @unchecked Sendable {
         #if os(iOS)
         synchronizer.delaysRateChangeUntilHasSufficientMediaData = false
         #endif
+        registerNotifications()
     }
 
-    func setPlayingCallback(_ cb: @escaping @Sendable (Bool) -> Void) {
-        queue.async { self.onPlayingChange = cb }
+    deinit {
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func registerNotifications() {
+        let nc = NotificationCenter.default
+        let audioFlushed = nc.addObserver(
+            forName: .AVSampleBufferAudioRendererWasFlushedAutomatically,
+            object: audioRenderer,
+            queue: nil
+        ) { [weak self] _ in
+            self?.handleAudioRendererFlushed()
+        }
+        observers.append(audioFlushed)
+    }
+
+    func setCallbacks(
+        onPlayingChange: @escaping @Sendable (Bool, UInt64) -> Void
+    ) {
+        queue.async {
+            self.onPlayingChange = onPlayingChange
+        }
     }
 
     func attach(videoRenderer: AVSampleBufferVideoRenderer) {
@@ -435,13 +509,17 @@ private final class SampleBufferPipeline: @unchecked Sendable {
                     self?.drainAudio()
                 }
             }
-            if self.videoRenderer === vr { return }
+            if self.videoRenderer === vr {
+                self.recoverVideoRendererIfNeeded(vr)
+                return
+            }
             if let existing = self.videoRenderer {
                 existing.stopRequestingMediaData()
                 self.synchronizer.removeRenderer(existing, at: .invalid)
             }
             self.videoRenderer = vr
             self.synchronizer.addRenderer(vr)
+            self.recoverVideoRendererIfNeeded(vr)
             vr.requestMediaDataWhenReady(on: self.queue) { [weak self] in
                 self?.drainVideo()
             }
@@ -480,15 +558,29 @@ private final class SampleBufferPipeline: @unchecked Sendable {
         }
     }
 
-    func setPaused(_ paused: Bool) {
+    func setPaused(_ paused: Bool, generation: UInt64) {
         queue.async {
+            self.activeGeneration = generation
             self.isPaused = paused
             if paused {
                 self.synchronizer.rate = 0
-                self.onPlayingChange?(false)
-            } else if self.clockStarted {
+                self.bufferingSince = nil
+                self.onPlayingChange?(false, generation)
+            } else if self.clockStarted && !self.isInterrupted {
                 self.synchronizer.rate = 1.0
-                self.onPlayingChange?(true)
+                self.onPlayingChange?(true, generation)
+            }
+        }
+    }
+
+    func setInterrupted(_ interrupted: Bool, generation: UInt64) {
+        queue.async {
+            self.activeGeneration = generation
+            self.isInterrupted = interrupted
+            if interrupted {
+                self.synchronizer.rate = 0
+                self.bufferingSince = nil
+                self.onPlayingChange?(false, generation)
             }
         }
     }
@@ -500,8 +592,32 @@ private final class SampleBufferPipeline: @unchecked Sendable {
         }
     }
 
-    func flush(clearImage: Bool) {
+    func setVolume(_ volume: Float) {
+        let clamped = max(0.0, min(1.0, volume))
         queue.async {
+            self.volume = clamped
+            self.audioRenderer.volume = clamped
+        }
+    }
+
+    func setVideoOutputEnabled(_ enabled: Bool) {
+        queue.async {
+            guard self.videoOutputEnabled != enabled else { return }
+            self.videoOutputEnabled = enabled
+            if !enabled {
+                self.pendingVideo.removeAll(keepingCapacity: true)
+                self.videoRenderer?.flush(removingDisplayedImage: false)
+                self.awaitingKeyframe = true
+            } else {
+                // Require an IDR keyframe on resume so video recovers without macroblock artifacts.
+                self.awaitingKeyframe = true
+            }
+        }
+    }
+
+    func flush(clearImage: Bool, generation: UInt64) {
+        queue.async {
+            self.activeGeneration = generation
             self.synchronizer.rate = 0
             self.audioRenderer.flush()
             if clearImage {
@@ -513,7 +629,10 @@ private final class SampleBufferPipeline: @unchecked Sendable {
             self.pendingAudio.removeAll(keepingCapacity: true)
             self.awaitingKeyframe = true
             self.clockStarted = false
+            self.isPaused = false
+            self.isInterrupted = false
             self.isBuffering = false
+            self.bufferingSince = nil
             self.firstSamplePTS = nil
             self.highestVideoPTS = nil
             self.highestAudioPTS = nil
@@ -536,20 +655,58 @@ private final class SampleBufferPipeline: @unchecked Sendable {
         }
     }
 
+    // MARK: - Notification handlers
+
+    private func handleAudioRendererFlushed() {
+        queue.async { [weak self] in
+            guard let self, self.clockStarted else { return }
+            Telemetry.log(.info, .live, "twitch.native.audio_flushed")
+            self.audioRenderer.flush()
+            let nowPTS = self.synchronizer.currentTime().seconds
+            if nowPTS.isFinite {
+                // Drop queued audio frames that are already behind the current playhead.
+                self.pendingAudio.removeAll { sb in
+                    let pts = CMSampleBufferGetPresentationTimeStamp(sb).seconds
+                    return pts.isFinite && pts < nowPTS - 0.1
+                }
+            }
+            self.drainAudio()
+            if !self.isPaused && !self.isInterrupted && !self.isBuffering && self.synchronizer.rate == 0 {
+                self.synchronizer.rate = 1.0
+            }
+        }
+    }
+
     // MARK: - Queue-confined internals
 
+    private func recoverVideoRendererIfNeeded(_ vr: AVSampleBufferVideoRenderer) {
+        guard vr.status == .failed || vr.requiresFlushToResumeDecoding else { return }
+        let wasFailed = vr.status == .failed
+        Telemetry.log(.info, .live, "twitch.native.video_flush", data: ["failed": .bool(wasFailed)])
+        vr.flush()
+        pendingVideo.removeAll(keepingCapacity: true)
+        awaitingKeyframe = true
+        if wasFailed {
+            vr.stopRequestingMediaData()
+            vr.requestMediaDataWhenReady(on: queue) { [weak self] in
+                self?.drainVideo()
+            }
+        }
+    }
+
     private func ingestOnQueue(_ samples: [DemuxedSample]) {
+        guard !isPaused && !isInterrupted else { return }
+
         // Recover cleanly if VideoToolbox invalidated the display layer (e.g., background transition or view reparenting).
-        if let vr = videoRenderer, vr.status == .failed || vr.requiresFlushToResumeDecoding {
-            vr.flush()
-            pendingVideo.removeAll(keepingCapacity: true)
-            awaitingKeyframe = true
+        if videoOutputEnabled, let vr = videoRenderer {
+            recoverVideoRendererIfNeeded(vr)
         }
 
+        let skipVideo = audioOnly || !videoOutputEnabled
         for sample in samples {
             switch sample {
             case .video(let frame):
-                guard !audioOnly else { continue }
+                guard !skipVideo else { continue }
                 if awaitingKeyframe {
                     guard frame.isKeyframe, let sps = frame.sps, let pps = frame.pps else { continue }
                     if sps != lastSPS || pps != lastPPS || videoFormatDesc == nil {
@@ -592,7 +749,7 @@ private final class SampleBufferPipeline: @unchecked Sendable {
                 else { continue }
 
                 let ptsSec = Double(frame.pts90k) / Double(MPEGTSDemuxer.timescale)
-                if audioOnly {
+                if skipVideo {
                     recordAnchorIfNeeded(ptsSeconds: ptsSec)
                     if firstSamplePTS == nil { firstSamplePTS = ptsSec }
                 }
@@ -639,23 +796,31 @@ private final class SampleBufferPipeline: @unchecked Sendable {
     }
 
     private func startClockIfReady() {
-        guard !clockStarted, !isPaused, let start = firstSamplePTS else { return }
-        let highest = audioOnly ? (highestAudioPTS ?? start) : (highestVideoPTS ?? start)
+        guard !clockStarted, !isPaused, !isInterrupted, let start = firstSamplePTS else { return }
+        let skipVideo = audioOnly || !videoOutputEnabled
+        let highest = skipVideo ? (highestAudioPTS ?? start) : (highestVideoPTS ?? start)
         let cushion = highest - start
         // Start playback once we have ~0.30 s buffered so the first frame shows almost instantly without immediate underrun.
         let minStartCushion = isLowLatency ? 0.30 : 0.80
         guard cushion >= minStartCushion else { return }
         clockStarted = true
         isBuffering = false
+        bufferingSince = nil
         audioRenderer.isMuted = isMuted
+        audioRenderer.volume = volume
         let startTime = CMTime(seconds: start, preferredTimescale: MPEGTSDemuxer.timescale)
         synchronizer.setRate(1.0, time: startTime)
-        onPlayingChange?(true)
+        onPlayingChange?(true, activeGeneration)
     }
 
     private func computeTelemetryAndPaceOnQueue() -> TwitchNativeStats {
+        if videoOutputEnabled, let vr = videoRenderer {
+            recoverVideoRendererIfNeeded(vr)
+        }
+
         let nowPTS = synchronizer.currentTime().seconds
-        let highest: Double? = audioOnly ? highestAudioPTS : (highestVideoPTS ?? highestAudioPTS)
+        let skipVideo = audioOnly || !videoOutputEnabled
+        let highest: Double? = skipVideo ? highestAudioPTS : (highestVideoPTS ?? highestAudioPTS)
         let bufferSec: Double
         if clockStarted, nowPTS.isFinite, let highest {
             bufferSec = max(0, highest - nowPTS)
@@ -665,16 +830,28 @@ private final class SampleBufferPipeline: @unchecked Sendable {
             bufferSec = 0
         }
 
+        var isStalled = false
+
         // Smooth live-edge chase and underrun protection.
-        if clockStarted && !isPaused {
+        if clockStarted && !isPaused && !isInterrupted {
             let resumeTarget = isLowLatency ? 0.35 : 0.85
             if isBuffering {
                 if bufferSec >= resumeTarget {
                     isBuffering = false
+                    bufferingSince = nil
                     synchronizer.rate = 1.0
+                } else if let since = bufferingSince {
+                    let stuck = ContinuousClock.now - since
+                    if stuck >= .seconds(6) {
+                        isStalled = true
+                    } else if stuck >= .seconds(2), nowPTS.isFinite, let highest, nowPTS > highest + 1.5 {
+                        // Synchronizer ran ahead of incoming PTS (e.g. after discontinuity/flush): trigger recovery early.
+                        isStalled = true
+                    }
                 }
             } else if bufferSec < 0.05 {
                 isBuffering = true
+                bufferingSince = .now
                 synchronizer.rate = 0.0
             } else if isLowLatency {
                 // Gently speed up with pitch-preserving audio when buffer grows past live target.
@@ -712,7 +889,9 @@ private final class SampleBufferPipeline: @unchecked Sendable {
             bufferSeconds: bufferSec,
             isLowLatency: isLowLatency,
             rate: synchronizer.rate,
-            isBuffering: isBuffering
+            isBuffering: isBuffering,
+            isClockStarted: clockStarted,
+            isStalled: isStalled
         )
     }
 }
@@ -732,36 +911,75 @@ public struct TwitchVideoRendererBox: @unchecked Sendable {
 /// Drives a single live Twitch stream from GQL/Usher through chunked prefetching into `AVSampleBufferDisplayLayer`.
 public actor TwitchNativeEngine {
     public typealias EventHandler = @Sendable (TwitchNativeEvent) -> Void
+    public typealias SegmentStreamer = @Sendable (URL) -> AsyncThrowingStream<Data, Error>
+
+    private struct SegmentConsumeResult {
+        let succeeded: Bool
+        let sampleCount: Int
+        let hadKeyframe: Bool
+    }
 
     private let resolver: TwitchStreamResolver
+    private let customSegmentStreamer: SegmentStreamer?
+    private let startupTimeout: Duration
+    private let audioSession: AudioSessionCoordinator
+    private let audioClaimID = "twitch.native.\(UUID().uuidString)"
     private let pipeline = SampleBufferPipeline()
     private var streamer = ChunkedStreamSession()
     private var demuxer = MPEGTSDemuxer()
 
     private var onEvent: EventHandler?
+    private var audioObserverRegistered = false
     private var channel: String?
     private var authToken: String?
     private var variants: [TwitchVariant] = []
     private var selectedVariant: TwitchVariant?
     private var preferredVariantID: String?
 
-    private var isPaused = false
+    private var userPaused = false
+    private var isInterrupted = false
     private var isMuted = false
+    private var currentVolume: Float = 1.0
+    private var volumeRampTask: Task<Void, Never>?
     private var generation: UInt64 = 0
     private var runTask: Task<Void, Never>?
     private var telemetryTask: Task<Void, Never>?
     private var overlappedFetch: OverlappedSegmentFetch?
+    private var loadingSince: ContinuousClock.Instant?
+    private var stallRecoveries = 0
 
-    public init(resolver: TwitchStreamResolver = TwitchStreamResolver()) {
+    /// Explicit user-requested pause state (distinct from transient pacer buffering or system interruptions).
+    public var isUserPaused: Bool { userPaused }
+    /// Current target audio renderer gain (`0.0...1.0`).
+    public var volume: Float { currentVolume }
+
+    public init(
+        resolver: TwitchStreamResolver = TwitchStreamResolver(),
+        startupTimeout: Duration = .seconds(12),
+        segmentStreamer: SegmentStreamer? = nil,
+        audioSession: AudioSessionCoordinator = .shared
+    ) {
         self.resolver = resolver
+        self.startupTimeout = startupTimeout
+        self.customSegmentStreamer = segmentStreamer
+        self.audioSession = audioSession
+    }
+
+    deinit {
+        volumeRampTask?.cancel()
+        audioSession.removeObserver(id: audioClaimID)
+        audioSession.release(audioClaimID)
     }
 
     public func setEventHandler(_ handler: @escaping EventHandler) {
         self.onEvent = handler
-        pipeline.setPlayingCallback { [weak self] playing in
-            guard let self else { return }
-            Task { await self.emit(playing ? .playing : .paused) }
-        }
+        pipeline.setCallbacks(
+            onPlayingChange: { [weak self] playing, gen in
+                guard let self else { return }
+                Task { await self.handlePlayingChange(playing, gen: gen) }
+            }
+        )
+        registerAudioObserverIfNeeded()
     }
 
     public func attach(videoRenderer box: TwitchVideoRendererBox) {
@@ -771,37 +989,52 @@ public actor TwitchNativeEngine {
     public func start(channel: String, authToken: String?, preferredVariantID: String? = nil) {
         let clean = TwitchStreamResolver.sanitize(channel)
         guard !clean.isEmpty else { return }
-        stopInternal(clearImage: true)
+        registerAudioObserverIfNeeded()
+        stopInternal(clearImage: true, releaseAudioClaim: false)
         self.channel = clean
         self.authToken = authToken
         self.preferredVariantID = preferredVariantID
-        self.isPaused = false
+        self.userPaused = false
+        self.isInterrupted = false
+        self.stallRecoveries = 0
         generation &+= 1
         let gen = generation
-        configureAudioSession()
+        pipeline.flush(clearImage: true, generation: gen)
+        pipeline.setVolume(currentVolume)
+        pipeline.setMuted(isMuted)
+        self.loadingSince = .now
+        audioSession.claim(audioClaimID, kind: .playback(allowsPiP: true))
+        emit(.userPausedChanged(false))
         emit(.loading)
+        startTelemetryLoop(gen: gen)
         runTask = Task.detached(priority: .userInitiated) { [weak self] in
             await self?.runSession(gen: gen)
         }
     }
 
     public func stop() {
-        stopInternal(clearImage: true)
+        stopInternal(clearImage: true, releaseAudioClaim: true)
     }
 
     public func setPaused(_ paused: Bool) {
-        guard channel != nil, paused != isPaused else { return }
-        isPaused = paused
+        guard channel != nil else { return }
+        if paused == userPaused && !isInterrupted { return }
+        userPaused = paused
+        emit(.userPausedChanged(paused))
         if paused {
-            pipeline.setPaused(true)
+            isInterrupted = false
+            loadingSince = nil
+            pipeline.setPaused(true, generation: generation)
             // Stop active segment downloads while paused so we don't burn data; resume jumps straight to live.
             runTask?.cancel()
             runTask = nil
             telemetryTask?.cancel()
             telemetryTask = nil
             cancelOverlap()
+            audioSession.release(audioClaimID)
         } else {
             // Resuming a live stream restarts cleanly at the live edge.
+            isInterrupted = false
             guard let ch = channel else { return }
             let auth = authToken
             let pref = selectedVariant?.id ?? preferredVariantID
@@ -810,25 +1043,89 @@ public actor TwitchNativeEngine {
     }
 
     public func setMuted(_ muted: Bool) {
+        volumeRampTask?.cancel()
+        volumeRampTask = nil
         isMuted = muted
         pipeline.setMuted(muted)
     }
 
+    public func setVolume(_ volume: Float) {
+        volumeRampTask?.cancel()
+        volumeRampTask = nil
+        let clamped = max(0.0, min(1.0, volume))
+        currentVolume = clamped
+        pipeline.setVolume(clamped)
+    }
+
+    /// Smoothly ramps `AVSampleBufferAudioRenderer.volume` over `duration` (equal-power by default).
+    ///
+    /// Click-free endpoint handling: when `updateMuteOnEndpoints` is true, unmuting runs *before* ramping up from 0,
+    /// and muting runs *only after* gain settles at 0.
+    public func rampVolume(
+        to target: Float,
+        duration: Duration = .milliseconds(160),
+        curve: TwitchVolumeRampCurve = .equalPower,
+        updateMuteOnEndpoints: Bool = true
+    ) {
+        volumeRampTask?.cancel()
+        volumeRampTask = nil
+
+        let goal = max(0.0, min(1.0, target))
+        let startVol = currentVolume
+
+        if updateMuteOnEndpoints && goal > 0.001 && isMuted {
+            isMuted = false
+            pipeline.setMuted(false)
+        }
+
+        let totalSeconds = Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+        guard totalSeconds > 0.005, abs(goal - startVol) > 0.001 else {
+            currentVolume = goal
+            pipeline.setVolume(goal)
+            if updateMuteOnEndpoints && goal <= 0.001 && !isMuted {
+                isMuted = true
+                pipeline.setMuted(true)
+            }
+            return
+        }
+
+        let stepInterval: Duration = .milliseconds(16)
+        let steps = max(1, Int((totalSeconds / 0.016).rounded()))
+        volumeRampTask = Task { [weak self] in
+            for step in 1...steps {
+                try? await Task.sleep(for: stepInterval)
+                guard let self, !Task.isCancelled else { return }
+                let progress = Double(step) / Double(steps)
+                let gain = curve.interpolate(from: startVol, to: goal, progress: progress)
+                await self.applyRampedVolume(gain)
+            }
+            guard let self, !Task.isCancelled else { return }
+            await self.finishVolumeRamp(goal: goal, updateMuteOnEndpoints: updateMuteOnEndpoints)
+        }
+    }
+
+    /// Disables or re-enables video decoding/enqueuing while audio continues uninterrupted (e.g. screen-locked
+    /// background audio without Picture-in-Picture).
+    public func setVideoOutputEnabled(_ enabled: Bool) {
+        pipeline.setVideoOutputEnabled(enabled)
+    }
+
     public func selectVariant(id: String) {
         preferredVariantID = id
-        guard let ch = channel, let match = variants.first(where: { $0.id == id && $0.isNativeCompatible }) else { return }
+        guard channel != nil, let match = variants.first(where: { $0.id == id && $0.isNativeCompatible }) else { return }
         selectedVariant = match
         // Restart playback loop on the new variant without re-resolving GQL/Usher unless needed.
         runTask?.cancel()
         telemetryTask?.cancel()
         cancelOverlap()
-        pipeline.flush(clearImage: false)
         demuxer.reset()
         generation &+= 1
         let gen = generation
+        pipeline.flush(clearImage: false, generation: gen)
+        loadingSince = .now
         emit(.variants(variants.filter(\.isNativeCompatible), selectedID: match.id))
         emit(.loading)
-        let _ = ch
+        startTelemetryLoop(gen: gen)
         runTask = Task.detached(priority: .userInitiated) { [weak self] in
             await self?.streamVariantLoop(variant: match, gen: gen)
         }
@@ -837,10 +1134,11 @@ public actor TwitchNativeEngine {
     /// Flushes buffered frames and rejoins directly at the latest prefetch edge.
     public func jumpToLive() {
         guard let ch = channel else { return }
-        if isPaused {
+        if userPaused {
             setPaused(false)
             return
         }
+        isInterrupted = false
         guard let variant = selectedVariant else {
             start(channel: ch, authToken: authToken, preferredVariantID: preferredVariantID)
             return
@@ -848,10 +1146,12 @@ public actor TwitchNativeEngine {
         runTask?.cancel()
         telemetryTask?.cancel()
         cancelOverlap()
-        pipeline.flush(clearImage: false)
         demuxer.reset()
         generation &+= 1
         let gen = generation
+        pipeline.flush(clearImage: false, generation: gen)
+        loadingSince = .now
+        startTelemetryLoop(gen: gen)
         runTask = Task.detached(priority: .userInitiated) { [weak self] in
             await self?.streamVariantLoop(variant: variant, gen: gen)
         }
@@ -859,8 +1159,121 @@ public actor TwitchNativeEngine {
 
     // MARK: - Playback loops
 
-    private func stopInternal(clearImage: Bool) {
+    private func registerAudioObserverIfNeeded() {
+        guard !audioObserverRegistered else { return }
+        audioObserverRegistered = true
+        audioSession.addObserver(id: audioClaimID) { [weak self] event in
+            guard let self else { return }
+            Task { await self.handleAudioEvent(event) }
+        }
+    }
+
+    private func applyRampedVolume(_ volume: Float) {
+        currentVolume = volume
+        pipeline.setVolume(volume)
+    }
+
+    private func finishVolumeRamp(goal: Float, updateMuteOnEndpoints: Bool) {
+        currentVolume = goal
+        pipeline.setVolume(goal)
+        if updateMuteOnEndpoints && goal <= 0.001 && !isMuted {
+            isMuted = true
+            pipeline.setMuted(true)
+        }
+        volumeRampTask = nil
+    }
+
+    private func activeSegmentStream() -> SegmentStreamer {
+        if let customSegmentStreamer { return customSegmentStreamer }
+        let s = streamer
+        return { url in s.stream(url: url) }
+    }
+
+    private func handlePlayingChange(_ playing: Bool, gen: UInt64) {
+        guard gen == generation else { return }
+        if playing {
+            loadingSince = nil
+            stallRecoveries = 0
+        }
+        emit(playing ? .playing : .paused)
+    }
+
+    private func handleAudioEvent(_ event: AudioSessionEvent) {
+        switch event {
+        case .interruptionBegan:
+            guard channel != nil, !userPaused, !isInterrupted else { return }
+            isInterrupted = true
+            loadingSince = nil
+            // Halt segment pulls AND notify pipeline/UI so the 480-frame cap never overflows during a call/Siri.
+            runTask?.cancel()
+            runTask = nil
+            telemetryTask?.cancel()
+            telemetryTask = nil
+            cancelOverlap()
+            pipeline.setInterrupted(true, generation: generation)
+
+        case .interruptionEnded(let shouldResume):
+            guard isInterrupted else { return }
+            isInterrupted = false
+            guard channel != nil, !userPaused else {
+                pipeline.setInterrupted(false, generation: generation)
+                return
+            }
+            if shouldResume {
+                audioSession.claim(audioClaimID, kind: .playback(allowsPiP: true))
+                audioSession.reactivateIfNeeded()
+                jumpToLive()
+            } else {
+                userPaused = true
+                pipeline.setInterrupted(false, generation: generation)
+                pipeline.setPaused(true, generation: generation)
+                audioSession.release(audioClaimID)
+                emit(.userPausedChanged(true))
+            }
+
+        case .routeOldDeviceUnavailable:
+            guard channel != nil, !userPaused else { return }
+            setPaused(true)
+
+        case .mediaServicesReset:
+            guard channel != nil, !userPaused, !isInterrupted else { return }
+            audioSession.claim(audioClaimID, kind: .playback(allowsPiP: true))
+            audioSession.reactivateIfNeeded()
+            jumpToLive()
+        }
+    }
+
+    private func startTelemetryLoop(gen: UInt64) {
+        telemetryTask?.cancel()
+        let interval: Duration = startupTimeout < .seconds(2) ? .milliseconds(50) : .milliseconds(500)
+        telemetryTask = Task.detached(priority: .utility) { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard let self, !Task.isCancelled else { return }
+                await self.pollTelemetry(gen: gen)
+            }
+        }
+    }
+
+    private func failSession(gen: UInt64, reason: String) {
+        guard gen == generation else { return }
+        Telemetry.log(.warn, .live, "twitch.native.failed", data: ["reason": .string(reason)])
         generation &+= 1
+        runTask?.cancel()
+        runTask = nil
+        telemetryTask?.cancel()
+        telemetryTask = nil
+        cancelOverlap()
+        loadingSince = nil
+        audioSession.release(audioClaimID)
+        emit(.failed(reason))
+    }
+
+    private func stopInternal(clearImage: Bool, releaseAudioClaim: Bool) {
+        generation &+= 1
+        let gen = generation
+        volumeRampTask?.cancel()
+        volumeRampTask = nil
         runTask?.cancel()
         runTask = nil
         telemetryTask?.cancel()
@@ -869,10 +1282,17 @@ public actor TwitchNativeEngine {
         streamer.invalidate()
         streamer = ChunkedStreamSession()
         demuxer.reset()
-        pipeline.flush(clearImage: clearImage)
+        pipeline.flush(clearImage: clearImage, generation: gen)
+        loadingSince = nil
+        stallRecoveries = 0
+        isInterrupted = false
         channel = nil
         variants = []
         selectedVariant = nil
+        if releaseAudioClaim {
+            userPaused = false
+            audioSession.release(audioClaimID)
+        }
     }
 
     private func cancelOverlap() {
@@ -890,30 +1310,33 @@ public actor TwitchNativeEngine {
     private func runSession(gen: UInt64) async {
         guard let ch = channel else { return }
         do {
-            let allVariants = try await resolver.resolve(channel: ch, authToken: authToken)
+            let resolved = try await resolver.resolveStream(channel: ch, authToken: authToken)
             guard gen == generation, !Task.isCancelled else { return }
 
-            let compatible = allVariants.filter(\.isNativeCompatible)
+            let compatible = resolved.variants.filter(\.isNativeCompatible)
             guard !compatible.isEmpty else {
-                emit(.failed("unsupported codec"))
+                failSession(gen: gen, reason: "unsupported codec")
                 return
             }
-            variants = allVariants
+            variants = resolved.variants
             let chosen = pickVariant(from: compatible, preferredID: preferredVariantID)
             selectedVariant = chosen
+            emit(.streamURL(resolved.masterURL))
             emit(.variants(compatible, selectedID: chosen.id))
             await streamVariantLoop(variant: chosen, gen: gen)
         } catch TwitchHLSError.offline {
             guard gen == generation else { return }
+            telemetryTask?.cancel()
+            telemetryTask = nil
+            loadingSince = nil
+            audioSession.release(audioClaimID)
             emit(.offline)
         } catch TwitchHLSError.integrityRequired {
-            guard gen == generation else { return }
-            emit(.failed("integrity check required"))
+            failSession(gen: gen, reason: "integrity check required")
         } catch is CancellationError {
             return
         } catch {
-            guard gen == generation else { return }
-            emit(.failed("\(error)"))
+            failSession(gen: gen, reason: "\(error)")
         }
     }
 
@@ -930,23 +1353,16 @@ public actor TwitchNativeEngine {
 
     private func streamVariantLoop(variant: TwitchVariant, gen: UInt64) async {
         pipeline.setMuted(isMuted)
+        pipeline.setVolume(currentVolume)
         demuxer.reset()
-
-        // Start 500 ms telemetry & live-edge pacing loop.
-        telemetryTask?.cancel()
-        telemetryTask = Task.detached(priority: .utility) { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
-                guard let self, !Task.isCancelled else { return }
-                await self.pollTelemetry(gen: gen)
-            }
-        }
 
         var lastConsumedSeq: Int?
         var seenKeys: [String] = []
         var seenKeySet: Set<String> = []
         var playlistFailures = 0
+        var segmentFailures = 0
         var tokenRefreshes = 0
+        var startupCompletedFallbackUsed = false
         var activeVariant = variant
 
         func markSeen(_ seg: TwitchSegment) {
@@ -981,43 +1397,48 @@ public actor TwitchNativeEngine {
                 }
                 pipeline.configure(audioOnly: activeVariant.isAudioOnly, isLowLatency: playlist.isLowLatency)
             } catch TwitchHLSError.offline {
-                if gen == generation { emit(.offline) }
+                if gen == generation {
+                    telemetryTask?.cancel()
+                    telemetryTask = nil
+                    loadingSince = nil
+                    audioSession.release(audioClaimID)
+                    emit(.offline)
+                }
                 return
             } catch is CancellationError {
                 return
             } catch {
                 playlistFailures += 1
-                // Twitch playback tokens expire periodically (~20 min) or weaver reassigns: refresh once before failing.
-                if playlistFailures >= 2, tokenRefreshes < 3, let ch = channel {
+                // Twitch playback tokens expire periodically (~20 min) or weaver reassigns: refresh before failing.
+                if playlistFailures >= 2, tokenRefreshes < 3 {
                     tokenRefreshes += 1
-                    if let refreshed = try? await resolver.resolve(channel: ch, authToken: authToken) {
-                        let compat = refreshed.filter(\.isNativeCompatible)
-                        if !compat.isEmpty {
-                            variants = refreshed
-                            activeVariant = pickVariant(from: compat, preferredID: activeVariant.id)
-                            selectedVariant = activeVariant
-                            playlistFailures = 0
-                            continue
-                        }
+                    if let refreshed = await refreshStreamURL(preferredID: activeVariant.id, attempt: tokenRefreshes) {
+                        activeVariant = refreshed
+                        playlistFailures = 0
+                        continue
                     }
                 }
                 if playlistFailures >= 4 {
-                    if gen == generation { emit(.failed("playlist unavailable")) }
+                    failSession(gen: gen, reason: "playlist unavailable")
                     return
                 }
-                try? await Task.sleep(for: .milliseconds(600))
+                try? await Task.sleep(for: .milliseconds(500))
                 continue
             }
 
             guard gen == generation, !Task.isCancelled else { return }
             if playlist.isEndList {
+                telemetryTask?.cancel()
+                telemetryTask = nil
+                loadingSince = nil
+                audioSession.release(audioClaimID)
                 emit(.offline)
                 return
             }
 
             let all = playlist.allSegments
             guard !all.isEmpty else {
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await Task.sleep(for: .milliseconds(450))
                 continue
             }
 
@@ -1033,9 +1454,12 @@ public actor TwitchNativeEngine {
             // 2. Choose the next segment(s) to consume.
             let candidates: [TwitchSegment]
             if lastConsumedSeq == nil {
-                // First join: jump right onto the low-latency prefetch edge!
-                if !playlist.prefetchSegments.isEmpty {
+                // First join: try the low-latency prefetch edge first, unless a prefetch failure already sent us
+                // back to the latest completed segment (which reliably begins with SPS/PPS + IDR keyframe).
+                if !startupCompletedFallbackUsed, !playlist.prefetchSegments.isEmpty {
                     candidates = playlist.prefetchSegments
+                } else if let latestCompleted = playlist.segments.last {
+                    candidates = [latestCompleted] + playlist.prefetchSegments
                 } else {
                     candidates = Array(playlist.segments.suffix(2))
                 }
@@ -1066,31 +1490,111 @@ public actor TwitchNativeEngine {
                 if existingSeq != nextSegment.sequence {
                     cancelOverlap()
                     let next = OverlappedSegmentFetch(segment: nextSegment)
-                    await next.start(streamer: streamer)
+                    await next.start(stream: activeSegmentStream())
                     overlappedFetch = next
                 }
             }
 
-            // Consume `current` (reusing overlapped fetch if we already started it on the previous turn!).
-            markSeen(current)
-            let ok = await consumeSegment(current, gen: gen)
-            if !ok {
-                // Unsupported video codec discovered in PMT (e.g. HEVC): fail out to embed fallback cleanly.
-                if let bad = demuxer.unsupportedVideoCodec {
-                    if gen == generation { emit(.failed("unsupported codec: \(bad)")) }
+            // 3. Consume `current` (reusing overlapped fetch if we already started it on the previous turn!).
+            let isFirstJoin = (lastConsumedSeq == nil)
+            let result = await consumeSegment(current, gen: gen)
+            guard gen == generation, !Task.isCancelled else { return }
+
+            if let bad = demuxer.unsupportedVideoCodec {
+                failSession(gen: gen, reason: "unsupported codec: \(bad)")
+                return
+            }
+
+            // On first join onto a prefetch segment: if the prefetch failed OR ended without a video keyframe,
+            // don't pin `lastConsumedSeq` to it — immediately fall back to the latest completed segment so the
+            // decoder gets a clean IDR + SPS/PPS boundary instead of spinning indefinitely.
+            let missingInitialKeyframe = isFirstJoin && current.isPrefetch && !activeVariant.isAudioOnly && !result.hadKeyframe
+            if isFirstJoin && current.isPrefetch && (!result.succeeded || missingInitialKeyframe) && !startupCompletedFallbackUsed {
+                startupCompletedFallbackUsed = true
+                cancelOverlap()
+                Telemetry.log(
+                    .info, .live, "twitch.native.prefetch_fallback",
+                    data: ["ok": .bool(result.succeeded), "keyframe": .bool(result.hadKeyframe)]
+                )
+                if let fallbackSeg = playlist.segments.last {
+                    let fb = await consumeSegment(fallbackSeg, gen: gen)
+                    guard gen == generation, !Task.isCancelled else { return }
+                    if let bad = demuxer.unsupportedVideoCodec {
+                        failSession(gen: gen, reason: "unsupported codec: \(bad)")
+                        return
+                    }
+                    if fb.succeeded && fb.sampleCount > 0 {
+                        markSeen(fallbackSeg)
+                        segmentFailures = 0
+                        continue
+                    }
+                }
+            }
+
+            if result.succeeded {
+                markSeen(current)
+                if result.sampleCount > 0 {
+                    segmentFailures = 0
+                }
+            } else {
+                segmentFailures += 1
+                // Once already playing, advance past a broken segment after one failure so we don't loop on a 404.
+                if !isFirstJoin {
+                    markSeen(current)
+                }
+                if segmentFailures >= 2, tokenRefreshes < 3 {
+                    tokenRefreshes += 1
+                    if let refreshed = await refreshStreamURL(preferredID: activeVariant.id, attempt: tokenRefreshes) {
+                        activeVariant = refreshed
+                        segmentFailures = 0
+                        continue
+                    }
+                }
+                if segmentFailures >= 4 {
+                    failSession(gen: gen, reason: "segment fetch failed")
                     return
                 }
+                try? await Task.sleep(for: .milliseconds(350))
             }
         }
     }
 
+    private func refreshStreamURL(preferredID: String, attempt: Int) async -> TwitchVariant? {
+        guard let ch = channel else { return nil }
+        Telemetry.log(.info, .live, "twitch.native.token_refresh", data: ["attempt": .int(attempt)])
+        guard let refreshed = try? await resolver.resolveStream(channel: ch, authToken: authToken) else { return nil }
+        let compat = refreshed.variants.filter(\.isNativeCompatible)
+        guard !compat.isEmpty else { return nil }
+        variants = refreshed.variants
+        let chosen = pickVariant(from: compat, preferredID: preferredID)
+        selectedVariant = chosen
+        emit(.streamURL(refreshed.masterURL))
+        return chosen
+    }
+
     /// Streams one segment chunk-by-chunk into `MPEGTSDemuxer` and `SampleBufferPipeline`.
-    private func consumeSegment(_ segment: TwitchSegment, gen: UInt64) async -> Bool {
+    private func consumeSegment(_ segment: TwitchSegment, gen: UInt64) async -> SegmentConsumeResult {
         if segment.isDiscontinuity {
             let flushed = demuxer.beginDiscontinuity()
             pipeline.enqueue(flushed)
         }
         pipeline.beginSegment(programDateTime: segment.programDateTime)
+
+        var totalSamples = 0
+        var hadKeyframe = false
+
+        func record(_ samples: [DemuxedSample]) {
+            totalSamples += samples.count
+            if !hadKeyframe {
+                for s in samples {
+                    if case .video(let v) = s, v.isKeyframe {
+                        hadKeyframe = true
+                        break
+                    }
+                }
+            }
+            pipeline.enqueue(samples)
+        }
 
         // Reuse the overlapped prefetch stream if it matches this segment!
         if let overlap = overlappedFetch, overlap.segment.sequence == segment.sequence {
@@ -1101,32 +1605,37 @@ public actor TwitchNativeEngine {
                     let samples = demuxer.push(chunk)
                     if demuxer.unsupportedVideoCodec != nil {
                         await overlap.cancel()
-                        return false
+                        return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
                     }
-                    pipeline.enqueue(samples)
+                    record(samples)
                 }
                 let tail = demuxer.flushSegment()
-                pipeline.enqueue(tail)
-                return true
+                record(tail)
+                return SegmentConsumeResult(succeeded: true, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
             } catch {
                 await overlap.cancel()
-                return false
+                return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
             }
         }
 
         // Otherwise open a direct chunked stream now.
+        let streamFn = activeSegmentStream()
         do {
-            for try await chunk in streamer.stream(url: segment.url) {
-                guard gen == generation, !Task.isCancelled else { return false }
+            for try await chunk in streamFn(segment.url) {
+                guard gen == generation, !Task.isCancelled else {
+                    return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
+                }
                 let samples = demuxer.push(chunk)
-                if demuxer.unsupportedVideoCodec != nil { return false }
-                pipeline.enqueue(samples)
+                if demuxer.unsupportedVideoCodec != nil {
+                    return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
+                }
+                record(samples)
             }
             let tail = demuxer.flushSegment()
-            pipeline.enqueue(tail)
-            return true
+            record(tail)
+            return SegmentConsumeResult(succeeded: true, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
         } catch {
-            return false
+            return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
         }
     }
 
@@ -1134,14 +1643,26 @@ public actor TwitchNativeEngine {
         guard gen == generation else { return }
         let stats = await pipeline.tickTelemetry()
         guard gen == generation else { return }
-        emit(.stats(stats))
-    }
 
-    private func configureAudioSession() {
-        #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-        try? session.setActive(true)
-        #endif
+        if stats.isClockStarted {
+            loadingSince = nil
+        } else if !userPaused, !isInterrupted, let since = loadingSince, ContinuousClock.now - since >= startupTimeout {
+            Telemetry.log(.warn, .live, "twitch.native.startup_timeout")
+            failSession(gen: gen, reason: "startup timeout")
+            return
+        }
+
+        if stats.isStalled, !userPaused, !isInterrupted {
+            stallRecoveries += 1
+            Telemetry.log(.warn, .live, "twitch.native.stall_recovery", data: ["attempt": .int(stallRecoveries)])
+            if stallRecoveries <= 2 {
+                jumpToLive()
+            } else {
+                failSession(gen: gen, reason: "playback stalled")
+            }
+            return
+        }
+
+        emit(.stats(stats))
     }
 }

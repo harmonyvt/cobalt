@@ -57,11 +57,8 @@ final class ClipTrimPreview {
         }
         self.selection = selection
         stop()
-        #if os(iOS)
-        // Muted and mixing: it never interrupts whatever is playing (the same rule as the webp trim).
-        let session = AVAudioSession.sharedInstance()
-        if session.category != .ambient { try? session.setCategory(.ambient, mode: .default) }
-        #endif
+        // Muted and mixing: off-main ambient hint that never interrupts active `.playback` claims (e.g. Twitch PiP/bar).
+        AudioSessionCoordinator.shared.ensureAmbient()
         self.url = url
         let item = AVPlayerItem(url: url)
         let queue = AVPlayer(playerItem: item)

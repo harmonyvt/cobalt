@@ -96,6 +96,7 @@ struct FocusLayer: View {
     /// Close or swipe down.
     let onClose: () -> Void
 
+    @State private var audioClaimID = "focus.\(UUID().uuidString)"
     @State private var showsTrim = false
     /// The crop editor's draft, while the editor is open over the planet (CONTRACT-ORBIT 2d).
     @State private var cropEditor: CropEditorModel?
@@ -499,8 +500,10 @@ struct FocusLayer: View {
         // The webp replaces the video: the video is silent and paused from then on (the sound toggle goes
         // with it), and the audio session is only ever `.playback` while the owner has sound on.
         .onChange(of: showsWebp) { _, shows in if shows { muted = true } }
-        .onChange(of: soundOn) { _, on in if on { AudioPolicy.playback() } else { AudioPolicy.release() } }
-        .onDisappear { if soundOn { AudioPolicy.release() } }
+        .onChange(of: soundOn) { _, on in
+            if on { AudioPolicy.playback(id: audioClaimID) } else { AudioPolicy.release(id: audioClaimID) }
+        }
+        .onDisappear { if soundOn { AudioPolicy.release(id: audioClaimID) } }
         .task(id: lifted) {
             liftSettled = false
             guard lifted else { return }

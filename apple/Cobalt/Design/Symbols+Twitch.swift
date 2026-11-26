@@ -39,5 +39,7 @@ extension Symbol {
         static let muted = "speaker.slash.fill"
         static let unmuted = "speaker.wave.2.fill"
         static let audioOnly = "waveform"
+        static let pipEnter = "pip.enter"
+        static let pipExit = "pip.exit"
     }
 }

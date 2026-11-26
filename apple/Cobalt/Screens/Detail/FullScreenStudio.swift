@@ -69,6 +69,7 @@ struct FullScreenStudioVideo: View {
     @State private var player = AVPlayer()
     @State private var transport = HeroTransport()
     @State private var muted = false
+    @State private var audioClaimID = "studio.\(UUID().uuidString)"
     @State private var audioReleased = false
     @State private var loopObserver: NSObjectProtocol?
 
@@ -1435,7 +1436,7 @@ struct FullScreenStudioVideo: View {
     // MARK: - Playback Lifecycle
 
     private func startPlayback() async {
-        AudioPolicy.playback()
+        AudioPolicy.playback(id: audioClaimID)
         let item = KeyedStream.item(url)
         player.replaceCurrentItem(with: item)
         player.isMuted = muted
@@ -1479,13 +1480,13 @@ struct FullScreenStudioVideo: View {
     private func releaseAudio() {
         guard !audioReleased else { return }
         audioReleased = true
-        AudioPolicy.release()
+        AudioPolicy.release(id: audioClaimID)
     }
 
     private func toggleMute() {
         muted.toggle()
         player.isMuted = muted
-        if muted { AudioPolicy.release() } else { AudioPolicy.playback() }
+        if muted { AudioPolicy.release(id: audioClaimID) } else { AudioPolicy.playback(id: audioClaimID) }
         transport.reveal()
     }
 

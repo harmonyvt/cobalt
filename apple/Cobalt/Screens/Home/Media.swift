@@ -53,50 +53,27 @@ actor FlipbookLoader {
     }
 }
 
-/// The app's audio session policy: everything the app plays on its own (the orbit's players, trim
-/// previews, the focused planet while muted) is `.ambient`, so it mixes with whatever the owner is
-/// listening to and never interrupts it. Only a planet the owner has unmuted takes `.playback`, and
-/// muting, closing or switching to the webp gives the session back.
+/// The app's audio session policy facade over `AudioSessionCoordinator.shared`.
 ///
-/// The session calls are made on one serial queue, never the main thread: `setActive` waits on the media server, and
-/// deactivating while a player still had its audio running held the main thread long enough to freeze the app on the
-/// way back from a video (owner, 2026-11-11). The queue keeps the calls in the order they were asked for.
+/// `.ambient()` hints never demote or deactivate an active `.playback` claim (such as a live Twitch stream in `.bar`
+/// or Picture-in-Picture), and `.release(id:)` only deactivates the audio session when the last `.playback` claim drops.
 @MainActor
 enum AudioPolicy {
-    #if os(iOS)
-    private nonisolated static let queue = DispatchQueue(label: "com.capybaraharmony.cobalt.audio-session", qos: .userInitiated)
-    #endif
+    private static let legacyPlaybackID = "audioPolicy.legacy"
 
-    /// Ambient, mixing: called whenever a player is created.
+    /// Ambient, mixing: called whenever a muted player is created. No-op while any `.playback` claim is active.
     static func ambient() {
-        #if os(iOS)
-        queue.async {
-            let session = AVAudioSession.sharedInstance()
-            if session.category != .ambient { try? session.setCategory(.ambient, mode: .default) }
-        }
-        #endif
+        AudioSessionCoordinator.shared.ensureAmbient()
     }
 
-    /// The owner unmuted a planet: it plays through the silent switch and takes the audio focus.
-    static func playback() {
-        #if os(iOS)
-        queue.async {
-            let session = AVAudioSession.sharedInstance()
-            try? session.setCategory(.playback, mode: .moviePlayback)
-            try? session.setActive(true)
-        }
-        #endif
+    /// Acquires a refcounted `.playback` claim (plays through the silent switch and takes audio focus).
+    static func playback(id: String = legacyPlaybackID, allowsPiP: Bool = false) {
+        AudioSessionCoordinator.shared.claim(id, kind: .playback(allowsPiP: allowsPiP))
     }
 
-    /// Back to ambient, and tell whoever was interrupted that they may resume. Callers pause their player first.
-    static func release() {
-        #if os(iOS)
-        queue.async {
-            let session = AVAudioSession.sharedInstance()
-            try? session.setCategory(.ambient, mode: .default)
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
-        }
-        #endif
+    /// Releases a named `.playback` claim; deactivates the session only when the last `.playback` claim drops.
+    static func release(id: String = legacyPlaybackID) {
+        AudioSessionCoordinator.shared.release(id)
     }
 }
 
