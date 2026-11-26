@@ -201,6 +201,23 @@ extension CobaltAppDelegate: UIApplicationDelegate {
         // ours and forward to itself until the stack ran out: the 8.27 (138) launch crash.
         return UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
     }
+
+    func application(
+        _ application: UIApplication,
+        didDiscardSceneSessions sceneSessions: Set<UISceneSession>
+    ) {
+        MainActor.assumeIsolated {
+            // iOS 27 can deliver a stale discard for the same `persistentIdentifier` that is already reconnected as
+            // the live window scene on relaunch; only purge entries that are no longer open or connected.
+            let activeIDs = Set(
+                application.openSessions.map(\.persistentIdentifier)
+                + application.connectedScenes.map(\.session.persistentIdentifier)
+            )
+            for session in sceneSessions where !activeIDs.contains(session.persistentIdentifier) {
+                PaneSceneFallback.remove(sessionID: session.persistentIdentifier)
+            }
+        }
+    }
 }
 #else
 extension CobaltAppDelegate: NSApplicationDelegate {

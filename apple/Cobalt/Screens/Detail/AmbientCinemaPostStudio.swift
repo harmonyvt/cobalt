@@ -660,6 +660,15 @@ struct AmbientCinemaPostStudio: View {
                     fileShareButton
                 }
             }
+
+            if offline {
+                Text(Copy.Pane.offlineNote)
+                    .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
+                    .foregroundStyle(.white.opacity(0.74))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 2)
+            }
         }
         .padding(11)
         .mediaGlassRounded(cornerRadius: 20, interactive: false)
@@ -1282,6 +1291,14 @@ struct AmbientCinemaPostStudio: View {
                         kit.share([rendition])
                     }
                     .disabled(controller.preparingShare)
+                }
+
+                if offline {
+                    Text(Copy.Pane.offlineNote)
+                        .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
                 }
             }
             .padding(12)

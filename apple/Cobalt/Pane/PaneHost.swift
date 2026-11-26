@@ -40,6 +40,10 @@ struct PaneHost<Content: View>: View {
     @State private var edgeTargeted = false
     /// Work waiting for the compact sheet to finish going down (`PaneAfterDismiss`).
     @State private var afterDismiss = PaneAfterDismiss()
+    #if os(iOS)
+    /// Hosting window's `UISceneSession.persistentIdentifier` (populated by `SceneSessionProbe`).
+    @State private var sceneSessionID: String?
+    #endif
 
     init(model: AppModel, dragging: Bool = false, @ViewBuilder content: () -> Content) {
         self.model = model
@@ -140,21 +144,32 @@ struct PaneHost<Content: View>: View {
                 }
                 #if os(iOS)
                 .ignoresSafeArea(.keyboard)
+                .background {
+                    SceneSessionProbe { id in sceneSessionID = id }
+                        .accessibilityHidden(true)
+                }
                 #endif
         }
         .onChange(of: placement, initial: true) { _, now in if measured { pane.place(now) } }
-        .onAppear {
-            #if DEBUG
-            // `-paneReset YES` (UI tests): start with no saved pane, so one test's pane is not the next one's
-            if UserDefaults.standard.bool(forKey: "paneReset") {
-                saved = nil
-                pane.restoreOnce(nil)
-                return
+        .onAppear { restoreIfReady() }
+        #if os(iOS)
+        .onChange(of: sceneSessionID) { _, id in
+            if !pane.restored {
+                restoreIfReady()
+            } else if let id {
+                PaneSceneFallback.save(pane.machine.saved.encoded(), sessionID: id)
+            }
+        }
+        #endif
+        .onChange(of: pane.machine.saved) { _, now in
+            let encoded = now.encoded()
+            saved = encoded
+            #if os(iOS)
+            if let id = resolvedSceneSessionID {
+                PaneSceneFallback.save(encoded, sessionID: id)
             }
             #endif
-            pane.restoreOnce(saved)
         }
-        .onChange(of: pane.machine.saved) { _, now in saved = now.encoded() }
         .onChange(of: sheetShown.wrappedValue, initial: true) { _, up in afterDismiss.sheetIsUp = up }
         .sheet(isPresented: sheetShown, onDismiss: { afterDismiss.sheetDidDismiss() }) { compactSheet }
         #if os(iOS)
@@ -184,6 +199,46 @@ struct PaneHost<Content: View>: View {
         if UserDefaults.standard.bool(forKey: "previewPaneOffline") { return true }
         #endif
         return model.capabilities.kind == .unreachable
+    }
+
+    // MARK: restoration
+
+    #if os(iOS)
+    private var resolvedSceneSessionID: String? {
+        if let sceneSessionID { return sceneSessionID }
+        let appScenes = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .filter { $0.session.role == .windowApplication }
+        return appScenes.count == 1 ? appScenes[0].session.persistentIdentifier : nil
+    }
+    #endif
+
+    private func restoreIfReady() {
+        guard !pane.restored else { return }
+        #if DEBUG
+        // `-paneReset YES` (UI tests): start with no saved pane, so one test's pane is not the next one's
+        if UserDefaults.standard.bool(forKey: "paneReset") {
+            saved = nil
+            #if os(iOS)
+            PaneSceneFallback.removeAll()
+            #endif
+            pane.restoreOnce(nil)
+            return
+        }
+        #endif
+        #if os(iOS)
+        // Prefer the per-scene mirror keyed by `UISceneSession.persistentIdentifier` when present: it updates on every
+        // `pane.machine.saved` change (and purges genuinely discarded sessions in `didDiscardSceneSessions`), whereas
+        // UIKit's `@SceneStorage("pane")` snapshot flushes lazily on backgrounding and can stay stale or be discarded on
+        // iOS 27 when a backgrounded process terminates before suspension even though the same scene session reconnects.
+        guard let sessionID = resolvedSceneSessionID else { return }
+        if let mirrored = PaneSceneFallback.load(sessionID: sessionID) {
+            saved = mirrored
+            pane.restoreOnce(mirrored)
+            return
+        }
+        #endif
+        pane.restoreOnce(saved)
     }
 
     // MARK: inline
@@ -475,3 +530,71 @@ private struct PaneOverlayLayout: Layout {
         }
     }
 }
+
+#if os(iOS)
+/// Per-scene persistence mirror for `PaneRoute` keyed by `UISceneSession.persistentIdentifier`.
+///
+/// `@SceneStorage("pane")` stays the primary store, while this mirror protects against iOS 27 intermittently dropping
+/// `UISceneSession.stateRestorationActivity` after a backgrounded process is terminated before suspension even though
+/// it reconnects the same `UISceneSession`. Discarded sessions are purged in `CobaltAppDelegate.application(_:didDiscardSceneSessions:)`.
+@MainActor
+enum PaneSceneFallback {
+    private static let key = "pane.sceneRoutes"
+
+    static func load(sessionID: String) -> Data? {
+        (UserDefaults.standard.dictionary(forKey: key) as? [String: Data])?[sessionID]
+    }
+
+    static func save(_ data: Data?, sessionID: String) {
+        var map = (UserDefaults.standard.dictionary(forKey: key) as? [String: Data]) ?? [:]
+        if let data {
+            if map[sessionID] == data { return }
+            map[sessionID] = data
+            UserDefaults.standard.set(map, forKey: key)
+        } else if map.removeValue(forKey: sessionID) != nil {
+            if map.isEmpty {
+                UserDefaults.standard.removeObject(forKey: key)
+            } else {
+                UserDefaults.standard.set(map, forKey: key)
+            }
+        }
+    }
+
+    static func remove(sessionID: String) {
+        save(nil, sessionID: sessionID)
+    }
+
+    static func removeAll() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+}
+
+/// Reads the hosting window's `UISceneSession.persistentIdentifier` without affecting layout.
+private struct SceneSessionProbe: UIViewRepresentable {
+    var onSessionID: @MainActor (String) -> Void
+
+    func makeUIView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.onSessionID = onSessionID
+        return view
+    }
+
+    func updateUIView(_ uiView: ProbeView, context: Context) {
+        uiView.onSessionID = onSessionID
+    }
+
+    final class ProbeView: UIView {
+        var onSessionID: (@MainActor (String) -> Void)?
+        private var lastReported: String?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let id = window?.windowScene?.session.persistentIdentifier, id != lastReported else { return }
+            lastReported = id
+            Task { @MainActor [weak self] in
+                self?.onSessionID?(id)
+            }
+        }
+    }
+}
+#endif

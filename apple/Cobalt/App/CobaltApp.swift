@@ -142,64 +142,14 @@ struct CobaltApp: App {
         #endif
     }
 
-    /// What the scene does once its content is up (its `.task`): takes the notification taps, and
-    /// runs the debug launch flags that need a live scene.
-    private func sceneStarted() async {
-        #if DEBUG
-        DebugHooks.log("CobaltApp scene .task")
-        #endif
-        LinkInbox.shared.install { [model] url in handleAppLink(url, model: model) }
-        #if os(macOS)
-        // the studio wallpaper, when it was on (once, however often the window opens again)
-        StageWallpaper.shared.restoreAtLaunch(model)
-        #endif
-        #if DEBUG
-        LaunchConfig.runDebugLiveIfRequested()
-        await LaunchConfig.runPreviewScriptIfRequested(model)
-        #endif
-    }
-
-    /// The shell; with `-previewPhotosOnly 1` (debug) just the photos section, for one-state screenshots.
-    @ViewBuilder
-    private var rootContent: some View {
-        #if DEBUG && os(iOS)
-        if UserDefaults.standard.bool(forKey: "previewPhotosOnly") {
-            PhotosSectionEvidence(model: model).cobaltRoot(model: model)
-        } else {
-            AppShell(model: model)
-        }
-        #else
-        AppShell(model: model)
-        #endif
-    }
-
-    private var windowContent: some View {
-        rootContent
-            .onOpenURL { url in
-                #if DEBUG
-                DebugHooks.log("onOpenURL \(SevenTvLink.redacted(url))")
-                #endif
-                handleAppLink(url, model: model)
-            }
-            .task { await sceneStarted() }
-            // every window's views read `\.lifecycle` (AppLifecycle), and the launch marker is written
-            .publishesLifecycle()
-            // PostHog (APP-API-CONTRACT 58): starts once the server names its project, follows the two switches
-            .onChange(of: AnalyticsKey(model), initial: true) { Analytics.sync(model: model) }
-            #if os(macOS)
-            .frame(minWidth: 900, minHeight: 600)
-            // the window is found by identifier and opened again by the Dock (`MacWindows`)
-            .registersMainWindow()
-            // closing the last window must not quit while the icon is up: set from the view, where reading is allowed
-            .onChange(of: model.settings.menuBarExtra, initial: true) { _, on in
-                MenuBarPresence.shared.staysRunning = on
-            }
-            #endif
-    }
-
     #if os(iOS)
     private var mainWindow: some Scene {
-        WindowGroup { windowContent }
+        // Keep `WindowGroup`'s direct generic content an internal concrete view (`CobaltWindowRoot`), not a stack of
+        // `.modifier(...)` wrappers containing `private` structs (`PublishesLifecycle`, `AnalyticsKey`, SwiftUI's
+        // `SceneBridgeReader`). SwiftUI keys `@SceneStorage` restoration on `String(reflecting: Content.self)` when a
+        // `WindowGroup` has no explicit ID; `private` types reflect with `(unknown context at $<ASLR>)`, which changes
+        // on every process launch and causes iOS to discard the saved scene state (`@SceneStorage("pane")`).
+        WindowGroup { CobaltWindowRoot(model: model) }
             // A background download the share sheet started (the original, CONTRACT-SYNC.md decision 6)
             // finished while cobalt was not running: iOS launches the app and hands over the session.
             // The foreground catch-up (photos refresh, reconcile) is `pickUpSharedJobs` in AppShell.
@@ -219,7 +169,7 @@ struct CobaltApp: App {
         // commands again, until the stack overflows. `StageWallpaperCommand` is a view: it reads the
         // wallpaper and the capabilities in its own body, which is an ordinary view graph.
         let model = model
-        return Window("capystore", id: "main") { windowContent }
+        return Window("capystore", id: "main") { CobaltWindowRoot(model: model) }
             .defaultSize(width: 1280, height: 780)
             .defaultLaunchBehavior(.presented)
             // ⌘V is not a menu command here: the system's Paste reaches the window's paste destination, and a text field
@@ -258,6 +208,67 @@ struct CobaltApp: App {
         .menuBarExtraStyle(.window)
     }
     #endif
+}
+
+/// Concrete `internal` root view for `WindowGroup` / `Window` so SwiftUI's automatic `com.apple.SwiftUI.sceneID`
+/// reflects as `SwiftUI.WindowGroup<Cobalt.CobaltWindowRoot>-1` with zero `private`-type ASLR addresses.
+struct CobaltWindowRoot: View {
+    let model: AppModel
+
+    /// What the scene does once its content is up (its `.task`): takes the notification taps, and
+    /// runs the debug launch flags that need a live scene.
+    private func sceneStarted() async {
+        #if DEBUG
+        DebugHooks.log("CobaltApp scene .task")
+        #endif
+        LinkInbox.shared.install { [model] url in handleAppLink(url, model: model) }
+        #if os(macOS)
+        // the studio wallpaper, when it was on (once, however often the window opens again)
+        StageWallpaper.shared.restoreAtLaunch(model)
+        #endif
+        #if DEBUG
+        LaunchConfig.runDebugLiveIfRequested()
+        await LaunchConfig.runPreviewScriptIfRequested(model)
+        #endif
+    }
+
+    /// The shell; with `-previewPhotosOnly 1` (debug) just the photos section, for one-state screenshots.
+    @ViewBuilder
+    private var rootContent: some View {
+        #if DEBUG && os(iOS)
+        if UserDefaults.standard.bool(forKey: "previewPhotosOnly") {
+            PhotosSectionEvidence(model: model).cobaltRoot(model: model)
+        } else {
+            AppShell(model: model)
+        }
+        #else
+        AppShell(model: model)
+        #endif
+    }
+
+    var body: some View {
+        rootContent
+            .onOpenURL { url in
+                #if DEBUG
+                DebugHooks.log("onOpenURL \(SevenTvLink.redacted(url))")
+                #endif
+                handleAppLink(url, model: model)
+            }
+            .task { await sceneStarted() }
+            // every window's views read `\.lifecycle` (AppLifecycle), and the launch marker is written
+            .publishesLifecycle()
+            // PostHog (APP-API-CONTRACT 58): starts once the server names its project, follows the two switches
+            .onChange(of: AnalyticsKey(model), initial: true) { Analytics.sync(model: model) }
+            #if os(macOS)
+            .frame(minWidth: 900, minHeight: 600)
+            // the window is found by identifier and opened again by the Dock (`MacWindows`)
+            .registersMainWindow()
+            // closing the last window must not quit while the icon is up: set from the view, where reading is allowed
+            .onChange(of: model.settings.menuBarExtra, initial: true) { _, on in
+                MenuBarPresence.shared.staysRunning = on
+            }
+            #endif
+    }
 }
 
 #if os(macOS)
