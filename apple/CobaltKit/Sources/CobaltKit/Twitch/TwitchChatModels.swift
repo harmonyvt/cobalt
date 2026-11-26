@@ -176,8 +176,10 @@ public struct TwitchChatLine: Sendable, Hashable, Identifiable {
         case system
     }
 
-    /// Twitch's message id (`id` tag), or a local one.
+    /// Twitch's message id (`id` tag), or a channel-namespaced local/system id (`"\(channel):local-N"` / `"\(channel):sys-N"`).
     public var id: String
+    /// Lowercased channel login this message belongs to (empty only for legacy/synthetic fixtures that omit it).
+    public var channel: String
     public var kind: Kind
     public var login: String
     public var displayName: String
@@ -199,7 +201,51 @@ public struct TwitchChatLine: Sendable, Hashable, Identifiable {
         public var login: String
         public var displayName: String
         public var text: String
+
+        public init(login: String, displayName: String, text: String) {
+            self.login = login
+            self.displayName = displayName
+            self.text = text
+        }
     }
+
+    public init(
+        id: String,
+        channel: String = "",
+        kind: Kind,
+        login: String,
+        displayName: String,
+        color: UInt32?,
+        badges: [ChatBadge],
+        fragments: [ChatFragment],
+        timestamp: Date,
+        mentionsMe: Bool,
+        mine: Bool,
+        replyTo: Reply?,
+        deleted: Bool = false
+    ) {
+        self.id = id
+        self.channel = channel.lowercased()
+        self.kind = kind
+        self.login = login
+        self.displayName = displayName
+        self.color = color
+        self.badges = badges
+        self.fragments = fragments
+        self.timestamp = timestamp
+        self.mentionsMe = mentionsMe
+        self.mine = mine
+        self.replyTo = replyTo
+        self.deleted = deleted
+    }
+
+    /// True when `id` was minted locally (`local-*`, `sys-*`, or channel-namespaced `ch:local-*` / `ch:sys-*`),
+    /// so it must never be sent to Twitch as `reply-parent-msg-id`.
+    public static func isSyntheticID(_ id: String) -> Bool {
+        id.hasPrefix("local-") || id.hasPrefix("sys-") || id.contains(":local-") || id.contains(":sys-")
+    }
+
+    public var isSyntheticID: Bool { Self.isSyntheticID(id) }
 
     /// The plain text again (for copying and replying).
     public var plainText: String {

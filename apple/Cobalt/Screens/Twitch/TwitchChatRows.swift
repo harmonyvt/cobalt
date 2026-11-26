@@ -17,12 +17,24 @@ struct TwitchChatRow: View, Equatable {
     let sevenTvBadge: ChatBadge?
     /// "add to a 7tv set…" on a 7TV emote's menu (the account is linked).
     let canAddEmotes: Bool
+    /// Non-nil only in combined dual-stream mode: draws the left channel color stripe and compact 1-letter badge.
+    var channelAccent: TwitchChannelAccent? = nil
+    /// Protected channel accent hues in dual-stream mode so colliding Twitch username colors shift cleanly away.
+    var avoidAccentHues: [Double] = []
+    /// When true (dual-stream mode), tapping any non-deleted chat line locks composer target to that line's channel.
+    var tapToReply: Bool = false
 
     var onReply: ((TwitchChatLine) -> Void)?
     var onAddEmote: ((ChatEmote) -> Void)?
 
     nonisolated static func == (a: TwitchChatRow, b: TwitchChatRow) -> Bool {
-        a.line == b.line && a.paint == b.paint && a.sevenTvBadge == b.sevenTvBadge && a.canAddEmotes == b.canAddEmotes
+        a.line == b.line
+            && a.paint == b.paint
+            && a.sevenTvBadge == b.sevenTvBadge
+            && a.canAddEmotes == b.canAddEmotes
+            && a.channelAccent == b.channelAccent
+            && a.avoidAccentHues == b.avoidAccentHues
+            && a.tapToReply == b.tapToReply
     }
 
     @Environment(\.colorScheme) private var scheme
@@ -30,23 +42,36 @@ struct TwitchChatRow: View, Equatable {
     var body: some View {
         switch line.kind {
         case .system:
-            Text(line.plainText)
-                .font(Font.cobalt(11.5, relativeTo: .caption))
-                .foregroundStyle(CobaltColor.caption)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
+            HStack(spacing: 5) {
+                if let accent = channelAccent {
+                    channelMarkBadge(accent)
+                }
+                Text(line.plainText)
+                    .font(Font.cobalt(11.5, relativeTo: .caption))
+                    .foregroundStyle(CobaltColor.caption)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
         case .notice(let said):
             VStack(alignment: .leading, spacing: 4) {
-                Text(said)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(TwitchChatPalette.twitch)
+                HStack(spacing: 5) {
+                    if let accent = channelAccent {
+                        channelMarkBadge(accent)
+                    }
+                    Text(said)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(TwitchChatPalette.twitch)
+                }
                 if !line.fragments.isEmpty { message }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(TwitchChatPalette.twitch.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(alignment: .leading) { Rectangle().fill(TwitchChatPalette.twitch).frame(width: 3) }
+            .overlay(alignment: .leading) {
+                let stripe = channelAccent.map { TwitchChatPalette.accentColor($0) } ?? TwitchChatPalette.twitch
+                Rectangle().fill(stripe).frame(width: 3)
+            }
             .clipShape(RoundedRectangle(cornerRadius: 10))
         case .message, .action:
             VStack(alignment: .leading, spacing: 2) {
@@ -62,15 +87,24 @@ struct TwitchChatRow: View, Equatable {
                 }
                 message
             }
-            .padding(.horizontal, 8)
+            .padding(.leading, channelAccent != nil ? 11 : 8)
+            .padding(.trailing, 8)
             .padding(.vertical, 3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(background, in: RoundedRectangle(cornerRadius: 8))
             .overlay(alignment: .leading) {
-                if line.mentionsMe { Rectangle().fill(TwitchChatPalette.twitch).frame(width: 3) }
+                if let accent = channelAccent {
+                    Rectangle().fill(TwitchChatPalette.accentColor(accent)).frame(width: 3)
+                } else if line.mentionsMe {
+                    Rectangle().fill(TwitchChatPalette.twitch).frame(width: 3)
+                }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
             .opacity(line.deleted ? 0.45 : 1)
             .contentShape(Rectangle())
+            .modifier(TapToReplyModifier(enabled: tapToReply && onReply != nil && !line.deleted) {
+                onReply?(line)
+            })
             .contextMenu { menu }
         }
     }
@@ -110,7 +144,7 @@ struct TwitchChatRow: View, Equatable {
     }
 
     private var fallbackNameColor: Color {
-        TwitchChatPalette.color(line.color, login: line.login, dark: scheme == .dark)
+        TwitchChatPalette.color(line.color, login: line.login, dark: scheme == .dark, avoiding: avoidAccentHues)
     }
 
     private var nameStyle: AnyShapeStyle {
@@ -120,6 +154,9 @@ struct TwitchChatRow: View, Equatable {
 
     private var message: some View {
         TwitchFlow(spacing: 4, lineSpacing: 2) {
+            if let accent = channelAccent {
+                channelMarkBadge(accent)
+            }
             ForEach(Array(line.badges.enumerated()), id: \.offset) { _, badge in
                 badgeView(badge)
             }
@@ -132,6 +169,21 @@ struct TwitchChatRow: View, Equatable {
                 pieceView(piece)
             }
         }
+    }
+
+    private func channelMarkBadge(_ accent: TwitchChannelAccent) -> some View {
+        let tint = TwitchChatPalette.accentColor(accent)
+        return Text(accent.mark)
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .foregroundStyle(tint)
+            .frame(width: 16, height: 16)
+            .background(tint.opacity(0.18), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(tint.opacity(0.45), lineWidth: 0.75)
+            )
+            .accessibilityLabel(Copy.TwitchDualChat.fromChannel(accent.displayName))
+            .help(accent.displayName)
     }
 
     @ViewBuilder private var nameView: some View {
@@ -301,17 +353,50 @@ struct TwitchFlow: Layout {
     }
 }
 
+private struct TapToReplyModifier: ViewModifier {
+    let enabled: Bool
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .onTapGesture(perform: action)
+                .accessibilityHint(Copy.TwitchDualChat.tapToReplyHint)
+        } else {
+            content
+        }
+    }
+}
+
 enum TwitchChatPalette {
     static let twitch = Color(hex: 0x9146FF)
 
-    /// Twitch's default name colours, for people who never picked one.
-    private static let defaults: [UInt32] = [
-        0xFF0000, 0x0000FF, 0x008000, 0xB22222, 0xFF7F50, 0x9ACD32, 0xFF4500, 0x2E8B57,
-        0xDAA520, 0xD2691E, 0x5F9EA0, 0x1E90FF, 0xFF69B4, 0x8A2BE2, 0x00FF7F,
-    ]
+    static let primaryChannel = Color(
+        light: TwitchChannelAccent.primaryLightRGB,
+        dark: TwitchChannelAccent.primaryDarkRGB)
+    static let secondaryChannel = Color(
+        light: TwitchChannelAccent.secondaryLightRGB,
+        dark: TwitchChannelAccent.secondaryDarkRGB)
 
-    static func color(_ rgb: UInt32?, login: String, dark: Bool) -> Color {
-        let value = rgb ?? defaults[Int(login.unicodeScalars.reduce(UInt32(0)) { $0 &+ $1.value } % UInt32(defaults.count))]
+    static func accentColor(_ accent: TwitchChannelAccent) -> Color {
+        Color(light: accent.lightRGB, dark: accent.darkRGB)
+    }
+
+    static func dualAccentGradient(for accents: [TwitchChannelAccent]) -> LinearGradient {
+        let colors: [Color]
+        if accents.count >= 2 {
+            colors = [accentColor(accents[0]), accentColor(accents[1])]
+        } else {
+            colors = [primaryChannel, secondaryChannel]
+        }
+        return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
+    }
+
+    static func color(_ rgb: UInt32?, login: String, dark: Bool, avoiding accentHues: [Double] = []) -> Color {
+        let raw = rgb ?? TwitchUsernameColorShifter.defaultTwitchColor(for: login)
+        let value = accentHues.isEmpty
+            ? raw
+            : TwitchUsernameColorShifter.shiftedIfColliding(raw, avoiding: accentHues)
         var r = Double((value >> 16) & 0xFF) / 255
         var g = Double((value >> 8) & 0xFF) / 255
         var b = Double(value & 0xFF) / 255
