@@ -7,7 +7,8 @@ import Testing
 @Suite struct PaneRouteCodingTests {
     static let everyItem: [PaneItem] = [
         .post("p1"), .peek("p2"), .selection, .save("job-1"), .link("set-1"), .collection("c1"), .emote("01H"),
-        .emoteAddToSet("01J"), .reward("r1"), .poolVideo("v1"), .stream("ninja"), .booruPost(4821), .booruFilters,
+        .emoteAddToSet("01J"), .reward("r1"), .poolVideo("v1"), .stream("ninja"),
+        .dualStream(primary: "ninja", secondary: "shroud"), .booruPost(4821), .booruFilters,
         .swarm("sw1"), .name("n1"), .job("q1"),
     ]
 
@@ -26,6 +27,7 @@ import Testing
             return try #require(JSONSerialization.jsonObject(with: data) as? [String: AnyHashable])
         }
         #expect(try json(.post("abc")) == ["kind": "post", "id": "abc"])
+        #expect(try json(.dualStream(primary: "a", secondary: "b")) == ["kind": "dualStream", "id": "a", "secondary": "b"])
         #expect(try json(.booruPost(7)) == ["kind": "booruPost", "n": 7])
         #expect(try json(.selection) == ["kind": "selection"])
     }

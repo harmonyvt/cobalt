@@ -137,5 +137,34 @@ extension Copy {
         static let play = "play"
         static let stop = "stop watching"
         static func watching(_ n: Int) -> String { "\(viewers(n)) watching" }
+
+        // MARK: dual stream
+
+        static let watchAlongside = "watch alongside"
+        static let addSecondStream = "add 2nd stream"
+        static let swapSecondStream = "switch 2nd stream"
+        static let pickSecondStreamTitle = "add 2nd stream"
+        static let pickSecondStreamPrompt = "channel name or twitch link"
+        static let pickSecondStreamEmpty = "pick a live channel or type any twitch login"
+        static let dualFocusInset = "focus"
+        static let dualSplit5050 = "50/50"
+        static let dualSideBySide32x9 = "32:9 side by side"
+        static let dualFocus16x9 = "16:9 focus + inset"
+        static let swapFocus = "swap focus"
+        static let tapToFocus = "tap to focus"
+        static let audioMix = "mix"
+        static let audioPinned = "pinned"
+        static let audioFollowsFocus = "follows focus"
+        static let audioUnpin = "follow focus"
+        static let audioMixerLabel = "audio balance"
+        static func keepOnly(_ name: String) -> String { "keep only \(name)" }
+        static func dropStream(_ name: String) -> String { "drop \(name)" }
+        static let dropSecondary = "drop 2nd stream"
+        static let dualAirPlayUnavailable = "airplay pauses in dual stream"
+        static let dualPiP = "dual picture in picture"
+        static let floatingWindow = "floating window"
+        static let closeFloatingWindow = "return to window"
+        static let suspendedOnLock = "paused while locked"
+        static let thermalSteppedDown = "reduced quality (thermal)"
     }
 }

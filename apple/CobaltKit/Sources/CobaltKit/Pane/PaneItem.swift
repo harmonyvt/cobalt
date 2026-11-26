@@ -15,6 +15,9 @@ public enum PaneState: String, Codable, Sendable, CaseIterable {
     case bar
 }
 
+/// A Twitch channel login (lowercased).
+public typealias TwitchChannel = String
+
 /// What the pane shows. One at a time per window.
 public enum PaneItem: Hashable, Codable, Sendable {
     /// A media item id (library, home, a link's file, a chat result).
@@ -38,7 +41,9 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// A studio pool video id.
     case poolVideo(String)
     /// A Twitch channel login.
-    case stream(String)
+    case stream(TwitchChannel)
+    /// Two simultaneous Twitch streams (primary + secondary channel logins).
+    case dualStream(primary: TwitchChannel, secondary: TwitchChannel)
     /// A booru post id.
     case booruPost(Int)
     /// The booru filters page.
@@ -55,7 +60,7 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// runtime state its page reports (`Pane.setRunning`); this only says the kind can.
     public var keepsRunning: Bool {
         switch self {
-        case .stream, .save, .swarm, .job, .reward, .poolVideo: true
+        case .stream, .dualStream, .save, .swarm, .job, .reward, .poolVideo: true
         default: false
         }
     }
@@ -63,7 +68,10 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// Who keeps the one bar when two running items want it (`PaneMachine`): a stream stops without its page, so it
     /// outranks the rest (a job, a save, a swarm or the studio keep running wherever they run; only their bar goes).
     public var barRank: Int {
-        if case .stream = self { 1 } else { 0 }
+        switch self {
+        case .stream, .dualStream: 1
+        default: 0
+        }
     }
 
     /// The item's kind, a stable short word: the saved route's key, analytics (never ids), placeholders.
@@ -80,6 +88,7 @@ public enum PaneItem: Hashable, Codable, Sendable {
         case .reward: "reward"
         case .poolVideo: "poolVideo"
         case .stream: "stream"
+        case .dualStream: "dualStream"
         case .booruPost: "booruPost"
         case .booruFilters: "booruFilters"
         case .swarm: "swarm"
@@ -91,11 +100,56 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// True for the transient hold-to-peek item.
     public var isPeek: Bool { if case .peek = self { true } else { false } }
 
+    /// True for single or dual Twitch stream items.
+    public var isStream: Bool {
+        switch self {
+        case .stream, .dualStream: true
+        default: false
+        }
+    }
+
+    /// Ordered active Twitch channel logins held by this pane item (empty for non-stream items).
+    public var streamChannels: [TwitchChannel] {
+        switch self {
+        case .stream(let login): [login]
+        case .dualStream(let primary, let secondary): [primary, secondary]
+        default: []
+        }
+    }
+
+    /// Promotes a single `.stream` item into `.dualStream` (or replaces secondary if already dual).
+    /// Returns `nil` when `self` is not a stream or `secondary` matches the primary channel.
+    public func promotedToDual(secondary rawSecondary: TwitchChannel) -> PaneItem? {
+        let sec = rawSecondary.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !sec.isEmpty else { return nil }
+        switch self {
+        case .stream(let primary):
+            let pri = primary.lowercased()
+            guard pri != sec else { return nil }
+            return .dualStream(primary: pri, secondary: sec)
+        case .dualStream(let primary, _):
+            let pri = primary.lowercased()
+            guard pri != sec else { return nil }
+            return .dualStream(primary: pri, secondary: sec)
+        default:
+            return nil
+        }
+    }
+
+    /// Demotes a `.dualStream` item down to a single `.stream(keeping)`.
+    public func demotedToSingle(keeping rawChannel: TwitchChannel) -> PaneItem? {
+        guard case .dualStream(let primary, let secondary) = self else { return nil }
+        let keep = rawChannel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard keep == primary.lowercased() || keep == secondary.lowercased() else { return nil }
+        return .stream(keep)
+    }
+
     // MARK: coding
 
-    // `{"kind":"post","id":"abc"}`, `{"kind":"booruPost","n":7}`, `{"kind":"selection"}`: flat and readable, so a
-    // saved route from an older build decodes or fails cleanly (an unknown kind throws; `PaneRoute` then drops it).
-    private enum CodingKeys: String, CodingKey { case kind, id, n }
+    // `{"kind":"post","id":"abc"}`, `{"kind":"dualStream","id":"a","secondary":"b"}`, `{"kind":"booruPost","n":7}`,
+    // `{"kind":"selection"}`: flat and readable, so a saved route from an older build decodes or fails cleanly (an
+    // unknown kind throws; `PaneRoute` then drops it).
+    private enum CodingKeys: String, CodingKey { case kind, id, secondary, n }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -113,6 +167,13 @@ public enum PaneItem: Hashable, Codable, Sendable {
         case "reward": self = .reward(try id())
         case "poolVideo": self = .poolVideo(try id())
         case "stream": self = .stream(try id())
+        case "dualStream":
+            let primary = try id()
+            let secondary = try c.decode(String.self, forKey: .secondary)
+            guard !primary.isEmpty, !secondary.isEmpty, primary.lowercased() != secondary.lowercased() else {
+                throw DecodingError.dataCorruptedError(forKey: .secondary, in: c, debugDescription: "invalid dualStream pair")
+            }
+            self = .dualStream(primary: primary, secondary: secondary)
         case "booruPost": self = .booruPost(try c.decode(Int.self, forKey: .n))
         case "booruFilters": self = .booruFilters
         case "swarm": self = .swarm(try id())
@@ -131,6 +192,9 @@ public enum PaneItem: Hashable, Codable, Sendable {
              .emoteAddToSet(let s), .reward(let s), .poolVideo(let s), .stream(let s), .swarm(let s), .name(let s),
              .job(let s):
             try c.encode(s, forKey: .id)
+        case .dualStream(let primary, let secondary):
+            try c.encode(primary, forKey: .id)
+            try c.encode(secondary, forKey: .secondary)
         case .booruPost(let n):
             try c.encode(n, forKey: .n)
         case .selection, .booruFilters:

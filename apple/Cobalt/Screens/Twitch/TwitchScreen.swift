@@ -15,15 +15,35 @@ struct TwitchScreen: View {
 
     private var store: TwitchStore { model.twitch }
 
-    /// The channel currently held by the pane (on screen, spanned, or minimized in the bar).
-    private var activeLogin: String? {
-        if case .stream(let login)? = pane.item, pane.state != .hidden { return login }
-        if case .stream(let login)? = pane.barItem { return login }
+    /// All channels currently held by the pane (single or dual, on screen, spanned, or minimized in the bar).
+    private var activeLogins: Set<String> {
+        var logins: Set<String> = []
+        if let item = pane.item, pane.state != .hidden {
+            logins.formUnion(item.streamChannels.map { $0.lowercased() })
+        }
+        if let bar = pane.barItem {
+            logins.formUnion(bar.streamChannels.map { $0.lowercased() })
+        }
+        return logins
+    }
+
+    /// The primary channel currently active in the pane or bar, used for 1-tap "watch alongside" promotion.
+    private var currentPrimaryLogin: String? {
+        if let item = pane.item, pane.state != .hidden, let first = item.streamChannels.first {
+            return first
+        }
+        if let bar = pane.barItem, let first = bar.streamChannels.first {
+            return first
+        }
         return nil
     }
 
     var body: some View {
-        TwitchChannelList(model: model, activeLogin: activeLogin)
+        TwitchChannelList(
+            model: model,
+            activeLogins: activeLogins,
+            currentPrimaryLogin: currentPrimaryLogin
+        )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(CobaltColor.bg)
             .navigationTitle(Copy.Twitch.title)
@@ -45,15 +65,17 @@ struct TwitchScreen: View {
 
 private struct TwitchChannelList: View {
     let model: AppModel
-    var activeLogin: String?
+    var activeLogins: Set<String>
+    var currentPrimaryLogin: String?
 
     @Environment(Pane.self) private var pane
     @State private var query = ""
+    @State private var pickingAlongsideFor: String?
 
     private var store: TwitchStore { model.twitch }
 
     private func isWatching(_ login: String) -> Bool {
-        activeLogin?.caseInsensitiveCompare(login) == .orderedSame
+        activeLogins.contains(login.lowercased())
     }
 
     var body: some View {
@@ -64,6 +86,7 @@ private struct TwitchChannelList: View {
                 if let me = store.session?.credentials?.login {
                     section(Copy.Twitch.yourChannel) {
                         TwitchRecentChip(login: me, icon: Symbol.Twitch.pin, active: isWatching(me)) { watch(me) }
+                            .contextMenu { alongsideMenuItems(for: me) }
                     }
                 }
                 live
@@ -72,6 +95,7 @@ private struct TwitchChannelList: View {
                         TwitchFlow(spacing: 8, lineSpacing: 8) {
                             ForEach(store.recents, id: \.self) { login in
                                 TwitchRecentChip(login: login, icon: Symbol.Twitch.recent, active: isWatching(login)) { watch(login) }
+                                    .contextMenu { alongsideMenuItems(for: login) }
                             }
                         }
                     }
@@ -83,6 +107,20 @@ private struct TwitchChannelList: View {
             .frame(maxWidth: .infinity)
         }
         .refreshable { await store.load(force: true) }
+        .sheet(item: Binding(
+            get: { pickingAlongsideFor.map(AlongsidePickTarget.init(login:)) },
+            set: { pickingAlongsideFor = $0?.login }
+        )) { target in
+            TwitchAddSecondStreamSheet(
+                model: model,
+                excluding: [target.login.lowercased()]
+            ) { partner in
+                pane.open(.dualStream(primary: target.login, secondary: partner))
+            }
+            #if os(iOS)
+            .presentationDetents([.medium, .large])
+            #endif
+        }
     }
 
     private var search: some View {
@@ -120,6 +158,30 @@ private struct TwitchChannelList: View {
         pane.open(.stream(login))
     }
 
+    /// Promotes an active stream into dual-stream with `name`, or asks for a 2nd stream if none is active yet.
+    private func watchAlongside(_ name: String) {
+        guard let login = TwitchStore.login(from: name) else { return }
+        if let existing = currentPrimaryLogin, existing.caseInsensitiveCompare(login) != .orderedSame {
+            pane.open(.dualStream(primary: existing, secondary: login))
+        } else {
+            pickingAlongsideFor = login
+        }
+    }
+
+    @ViewBuilder
+    private func alongsideMenuItems(for login: String) -> some View {
+        Button {
+            watch(login)
+        } label: {
+            Label(Copy.Twitch.open, systemImage: Symbol.Twitch.tab)
+        }
+        Button {
+            watchAlongside(login)
+        } label: {
+            Label(Copy.Twitch.watchAlongside, systemImage: Symbol.Twitch.watchAlongside)
+        }
+    }
+
     @ViewBuilder private var banner: some View {
         if store.needsReconnect {
             TwitchBanner(title: Copy.Twitch.reconnectTitle, message: Copy.Twitch.reconnectBody) { model.selectedTab = .stage }
@@ -144,6 +206,7 @@ private struct TwitchChannelList: View {
                                 TwitchStreamCard(stream: s, watching: isWatching(s.login))
                             }
                             .buttonStyle(.plain)
+                            .contextMenu { alongsideMenuItems(for: s.login) }
                         }
                     }
                 }
@@ -159,6 +222,11 @@ private struct TwitchChannelList: View {
             content()
         }
     }
+}
+
+private struct AlongsidePickTarget: Identifiable {
+    let login: String
+    var id: String { login }
 }
 
 private struct TwitchBanner: View {

@@ -1,27 +1,20 @@
 import CobaltKit
 import SwiftUI
 
-// A twitch stream in the screen pane (apple/CONTRACT-PANE.md section 5; APP-API-CONTRACT 70).
+// A twitch stream (or dual-stream) in the screen pane (apple/CONTRACT-PANE.md section 5; APP-API-CONTRACT 70).
 //
-// One consistent watch surface in every posture and state — always composed of the same three parts:
-//   1. the video / TV stage (`TwitchPlayer` or `TwitchTVCard`),
-//   2. the unified stream bar (channel identity, live viewers/game, and the same compact glass icon controls, always attached
-//      to the stage), and
-//   3. full-height edge-to-edge live chat (`TwitchChatCard`, zero nested scroll views, composer pinned at the bottom).
+// Single-stream and dual-stream share one consistent watch surface across every posture:
+//   1. the video / TV stage (`TwitchPlayer` or `TwitchTVCard` for single; `TwitchDualStage` for dual),
+//   2. the unified stream bar (single-stream wide/stacked when not condensed) or Clear Liquid Glass HUD,
+//   3. full-height edge-to-edge live chat (`TwitchChatCard` -> single chat or `TwitchCombinedChatModel` in dual mode,
+//      zero nested scroll views, composer pinned at the bottom and guaranteed below the crease in Tabletop).
 //
-// Layout across postures (`TwitchWatchLayout`):
-// - folded iPhone / Duo wide `screen` / iPad & Mac column: stacked (16:9 stage -> stream bar -> full-height chat);
-// - Duo tall `screen` / landscape iPhone sheet / iPad & Mac `span`: side-by-side (stage + stream bar left, chat right);
-// - Duo `span` (`.split`): across the physical hinge via `PaneHalves` (stage + stream bar on screen 1, full-height chat on
-//   screen 2);
-// - closed while running (`.bar`): live mini-player thumb, channel title/subtitle, and play/pause.
-//
-// The app has one stream: the player is `TwitchPlayerHost.shared` (its web view moves between pages without a reload) and
-// the chat is `model.twitch` (`TwitchStore`), so a page rebuilt for another shape (screen, span, bar) picks both up where
-// they were. The page opens the channel when it appears; the pane's `PaneKeepAlive` lets go of the chat when the pane moves on.
+// Promotion `.stream(a)` -> `.dualStream(a, b)` and demotion `.dualStream(a, b)` -> `.stream(a)` preserve
+// `TwitchPlayerHost.shared`'s live `AVSampleBufferDisplayLayer` and `TwitchStore`'s chat engine with zero black flash.
 
 struct TwitchStreamPage: View {
     let login: String
+    var secondaryLogin: String? = nil
     let model: AppModel
 
     @Environment(Pane.self) private var pane
@@ -36,15 +29,37 @@ struct TwitchStreamPage: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var choosingTV = false
+    @State private var pickingSecondStream = false
     @State private var containerSize: CGSize = .zero
 
     private var store: TwitchStore { model.twitch }
     private var host: TwitchPlayerHost { .shared }
-    private var item: PaneItem { .stream(login) }
-    /// The store holds this channel (not the one before it, while a new one opens).
+    private var isDualStream: Bool { secondaryLogin != nil }
+
+    private var item: PaneItem {
+        if let secondaryLogin {
+            return .dualStream(primary: login, secondary: secondaryLogin)
+        }
+        return .stream(login)
+    }
+
+    private var sessionKey: String {
+        if let secondaryLogin {
+            return "\(login)|\(secondaryLogin)"
+        }
+        return login
+    }
+
+    /// The store holds this primary channel (not the one before it, while a new one opens).
     private var holdsChannel: Bool { store.channel == login }
-    private var isLive: Bool { holdsChannel && store.stream != nil }
-    /// True in single-focus iOS/Duo mode when this page owns its Clear Liquid Glass HUD over the video stage.
+    private var isLive: Bool {
+        if isDualStream {
+            return holdsChannel && (store.stream != nil || store.secondaryStream != nil)
+        }
+        return holdsChannel && store.stream != nil
+    }
+
+    /// True in single-focus iOS/Duo mode when this page owns its full-bleed Clear Liquid Glass watch stage + system toolbar.
     private var ownsGlassHUD: Bool { !pane.sitsBesideTab && shape != .bar }
 
     /// Pure-SwiftUI keyboard detection comparing keyboard-ignored `paneHostSize` against the live container height.
@@ -66,6 +81,13 @@ struct TwitchStreamPage: View {
         return nil
     }
 
+    private var showsPauseGlyph: Bool {
+        if isDualStream {
+            return !host.userPaused && (host.isPlaying || host.secondaryIsPlaying || host.isLoading || host.secondaryIsLoading)
+        }
+        return host.isPlaying
+    }
+
     var body: some View {
         Group {
             switch shape {
@@ -78,25 +100,50 @@ struct TwitchStreamPage: View {
         .preference(key: PaneMoreKey.self, value: moreActions)
         .preference(key: PaneFloatingHeaderKey.self, value: false)
         .preference(key: PaneHidesChromeHeaderKey.self, value: ownsGlassHUD)
+        .preference(key: PaneShowsSystemToolbarKey.self, value: ownsGlassHUD)
+        .toolbar {
+            if ownsGlassHUD {
+                watchToolbar
+            }
+        }
+        .duoToolbarCompression(.prefersToolbarItems)
         .onChange(of: title, initial: true) { pane.reportTitle(title, for: paneItem) }
         .onAppear {
-            store.open(login)
-            pane.setRunning(true, for: item)
-            // the chat and the TV belong to the item, not to this shape of its page (rebuilt for every shape change)
-            if pane.holds(item) { pane.keepAlive("stream", for: item) { TwitchWatch(login: login, model: model) }.begin() }
+            syncWatchSession()
+        }
+        .onChange(of: sessionKey) { _, _ in
+            syncWatchSession()
+        }
+        .onChange(of: host.focusedChannel) { _, focused in
+            if isDualStream, let focused {
+                store.updateCombinedChatFocus(focused)
+            }
         }
         .onChange(of: store.channel) { _, channel in
             // closed from somewhere else: nothing is playing any more
-            if channel != login { pane.setRunning(false, for: item) }
+            if channel != login, pane.item == item {
+                pane.setRunning(false, for: item)
+            }
         }
         .task { if model.sevenTv.status == nil { await model.sevenTv.load() } }
         // back from studio (a reconnect) or from the background: a session that could not chat is asked again
         .onChange(of: lifecycle.phase) { _, phase in
             if phase == .active { Task { await store.load() } }
         }
+        .sheet(isPresented: $pickingSecondStream) {
+            TwitchAddSecondStreamSheet(
+                model: model,
+                excluding: Set([login].map { $0.lowercased() })
+            ) { picked in
+                promoteToDual(with: picked)
+            }
+            #if os(iOS)
+            .presentationDetents([.medium, .large])
+            #endif
+        }
         #if os(iOS)
-        // The TV (70.5): while this page is up, a mirrored screen shows capystore's own window with the stream.
-        .background(TwitchTVAccessory(enabled: TwitchTV.shared.wanted).frame(width: 0, height: 0))
+        // The TV (70.5): while this page is up (single-stream), a mirrored screen shows capystore's own window.
+        .background(TwitchTVAccessory(enabled: !isDualStream && TwitchTV.shared.wanted).frame(width: 0, height: 0))
         .onChange(of: login) { TwitchTV.shared.refresh() }
         .sheet(isPresented: $choosingTV) {
             TwitchTVSheet().presentationDetents([.medium, .large])
@@ -104,17 +151,140 @@ struct TwitchStreamPage: View {
         #endif
     }
 
+    /// Synchronizes `TwitchStore` and `PaneKeepAlive` for single or dual-stream without dropping live channels.
+    private func syncWatchSession() {
+        if let secondaryLogin {
+            store.openDual(
+                primary: login,
+                secondary: secondaryLogin,
+                focusedChannel: host.focusedChannel ?? login
+            )
+        } else {
+            store.open(login)
+        }
+        pane.setRunning(true, for: item)
+        if pane.holds(item) {
+            pane.keepAlive("stream", for: item) {
+                TwitchWatch(login: login, secondaryLogin: secondaryLogin, model: model, pane: pane)
+            }.begin()
+        }
+    }
+
+    // MARK: - Rule 15 System Toolbar (iPhone Duo Vertical Rail + Tabletop Top Bar)
+
+    @ToolbarContentBuilder
+    private var watchToolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            DuoToolbarButton(title: Copy.close, systemImage: "chevron.backward") {
+                pane.close()
+            }
+            .accessibilityIdentifier("pane.close")
+        }
+        .duoVisibilityPriority(.high)
+
+        ToolbarItem(placement: .primaryAction) {
+            DuoToolbarButton(
+                title: showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play,
+                systemImage: showsPauseGlyph ? "pause.fill" : "play.fill"
+            ) {
+                host.setPaused(showsPauseGlyph)
+            }
+            .accessibilityIdentifier("twitch.toolbar.playpause")
+        }
+        .duoVisibilityPriority(.high)
+
+        if host.canTogglePiP {
+            ToolbarItem(placement: .automatic) {
+                DuoToolbarButton(
+                    title: host.isPiPActive ? Copy.Twitch.pipExit : (isDualStream ? Copy.Twitch.dualPiP : Copy.Twitch.pipEnter),
+                    systemImage: host.isPiPActive ? Symbol.Twitch.pipExit : Symbol.Twitch.pipEnter
+                ) {
+                    host.togglePiP()
+                }
+                .accessibilityIdentifier("twitch.toolbar.pip")
+            }
+            .duoVisibilityPriority(.high)
+        }
+
+        ToolbarItem(placement: .automatic) {
+            DuoToolbarButton(
+                title: isDualStream ? Copy.Twitch.swapSecondStream : Copy.Twitch.addSecondStream,
+                systemImage: Symbol.Twitch.addStream
+            ) {
+                pickingSecondStream = true
+            }
+            .accessibilityIdentifier("twitch.toolbar.addSecondStream")
+        }
+        .duoVisibilityPriority(.automatic)
+
+        if store.canClip {
+            ToolbarItem(placement: .automatic) {
+                DuoToolbarButton(title: Copy.Twitch.clip, systemImage: Symbol.Twitch.clip) {
+                    makeClip()
+                }
+                .disabled(offline || store.clipState == .making)
+                .accessibilityIdentifier("twitch.toolbar.clip")
+            }
+            .duoVisibilityPriority(.low)
+        }
+
+        DuoOverflowToolbarMenu(Copy.Media.more) {
+            if let secondaryLogin {
+                Button(Copy.Twitch.swapFocus, systemImage: Symbol.Twitch.swapFocus) {
+                    host.swapDualFocus()
+                }
+                Button(
+                    host.dualStageMode == .focusInset ? Copy.Twitch.dualSplit5050 : Copy.Twitch.dualFocusInset,
+                    systemImage: host.dualStageMode == .focusInset ? Symbol.Twitch.splitLayoutHorizontal : Symbol.Twitch.focusLayout
+                ) {
+                    host.toggleDualStageMode()
+                }
+                Divider()
+                Button(Copy.Twitch.keepOnly(primaryDisplayName), systemImage: Symbol.Twitch.dropStream) {
+                    keepOnly(login)
+                }
+                Button(Copy.Twitch.keepOnly(secondaryDisplayName), systemImage: Symbol.Twitch.dropStream) {
+                    keepOnly(secondaryLogin)
+                }
+                Divider()
+                Button("\(Copy.Twitch.openOnTwitch) (\(primaryDisplayName))", systemImage: Symbol.Twitch.open) {
+                    openChannelOnTwitch(login)
+                }
+                Button("\(Copy.Twitch.openOnTwitch) (\(secondaryDisplayName))", systemImage: Symbol.Twitch.open) {
+                    openChannelOnTwitch(secondaryLogin)
+                }
+            } else {
+                #if os(iOS)
+                Button(Copy.Twitch.watchOnTV, systemImage: Symbol.Twitch.tv) {
+                    choosingTV = true
+                }
+                #endif
+                Button(Copy.Twitch.jumpToLive, systemImage: Symbol.Twitch.jumpToLive) {
+                    host.jumpToLive()
+                }
+                .disabled(host.delay == nil || host.isCatchingUp)
+                Button(Copy.Twitch.openOnTwitch, systemImage: Symbol.Twitch.open) {
+                    openChannelOnTwitch(login)
+                }
+            }
+            Divider()
+            Button(Copy.Twitch.stop, systemImage: "stop.fill", role: .destructive) {
+                stop()
+            }
+        }
+    }
+
     // MARK: layouts
 
-    /// Posture-adaptive single-focus watch canvas:
-    /// - Half-Closed Tabletop (horizontal crease): video + floating glass controls above crease, chat + composer below.
-    /// - Book Crease (vertical crease): video + stream bar left of crease, live chat right of crease.
+    /// Posture-adaptive watch canvas:
+    /// - Half-Closed Tabletop (horizontal crease): video stage above the crease, chat + composer + keyboard strictly below `.division`.
+    /// - Book Crease (vertical crease): video stage left of crease, live chat right of crease.
     /// - Unfolded Wide / Landscape: ~62% video stage left, ~38% full-height chat right.
-    /// - Folded / Tall: stacked video + stream bar + chat, condensing into compact video + overlay controls when keyboard opens.
+    /// - Folded / Tall: stacked video + chat, condensing stage cleanly when keyboard opens.
     private var adaptiveWatch: some View {
         Group {
             if activeFoldAxis == .vertical {
-                // Half-Closed Tabletop: video stage above the crease, chat + composer + keyboard below the crease.
+                // Half-Closed Tabletop: video stage above the crease, chat + composer + keyboard strictly below the crease.
                 DuoSplit(ratio: keyboardOpen ? 0.42 : 0.5, axes: .vertical) {
                     videoStage(compactControls: true, maxHeight: nil)
                 } secondary: {
@@ -123,7 +293,7 @@ struct TwitchStreamPage: View {
             } else if activeFoldAxis == .horizontal {
                 // Book Crease: video + controls on the leading half, full-height chat on the trailing half.
                 DuoSplit(ratio: 0.5, axes: .horizontal) {
-                    mediaPanel(condensed: keyboardOpen && containerSize.height < 360)
+                    mediaPanel(condensed: isDualStream || (keyboardOpen && containerSize.height < 360))
                 } secondary: {
                     chatPanel
                 }
@@ -139,13 +309,16 @@ struct TwitchStreamPage: View {
 
     @ViewBuilder
     private var flatWatchLayout: some View {
-        let baseLayout = TwitchWatchLayout.resolve(isWideShape: shape == .wide || !pane.sitsBesideTab && containerSize.width >= TwitchWatchLayout.sideBySideMinWidth, size: containerSize)
+        let baseLayout = TwitchWatchLayout.resolve(
+            isWideShape: shape == .wide || (!pane.sitsBesideTab && containerSize.width >= TwitchWatchLayout.sideBySideMinWidth),
+            size: containerSize
+        )
         switch baseLayout {
         case .sideBySide:
             let chatWidth = !pane.sitsBesideTab
                 ? TwitchWatchLayout.singleFocusChatWidth(for: containerSize.width)
                 : TwitchWatchLayout.chatWidth(for: containerSize.width)
-            let condensed = keyboardOpen && containerSize.height < 360
+            let condensed = isDualStream || (keyboardOpen && containerSize.height < 360)
             HStack(spacing: 0) {
                 mediaPanel(condensed: condensed)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -155,8 +328,8 @@ struct TwitchStreamPage: View {
                     .frame(maxHeight: .infinity)
             }
         case .stacked:
-            let maxH = TwitchWatchLayout.stackedVideoMaxHeight(for: containerSize, keyboardOpen: keyboardOpen)
-            let condenseBar = TwitchWatchLayout.compactOverlayStreamBar(
+            let maxH = stackedStageMaxHeight
+            let condenseBar = isDualStream || TwitchWatchLayout.compactOverlayStreamBar(
                 isStacked: true,
                 isTabletop: false,
                 keyboardOpen: keyboardOpen
@@ -170,6 +343,15 @@ struct TwitchStreamPage: View {
                 chatPanel
             }
         }
+    }
+
+    /// Stage height cap in stacked portrait: gives 50/50 vertical dual-stream enough room when keyboard is closed,
+    /// while preserving the Keyboard-Open Guarantee (chat + composer always visible when keyboard is open).
+    private var stackedStageMaxHeight: CGFloat? {
+        if isDualStream && !keyboardOpen && host.dualStageMode == .split5050 && containerSize.height > 0 {
+            return max(260, min(containerSize.height * 0.52, 460))
+        }
+        return TwitchWatchLayout.stackedVideoMaxHeight(for: containerSize, keyboardOpen: keyboardOpen)
     }
 
     /// Media half for wide side-by-side and book-crease layouts: full-area video stage with optional docked stream bar.
@@ -195,136 +377,99 @@ struct TwitchStreamPage: View {
             onTV: onTV,
             onPlayPause: { host.setPaused(host.isPlaying) },
             onJumpToLive: { host.jumpToLive() },
+            onAddSecondStream: { pickingSecondStream = true },
             onClip: makeClip,
             onTVTap: { choosingTV = true },
             onStop: stop)
     }
 
-    /// Video / TV stage with optional floating Clear Liquid Glass Top HUD and compact bottom-trailing controls.
+    /// Video / TV stage (single-stream `TwitchPlayer` or dual-stream `TwitchDualStage`).
     @ViewBuilder
     private func videoStage(compactControls: Bool, maxHeight: CGFloat?) -> some View {
-        ZStack {
-            if onTV {
-                CobaltColor.bg
-                playerOrTV(compact: maxHeight != nil || compactControls)
-            } else {
-                Color.black
-                player
-            }
-
-            if ownsGlassHUD {
-                VStack(spacing: 0) {
-                    MediaEdgeVignette(edge: .top, height: compactControls ? 68 : 88, intensity: 0.44)
-                    Spacer(minLength: 0)
-                    if compactControls {
-                        MediaEdgeVignette(edge: .bottom, height: 64, intensity: 0.48)
-                    }
+        if let secondaryLogin {
+            TwitchDualStage(
+                primary: login,
+                secondary: secondaryLogin,
+                primaryDisplayName: primaryDisplayName,
+                secondaryDisplayName: secondaryDisplayName,
+                showsTopChrome: false,
+                compactChrome: compactControls,
+                onMinimize: { pane.close() },
+                onStop: stop,
+                onSwitchSecondStream: { pickingSecondStream = true },
+                onKeepOnly: keepOnly,
+                onOpenOnTwitch: openChannelOnTwitch
+            )
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: maxHeight ?? .infinity)
+        } else {
+            ZStack {
+                if onTV {
+                    CobaltColor.bg
+                    playerOrTV(compact: maxHeight != nil || compactControls)
+                } else {
+                    Color.black
+                    player
                 }
-                .allowsHitTesting(false)
 
-                VStack(spacing: 0) {
-                    floatingTopHUD(compact: compactControls)
-                    Spacer(minLength: 0)
-                    if compactControls {
+                if ownsGlassHUD {
+                    VStack(spacing: 0) {
+                        MediaEdgeVignette(edge: .top, height: compactControls ? 54 : 70, intensity: 0.36)
+                        Spacer(minLength: 0)
+                        if compactControls {
+                            MediaEdgeVignette(edge: .bottom, height: 64, intensity: 0.48)
+                        }
+                    }
+                    .allowsHitTesting(false)
+
+                    VStack(spacing: 0) {
+                        singleStreamChannelPill(compact: compactControls)
+                        Spacer(minLength: 0)
+                        if compactControls {
+                            floatingCompactControls
+                        }
+                    }
+                } else if compactControls {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
                         floatingCompactControls
                     }
                 }
-            } else if compactControls {
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    floatingCompactControls
-                }
             }
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: maxHeight ?? .infinity)
+            .clipped()
         }
-        .frame(maxWidth: .infinity)
-        .frame(maxHeight: maxHeight ?? .infinity)
-        .clipped()
     }
 
-    /// Floating Clear Liquid Glass top HUD over the live stream (minimize to mini-bar, channel/LIVE pill, more, stop).
-    private func floatingTopHUD(compact: Bool) -> some View {
-        MediaGlassGroup(spacing: 8) {
-            HStack(spacing: 8) {
-                Button {
-                    pane.close()
-                } label: {
-                    Label(Copy.close, systemImage: "chevron.backward")
-                        .labelStyle(.iconOnly)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .mediaGlassCircle()
-                        .frame(width: Metrics.hit, height: Metrics.hit)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Copy.close)
-                .accessibilityIdentifier("pane.close")
-
-                HStack(spacing: 6) {
-                    if isLive {
-                        Circle()
-                            .fill(Color.red)
-                            .frame(width: 7, height: 7)
-                            .shadow(color: .red.opacity(0.7), radius: 3)
-                    }
-                    Text(title)
-                        .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    if !compact, let subtitle {
-                        Text(subtitle)
-                            .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
-                            .foregroundStyle(.white.opacity(0.76))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .frame(minHeight: 36)
-                .mediaGlassCapsule(interactive: false)
-
-                Spacer(minLength: 4)
-
-                HStack(spacing: 4) {
-                    if !moreActions.isEmpty {
-                        Menu {
-                            ForEach(moreActions) { action in
-                                Button(action.title, systemImage: action.systemImage, action: action.perform)
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 34)
-                                .frame(minWidth: 40, minHeight: 40)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(Copy.Media.more)
-                    }
-
-                    Button(role: .destructive, action: stop) {
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(CobaltColor.errorText)
-                            .frame(width: 34, height: 34)
-                            .frame(minWidth: 40, minHeight: 40)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Copy.Twitch.stop)
-                    .accessibilityIdentifier("twitch.hud.stop")
-                }
-                .padding(.horizontal, 3)
-                .mediaGlassCapsule(interactive: false)
+    /// Subtle non-overlapping channel identity pill below the transparent system toolbar in single-focus single-stream mode.
+    private func singleStreamChannelPill(compact: Bool) -> some View {
+        HStack(spacing: 6) {
+            if isLive {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: .red.opacity(0.7), radius: 3)
             }
+            Text(title)
+                .font(Font.cobalt(12.5, .semibold, relativeTo: .subheadline))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            if !compact, let subtitle {
+                Text(subtitle)
+                    .font(Font.cobalt(11, .regular, relativeTo: .caption))
+                    .foregroundStyle(.white.opacity(0.76))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.top, compact ? 4 : 8)
+        .allowsHitTesting(false)
     }
 
-    /// Compact Clear Liquid Glass playback controls overlaid on the video stage in Tabletop or Keyboard-Open postures
+    /// Compact Clear Liquid Glass playback controls overlaid on single-stream video in Tabletop or Keyboard-Open postures
     /// so no separate stream bar competes for vertical height with chat & keyboard.
     private var floatingCompactControls: some View {
         MediaGlassGroup(spacing: 6) {
@@ -345,18 +490,29 @@ struct TwitchStreamPage: View {
                         Image(systemName: host.isPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.white)
-                            .frame(width: Metrics.hit - 4, height: Metrics.hit - 4)
+                            .frame(width: Metrics.hit, height: Metrics.hit)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
                     .accessibilityIdentifier("twitch.playpause")
 
+                    Button { pickingSecondStream = true } label: {
+                        Image(systemName: Symbol.Twitch.addStream)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: Metrics.hit, height: Metrics.hit)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Copy.Twitch.addSecondStream)
+                    .accessibilityIdentifier("twitch.addSecondStream")
+
                     Button { host.jumpToLive() } label: {
                         Image(systemName: Symbol.Twitch.jumpToLive)
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle((host.delay == nil || host.isCatchingUp) ? .white.opacity(0.42) : .white)
-                            .frame(width: Metrics.hit - 4, height: Metrics.hit - 4)
+                            .frame(width: Metrics.hit, height: Metrics.hit)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -369,7 +525,7 @@ struct TwitchStreamPage: View {
                             Image(systemName: Symbol.Twitch.clip)
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle((offline || store.clipState == .making) ? .white.opacity(0.42) : .white)
-                                .frame(width: Metrics.hit - 4, height: Metrics.hit - 4)
+                                .frame(width: Metrics.hit, height: Metrics.hit)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -383,7 +539,7 @@ struct TwitchStreamPage: View {
                         Image(systemName: Symbol.Twitch.tv)
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(onTV ? TwitchTVPalette.tv : .white)
-                            .frame(width: Metrics.hit - 4, height: Metrics.hit - 4)
+                            .frame(width: Metrics.hit, height: Metrics.hit)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -400,11 +556,15 @@ struct TwitchStreamPage: View {
     }
 
     private var chatPanel: some View {
-        TwitchChatCard(model: model, delay: chatDelay)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        TwitchChatCard(
+            model: model,
+            delay: isDualStream ? 0 : chatDelay,
+            combined: isDualStream ? store.combinedChat : nil
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Minimized running bar over the tabs: live mini-player thumb, channel title/subtitle, play/pause, and explicit stop/dismiss.
+    /// Minimized running bar over the tabs: live mini-player thumb, channel title/subtitle, focus swap (dual), play/pause, and explicit stop/dismiss.
     private var bar: some View {
         HStack(spacing: 10) {
             ZStack { barThumb }
@@ -413,7 +573,16 @@ struct TwitchStreamPage: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
-                    if isLive {
+                    if isDualStream {
+                        Circle()
+                            .fill(Color(dualBarRGB: TwitchChannelAccent.primaryDarkRGB))
+                            .frame(width: 6, height: 6)
+                            .accessibilityHidden(true)
+                        Circle()
+                            .fill(Color(dualBarRGB: TwitchChannelAccent.secondaryDarkRGB))
+                            .frame(width: 6, height: 6)
+                            .accessibilityHidden(true)
+                    } else if isLive {
                         Circle()
                             .fill(Color.red)
                             .frame(width: 6, height: 6)
@@ -433,8 +602,23 @@ struct TwitchStreamPage: View {
             }
             Spacer(minLength: 0)
             HStack(spacing: 6) {
-                Button { host.setPaused(host.isPlaying) } label: {
-                    Image(systemName: host.isPlaying ? "pause.fill" : "play.fill")
+                if isDualStream {
+                    Button { host.swapDualFocus() } label: {
+                        Image(systemName: Symbol.Twitch.swapFocus)
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(minWidth: 22, minHeight: 22)
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    #if os(iOS)
+                    .controlSize(.regular)
+                    #endif
+                    .accessibilityLabel(Copy.Twitch.swapFocus)
+                    .accessibilityIdentifier("twitch.bar.swapFocus")
+                }
+
+                Button { host.setPaused(showsPauseGlyph) } label: {
+                    Image(systemName: showsPauseGlyph ? "pause.fill" : "play.fill")
                         .font(.system(size: 14, weight: .semibold))
                         .frame(minWidth: 22, minHeight: 22)
                 }
@@ -443,7 +627,7 @@ struct TwitchStreamPage: View {
                 #if os(iOS)
                 .controlSize(.regular)
                 #endif
-                .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
+                .accessibilityLabel(showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play)
 
                 Button(role: .destructive, action: stop) {
                     Image(systemName: Symbol.close)
@@ -472,29 +656,100 @@ struct TwitchStreamPage: View {
 
     // MARK: words & actions
 
+    private var primaryDisplayName: String {
+        store.displayName(for: login)
+    }
+
+    private var secondaryDisplayName: String {
+        guard let secondaryLogin else { return "" }
+        return store.displayName(for: secondaryLogin)
+    }
+
     private var title: String {
-        (holdsChannel ? store.channelInfo?.displayName : nil) ?? login
+        if isDualStream {
+            return "\(primaryDisplayName) · \(secondaryDisplayName)"
+        }
+        return (holdsChannel ? store.channelInfo?.displayName : nil) ?? login
     }
 
     private var subtitle: String? {
         guard holdsChannel else { return nil }
+        if isDualStream {
+            let focused = host.focusedChannel ?? login
+            let focusedName = store.displayName(for: focused)
+            if let s = store.streamInfo(for: focused) {
+                return [focusedName, Copy.Twitch.watching(s.viewers), s.game].filter { !$0.isEmpty }.joined(separator: " · ")
+            }
+            return focusedName
+        }
         if let s = store.stream {
             return [Copy.Twitch.watching(s.viewers), s.game].filter { !$0.isEmpty }.joined(separator: " · ")
         }
         return store.channelInfo != nil ? Copy.Twitch.offline : nil
     }
 
-    /// Secondary actions handed to `PaneChrome`'s header `⋯` menu.
+    /// Secondary actions handed to `PaneChrome`'s header `⋯` menu (macOS / iPad split-column).
     private var moreActions: [PaneAction] {
         var out: [PaneAction] = []
-        if let url = URL(string: "https://www.twitch.tv/\(login)") {
-            out.append(PaneAction(Copy.Twitch.openOnTwitch, systemImage: Symbol.Twitch.open) { openURL(url) })
+        if let secondaryLogin {
+            out.append(PaneAction(Copy.Twitch.swapSecondStream, systemImage: Symbol.Twitch.addStream) {
+                pickingSecondStream = true
+            })
+            out.append(PaneAction(Copy.Twitch.keepOnly(primaryDisplayName), systemImage: Symbol.Twitch.dropStream) {
+                keepOnly(login)
+            })
+            out.append(PaneAction(Copy.Twitch.keepOnly(secondaryDisplayName), systemImage: Symbol.Twitch.dropStream) {
+                keepOnly(secondaryLogin)
+            })
+            if host.canTogglePiP {
+                out.append(PaneAction(
+                    host.isPiPActive ? Copy.Twitch.closeFloatingWindow : Copy.Twitch.floatingWindow,
+                    systemImage: host.isPiPActive ? Symbol.Twitch.pipExit : Symbol.Twitch.floatingPanel
+                ) {
+                    host.togglePiP()
+                })
+            }
+            if let url = URL(string: "https://www.twitch.tv/\(login)") {
+                out.append(PaneAction("\(Copy.Twitch.openOnTwitch) (\(primaryDisplayName))", systemImage: Symbol.Twitch.open) { openURL(url) })
+            }
+            if let url = URL(string: "https://www.twitch.tv/\(secondaryLogin)") {
+                out.append(PaneAction("\(Copy.Twitch.openOnTwitch) (\(secondaryDisplayName))", systemImage: Symbol.Twitch.open) { openURL(url) })
+            }
+        } else {
+            out.append(PaneAction(Copy.Twitch.addSecondStream, systemImage: Symbol.Twitch.addStream) {
+                pickingSecondStream = true
+            })
+            if let url = URL(string: "https://www.twitch.tv/\(login)") {
+                out.append(PaneAction(Copy.Twitch.openOnTwitch, systemImage: Symbol.Twitch.open) { openURL(url) })
+            }
         }
         return out
     }
 
+    /// Zero-flash 1 -> 2 promotion (or switching the 2nd stream in place).
+    private func promoteToDual(with picked: String) {
+        guard let clean = TwitchStore.login(from: picked), clean != login.lowercased() else { return }
+        pane.open(.dualStream(primary: login, secondary: clean))
+    }
+
+    /// Zero-flash 2 -> 1 demotion keeping `channel` alive on screen.
+    private func keepOnly(_ channel: String) {
+        pane.open(.stream(channel))
+    }
+
+    private func openChannelOnTwitch(_ channel: String) {
+        if let url = URL(string: "https://www.twitch.tv/\(channel)") {
+            openURL(url)
+        }
+    }
+
     private func makeClip() {
-        Task { await store.clip { url in _ = model.queue.add([.link(url)], via: .paste) } }
+        let targetChannel = isDualStream ? (host.focusedChannel ?? login) : login
+        Task {
+            await store.clip(channel: targetChannel) { url in
+                _ = model.queue.add([.link(url)], via: .paste)
+            }
+        }
     }
 
     private func clearClipStateSoon() async {
@@ -504,7 +759,7 @@ struct TwitchStreamPage: View {
         store.acknowledgeClip()
     }
 
-    /// Ends the stream: the chat closes, the player stops, and the pane hides (no bar: nothing is running).
+    /// Ends the stream (or both streams): the chat closes, the player stops, and the pane hides (no bar: nothing is running).
     private func stop() {
         store.close()
         host.stop()
@@ -525,7 +780,7 @@ struct TwitchStreamPage: View {
 
     private var onTV: Bool {
         #if os(iOS)
-        TwitchTV.shared.onTV
+        !isDualStream && TwitchTV.shared.onTV
         #else
         false
         #endif
@@ -550,9 +805,11 @@ struct TwitchStreamPage: View {
             .frame(maxWidth: .infinity)
     }
 
-    /// The bar's thumb: the stream itself, playing in a 40 pt window (the sound stays on); its still while it is on the TV.
+    /// The bar's thumb: live focused stream in a 40 pt window (never demotes dual-stream to single!).
     @ViewBuilder private var barThumb: some View {
-        if onTV, let url = store.channelInfo?.avatar {
+        if let secondaryLogin {
+            TwitchDualBarThumb(primary: login, secondary: secondaryLogin)
+        } else if onTV, let url = store.channelInfo?.avatar {
             StillImage(url: url)
         } else if onTV {
             ZStack { CobaltColor.surface; Image(systemName: Symbol.Twitch.tv).foregroundStyle(CobaltColor.caption) }
@@ -568,6 +825,224 @@ struct TwitchStreamPage: View {
     }
 
     private var chatDelay: TimeInterval { TwitchChatCard.tvDelay }
+}
+
+// MARK: - Dual-Stream Mini-Bar Live Thumbnail
+
+/// Holds a dual claim while the pane is minimized to `.bar` so both engines stay live without demoting to single-stream.
+private struct TwitchDualBarThumb: View {
+    let primary: String
+    let secondary: String
+
+    @State private var holderID = UUID()
+    private var host: TwitchPlayerHost { .shared }
+
+    var body: some View {
+        ZStack {
+            Color.black
+            if host.isPiPActive {
+                Image(systemName: Symbol.Twitch.pipEnter)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+            } else {
+                TwitchNativeSlotSurface(
+                    slot: host.dualMixer.focusedSlot,
+                    holds: host.holds(holderID),
+                    pipActive: host.isPiPActive
+                )
+                .allowsHitTesting(false)
+            }
+        }
+        .onAppear {
+            host.claimDual(holderID, primary: primary, secondary: secondary)
+        }
+        .onDisappear {
+            host.release(holderID)
+        }
+    }
+}
+
+// MARK: - Add 2nd Stream Picker Sheet
+
+/// Reusable picker sheet to add or switch a 2nd Twitch stream alongside an existing channel.
+struct TwitchAddSecondStreamSheet: View {
+    let model: AppModel
+    let excluding: Set<String>
+    let onPick: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private var store: TwitchStore { model.twitch }
+
+    private var filteredLive: [TwitchStreamInfo] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return store.following.filter { s in
+            let lower = s.login.lowercased()
+            guard !excluding.contains(lower) else { return false }
+            if q.isEmpty { return true }
+            return lower.contains(q) || s.displayName.lowercased().contains(q) || s.game.lowercased().contains(q)
+        }
+    }
+
+    private var filteredRecents: [String] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let liveSet = Set(store.following.map { $0.login.lowercased() })
+        return store.recents.filter { login in
+            let lower = login.lowercased()
+            guard !excluding.contains(lower), !liveSet.contains(lower) else { return false }
+            if q.isEmpty { return true }
+            return lower.contains(q)
+        }
+    }
+
+    private var parsedQueryLogin: String? {
+        guard let candidate = TwitchStore.login(from: query), !excluding.contains(candidate.lowercased()) else {
+            return nil
+        }
+        return candidate
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    // Search / direct login input
+                    HStack(spacing: 8) {
+                        Image(systemName: Symbol.Twitch.search)
+                            .foregroundStyle(CobaltColor.caption)
+                        TextField(Copy.Twitch.pickSecondStreamPrompt, text: $query)
+                            .textFieldStyle(.plain)
+                            .autocorrectionDisabled()
+                            #if os(iOS)
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.go)
+                            #endif
+                            .onSubmit(submitQuery)
+                            .accessibilityIdentifier("twitch.dual.picker.search")
+                        if parsedQueryLogin != nil {
+                            Button(Copy.Twitch.open, action: submitQuery)
+                                .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
+                        }
+                    }
+                    .padding(.leading, 12)
+                    .padding(.trailing, 6)
+                    .frame(minHeight: Metrics.hit)
+                    .background(CobaltColor.surface, in: Capsule())
+
+                    if !filteredLive.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(Copy.Twitch.liveNow)
+                                .font(Font.cobalt(12.5, .medium, relativeTo: .caption))
+                                .foregroundStyle(CobaltColor.caption)
+                            ForEach(filteredLive) { stream in
+                                Button {
+                                    pick(stream.login)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        ZStack {
+                                            Rectangle().fill(CobaltColor.frameBase)
+                                            if let thumb = stream.thumbnail {
+                                                StillImage(url: thumb)
+                                            }
+                                        }
+                                        .frame(width: 84, height: 48)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            HStack(spacing: 5) {
+                                                Circle().fill(Color.red).frame(width: 6, height: 6)
+                                                Text(stream.displayName)
+                                                    .font(Font.cobalt(14.5, .semibold))
+                                                    .foregroundStyle(CobaltColor.text)
+                                                    .lineLimit(1)
+                                            }
+                                            Text(stream.game.isEmpty ? stream.title : "\(Copy.Twitch.viewers(stream.viewers)) · \(stream.game)")
+                                                .font(Font.cobalt(12.5))
+                                                .foregroundStyle(CobaltColor.caption)
+                                                .lineLimit(1)
+                                        }
+                                        Spacer(minLength: 0)
+                                        Image(systemName: Symbol.Twitch.addStream)
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundStyle(TwitchChatPalette.twitch)
+                                    }
+                                    .padding(.vertical, 6)
+                                    .padding(.horizontal, 10)
+                                    .frame(minHeight: Metrics.hit)
+                                    .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("twitch.dual.picker.live.\(stream.login)")
+                            }
+                        }
+                    }
+
+                    if !filteredRecents.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(Copy.Twitch.recent)
+                                .font(Font.cobalt(12.5, .medium, relativeTo: .caption))
+                                .foregroundStyle(CobaltColor.caption)
+                            TwitchFlow(spacing: 8, lineSpacing: 8) {
+                                ForEach(filteredRecents, id: \.self) { recentLogin in
+                                    Button {
+                                        pick(recentLogin)
+                                    } label: {
+                                        Label(recentLogin, systemImage: Symbol.Twitch.recent)
+                                            .font(Font.cobalt(13.5, .medium))
+                                            .foregroundStyle(CobaltColor.text)
+                                            .padding(.horizontal, 12)
+                                            .frame(minHeight: Metrics.hit)
+                                            .background(CobaltColor.surface, in: Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+
+                    if filteredLive.isEmpty && filteredRecents.isEmpty {
+                        Text(Copy.Twitch.pickSecondStreamEmpty)
+                            .font(CobaltType.caption)
+                            .foregroundStyle(CobaltColor.caption)
+                            .padding(.top, 8)
+                    }
+                }
+                .padding(16)
+            }
+            .background(CobaltColor.bg)
+            .navigationTitle(Copy.Twitch.pickSecondStreamTitle)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    DuoToolbarButton(title: Copy.Twitch.close, systemImage: Symbol.Twitch.close) {
+                        dismiss()
+                    }
+                }
+                .duoVisibilityPriority(.high)
+            }
+            .task {
+                if !store.followingLoaded {
+                    await store.load()
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 420, minHeight: 420)
+        #endif
+    }
+
+    private func submitQuery() {
+        guard let login = parsedQueryLogin else { return }
+        pick(login)
+    }
+
+    private func pick(_ login: String) {
+        onPick(login)
+        dismiss()
+    }
 }
 
 // MARK: - unified stream bar
@@ -589,6 +1064,7 @@ private struct TwitchStreamBar: View {
     let onTV: Bool
     let onPlayPause: () -> Void
     let onJumpToLive: () -> Void
+    let onAddSecondStream: () -> Void
     let onClip: () -> Void
     let onTVTap: () -> Void
     let onStop: () -> Void
@@ -677,6 +1153,12 @@ private struct TwitchStreamBar: View {
                 .buttonStyle(.cobaltIcon(.small, prominent: true))
                 .accessibilityIdentifier("twitch.playpause")
 
+                Button(action: onAddSecondStream) {
+                    Label(Copy.Twitch.addSecondStream, systemImage: Symbol.Twitch.addStream)
+                }
+                .buttonStyle(.cobaltIcon(.small))
+                .accessibilityIdentifier("twitch.addSecondStream")
+
                 Button(action: onJumpToLive) {
                     Label(Copy.Twitch.jumpToLive, systemImage: Symbol.Twitch.jumpToLive)
                 }
@@ -717,17 +1199,20 @@ private struct TwitchStreamBar: View {
 }
 
 /// What a stream keeps for as long as the pane holds it, whatever shape its page is drawn in (`Pane.keepAlive`): the chat
-/// connection and the TV's watch. A page rebuilt for another shape (screen, span, bar, a peek over it) picks it up again,
-/// so neither is closed and reopened (the TV window would flicker); both end when the pane lets go of the stream.
+/// connection and the TV's watch. Preserves chat/TV when promoting `.stream(a)` <-> `.dualStream(a, b)`.
 @MainActor
 private final class TwitchWatch: PaneKeptObject {
     private let login: String
+    private let secondaryLogin: String?
     private let model: AppModel
+    private weak var pane: Pane?
     private var started = false
 
-    init(login: String, model: AppModel) {
+    init(login: String, secondaryLogin: String?, model: AppModel, pane: Pane) {
         self.login = login
+        self.secondaryLogin = secondaryLogin
         self.model = model
+        self.pane = pane
     }
 
     /// Idempotent: the first page to appear starts it.
@@ -735,26 +1220,35 @@ private final class TwitchWatch: PaneKeptObject {
         guard !started else { return }
         started = true
         #if os(iOS)
-        TwitchTV.shared.watchStarted(model)
+        if secondaryLogin == nil {
+            TwitchTV.shared.watchStarted(model)
+        }
         #endif
     }
 
     func paneReleased() {
-        // another channel may have opened since: close only this one's chat
-        if model.twitch.channel == login { model.twitch.close() }
+        // If the pane transitioned directly to another stream or dual-stream (e.g., 1 -> 2 promotion or 2 -> 1 demotion),
+        // keep the store and TV watch alive without interrupting live streams or chat.
+        let stillHoldingStream = (pane?.item?.isStream == true) || (pane?.barItem?.isStream == true)
+        if !stillHoldingStream, model.twitch.channel == login {
+            model.twitch.close()
+        }
         guard started else { return }
         started = false
         #if os(iOS)
-        TwitchTV.shared.watchEnded()
+        if !stillHoldingStream {
+            TwitchTV.shared.watchEnded()
+        }
         #endif
     }
 }
 
-/// Edge-to-edge live chat inside the stream pane, with 7TV "add to a set" presented as a sheet over the pane so the stream
-/// stays mounted and playing underneath.
+/// Edge-to-edge live chat inside the stream pane (single-stream or combined dual-stream), with 7TV "add to a set"
+/// presented as a sheet over the pane so the stream(s) stay mounted and playing underneath.
 struct TwitchChatCard: View {
     let model: AppModel
     let delay: TimeInterval
+    var combined: TwitchCombinedChatModel? = nil
 
     /// Video-only AirPlay runs the TV behind the phone: chat waits to match (70.5).
     static var tvDelay: TimeInterval {
@@ -768,7 +1262,7 @@ struct TwitchChatCard: View {
     @State private var addingToSet: SevenTvAddToSetModel?
 
     var body: some View {
-        TwitchChatPane(model: model, delay: delay, showsLabel: false) { emote in
+        TwitchChatPane(model: model, delay: delay, showsLabel: false, combined: combined) { emote in
             guard let hit = emote.asHit else { return }
             SevenTvEmoteHits.remember(hit)
             addingToSet = model.sevenTv.addToSetPicker(emote: hit)
@@ -780,15 +1274,27 @@ struct TwitchChatCard: View {
     }
 }
 
+private extension Color {
+    init(dualBarRGB rgb: UInt32) {
+        self.init(
+            red: Double((rgb >> 16) & 0xFF) / 255.0,
+            green: Double((rgb >> 8) & 0xFF) / 255.0,
+            blue: Double(rgb & 0xFF) / 255.0
+        )
+    }
+}
+
 #if DEBUG
 private struct TwitchPageHost: View {
     let shape: PaneShape
     var hinge: PaneHinge?
+    var secondary: String? = nil
 
     var body: some View {
+        let item: PaneItem = secondary.map { .dualStream(primary: "ninja", secondary: $0) } ?? .stream("ninja")
         PreviewHost(.happy, tab: .twitch) { model in
-            AreaPageHost(item: .stream("ninja"), shape: shape, hinge: hinge) {
-                TwitchStreamPage(login: "ninja", model: model)
+            AreaPageHost(item: item, shape: shape, hinge: hinge) {
+                TwitchStreamPage(login: "ninja", secondaryLogin: secondary, model: model)
             }
         }
     }
@@ -797,25 +1303,22 @@ private struct TwitchPageHost: View {
 #Preview("twitch · folded portrait", traits: .fixedLayout(width: 402, height: 800)) {
     TwitchPageHost(shape: .tall)
 }
+#Preview("twitch · dual stream", traits: .fixedLayout(width: 900, height: 700)) {
+    TwitchPageHost(shape: .wide, secondary: "shroud")
+}
 #Preview("twitch · landscape phone", traits: .fixedLayout(width: 874, height: 380)) {
-    TwitchPageHost(shape: .tall)
-}
-#Preview("twitch · duo wide screen", traits: .fixedLayout(width: 475, height: 669)) {
-    TwitchPageHost(shape: .tall)
-}
-#Preview("twitch · duo wide span", traits: .fixedLayout(width: 951, height: 669)) {
-    TwitchPageHost(shape: .split(.media), hinge: PaneHinge(axis: .vertical, position: 475))
-}
-#Preview("twitch · duo tall screen", traits: .fixedLayout(width: 669, height: 475)) {
     TwitchPageHost(shape: .wide)
 }
-#Preview("twitch · duo tall span", traits: .fixedLayout(width: 669, height: 951)) {
-    TwitchPageHost(shape: .split(.media), hinge: PaneHinge(axis: .horizontal, position: 475))
-}
-#Preview("twitch · pad / mac span", traits: .fixedLayout(width: 1100, height: 700)) {
+#Preview("twitch · mac wide", traits: .fixedLayout(width: 1180, height: 760)) {
     TwitchPageHost(shape: .wide)
 }
-#Preview("twitch · bar", traits: .fixedLayout(width: 402, height: 64)) {
+#Preview("twitch · duo split", traits: .fixedLayout(width: 900, height: 760)) {
+    TwitchPageHost(shape: .split(.media), hinge: PaneHinge(axis: .vertical, position: 450))
+}
+#Preview("twitch · mini bar", traits: .fixedLayout(width: 402, height: 72)) {
     TwitchPageHost(shape: .bar)
+}
+#Preview("twitch · dual mini bar", traits: .fixedLayout(width: 402, height: 72)) {
+    TwitchPageHost(shape: .bar, secondary: "shroud")
 }
 #endif

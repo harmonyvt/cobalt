@@ -6,6 +6,11 @@ import UIKit
 import AppKit
 #endif
 
+private enum PaneChromeIdentity: Hashable {
+    case twitchStream
+    case item(PaneItem)
+}
+
 /// The pane's own frame around a page, wherever it is drawn (beside the tab, spanned, the sheet, the cover): the header
 /// (span leading, context label centred, `more` and the xmark trailing, 44 pt glass circles), the page's own
 /// `NavigationStack` (a page may push sub-pages: filters, add to set), the keys, and the VoiceOver container.
@@ -19,6 +24,7 @@ struct PaneChrome: View {
     @Environment(\.paneOffline) private var offline
     @State private var floatingHeader = false
     @State private var hidesChromeHeader = false
+    @State private var showsSystemToolbar = false
 
     /// The header bar's height (48 pt on macOS, 56 pt on iOS).
     static var headerHeight: CGFloat { Platform.isMac ? 48 : 56 }
@@ -61,16 +67,18 @@ struct PaneChrome: View {
             }
             .onPreferenceChange(PaneFloatingHeaderKey.self) { floatingHeader = $0 }
             .onPreferenceChange(PaneHidesChromeHeaderKey.self) { hidesChromeHeader = $0 }
+            .onPreferenceChange(PaneShowsSystemToolbarKey.self) { showsSystemToolbar = $0 }
             .overlayPreferenceValue(PaneMoreKey.self, alignment: .top) { more in
                 if !hidesChromeHeader {
                     header(more, floating: floatingHeader)
                 }
             }
             #if os(iOS)
-            .toolbar(.hidden, for: .navigationBar)
+            .toolbar(showsSystemToolbar ? .visible : .hidden, for: .navigationBar)
+            .toolbarBackgroundVisibility(showsSystemToolbar ? .hidden : .automatic, for: .navigationBar)
             #endif
         }
-        .id(item)                                           // another item is another page, with a fresh stack
+        .id(item.isStream ? PaneChromeIdentity.twitchStream : PaneChromeIdentity.item(item))
         .modifier(PaneChromeBackground())
         .background { keys }
         .accessibilityElement(children: .contain)
