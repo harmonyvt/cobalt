@@ -225,11 +225,21 @@ struct DetailHero: View {
     var maxHeight: CGFloat
 
     var body: some View {
-        if c.isGalleryLike, c.page != nil {
-            GalleryPager(c: c, maxHeight: maxHeight)
-        } else {
-            RenditionHero(rendition: c.rendition, item: c.item, maxHeight: maxHeight)
+        Group {
+            if c.isGalleryLike, c.page != nil {
+                GalleryPager(c: c, maxHeight: maxHeight)
+            } else {
+                RenditionHero(rendition: c.rendition, item: c.item, maxHeight: maxHeight)
+            }
         }
+        .environment(\.fullScreenStudio, FullScreenStudioContext(
+            controller: c.controller,
+            itemID: c.item.id,
+            fallbackItem: c.item,
+            renditionID: c.rendition.id,
+            fallbackRendition: c.rendition,
+            leave: c.leave
+        ))
     }
 }
 
