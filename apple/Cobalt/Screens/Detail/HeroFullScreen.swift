@@ -63,6 +63,8 @@ private struct HeroFullScreenModifier: ViewModifier {
     @Binding var item: HeroFullScreen?
     let onClose: (CMTime?) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.fullScreenStudio) private var fullScreenStudio
+    @Environment(\.subtitles) private var subtitles
 
     func body(content: Content) -> some View {
         #if os(iOS)
@@ -73,6 +75,8 @@ private struct HeroFullScreenModifier: ViewModifier {
                 withTransaction(transaction) { item = nil }
                 onClose(time)
             }
+            .environment(\.fullScreenStudio, fullScreenStudio)
+            .environment(\.subtitles, subtitles)
         }
         #else
         content.sheet(item: $item) { shown in
@@ -80,7 +84,9 @@ private struct HeroFullScreenModifier: ViewModifier {
                 item = nil
                 onClose(time)
             }
-            .frame(minWidth: 860, minHeight: 620)
+            .environment(\.fullScreenStudio, fullScreenStudio)
+            .environment(\.subtitles, subtitles)
+            .frame(minWidth: 920, minHeight: 640)
         }
         #endif
     }
@@ -93,8 +99,8 @@ private struct HeroFullScreenContent: View {
 
     var body: some View {
         switch item {
-        case .video(let url, _, let start):
-            FullScreenVideo(url: url, start: start, close: close)
+        case .video(let url, let name, let start):
+            FullScreenStudioVideo(url: url, name: name, start: start, close: close)
         case .webp(let source, let aspect, let name):
             FullScreenWebp(source: source, aspect: aspect, name: name) { close(nil) }
         case .photo(let source, let aspect, let name):
@@ -102,136 +108,6 @@ private struct HeroFullScreenContent: View {
         }
     }
 }
-
-// MARK: - video
-
-/// The system player over a black screen: the clip's own item (sound on), from where the hero had got to.
-private struct FullScreenVideo: View {
-    let url: URL
-    let start: CMTime
-    let close: (CMTime?) -> Void
-    @State private var player = AVPlayer()
-    /// The audio session was given back (by the close button, or by going away some other way: a swipe, the sheet
-    /// closed by the system). Once only, whichever comes first.
-    @State private var audioReleased = false
-
-    // Session replay (APP-API-CONTRACT 58): media is always masked.
-    var body: some View { mediaBody.mediaMask() }
-
-    @ViewBuilder private var mediaBody: some View {
-        DuoMediaOverlay(edge: .bottom) { isSeparated in
-            if isSeparated {
-                VStack(spacing: 12) {
-                    Spacer(minLength: 0)
-                    Button { finish() } label: {
-                        Label(Copy.Media.exitFullScreen, systemImage: Symbol.close)
-                    }
-                    .buttonStyle(.cobaltSecondary(fullWidth: false))
-                    .keyboardShortcut(.cancelAction)
-                    .accessibilityLabel(Copy.Media.exitFullScreen)
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-            } else {
-                VStack(spacing: 0) {
-                    HStack {
-                        CloseButton(cancels: true) { finish() }
-                            .accessibilityLabel(Copy.Media.exitFullScreen)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.leading, 12)
-                    .padding(.top, 8)
-                    Spacer(minLength: 0)
-                }
-                .background(alignment: .top) {
-                    MediaEdgeVignette(edge: .top, height: 88, intensity: 0.42)
-                }
-            }
-        } media: {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                SystemPlayer(player: player)
-                    .ignoresSafeArea()
-            }
-        }
-        .preferredColorScheme(.dark)
-        .task {
-            AudioPolicy.playback()
-            let item = KeyedStream.item(url)
-            player.replaceCurrentItem(with: item)
-            player.isMuted = false
-            await item.seek(to: start.isValid ? start : .zero)
-            PlayerPool.shared.play(player, as: .hero)
-        }
-        // emptied as it goes, so a streamed clip's connections close now rather than whenever the player is freed; the
-        // sound is given back here too, so a dismissal that skips `finish` never leaves the session in playback
-        .onDisappear {
-            player.pause()
-            PlayerPool.shared.forget(player)
-            player.replaceCurrentItem(with: nil)
-            releaseAudio()
-        }
-    }
-
-    private func finish() {
-        let time = player.currentTime()
-        player.pause()
-        releaseAudio()
-        close(time.isValid ? time : nil)
-    }
-
-    /// Back to ambient, once: after the player has paused (deactivating with audio running held the main thread).
-    private func releaseAudio() {
-        guard !audioReleased else { return }
-        audioReleased = true
-        AudioPolicy.release()
-    }
-}
-
-/// The system player over `player`. iOS uses AVKit's SwiftUI `VideoPlayer`. On the Mac `VideoPlayer` aborts the app while
-/// SwiftUI builds it (macOS 27: `swift::fatalError` in `getSuperclassMetadata` from `_AVKit_SwiftUI`'s generic metadata,
-/// SIGABRT, before a single frame), so there it is AppKit's `AVPlayerView`, the same system player (floating controls: play,
-/// scrub, volume, AirPlay, picture in picture), in a plain `NSViewRepresentable`: no coordinator, no closures, nothing the
-/// system calls back into.
-private struct SystemPlayer: View {
-    let player: AVPlayer
-
-    // Session replay (APP-API-CONTRACT 58): media is always masked.
-    var body: some View { mediaBody.mediaMask() }
-
-    @ViewBuilder private var mediaBody: some View {
-        #if os(macOS)
-        SystemPlayerView(player: player)
-        #else
-        VideoPlayer(player: player)
-        #endif
-    }
-}
-
-#if os(macOS)
-private struct SystemPlayerView: NSViewRepresentable {
-    let player: AVPlayer
-
-    func makeNSView(context: Context) -> AVPlayerView {
-        let view = AVPlayerView()
-        view.player = player
-        view.controlsStyle = .floating
-        view.showsFullScreenToggleButton = true
-        view.allowsPictureInPicturePlayback = true
-        view.videoGravity = .resizeAspect
-        return view
-    }
-
-    func updateNSView(_ view: AVPlayerView, context: Context) {
-        if view.player !== player { view.player = player }
-    }
-
-    static func dismantleNSView(_ view: AVPlayerView, coordinator: Void) {
-        view.player = nil
-    }
-}
-#endif
 
 // MARK: - webp
 
