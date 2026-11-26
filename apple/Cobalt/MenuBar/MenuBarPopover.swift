@@ -232,7 +232,7 @@ struct MenuBarPopover: View {
                 watched.formUnion(ids)
                 note = message
                 activityOpen = true
-            case .review, .nameFile:
+            case .review:
                 // the plan and the perform disagreed: the window still owns the sheet
                 MenuBarHandoff.shared.stage(items: items)
                 reveal()

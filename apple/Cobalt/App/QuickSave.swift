@@ -42,7 +42,7 @@ enum QuickSave {
             NSSound.beep()
         case .queued(_, let ids):
             watch(ids, model: model)
-        case .review, .nameFile:
+        case .review:
             handOver(items)
         }
     }

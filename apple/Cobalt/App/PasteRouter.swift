@@ -1,16 +1,15 @@
 import CobaltKit
 import Foundation
 
-/// The window's paste and the menu bar's paste share this. A single new link, and several files, are
-/// queued here. A review or a name-it sheet is returned for the window to present: the menu bar never
-/// draws those, it hands the same clipboard to the window.
+/// The window's paste and the menu bar's paste share this. A single new link, and any files, are
+/// queued here. A review of several links is returned for the window to present: the menu bar never
+/// draws that, it hands the same clipboard to the window.
 @MainActor
 enum PasteRouter {
     enum Effect: Equatable {
         case status(String)
         case queued(message: String?, ids: [Job.ID])
         case review(PasteReviewRequest)
-        case nameFile(URL)
     }
 
     static func plan(for items: [PastedContent], model: AppModel) -> MenuBarPastePlan {
@@ -34,8 +33,6 @@ enum PasteRouter {
             return commitLinks(urls, via: via, model: model)
         case .saveFiles:
             return commitFiles(files, via: via, model: model)
-        case .needsAttention(.nameFile):
-            return .nameFile(files[0])
         case .needsAttention(.review):
             // the review's rows (already saved, saving now) are the sheet's, built the same way as before
             switch PasteIntake.outcome(for: text(of: items), source: source, model: model) {
@@ -69,8 +66,20 @@ enum PasteRouter {
     }
 
     private static func commitFiles(_ urls: [URL], via: JobVia, model: AppModel) -> Effect {
+        if urls.count == 1 {
+            let job = model.importFile(urls[0], via: via)
+            let ids = job.map { [$0.id] } ?? []
+            let alongside = ids.filter { $0 != model.queue.focusedID }.count
+            let message = alongside > 0 ? Copy.Jobs.uploadingAlongside(alongside) : nil
+            return .queued(message: message, ids: ids)
+        }
         model.selectedTab = .save
         let jobs = model.queue.add(urls.map { JobInput.file($0, photosAssetID: nil) }, via: via)
+        for job in jobs {
+            if case .uploading = job.pipeline.state {
+                job.pipeline.setTitle(CapybaraUploadNames.random())
+            }
+        }
         return .queued(message: Copy.Jobs.uploadingAlongside(jobs.count), ids: jobs.map(\.id))
     }
 
