@@ -438,10 +438,11 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     /// The share sheet's upload of one photo or video (CONTRACT-SHARE-QUICK.md section 10): `PUT /studio/upload?name=&public=1&queue=1`
     /// with the file's type, for a background `URLSession` upload from the file (which sets `Content-Length`). Throws
     /// `.noAPIKey` without a key for this server.
-    public func shareUploadRequest(name: String, contentType: String, public makePublic: Bool) throws -> URLRequest {
+    public func shareUploadRequest(name: String, contentType: String, public makePublic: Bool, title: String? = nil) throws -> URLRequest {
         var query = [("name", name)]
         if makePublic { query.append(("public", "1")) }
         query.append(("queue", "1"))
+        if let title { query.append(("title", title)) }
         var req = try makeRequest("PUT", "/studio/upload", query: query, keyed: true, timeout: 120)
         req.setValue(contentType, forHTTPHeaderField: "Content-Type")
         return req

@@ -29,8 +29,6 @@ struct ShareRootView: View {
     @State private var copied = false
     /// Which link the pair copied a moment ago ("copy share" / "copy direct").
     @State private var copiedForm: LinkForm?
-    /// What is typed in the inline title row (nil until the owner touches it: the row shows the default).
-    @State private var titleDraft: String?
     @State private var sharing = false
     @AccessibilityFocusState private var stayFocused: Bool
     /// The countdown whose start has been announced (once per countdown, however many times the card
@@ -43,24 +41,13 @@ struct ShareRootView: View {
 
     private var pipeline: Pipeline { model.pipeline }
 
-    /// What the ready card calls the clip: the owner's title when they typed one, else the media's name (a link
+    /// What the ready card calls the clip: the run's title when set, else the media's name (a link
     /// save's ref), as before.
     private var name: String {
         if let title = pipeline.runTitle { return title }
         if let name = pipeline.media?.name { return name }
         if case .link(let info) = pipeline.input { return info.ref }
         return Copy.appName
-    }
-
-    /// The file being shared, while it uploads, saves and is read: the card's inline title row names it
-    /// (CONTRACT-LIBRARY2 decision 3). Link shares get no field (their default is `service · ref`; rename later),
-    /// and a server that cannot keep a title has nothing to send it to.
-    private var titledFile: String? {
-        guard model.capabilities.titles, case .file(let name, _, _) = pipeline.input else { return nil }
-        switch pipeline.state {
-        case .uploading, .saving, .reading: return name
-        default: return nil
-        }
     }
 
     private var duration: Double { pipeline.media?.duration ?? pipeline.maxClipSeconds }
@@ -119,15 +106,7 @@ struct ShareRootView: View {
     }
 
     private func close() {
-        commitTitle()
         Task { _ = await model.close() }
-    }
-
-    /// Whatever is typed in the title row goes to the run before anything that ends or hands off the sheet reads
-    /// it (the share job carries `runTitle` to the app).
-    private func commitTitle() {
-        guard let draft = titleDraft, case .file(let name, _, _) = pipeline.input else { return }
-        pipeline.setTitle(TitleText.custom(draft, default: MediaTitle.stripExtension(name)))
     }
 
     // MARK: card
@@ -137,15 +116,6 @@ struct ShareRootView: View {
         if pipeline.state != .idle {
             let shape = RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous)
             VStack(alignment: .leading, spacing: 12) {
-                // outside the switch: the row keeps what is typed (and the keyboard) as the run moves from
-                // uploading to saving to reading
-                if let file = titledFile {
-                    let fallback = MediaTitle.stripExtension(file)
-                    TitleRow(
-                        pipeline: pipeline, defaultTitle: fallback,
-                        draft: Binding(get: { titleDraft ?? pipeline.runTitle ?? fallback }, set: { titleDraft = $0 }))
-                        .transition(.opacity)
-                }
                 switch pipeline.state {
                 case .picker(let items):
                     PickerContent(pipeline: pipeline, items: items, webpAvailable: model.webpAvailable)
@@ -232,7 +202,7 @@ struct ShareRootView: View {
             GlassEffectContainer(spacing: 8) {
                 VStack(spacing: 8) {
                     if model.isLong {
-                        Button(Copy.trimInCobalt, systemImage: Symbol.openApp) { model.noteInteraction(); commitTitle(); Task { await model.handOffToApp() } }
+                        Button(Copy.trimInCobalt, systemImage: Symbol.openApp) { model.noteInteraction(); Task { await model.handOffToApp() } }
                             .buttonStyle(.cobaltPrimary())
                     } else {
                         Button(Copy.makeWebp, systemImage: Symbol.makeWebp) { model.noteInteraction(); pipeline.makeWebp() }
@@ -398,7 +368,6 @@ struct ShareRootView: View {
     private var plainContinueBlock: some View {
         VStack(spacing: 6) {
             Button(ShareCopy.continueInBackground, systemImage: ShareSymbol.background) {
-                commitTitle()
                 Task { await model.continueInBackground() }
             }
             .buttonStyle(.cobaltSecondary())

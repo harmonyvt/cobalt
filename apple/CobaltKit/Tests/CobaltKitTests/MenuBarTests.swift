@@ -60,9 +60,9 @@ struct MenuBarPasteTests {
         #expect(plan == .needsAttention(.review))
     }
 
-    @Test func oneFileNeedsTheNameSheet() {
+    @Test func oneFileSavesDirectlyWithoutNameSheet() {
         let plan = MenuBarPaste.plan(fileCount: 1, links: [linkA], isLive: { _ in false })
-        #expect(plan == .needsAttention(.nameFile))
+        #expect(plan == .saveFiles)
     }
 
     @Test func severalFilesSaveWithNoSheet() {

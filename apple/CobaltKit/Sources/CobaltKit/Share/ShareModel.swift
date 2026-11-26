@@ -137,7 +137,9 @@ public final class ShareModel {
         Telemetry.log(.info, .share, "share input", data: input.telemetryData.merging(Telemetry.memoryData()) { a, _ in a })
         switch input {
         case .link(let url): model.pipeline.start(link: url)
-        case .file(let url): model.pipeline.start(file: url)
+        case .file(let url):
+            model.pipeline.jobOptions.title = CapybaraUploadNames.random()
+            model.pipeline.start(file: url)
         case .none: model.pipeline.start(pastedText: nil)
         }
         return model

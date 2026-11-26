@@ -15,6 +15,8 @@ struct SharedUpload: Sendable, Equatable {
     var name: String
     var contentType: String
     var bytes: Int64
+    /// Optional custom post title sent as `?title=` on `PUT /studio/upload`.
+    var title: String? = nil
 }
 
 /// The upload's task label: `upload:<stored file>/<name>`. The app deletes the stored copy by it and names the file in
@@ -158,7 +160,7 @@ struct InstantUploadEngine: Sendable {
         var requests: [(URLRequest, SharedUpload)] = []
         for file in files {
             do {
-                requests.append((try client.shareUploadRequest(name: file.name, contentType: file.contentType, public: makePublic), file))
+                requests.append((try client.shareUploadRequest(name: file.name, contentType: file.contentType, public: makePublic, title: file.title), file))
             } catch CobaltError.noAPIKey {
                 return .failed(.noKey)
             } catch {
@@ -168,7 +170,7 @@ struct InstantUploadEngine: Sendable {
         guard !requests.isEmpty else { return .failed(.couldNotStart) }
         let session = transport.session(identifier: BackgroundSessionID.uploadSave(job: job), events: SaveSink())
         for (request, file) in requests {
-            _ = session.upload(request, from: file.file, label: UploadLabel.make(stored: file.file.lastPathComponent, name: file.name))
+            _ = session.upload(request, from: file.file, label: UploadLabel.make(stored: file.file.lastPathComponent, name: file.title ?? file.name))
         }
         await InstantShareEngine.race(registerWait) { await session.registered() }
         return .saved
@@ -185,9 +187,9 @@ extension InstantShare {
         return !media[0].hasItemConformingToTypeIdentifier(UTType.movie.identifier)
     }
 
-    /// The upload words the "uploading" notification and the tests read: `IMG_0412.heic`, or `3 files`.
+    /// The upload words the "uploading" notification and the tests read: `sleepy yuzu capy` / `IMG_0412.heic`, or `3 files`.
     static func uploadSummary(_ files: [SharedUpload]) -> String {
-        files.count == 1 ? files[0].name : "\(files.count) files"
+        files.count == 1 ? (files[0].title ?? files[0].name) : "\(files.count) files"
     }
 
     /// Copies what was shared and queues the uploads (the extension's path for photos and videos, CONTRACT-SHARE-QUICK.md
@@ -209,7 +211,9 @@ extension InstantShare {
                 try? FileManager.default.removeItem(at: file.file)
                 tooLarge += 1
             } else {
-                files.append(file)
+                var named = file
+                named.title = CapybaraUploadNames.random()
+                files.append(named)
             }
         }
         func log(_ result: String) {

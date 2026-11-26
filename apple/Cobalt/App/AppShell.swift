@@ -19,19 +19,15 @@ extension AppModel {
 
     /// The file circle's picker, a file from Photos, a file pasted or dropped: one upload job. Never refused because
     /// something else runs; it takes the focus only on a quiet screen (`JobQueue.add`, CONTRACT-PARALLEL 5.1).
+    /// Each upload gets a randomly generated capybara-themed title right away so nothing prompts for a filename.
     @discardableResult
     func importFile(_ url: URL, photosAssetID: String? = nil, via: JobVia = .circle) -> Job? {
         selectedTab = .save
-        return queue.add([.file(url, photosAssetID: photosAssetID)], via: via).first
-    }
-
-    /// The title sheet for the file upload `importFile` just started (CONTRACT-LIBRARY2 decision 3): nil when no
-    /// upload began (a refused or unreadable file) or when the server cannot keep a title (rename later is then
-    /// this device only). The default is the file's name without its media extension, which for a Photos pick is
-    /// `from photos · 4 oct`.
-    func titleRequest(for pipeline: Pipeline) -> TitleRequest? {
-        guard capabilities.titles, case .uploading = pipeline.state, case .file(let name, _, _) = pipeline.input else { return nil }
-        return TitleRequest(defaultTitle: MediaTitle.stripExtension(name))
+        return queue.add(
+            [.file(url, photosAssetID: photosAssetID)],
+            via: via,
+            options: JobOptions(title: CapybaraUploadNames.random())
+        ).first
     }
 
     var visibleTabs: [AppTab] {
@@ -52,8 +48,6 @@ struct AppShell: View {
     @State private var pickedPhoto: PhotosPickerItem?
     @State private var photoImport = PhotoImport()
     @State private var dropTargeted = false
-    /// The `name it` sheet over the save tab while a picked file uploads, with the upload it names.
-    @State private var titleSheet: TitleSheetRequest?
     /// Two or more links pasted or dropped: the review sheet (CONTRACT-PARALLEL 4.5).
     @State private var review: PasteReviewRequest?
     @State private var width: CGFloat = 0
@@ -123,7 +117,7 @@ struct AppShell: View {
             .overlay { if dropTargeted { dropHighlight } }
             #if os(iOS)
             .background { KeyboardShelfPublisher(store: model.store) }
-            .modifier(AlertsPromptPresenter(model: model, blocked: titleSheet != nil || review != nil))
+            .modifier(AlertsPromptPresenter(model: model, blocked: review != nil))
             #endif
             .overlay(alignment: noticeAlignment) {
                 if let note {
@@ -168,11 +162,6 @@ struct AppShell: View {
                 photoImport.load(item, into: model) { [id = item.itemIdentifier] in intake($0, photosAssetID: id) }
             }
             // the shell's own sheets wear `coversPane`: a pane opened under one waits for it to go (one narrow screen)
-            .sheet(item: $titleSheet) { sheet in
-                TitleSheet(pipeline: sheet.pipeline, defaultTitle: sheet.request.defaultTitle) { titleSheet = nil }
-                    .cobaltRoot(model: model)
-                    .coversPane(pane)
-            }
             .sheet(item: $review) { request in
                 PasteReviewSheet(request: request) {
                     finishReview(request, saving: [])
@@ -192,7 +181,6 @@ struct AppShell: View {
             .background { shortcuts }
             #if DEBUG
             .onAppear {
-                if let kind = UserDefaults.standard.string(forKey: "previewTitleSheet") { debugTitleSheet(kind) }
                 if let n = UserDefaults.standard.string(forKey: "previewDetail").flatMap(Int.init), model.store.media.indices.contains(n) {
                     debugDetail = model.mediaItem(for: model.store.media[n])
                 }
@@ -269,8 +257,6 @@ struct AppShell: View {
             if let message { showStatus(message) }
         case .review(let request):
             review = request
-        case .nameFile(let url):
-            intake(url, via: via)
         }
     }
 
@@ -285,26 +271,10 @@ struct AppShell: View {
         }
     }
 
-    /// Files from the picker, Photos, a paste and a drop come through here: the run starts (`importFile`: the file
-    /// is measured and copied in), then the title sheet rises, and the upload itself waits for it (Harmony,
-    /// 2026-10-28: nothing goes up before the file has its name). `done` names it, `skip` or closing the sheet sends
-    /// it as it is. A beat later, so the picker that returned the file has finished leaving, and only if the run is
-    /// still that upload; otherwise the hold is let go at once.
+    /// Files from the picker, Photos, a paste and a drop upload immediately with a randomly generated
+    /// capybara-themed title (`importFile`) — no filename prompt blocks the upload.
     private func intake(_ url: URL, photosAssetID: String? = nil, via: JobVia = .circle) {
-        guard let job = model.importFile(url, photosAssetID: photosAssetID, via: via),
-              let request = model.titleRequest(for: job.pipeline)
-        else { return }
-        let pipeline = job.pipeline
-        guard case .uploading = pipeline.state else { return }              // refused at once (too big, not media)
-        pipeline.holdUploadForTitle()
-        Task {
-            try? await Task.sleep(for: .milliseconds(350))
-            if case .uploading = pipeline.state, case .file = pipeline.input {
-                titleSheet = TitleSheetRequest(request: request, pipeline: pipeline)
-            } else {
-                pipeline.releaseTitleHold()
-            }
-        }
+        model.importFile(url, photosAssetID: photosAssetID, via: via)
     }
 
     /// A paste the menu bar handed over, or a job it started that now needs a choice. The window may not have
@@ -319,22 +289,6 @@ struct AppShell: View {
         }
         handle(request.items, via: .paste, dropped: false)
     }
-
-    #if DEBUG
-    /// `-previewTitleSheet files|photos|long` (simulator evidence, over a preview scenario): picks a file the way
-    /// the importer would, so the upload starts and the `name it` sheet rises with that default.
-    private func debugTitleSheet(_ kind: String) {
-        let name = switch kind {
-        case "photos": "from photos · 4 oct.mov"
-        case "long": "the whole afternoon at the harbour, before the wind came up and everyone left.mov"
-        default: "IMG_0412.mov"
-        }
-        Task {
-            try? await Task.sleep(for: .seconds(1.5))
-            intake(URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(name))
-        }
-    }
-    #endif
 
     // MARK: navigation
 
@@ -751,15 +705,8 @@ private struct RegularToolsHub: View {
 }
 #endif
 
-/// The `name it` sheet and the upload it names (the sheet follows that run, focused or not).
-private struct TitleSheetRequest: Identifiable {
-    let request: TitleRequest
-    let pipeline: Pipeline
-    var id: UUID { request.id }
-}
-
 /// ⌘V and Edit > Paste anywhere in the window (CONTRACT-PARALLEL 4.1): the content is a paste destination, so a text
-/// field that has the focus (the `name it` sheet's) takes ⌘V itself and the shell sees only the pastes nothing else
+/// field that has the focus takes ⌘V itself and the shell sees only the pastes nothing else
 /// wants. Replaces the old global menu command, which bound ⌘V even over a text field.
 private struct PasteAnywhere: ViewModifier {
     let received: @MainActor ([PastedContent]) -> Void

@@ -19,8 +19,6 @@ public enum MenuBarPastePlan: Equatable, Sendable {
 public enum MenuBarPasteAttention: Equatable, Sendable {
     /// Two or more links. The review sheet, including links already saved that the owner can tick.
     case review
-    /// One file. The name-it sheet before the upload goes out.
-    case nameFile
 }
 
 public enum MenuBarPaste {
@@ -28,8 +26,7 @@ public enum MenuBarPaste {
     /// `isLive` is true when a job is already saving that exact link (`JobQueue.liveJob(for:)`).
     /// A file on the pasteboard wins: the text is not read, matching the window.
     public static func plan(fileCount: Int, links: [URL], isLive: (URL) -> Bool) -> MenuBarPastePlan {
-        if fileCount == 1 { return .needsAttention(.nameFile) }
-        if fileCount > 1 { return .saveFiles }
+        if fileCount > 0 { return .saveFiles }
         guard let only = links.first else { return .noLink }
         if links.count == 1 { return isLive(only) ? .alreadySaving : .saveLinks(links) }
         return .needsAttention(.review)
