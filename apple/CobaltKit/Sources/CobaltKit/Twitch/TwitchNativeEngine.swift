@@ -410,6 +410,7 @@ private final class SampleBufferPipeline: @unchecked Sendable {
     private var pendingSegmentPDT: Date?
 
     private var onPlayingChange: (@Sendable (Bool) -> Void)?
+    private var audioRequestRegistered = false
 
     init() {
         audioRenderer.audioTimePitchAlgorithm = .timeDomain
@@ -428,16 +429,21 @@ private final class SampleBufferPipeline: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             let vr = box.value
-            if let existing = self.videoRenderer, existing !== vr {
+            if !self.audioRequestRegistered {
+                self.audioRequestRegistered = true
+                self.audioRenderer.requestMediaDataWhenReady(on: self.queue) { [weak self] in
+                    self?.drainAudio()
+                }
+            }
+            if self.videoRenderer === vr { return }
+            if let existing = self.videoRenderer {
+                existing.stopRequestingMediaData()
                 self.synchronizer.removeRenderer(existing, at: .invalid)
             }
             self.videoRenderer = vr
             self.synchronizer.addRenderer(vr)
             vr.requestMediaDataWhenReady(on: self.queue) { [weak self] in
                 self?.drainVideo()
-            }
-            self.audioRenderer.requestMediaDataWhenReady(on: self.queue) { [weak self] in
-                self?.drainAudio()
             }
         }
     }
@@ -533,8 +539,8 @@ private final class SampleBufferPipeline: @unchecked Sendable {
     // MARK: - Queue-confined internals
 
     private func ingestOnQueue(_ samples: [DemuxedSample]) {
-        // Recover cleanly if VideoToolbox invalidated the display layer (e.g., background transition).
-        if let vr = videoRenderer, vr.status == .failed {
+        // Recover cleanly if VideoToolbox invalidated the display layer (e.g., background transition or view reparenting).
+        if let vr = videoRenderer, vr.status == .failed || vr.requiresFlushToResumeDecoding {
             vr.flush()
             pendingVideo.removeAll(keepingCapacity: true)
             awaitingKeyframe = true

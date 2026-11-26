@@ -251,6 +251,75 @@ struct MPEGTSDemuxerTests {
         #expect(demuxer.unsupportedVideoCodec == "hevc")
     }
 
+    @Test func reassemblesUnalignedPESVideoAccessUnitsAcrossBoundaries() {
+        var stream = Data()
+        stream.append(makePAT(pmtPID: 0x0100))
+        stream.append(makePMT(pmtPID: 0x0100, videoPID: 0x0101, videoStreamType: 0x1B, audioPID: nil))
+
+        // Build 3 Access Units matching Twitch's live TS muxer:
+        // - PES 0 carries AUD + SPS + PPS + head of IDR slice (missing its last 139 bytes).
+        // - PES 1 begins with those 139 tail bytes of frame 0's IDR slice, then AUD + P-slice 1 + first two 0x00 bytes of next start code.
+        // - PES 2 begins with `00 01 09 F0` (completing the straddling start code + AUD) + P-slice 2.
+        let idrHead = Data([0x65, 0xB8]) + Data(repeating: 0xAA, count: 198)
+        let idrTail = Data(repeating: 0xBB, count: 138) + Data([0xC0])
+        let fullIDR = idrHead + idrTail
+
+        let pSlice1 = Data([0x41, 0x9A]) + Data(repeating: 0xCC, count: 60) + Data([0x80])
+        let pSlice2 = Data([0x41, 0x9A]) + Data(repeating: 0xDD, count: 40) + Data([0x80])
+
+        var pes0 = Data([0x00, 0x00, 0x00, 0x01, 0x09, 0xF0])
+        pes0.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+        pes0.append(Self.sampleSPS)
+        pes0.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+        pes0.append(Self.samplePPS)
+        pes0.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+        pes0.append(idrHead)
+
+        var pes1 = Data()
+        pes1.append(idrTail)
+        pes1.append(contentsOf: [0x00, 0x00, 0x00, 0x01, 0x09, 0xF0])
+        pes1.append(contentsOf: [0x00, 0x00, 0x01])
+        pes1.append(pSlice1)
+        pes1.append(contentsOf: [0x00, 0x00]) // first half of straddling 4-byte start code
+
+        var pes2 = Data([0x00, 0x01, 0x09, 0xF0]) // second half of straddling start code + AUD
+        pes2.append(contentsOf: [0x00, 0x00, 0x01])
+        pes2.append(pSlice2)
+
+        stream.append(makePESPackets(pid: 0x0101, streamID: 0xE0, pts: 92_970, dts: 90_000, payload: pes0))
+        stream.append(makePESPackets(pid: 0x0101, streamID: 0xE0, pts: 97_470, dts: 91_530, payload: pes1))
+        stream.append(makePESPackets(pid: 0x0101, streamID: 0xE0, pts: 94_500, dts: 93_060, payload: pes2))
+
+        // Feed in small irregular 53-byte chunks to simulate incremental HTTP prefetch streaming.
+        var demuxer = MPEGTSDemuxer()
+        var samples: [DemuxedSample] = []
+        var offset = 0
+        while offset < stream.count {
+            let end = min(offset + 53, stream.count)
+            samples.append(contentsOf: demuxer.push(stream.subdata(in: offset..<end)))
+            offset = end
+        }
+        samples.append(contentsOf: demuxer.flushSegment())
+
+        let videos = samples.compactMap { if case .video(let v) = $0 { return v } else { return nil } }
+        #expect(videos.count == 3)
+        #expect(videos[0].isKeyframe)
+        #expect(videos[0].pts90k == 2_970)
+        #expect(videos[0].dts90k == 0)
+        #expect(videos[0].avccData.count == 4 + fullIDR.count)
+        #expect(videos[0].avccData.dropFirst(4) == fullIDR)
+
+        #expect(!videos[1].isKeyframe)
+        #expect(videos[1].pts90k == 7_470)
+        #expect(videos[1].dts90k == 1_530)
+        #expect(videos[1].avccData.dropFirst(4) == pSlice1)
+
+        #expect(!videos[2].isKeyframe)
+        #expect(videos[2].pts90k == 4_500)
+        #expect(videos[2].dts90k == 3_060)
+        #expect(videos[2].avccData.dropFirst(4) == pSlice2)
+    }
+
     // MARK: - Synthetic TS helpers
 
     private func makePAT(pmtPID: UInt16) -> Data {
