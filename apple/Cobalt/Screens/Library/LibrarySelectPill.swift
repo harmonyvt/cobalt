@@ -256,6 +256,7 @@ struct LibraryPickedSheet: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(expanded ? Copy.Library2.shelfFold : Copy.Library2.shelfUnfold)
+                        .accessibilityIdentifier("library.select.toggle")
                     }
                 }
                 .padding(.horizontal, 14)
@@ -313,6 +314,8 @@ struct LibraryPickedSheet: View {
             .padding(.top, 9)
             .padding(.bottom, 10)
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("library.select.sheet")
         .frame(maxWidth: tier == .wide ? 680 : 560)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(

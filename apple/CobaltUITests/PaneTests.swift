@@ -226,34 +226,39 @@ final class PaneTests: XCTestCase {
         app.terminate()
     }
 
-    /// The pill expands (a tap on its count) into the selection sheet at medium; a tile behind it still ticks and the sheet
-    /// follows; a swipe down collapses it to the pill and the picks stay.
+    /// The docked selection sheet expands in-place (tapping its toggle) to show the picked grid while leaving the masonry
+    /// behind tappable; ticking another tile updates both counts, and collapsing keeps the picks and select mode.
     func testIPhoneSelectPillExpandsAndCollapses() throws {
         guard !isPad else { throw XCTSkip("an iPhone layout: the iPad has the pane beside the tab") }
         let app = launch(["-previewScenario", "happy", "-previewTab", "library", "-paneReset", "YES"])
         XCTAssertTrue(find(app, "library.tile").waitForExistence(timeout: wait), "the library never showed tiles")
         settle()
         find(app, "library.select").tap()
-        XCTAssertTrue(find(app, "library.select.count").waitForExistence(timeout: wait), "no select pill")
+        XCTAssertTrue(find(app, "library.select.count").waitForExistence(timeout: wait), "no select header")
         let ticked = try tick(app, upTo: 2)
         XCTAssertEqual(ticked, "2 picked")
         settle()
         shot("pill", "1-collapsed")
 
-        // expand: tap the count
-        find(app, "library.select.count").tap()
-        let pane = find(app, "pane")
-        XCTAssertTrue(pane.waitForExistence(timeout: wait), "tapping the count did not open the selection sheet")
-        settle(2)
+        let sheet = find(app, "library.select.sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: wait), "no docked selection sheet")
+        let toggle = find(app, "library.select.toggle")
+        XCTAssertTrue(toggle.waitForExistence(timeout: wait), "no expand toggle on selection sheet")
+        XCTAssertEqual(toggle.label, "show shelf", "selection sheet should start collapsed")
+        let collapsedTop = sheet.frame.minY
+
+        // expand: tap the tray toggle
+        toggle.tap()
+        XCTAssertTrue(waitLabel(toggle, "fold shelf"), "tapping the toggle did not expand the selection sheet")
+        settle(1.5)
         shot("pill", "2-expanded")
         let window = app.windows.firstMatch.frame
-        let top = pane.frame.minY
-        XCTAssertGreaterThan(top, window.height * 0.3, "the sheet opened taller than medium (top \(top) of \(window.height))")
-        XCTAssertLessThan(top, window.height * 0.7, "the sheet is not up (top \(top) of \(window.height))")
-        XCTAssertTrue(app.staticTexts["2 posts"].waitForExistence(timeout: 5), "the sheet does not say `2 posts`")
-        XCTAssertFalse(find(app, "library.select.count").exists, "the pill stayed under the expanded sheet")
+        let top = sheet.frame.minY
+        XCTAssertLessThan(top, collapsedTop - 10, "the expanded sheet did not grow taller (collapsed \(collapsedTop), expanded \(top))")
+        XCTAssertGreaterThan(top, window.height * 0.25, "the expanded sheet covered too much of the grid (top \(top) of \(window.height))")
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5), "the sheet does not say `2 selected`")
 
-        // a tile behind the sheet still ticks, and the sheet's count follows
+        // a tile behind the sheet still ticks, and both the top bar and sheet counts follow
         let tiles = app.descendants(matching: .any).matching(identifier: "library.tile")
         var followed = false
         for index in 0..<min(tiles.count, 24) {
@@ -261,19 +266,20 @@ final class PaneTests: XCTestCase {
             guard tile.exists, tile.isHittable, tile.frame.maxY < top - 4, tile.frame.minY > 100, !tile.isSelected else { continue }
             tile.tap()
             // (a gallery cannot be ticked: the next tile then)
-            if app.staticTexts["3 posts"].waitForExistence(timeout: 3) { followed = true; break }
+            if app.staticTexts["3 selected"].waitForExistence(timeout: 3) { followed = true; break }
         }
         XCTAssertTrue(followed, "the sheet's count did not follow a tick behind it")
+        XCTAssertEqual(find(app, "library.select.count").label, "3 picked", "the top bar count did not follow a tick behind the sheet")
         settle()
         shot("pill", "3-ticked-behind")
 
-        // swipe down from the grabber: the pill comes back, nothing is un-picked, select mode stays
-        let grabber = pane.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01))
-        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
-        grabber.press(forDuration: 0.1, thenDragTo: bottom)
-        XCTAssertTrue(waitGone(find(app, "pane")), "swiping down did not collapse the sheet")
+        // collapse: the tray folds back down, nothing is un-picked, select mode stays
+        toggle.tap()
+        XCTAssertTrue(waitLabel(toggle, "show shelf"), "tapping the toggle did not collapse the selection sheet")
+        settle(1.5)
+        XCTAssertGreaterThan(sheet.frame.minY, top + 10, "the collapsed sheet did not shrink back down")
         let count = find(app, "library.select.count")
-        XCTAssertTrue(count.waitForExistence(timeout: wait), "the pill did not come back")
+        XCTAssertTrue(count.waitForExistence(timeout: wait), "the select count disappeared after collapsing")
         XCTAssertEqual(count.label, "3 picked", "collapsing changed the picks")
         settle()
         shot("pill", "4-collapsed-again")
