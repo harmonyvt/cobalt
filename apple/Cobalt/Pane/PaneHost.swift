@@ -226,6 +226,17 @@ struct PaneHost<Content: View>: View {
             return
         }
         #endif
+        // After a foreground crash, reset the saved pane instead of reopening the page that just crashed (breaks crash loops).
+        if Telemetry.previousSessionEndedUncleanly {
+            saved = nil
+            #if os(iOS)
+            PaneSceneFallback.removeAll()
+            #endif
+            Telemetry.log(.warn, .app, "pane restore skipped after unclean exit")
+            pane.restoreOnce(nil)
+            return
+        }
+        let dataToRestore: Data?
         #if os(iOS)
         // Prefer the per-scene mirror keyed by `UISceneSession.persistentIdentifier` when present: it updates on every
         // `pane.machine.saved` change (and purges genuinely discarded sessions in `didDiscardSceneSessions`), whereas
@@ -234,11 +245,19 @@ struct PaneHost<Content: View>: View {
         guard let sessionID = resolvedSceneSessionID else { return }
         if let mirrored = PaneSceneFallback.load(sessionID: sessionID) {
             saved = mirrored
-            pane.restoreOnce(mirrored)
-            return
+            dataToRestore = mirrored
+        } else {
+            dataToRestore = saved
         }
+        #else
+        dataToRestore = saved
         #endif
-        pane.restoreOnce(saved)
+        // Arm the unclean-exit marker before restoring a visible pane so a crash on its first frame (before
+        // `didBecomeActive` fires) also resets cleanly on the next relaunch.
+        if let route = PaneRoute.decoded(dataToRestore), route.state != .hidden {
+            Telemetry.markForegroundActive()
+        }
+        pane.restoreOnce(dataToRestore)
     }
 
     // MARK: inline

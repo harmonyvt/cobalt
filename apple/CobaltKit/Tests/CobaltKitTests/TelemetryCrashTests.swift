@@ -48,6 +48,7 @@ struct TelemetryCrashTests {
         before.markClean()
         let after = runtime(dir)
         #expect(after.collectUncleanExit() == nil)
+        #expect(after.recoveredFromUncleanExit == false)
         #expect(after.crashes.count == 0)
     }
 
@@ -57,13 +58,20 @@ struct TelemetryCrashTests {
         a.markRunning()
         a.markClean()
         a.markRunning()                                              // back in the foreground, then killed
-        #expect(runtime(dir).collectUncleanExit() != nil)
+        let after = runtime(dir)
+        #expect(after.collectUncleanExit() != nil)
+        #expect(after.recoveredFromUncleanExit == true)
+        // Flag stays true for the rest of this launch even after the marker is consumed once.
+        #expect(after.collectUncleanExit() == nil)
+        #expect(after.recoveredFromUncleanExit == true)
     }
 
     @Test func noMarkerBeforeTheFirstActivation() throws {
         let dir = try makeTempDirectory()
         _ = runtime(dir)                                             // launched in the background: never became active
-        #expect(runtime(dir).collectUncleanExit() == nil)
+        let after = runtime(dir)
+        #expect(after.collectUncleanExit() == nil)
+        #expect(after.recoveredFromUncleanExit == false)
     }
 
     // MARK: MetricKit passthrough

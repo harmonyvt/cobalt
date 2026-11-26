@@ -134,32 +134,16 @@ final class TwitchNowPlayingController {
 
         let cc = MPRemoteCommandCenter.shared()
         cc.playCommand.isEnabled = true
-        cc.playCommand.addTarget { [weak self] _ in
-            Task { @MainActor [weak self] in self?.onPlay?() }
-            return .success
-        }
+        Self.addRemoteTarget(cc.playCommand) { [weak self] in self?.onPlay?() }
 
         cc.pauseCommand.isEnabled = true
-        cc.pauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor [weak self] in self?.onPause?() }
-            return .success
-        }
+        Self.addRemoteTarget(cc.pauseCommand) { [weak self] in self?.onPause?() }
 
         cc.togglePlayPauseCommand.isEnabled = true
-        cc.togglePlayPauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor [weak self] in self?.onTogglePlayPause?() }
-            return .success
-        }
+        Self.addRemoteTarget(cc.togglePlayPauseCommand) { [weak self] in self?.onTogglePlayPause?() }
 
-        cc.nextTrackCommand.addTarget { [weak self] _ in
-            Task { @MainActor [weak self] in self?.onNextTrack?() }
-            return .success
-        }
-
-        cc.previousTrackCommand.addTarget { [weak self] _ in
-            Task { @MainActor [weak self] in self?.onPreviousTrack?() }
-            return .success
-        }
+        Self.addRemoteTarget(cc.nextTrackCommand) { [weak self] in self?.onNextTrack?() }
+        Self.addRemoteTarget(cc.previousTrackCommand) { [weak self] in self?.onPreviousTrack?() }
 
         // Live streams do not scrub.
         cc.changePlaybackPositionCommand.isEnabled = false
@@ -192,6 +176,18 @@ final class TwitchNowPlayingController {
         cc.previousTrackCommand.isEnabled = onPreviousTrack != nil
     }
 
+    /// Registers a `MPRemoteCommand` block outside `@MainActor` isolation so MediaRemote invoking the Obj-C block
+    /// on a background queue never trips Swift 6's `_dispatch_assert_queue_fail` check.
+    private nonisolated static func addRemoteTarget(
+        _ command: MPRemoteCommand,
+        action: @escaping @MainActor @Sendable () -> Void
+    ) {
+        command.addTarget { _ in
+            Task { @MainActor in action() }
+            return .success
+        }
+    }
+
     // MARK: - Off-main artwork fetch & decode
 
     private nonisolated static func fetchArtworkCGImage(url: URL) async -> CGImage? {
@@ -210,7 +206,9 @@ final class TwitchNowPlayingController {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
-    private static func makeMediaArtwork(cgImage: CGImage) -> MPMediaItemArtwork {
+    /// Constructed `nonisolated` so `MPMediaItemArtwork`'s `requestHandler` Obj-C block does not inherit `@MainActor`.
+    /// `MediaPlayer` invokes `requestHandler` on its own background queue; a `@MainActor` closure traps with `SIGTRAP`.
+    private nonisolated static func makeMediaArtwork(cgImage: CGImage) -> MPMediaItemArtwork {
         let size = CGSize(width: cgImage.width, height: cgImage.height)
         return MPMediaItemArtwork(boundsSize: size) { _ in
             #if os(iOS)

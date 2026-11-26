@@ -44,6 +44,18 @@ public enum Telemetry {
         if process == .app { runtime.armCrashCapture() }
     }
 
+    /// True when the previous foreground run ended without going to the background or terminating cleanly (crash / kill).
+    /// Set once during `start(process: .app)` so UI restoration (`PaneHost`) can reset instead of reopening a crashing page.
+    public static var previousSessionEndedUncleanly: Bool {
+        runtime?.recoveredFromUncleanExit ?? false
+    }
+
+    /// Marks the app as actively presenting foreground UI before `didBecomeActive` fires (e.g. while restoring a saved
+    /// pane), so a crash on the first frame of a restored page also trips `previousSessionEndedUncleanly` on next launch.
+    public static func markForegroundActive() {
+        runtime?.markRunning()
+    }
+
     /// Swaps the runtime (tests only). Returns what was installed before.
     @discardableResult
     static func install(_ runtime: TelemetryRuntime?) -> TelemetryRuntime? {
@@ -67,6 +79,9 @@ final class TelemetryRuntime: Sendable {
     let directory: URL
     let log: TelemetryLog
     let crashes: CrashStore
+    private let uncleanExitRecovered = Mutex<Bool>(false)
+
+    var recoveredFromUncleanExit: Bool { uncleanExitRecovered.withLock { $0 } }
 
     init(directory: URL, process: TelemetryProcess, limits: TelemetryLog.Limits = .init(), mirrorToOSLog: Bool = true) {
         self.directory = directory
@@ -100,6 +115,7 @@ final class TelemetryRuntime: Sendable {
     @discardableResult
     func collectUncleanExit() -> CrashRecord? {
         guard let marker = UncleanExit.leftover(in: directory) else { return nil }
+        uncleanExitRecovered.withLock { $0 = true }
         let record = UncleanExit.record(for: marker, current: .current(process: .app), log: log)
         crashes.add(record, payload: nil)
         UncleanExit.clear(in: directory)
