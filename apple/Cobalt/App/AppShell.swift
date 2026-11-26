@@ -424,20 +424,59 @@ struct AppShell: View {
                     tabScreen(tab)
                 }
             } else {
+                let primary = regularPrimaryTabs
+                let secondary = regularSecondaryTabs
                 TabView(selection: $model.selectedTab) {
-                    // the order is `AppTab`'s; the queue is not a tab here: it is a sheet opened from the toolbar button on
-                    // save, library, links and chat (apple/CONTRACT.md 12; `AppModel.showQueue()`)
-                    ForEach(model.visibleTabs.filter { $0 != .queue }, id: \.self) { tab in
+                    // Streamlined top-level navigation (max 4 items) so iPhone Duo's Vertical Controls rail
+                    // and floating tab bar stay spacious and never collide with `PaneBarAccessory`.
+                    ForEach(primary, id: \.self) { tab in
                         Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
                             tabRoot(tab)
                         }
-                        .badge(tab == .swarms ? model.swarms.waitingCount : 0)
+                    }
+
+                    if !secondary.isEmpty {
+                        Tab(Copy.tab(.tools), systemImage: icon(for: .tools), value: AppTab.tools) {
+                            NavigationStack {
+                                RegularToolsHub(model: model, tabs: secondary)
+                            }
+                        }
+                        .badge(model.swarms.waitingCount)
+
+                        TabSection(Copy.PhoneNav.tools) {
+                            ForEach(secondary, id: \.self) { tab in
+                                Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
+                                    tabRoot(tab)
+                                }
+                                .badge(tab == .swarms ? model.swarms.waitingCount : 0)
+                            }
+                        }
+                        .tabPlacement(.sidebarOnly)
                     }
                 }
                 .modifier(PaneBarAccessory(model: model))
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+    }
+
+    /// The primary top-level tabs shown directly in the bar / Duo Vertical Controls rail (at most 3 + Tools = 4).
+    private var regularPrimaryTabs: [AppTab] {
+        let visible = model.visibleTabs.filter { $0 != .queue && $0 != .tools }
+        var primary: [AppTab] = []
+        for candidate in [AppTab.save, .library] where visible.contains(candidate) {
+            primary.append(candidate)
+        }
+        if let live = [AppTab.twitch, .stage, .sevenTv].first(where: { visible.contains($0) }) {
+            primary.append(live)
+        }
+        return primary
+    }
+
+    /// Secondary workspaces tucked into the sidebar section and reachable in one tap from `RegularToolsHub`.
+    private var regularSecondaryTabs: [AppTab] {
+        let primary = Set(regularPrimaryTabs)
+        return model.visibleTabs.filter { $0 != .queue && $0 != .tools && !primary.contains($0) }
     }
     #endif
 
@@ -617,6 +656,96 @@ private struct QueueTabRedirect: ViewModifier {
             guard tab == .queue else { return }
             model.selectedTab = .save
             model.queueShown = true
+        }
+    }
+}
+
+/// Clean fold-safe hub for secondary workspaces on iOS `.regular` (iPhone Duo unfolded & iPad),
+/// keeping the top-level tab bar / Duo Vertical Controls rail crisp at 4 items.
+private struct RegularToolsHub: View {
+    let model: AppModel
+    let tabs: [AppTab]
+
+    var body: some View {
+        ScrollView {
+            DuoAdaptiveGrid(minItemWidth: 220, spacing: 12, minColumns: 2) {
+                ForEach(tabs, id: \.self) { tab in
+                    hubCard(for: tab)
+                }
+            }
+            .padding(16)
+        }
+        .background(CobaltColor.bg)
+        .navigationTitle(Copy.PhoneNav.tools)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            QueueToolbarItem(model: model)
+        }
+    }
+
+    private func hubCard(for tab: AppTab) -> some View {
+        let waiting = tab == .swarms ? model.swarms.waitingCount : 0
+        let detail = detailText(for: tab)
+        return Button {
+            model.selectedTab = tab
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon(for: tab))
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(CobaltColor.text)
+                    .frame(width: 36, height: 36)
+                    .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(Copy.tab(tab))
+                        .font(CobaltType.bodySemibold)
+                        .foregroundStyle(CobaltColor.text)
+                        .lineLimit(1)
+                    if let detail {
+                        Text(detail)
+                            .font(CobaltType.captionSmall)
+                            .foregroundStyle(CobaltColor.caption)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 4)
+
+                if waiting > 0 {
+                    Text("\(waiting)")
+                        .font(Font.cobalt(11, .semibold, relativeTo: .caption2))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(CobaltColor.linkBlue, in: Capsule())
+                }
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(CobaltColor.caption)
+                    .accessibilityHidden(true)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: max(62, Metrics.hit), alignment: .leading)
+            .background(CobaltColor.row, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("tools.hub.\(tab.rawValue)")
+    }
+
+    private func detailText(for tab: AppTab) -> String? {
+        switch tab {
+        case .links: return Copy.PhoneNav.toolsLinksNote
+        case .chat, .swarms: return Copy.PhoneNav.toolsAssistantsNote
+        case .booru: return Copy.PhoneNav.toolsBooruNote
+        case .names: return Copy.PhoneNav.toolsNamesNote
+        default: return nil
         }
     }
 }

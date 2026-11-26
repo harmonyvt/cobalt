@@ -99,4 +99,36 @@ struct TwitchWatchLayoutTests {
         #expect(TwitchWatchLayout.resolve(isWideShape: false, size: .zero) == .stacked(videoMaxHeight: nil))
         #expect(TwitchWatchLayout.resolve(isWideShape: true, size: .zero) == .sideBySide(chatWidth: 320))
     }
+
+    @Test("keyboard-open guarantee caps video height on folded outer and unfolded tall postures")
+    func keyboardOpenGuarantee() {
+        // Folded Outer with keyboard visible (~402 x 433 remaining above keyboard)
+        let outerMax = TwitchWatchLayout.stackedVideoMaxHeight(for: CGSize(width: 402, height: 433), keyboardOpen: true)
+        #expect(outerMax == 147)
+        // Unfolded Tall with keyboard visible (~669 x 560 remaining above keyboard) -> capped at 180 pt
+        let tallMax = TwitchWatchLayout.stackedVideoMaxHeight(for: CGSize(width: 669, height: 560), keyboardOpen: true)
+        #expect(tallMax == 180)
+        // Very short compact height never crushes below floor
+        let floorMax = TwitchWatchLayout.stackedVideoMaxHeight(for: CGSize(width: 390, height: 320), keyboardOpen: true)
+        #expect(floorMax == TwitchWatchLayout.keyboardVideoMinHeight)
+    }
+
+    @Test("compact overlay stream bar activates in tabletop and stacked keyboard-open postures")
+    func compactOverlayStreamBarRules() {
+        #expect(TwitchWatchLayout.compactOverlayStreamBar(isStacked: false, isTabletop: true, keyboardOpen: false))
+        #expect(TwitchWatchLayout.compactOverlayStreamBar(isStacked: false, isTabletop: true, keyboardOpen: true))
+        #expect(TwitchWatchLayout.compactOverlayStreamBar(isStacked: true, isTabletop: false, keyboardOpen: true))
+        #expect(!TwitchWatchLayout.compactOverlayStreamBar(isStacked: true, isTabletop: false, keyboardOpen: false))
+        #expect(!TwitchWatchLayout.compactOverlayStreamBar(isStacked: false, isTabletop: false, keyboardOpen: true))
+    }
+
+    @Test("single-focus wide watch uses ~62/38 split clamped between 280 and 400 pt")
+    func singleFocusWideChatWidth() {
+        // iPhone Duo Unfolded Wide (951 pt) -> 361 pt chat (~38%), 590 pt video (~62%)
+        #expect(TwitchWatchLayout.singleFocusChatWidth(for: 951) == 361)
+        // iPad / Mac large canvas -> capped at 400 pt
+        #expect(TwitchWatchLayout.singleFocusChatWidth(for: 1366) == 400)
+        // Smaller landscape width -> floored at 280 pt
+        #expect(TwitchWatchLayout.singleFocusChatWidth(for: 669) == 280)
+    }
 }

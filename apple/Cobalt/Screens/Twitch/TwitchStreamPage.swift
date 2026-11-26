@@ -28,10 +28,13 @@ struct TwitchStreamPage: View {
     @Environment(\.paneItem) private var paneItem
     @Environment(\.paneShape) private var shape
     @Environment(\.paneHinge) private var hinge
+    @Environment(\.paneReservedRegions) private var reservedRegions
+    @Environment(\.paneHostSize) private var hostSize
     @Environment(\.paneOffline) private var offline
     @Environment(\.openURL) private var openURL
     @Environment(\.lifecycle) private var lifecycle
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var choosingTV = false
     @State private var containerSize: CGSize = .zero
 
@@ -41,20 +44,40 @@ struct TwitchStreamPage: View {
     /// The store holds this channel (not the one before it, while a new one opens).
     private var holdsChannel: Bool { store.channel == login }
     private var isLive: Bool { holdsChannel && store.stream != nil }
+    /// True in single-focus iOS/Duo mode when this page owns its Clear Liquid Glass HUD over the video stage.
+    private var ownsGlassHUD: Bool { !pane.sitsBesideTab && shape != .bar }
+
+    /// Pure-SwiftUI keyboard detection comparing keyboard-ignored `paneHostSize` against the live container height.
+    private var keyboardOpen: Bool {
+        #if os(iOS)
+        return hostSize.height > 0 && containerSize.height > 0 && (hostSize.height - containerSize.height) >= 120
+        #else
+        return false
+        #endif
+    }
+
+    private var activeFoldAxis: Axis? {
+        if let div = reservedRegions.activeDivision {
+            return div.width > div.height ? .vertical : .horizontal
+        }
+        if case .split = shape, let hinge {
+            return hinge.axis == .horizontal ? .vertical : .horizontal
+        }
+        return nil
+    }
 
     var body: some View {
         Group {
             switch shape {
             case .bar:
                 bar
-            case .split:
-                split
-            case .tall, .wide:
-                singleContainer
+            case .split, .tall, .wide:
+                adaptiveWatch
             }
         }
         .preference(key: PaneMoreKey.self, value: moreActions)
         .preference(key: PaneFloatingHeaderKey.self, value: false)
+        .preference(key: PaneHidesChromeHeaderKey.self, value: ownsGlassHUD)
         .onChange(of: title, initial: true) { pane.reportTitle(title, for: paneItem) }
         .onAppear {
             store.open(login)
@@ -83,99 +106,297 @@ struct TwitchStreamPage: View {
 
     // MARK: layouts
 
-    /// Single-pane container (`.tall` or `.wide`): switches cleanly between stacked and side-by-side based on geometry.
-    private var singleContainer: some View {
-        let layout = TwitchWatchLayout.resolve(isWideShape: shape == .wide, size: containerSize)
-        return Group {
-            switch layout {
-            case .stacked(let videoMaxHeight):
-                VStack(spacing: 0) {
-                    stackedStage(maxHeight: videoMaxHeight)
-                    TwitchStreamBar(
-                        title: title, subtitle: subtitle, isLive: isLive,
-                        clipNote: clipText, clipFailed: store.clipState == .failed,
-                        isPlaying: host.isPlaying,
-                        jumpDisabled: host.delay == nil || host.isCatchingUp,
-                        isCatchingUp: host.isCatchingUp,
-                        canClip: store.canClip, clipState: store.clipState, offline: offline,
-                        onTV: onTV,
-                        onPlayPause: { host.setPaused(host.isPlaying) },
-                        onJumpToLive: { host.jumpToLive() },
-                        onClip: makeClip,
-                        onTVTap: { choosingTV = true },
-                        onStop: stop)
-                    hairline(horizontal: true)
+    /// Posture-adaptive single-focus watch canvas:
+    /// - Half-Closed Tabletop (horizontal crease): video + floating glass controls above crease, chat + composer below.
+    /// - Book Crease (vertical crease): video + stream bar left of crease, live chat right of crease.
+    /// - Unfolded Wide / Landscape: ~62% video stage left, ~38% full-height chat right.
+    /// - Folded / Tall: stacked video + stream bar + chat, condensing into compact video + overlay controls when keyboard opens.
+    private var adaptiveWatch: some View {
+        Group {
+            if activeFoldAxis == .vertical {
+                // Half-Closed Tabletop: video stage above the crease, chat + composer + keyboard below the crease.
+                DuoSplit(ratio: keyboardOpen ? 0.42 : 0.5, axes: .vertical) {
+                    videoStage(compactControls: true, maxHeight: nil)
+                } secondary: {
                     chatPanel
                 }
-            case .sideBySide(let chatWidth):
-                HStack(spacing: 0) {
-                    mediaPanel
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    hairline(horizontal: false)
+            } else if activeFoldAxis == .horizontal {
+                // Book Crease: video + controls on the leading half, full-height chat on the trailing half.
+                DuoSplit(ratio: 0.5, axes: .horizontal) {
+                    mediaPanel(condensed: keyboardOpen && containerSize.height < 360)
+                } secondary: {
                     chatPanel
-                        .frame(width: chatWidth)
-                        .frame(maxHeight: .infinity)
                 }
+            } else {
+                flatWatchLayout
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { containerSize = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: keyboardOpen)
         .task(id: store.clipState) { await clearClipStateSoon() }
-    }
-
-    /// Spanned across two physical screens (Duo wide or Duo tall): stage + stream bar on screen 1, full-height chat on screen 2.
-    private var split: some View {
-        PaneHalves(hinge: hinge) {
-            mediaPanel
-                .environment(\.paneShape, .split(.media))
-            chatPanel
-                .environment(\.paneShape, .split(.details))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: store.clipState) { await clearClipStateSoon() }
-    }
-
-    /// Media half for side-by-side and dual-screen split layouts: full-area video stage with the unified stream bar docked below it.
-    private var mediaPanel: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                onTV ? CobaltColor.bg : Color.black
-                playerOrTV(compact: false)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            hairline(horizontal: true)
-            TwitchStreamBar(
-                title: title, subtitle: subtitle, isLive: isLive,
-                clipNote: clipText, clipFailed: store.clipState == .failed,
-                isPlaying: host.isPlaying,
-                jumpDisabled: host.delay == nil || host.isCatchingUp,
-                isCatchingUp: host.isCatchingUp,
-                canClip: store.canClip, clipState: store.clipState, offline: offline,
-                onTV: onTV,
-                onPlayPause: { host.setPaused(host.isPlaying) },
-                onJumpToLive: { host.jumpToLive() },
-                onClip: makeClip,
-                onTVTap: { choosingTV = true },
-                onStop: stop)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
-    private func stackedStage(maxHeight: CGFloat?) -> some View {
-        if onTV {
-            playerOrTV(compact: true)
-                .background(CobaltColor.bg)
-        } else {
-            ZStack {
+    private var flatWatchLayout: some View {
+        let baseLayout = TwitchWatchLayout.resolve(isWideShape: shape == .wide || !pane.sitsBesideTab && containerSize.width >= TwitchWatchLayout.sideBySideMinWidth, size: containerSize)
+        switch baseLayout {
+        case .sideBySide:
+            let chatWidth = !pane.sitsBesideTab
+                ? TwitchWatchLayout.singleFocusChatWidth(for: containerSize.width)
+                : TwitchWatchLayout.chatWidth(for: containerSize.width)
+            let condensed = keyboardOpen && containerSize.height < 360
+            HStack(spacing: 0) {
+                mediaPanel(condensed: condensed)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                hairline(horizontal: false)
+                chatPanel
+                    .frame(width: chatWidth)
+                    .frame(maxHeight: .infinity)
+            }
+        case .stacked:
+            let maxH = TwitchWatchLayout.stackedVideoMaxHeight(for: containerSize, keyboardOpen: keyboardOpen)
+            let condenseBar = TwitchWatchLayout.compactOverlayStreamBar(
+                isStacked: true,
+                isTabletop: false,
+                keyboardOpen: keyboardOpen
+            )
+            VStack(spacing: 0) {
+                videoStage(compactControls: condenseBar, maxHeight: maxH)
+                if !condenseBar {
+                    streamBar
+                }
+                hairline(horizontal: true)
+                chatPanel
+            }
+        }
+    }
+
+    /// Media half for wide side-by-side and book-crease layouts: full-area video stage with optional docked stream bar.
+    private func mediaPanel(condensed: Bool) -> some View {
+        VStack(spacing: 0) {
+            videoStage(compactControls: condensed, maxHeight: nil)
+            if !condensed {
+                hairline(horizontal: true)
+                streamBar
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var streamBar: some View {
+        TwitchStreamBar(
+            title: title, subtitle: subtitle, isLive: isLive,
+            clipNote: clipText, clipFailed: store.clipState == .failed,
+            isPlaying: host.isPlaying,
+            jumpDisabled: host.delay == nil || host.isCatchingUp,
+            isCatchingUp: host.isCatchingUp,
+            canClip: store.canClip, clipState: store.clipState, offline: offline,
+            onTV: onTV,
+            onPlayPause: { host.setPaused(host.isPlaying) },
+            onJumpToLive: { host.jumpToLive() },
+            onClip: makeClip,
+            onTVTap: { choosingTV = true },
+            onStop: stop)
+    }
+
+    /// Video / TV stage with optional floating Clear Liquid Glass Top HUD and compact bottom-trailing controls.
+    @ViewBuilder
+    private func videoStage(compactControls: Bool, maxHeight: CGFloat?) -> some View {
+        ZStack {
+            if onTV {
+                CobaltColor.bg
+                playerOrTV(compact: maxHeight != nil || compactControls)
+            } else {
                 Color.black
                 player
             }
-            .frame(maxWidth: .infinity)
-            .frame(maxHeight: maxHeight)
-            .clipped()
+
+            if ownsGlassHUD {
+                VStack(spacing: 0) {
+                    MediaEdgeVignette(edge: .top, height: compactControls ? 68 : 88, intensity: 0.44)
+                    Spacer(minLength: 0)
+                    if compactControls {
+                        MediaEdgeVignette(edge: .bottom, height: 64, intensity: 0.48)
+                    }
+                }
+                .allowsHitTesting(false)
+
+                VStack(spacing: 0) {
+                    floatingTopHUD(compact: compactControls)
+                    Spacer(minLength: 0)
+                    if compactControls {
+                        floatingCompactControls
+                    }
+                }
+            } else if compactControls {
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    floatingCompactControls
+                }
+            }
         }
+        .frame(maxWidth: .infinity)
+        .frame(maxHeight: maxHeight ?? .infinity)
+        .clipped()
+    }
+
+    /// Floating Clear Liquid Glass top HUD over the live stream (minimize to mini-bar, channel/LIVE pill, more, stop).
+    private func floatingTopHUD(compact: Bool) -> some View {
+        MediaGlassGroup(spacing: 8) {
+            HStack(spacing: 8) {
+                Button {
+                    pane.close()
+                } label: {
+                    Label(Copy.close, systemImage: "chevron.backward")
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .mediaGlassCircle()
+                        .frame(width: Metrics.hit, height: Metrics.hit)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Copy.close)
+                .accessibilityIdentifier("pane.close")
+
+                HStack(spacing: 6) {
+                    if isLive {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 7, height: 7)
+                            .shadow(color: .red.opacity(0.7), radius: 3)
+                    }
+                    Text(title)
+                        .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    if !compact, let subtitle {
+                        Text(subtitle)
+                            .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
+                            .foregroundStyle(.white.opacity(0.76))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(minHeight: 36)
+                .mediaGlassCapsule(interactive: false)
+
+                Spacer(minLength: 4)
+
+                HStack(spacing: 4) {
+                    if !moreActions.isEmpty {
+                        Menu {
+                            ForEach(moreActions) { action in
+                                Button(action.title, systemImage: action.systemImage, action: action.perform)
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 34)
+                                .frame(minWidth: 40, minHeight: 40)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(Copy.Media.more)
+                    }
+
+                    Button(role: .destructive, action: stop) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(CobaltColor.errorText)
+                            .frame(width: 34, height: 34)
+                            .frame(minWidth: 40, minHeight: 40)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Copy.Twitch.stop)
+                    .accessibilityIdentifier("twitch.hud.stop")
+                }
+                .padding(.horizontal, 3)
+                .mediaGlassCapsule(interactive: false)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, compact ? 4 : 8)
+    }
+
+    /// Compact Clear Liquid Glass playback controls overlaid on the video stage in Tabletop or Keyboard-Open postures
+    /// so no separate stream bar competes for vertical height with chat & keyboard.
+    private var floatingCompactControls: some View {
+        MediaGlassGroup(spacing: 6) {
+            HStack(spacing: 6) {
+                if let clipText {
+                    Text(clipText)
+                        .font(CobaltType.captionSmall)
+                        .foregroundStyle(store.clipState == .failed ? CobaltColor.errorText : CobaltColor.success)
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 32)
+                        .mediaGlassCapsule(interactive: false)
+                }
+
+                Spacer(minLength: 4)
+
+                HStack(spacing: 2) {
+                    Button { host.setPaused(host.isPlaying) } label: {
+                        Image(systemName: host.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: Metrics.hit - 4, height: Metrics.hit - 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
+                    .accessibilityIdentifier("twitch.playpause")
+
+                    Button { host.jumpToLive() } label: {
+                        Image(systemName: Symbol.Twitch.jumpToLive)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle((host.delay == nil || host.isCatchingUp) ? .white.opacity(0.42) : .white)
+                            .frame(width: Metrics.hit - 4, height: Metrics.hit - 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(host.delay == nil || host.isCatchingUp)
+                    .accessibilityLabel(Copy.Twitch.jumpToLive)
+                    .accessibilityIdentifier("twitch.jumpToLive")
+
+                    if store.canClip {
+                        Button(action: makeClip) {
+                            Image(systemName: Symbol.Twitch.clip)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle((offline || store.clipState == .making) ? .white.opacity(0.42) : .white)
+                                .frame(width: Metrics.hit - 4, height: Metrics.hit - 4)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(offline || store.clipState == .making)
+                        .accessibilityLabel(Copy.Twitch.clip)
+                        .accessibilityIdentifier("twitch.clip")
+                    }
+
+                    #if os(iOS)
+                    Button { choosingTV = true } label: {
+                        Image(systemName: Symbol.Twitch.tv)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(onTV ? TwitchTVPalette.tv : .white)
+                            .frame(width: Metrics.hit - 4, height: Metrics.hit - 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Copy.Twitch.watchOnTV)
+                    .accessibilityIdentifier("twitch.tv")
+                    #endif
+                }
+                .padding(.horizontal, 4)
+                .mediaGlassCapsule(interactive: false)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 6)
     }
 
     private var chatPanel: some View {
@@ -183,18 +404,26 @@ struct TwitchStreamPage: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Minimized running bar over the tabs: live mini-player thumb, channel title/subtitle, and one play/pause button.
+    /// Minimized running bar over the tabs: live mini-player thumb, channel title/subtitle, play/pause, and explicit stop/dismiss.
     private var bar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             ZStack { barThumb }
                 .frame(width: 40, height: 40)
                 .clipShape(.rect(cornerRadius: 8))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(CobaltType.bodySemibold)
-                    .foregroundStyle(CobaltColor.text)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    if isLive {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 6, height: 6)
+                            .accessibilityHidden(true)
+                    }
+                    Text(title)
+                        .font(CobaltType.bodySemibold)
+                        .foregroundStyle(CobaltColor.text)
+                        .lineLimit(1)
+                }
                 if let subtitle {
                     Text(subtitle)
                         .font(CobaltType.captionSmall)
@@ -203,19 +432,35 @@ struct TwitchStreamPage: View {
                 }
             }
             Spacer(minLength: 0)
-            Button { host.setPaused(host.isPlaying) } label: {
-                Image(systemName: host.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 15, weight: .semibold))
+            HStack(spacing: 6) {
+                Button { host.setPaused(host.isPlaying) } label: {
+                    Image(systemName: host.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(minWidth: 22, minHeight: 22)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                #if os(iOS)
+                .controlSize(.regular)
+                #endif
+                .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
+
+                Button(role: .destructive, action: stop) {
+                    Image(systemName: Symbol.close)
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(minWidth: 22, minHeight: 22)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                #if os(iOS)
+                .controlSize(.regular)
+                #endif
+                .accessibilityLabel(Copy.Twitch.stop)
+                .accessibilityIdentifier("twitch.bar.stop")
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            #if os(iOS)
-            .controlSize(.large)
-            #endif
-            .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
         }
         .padding(.horizontal, 12)
-        .frame(minHeight: 48)
+        .frame(minHeight: 50)
     }
 
     private func hairline(horizontal: Bool) -> some View {

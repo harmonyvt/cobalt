@@ -64,39 +64,61 @@ struct PaneHost<Content: View>: View {
             displayFeatureFrame: reservedRegions.activeDivision)
     }
 
-    /// The pane is drawn beside (or over) the tab, not in a sheet.
-    private var inline: Bool { measured && pane.isVisible && placement != .compact }
+    /// On iOS, opened pane items present as a single-focus full-canvas experience instead of forcing a 50/50 split beside
+    /// Library or Twitch Browse. Media items (`.post`) and Twitch streams (`.stream`) stay in this single-focus canvas across
+    /// every posture (including folded compact) so folding/unfolding an iPhone Duo never tears down playback.
+    private var singleFocusOverlay: Bool {
+        #if os(iOS)
+        guard measured, pane.isVisible, let item = pane.item else { return false }
+        if placement != .compact { return item != .selection }
+        switch item {
+        case .post, .stream: return true
+        default: return false
+        }
+        #else
+        return false
+        #endif
+    }
+
+    /// The pane is drawn directly in the host's overlay (full-canvas single-focus on iOS, column/spanned on macOS),
+    /// rather than in a compact sheet.
+    private var inline: Bool {
+        #if os(iOS)
+        return singleFocusOverlay
+        #else
+        return measured && pane.isVisible && placement != .compact
+        #endif
+    }
 
     var body: some View {
         let placement = self.placement
+        let singleFocus = self.singleFocusOverlay
         let inline = self.inline
         let spanned = pane.state == .span
-        // The tab stays in its own un-animated layout slot, anchored to its trailing (or bottom) edge, so opening or
-        // closing the pane resizes `UITabBarController` / `UINavigationController` in a single atomic pass. Animating
-        // the tab's frame across 60 fps caused subpixel trailing-edge jitter that made iOS 27 Duo's right chrome rail
-        // repeatedly detach and re-dock the navigation bar buttons on every frame. The pane and seam animate in an
-        // overlay above the tab so the pane still slides smoothly from the leading/top edge and spans cleanly over it.
+        let fullCanvas = singleFocus || spanned
+        // The tab stays in its own un-animated layout slot. On iOS single-focus mode, `hasPane` is false so the underlying
+        // tab never squishes into 50/50 or reflows; on macOS, the leading column docks beside the detail tab cleanly.
         ZStack(alignment: .topLeading) {
-            PaneTabLayout(placement: placement, hasPane: inline) {
+            PaneTabLayout(placement: placement, hasPane: inline && pane.sitsBesideTab) {
                 content
-                    .accessibilityHidden(inline && spanned)
+                    .accessibilityHidden(inline && fullCanvas)
             }
-            PaneOverlayLayout(placement: placement, spanned: spanned) {
+            PaneOverlayLayout(placement: placement, spanned: fullCanvas) {
                 if inline, let item = pane.item {
-                    PaneChrome(model: model, item: item, shape: inlineShape(placement, spanned: spanned),
-                               hinge: inlineHinge(placement, spanned: spanned))
+                    PaneChrome(model: model, item: item, shape: inlineShape(placement, spanned: spanned, singleFocus: singleFocus),
+                               hinge: inlineHinge(placement, spanned: spanned, singleFocus: singleFocus))
                         .layoutValue(key: PaneRoleKey.self, value: .pane)
                         .accessibilitySortPriority(1)            // reading order: the pane first
-                        .transition(transition(placement))
+                        .transition(transition(placement, singleFocus: singleFocus))
                 }
-                if inline, showsSeam(placement, spanned: spanned) {
+                if inline, showsSeam(placement, spanned: spanned, singleFocus: singleFocus) {
                     PaneSeam(queue: model.queue, activity: model.activity, axis: seamAxis(placement), showingJobID: showingJobID)
                         .layoutValue(key: PaneRoleKey.self, value: .seam)
                         .transition(.opacity)
                 }
             }
             .accessibilitySortPriority(1)
-            .motion(Motion.pane, value: LayoutKey(inline: inline, state: pane.state, placement: placement))
+            .motion(Motion.pane, value: LayoutKey(inline: inline, state: pane.state, placement: placement, singleFocus: singleFocus))
         }
         .cobaltPage()
         .hapticChange(.impact(weight: .light), trigger: inline ? placement.name : "off") { old, new in
@@ -151,6 +173,8 @@ struct PaneHost<Content: View>: View {
         .environment(\.paneOffline, Self.isOffline(model))
         .environment(\.paneAfterDismiss, afterDismiss)
         .environment(\.mediaDetailModel, model)
+        .environment(\.paneReservedRegions, reservedRegions)
+        .environment(\.paneHostSize, size)
     }
 
     /// The server can't be reached. DEBUG: `-previewPaneOffline YES` says so over the preview data (simulator evidence of the
@@ -164,21 +188,36 @@ struct PaneHost<Content: View>: View {
 
     // MARK: inline
 
-    private func inlineShape(_ placement: PanePlacement, spanned: Bool) -> PaneShape {
+    private func inlineShape(_ placement: PanePlacement, spanned: Bool, singleFocus: Bool) -> PaneShape {
+        if singleFocus {
+            if let division = reservedRegions.activeDivision, !division.isNull, !division.isInfinite,
+               division.width > 0 || division.height > 0 {
+                return .split(.media)
+            }
+            return (size.width >= 700 && size.width > size.height) ? .wide : .tall
+        }
         switch placement {
-        case .twoScreens(let axis, _): spanned ? .split(.media) : (axis == .vertical ? .tall : .wide)
-        case .column: spanned ? .wide : .tall
-        case .compact: .tall
+        case .twoScreens(let axis, _): return spanned ? .split(.media) : (axis == .vertical ? .tall : .wide)
+        case .column: return spanned ? .wide : .tall
+        case .compact: return .tall
         }
     }
 
-    private func inlineHinge(_ placement: PanePlacement, spanned: Bool) -> PaneHinge? {
+    private func inlineHinge(_ placement: PanePlacement, spanned: Bool, singleFocus: Bool) -> PaneHinge? {
+        if singleFocus {
+            guard let division = reservedRegions.activeDivision, !division.isNull, !division.isInfinite,
+                  division.width > 0 || division.height > 0 else { return nil }
+            let vertical = division.height >= division.width
+            return PaneHinge(axis: vertical ? .vertical : .horizontal, position: vertical ? division.midX : division.midY)
+        }
         guard spanned, case .twoScreens(let axis, let hinge) = placement else { return nil }
         return PaneHinge(axis: axis, position: hinge)
     }
 
-    /// The hairline is on the hinge of two screens (spanned or not) and beside a column; a spanned column has none.
-    private func showsSeam(_ placement: PanePlacement, spanned: Bool) -> Bool {
+    /// The hairline is only shown when the pane docks beside the tab (macOS column) or spans a legacy two-screen split.
+    /// Single-focus full-canvas overlays on iOS/Duo never draw a forced split seam.
+    private func showsSeam(_ placement: PanePlacement, spanned: Bool, singleFocus: Bool) -> Bool {
+        if singleFocus { return false }
         if case .column = placement { return !spanned }
         return true
     }
@@ -195,24 +234,25 @@ struct PaneHost<Content: View>: View {
         }
     }
 
-    private func transition(_ placement: PanePlacement) -> AnyTransition {
+    private func transition(_ placement: PanePlacement, singleFocus: Bool) -> AnyTransition {
         if reduceMotion { return .opacity }
+        if singleFocus { return .opacity.combined(with: .scale(scale: 0.985)) }
         if case .twoScreens(axis: .horizontal, hinge: _) = placement { return .move(edge: .top) }
         return .move(edge: .leading)
     }
 
     // MARK: compact
 
-    /// The compact sheet is up while the pane is visible on one narrow screen, and no other sheet is (`.coversPane`): a
-    /// pane opened while the queue, a paste review or a title sheet is up waits for it to finish going, then presents,
-    /// so the pane is never `screen` with nothing on screen.
+    /// The compact sheet is up while the pane is visible on one narrow screen for utility items (not single-focus media/stream),
+    /// and no other sheet is (`.coversPane`): a pane opened while the queue, a paste review or a title sheet is up waits for it
+    /// to finish going, then presents, so the pane is never `screen` with nothing on screen.
     private var sheetShown: Binding<Bool> {
         Binding(
-            get: { measured && placement == .compact && pane.isVisible && !pane.isCovered },
+            get: { measured && placement == .compact && pane.isVisible && !singleFocusOverlay && !pane.isCovered },
             set: { shown in
                 // swiped down: hide (a running item goes to the bar). A posture change that took the sheet away is not
                 // a close (the pane is drawn inline now), nor is another sheet coming up over the window.
-                if !shown, pane.isVisible, placement == .compact, !pane.isCovered { pane.close() }
+                if !shown, pane.isVisible, placement == .compact, !singleFocusOverlay, !pane.isCovered { pane.close() }
             })
     }
 
@@ -223,6 +263,8 @@ struct PaneHost<Content: View>: View {
             .environment(\.paneOffline, Self.isOffline(model))
             .environment(\.paneAfterDismiss, afterDismiss)
             .environment(\.mediaDetailModel, model)
+            .environment(\.paneReservedRegions, reservedRegions)
+            .environment(\.paneHostSize, size)
             .cobaltRoot(model: model)
     }
 
@@ -235,7 +277,7 @@ struct PaneHost<Content: View>: View {
 
     @ViewBuilder
     private func edgeStrip(_ placement: PanePlacement) -> some View {
-        if dragging || edgeTargeted, placement != .compact, measured, !pane.isVisible, pane.item != nil {
+        if dragging || edgeTargeted, pane.sitsBesideTab, measured, !pane.isVisible, pane.item != nil {
             let horizontal = edgeAlignment(placement) == .top
             Color.clear
                 .frame(width: horizontal ? nil : 28, height: horizontal ? 28 : nil)
@@ -262,6 +304,7 @@ private struct LayoutKey: Equatable {
     var inline: Bool
     var state: PaneState
     var placement: PanePlacement
+    var singleFocus: Bool
 }
 
 /// The pane in a sheet on one narrow screen. On the iPhone and a narrow iPad window that is the whole pane (no span, so no

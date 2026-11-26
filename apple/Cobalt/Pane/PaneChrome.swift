@@ -18,6 +18,7 @@ struct PaneChrome: View {
     @Environment(Pane.self) private var pane
     @Environment(\.paneOffline) private var offline
     @State private var floatingHeader = false
+    @State private var hidesChromeHeader = false
 
     /// The header bar's height (48 pt on macOS, 56 pt on iOS).
     static var headerHeight: CGFloat { Platform.isMac ? 48 : 56 }
@@ -37,14 +38,14 @@ struct PaneChrome: View {
     /// Shifts a horizontal hinge into `PaneDestination`'s coordinate space when the dedicated header sits above it so
     /// `PaneHalves` still lands precisely on the physical hinge.
     private var effectiveHinge: PaneHinge? {
-        guard let hinge, !floatingHeader, hinge.axis == .horizontal else { return hinge }
+        guard let hinge, !floatingHeader, !hidesChromeHeader, hinge.axis == .horizontal else { return hinge }
         return PaneHinge(axis: .horizontal, position: max(0, hinge.position - reservedHeaderHeight - 0.5))
     }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if !floatingHeader {
+                if !floatingHeader && !hidesChromeHeader {
                     Color.clear.frame(height: reservedHeaderHeight)
                     Rectangle()
                         .fill(CobaltColor.hairline)
@@ -55,12 +56,15 @@ struct PaneChrome: View {
                     .environment(\.paneItem, item)
                     .environment(\.paneShape, shape)
                     .environment(\.paneHinge, effectiveHinge)
-                    .environment(\.paneHeaderHeight, floatingHeader ? Self.headerHeight : 0)
+                    .environment(\.paneHeaderHeight, (floatingHeader && !hidesChromeHeader) ? Self.headerHeight : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .onPreferenceChange(PaneFloatingHeaderKey.self) { floatingHeader = $0 }
+            .onPreferenceChange(PaneHidesChromeHeaderKey.self) { hidesChromeHeader = $0 }
             .overlayPreferenceValue(PaneMoreKey.self, alignment: .top) { more in
-                header(more, floating: floatingHeader)
+                if !hidesChromeHeader {
+                    header(more, floating: floatingHeader)
+                }
             }
             #if os(iOS)
             .toolbar(.hidden, for: .navigationBar)
@@ -72,7 +76,7 @@ struct PaneChrome: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Copy.Pane.container(pane.title ?? Copy.Pane.context(item)))
         .accessibilityIdentifier("pane")
-        .accessibilityAddTraits(pane.state == .span ? .isModal : [])
+        .accessibilityAddTraits((pane.state == .span || !pane.sitsBesideTab) ? .isModal : [])
         .accessibilityAction(.escape) { pane.requestClose() }
     }
 
@@ -140,11 +144,11 @@ struct PaneChrome: View {
         }
     }
 
-    /// Spanning is the iPad's and the Mac's (a pane beside the tab that can take the window). The iPhone's pane is one
-    /// sheet: span there was a full-screen cover stacked over it, so the iPhone has no span button (and no ⌘⇧F).
+    /// Spanning only applies when the pane docks beside the tab (macOS column). On iOS / iPhone Duo, opened items are
+    /// already single-focus full-canvas experiences with no forced 50/50 split.
     private var spanAllowed: Bool {
         #if os(iOS)
-        return pane.placement != .compact
+        return pane.sitsBesideTab
         #else
         return true
         #endif

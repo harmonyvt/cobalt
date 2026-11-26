@@ -116,11 +116,21 @@ final class Pane {
     /// A sheet that is not the pane is up (`.coversPane`): the compact pane sheet waits for it.
     var isCovered: Bool { !covering.isEmpty }
 
-    /// The room the tab keeps beside the pane, or nil when the pane takes none (hidden, bar, or a sheet). Spanned, the
-    /// tab keeps the room it had (it is covered, not reflowed). Measured on the pane's own host, so on the Mac it is the
-    /// detail area less the column, never the window (the sidebar is not the tab's).
+    /// Whether the pane docks beside the active tab (macOS column) instead of presenting as a single-focus
+    /// full-canvas experience (iOS / iPhone Duo / iPad).
+    var sitsBesideTab: Bool {
+        #if os(macOS)
+        return placement != .compact
+        #else
+        return false
+        #endif
+    }
+
+    /// The room the tab keeps beside the pane, or nil when the pane takes none (hidden, bar, sheet, or iOS
+    /// single-focus full-canvas). Measured on the pane's own host, so on the Mac it is the detail area less the
+    /// column, never the window (the sidebar is not the tab's).
     var tabSize: CGSize? {
-        guard machine.route.isVisible, hostSize.width > 0 else { return nil }
+        guard sitsBesideTab, machine.route.isVisible, hostSize.width > 0 else { return nil }
         return placement.tabExtent(in: hostSize)
     }
 
