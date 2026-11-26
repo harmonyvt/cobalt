@@ -42,23 +42,45 @@ public struct ChatBadge: Sendable, Hashable {
     public var id: String
     public var title: String
     public var url: URL
+    public var animated: Bool
 
-    public init(id: String, title: String, url: URL) {
+    public init(id: String, title: String, url: URL, animated: Bool = false) {
         self.id = id
         self.title = title
         self.url = url
+        self.animated = animated
     }
 }
 
-/// A 7TV paint: the gradient (or plain colour) a supporter's name is drawn in.
+/// A 7TV paint: the gradient, image texture, or plain colour (plus drop shadows) a supporter's name is drawn in.
 public struct SevenTvPaint: Sendable, Hashable {
-    public enum Kind: String, Sendable, Hashable { case linear, radial, plain }
+    public enum Kind: String, Sendable, Hashable { case linear, radial, plain, image }
 
     public struct Stop: Sendable, Hashable {
         /// 0...1 along the gradient.
         public var at: Double
         /// 0xRRGGBBAA.
         public var rgba: UInt32
+
+        public init(at: Double, rgba: UInt32) {
+            self.at = at
+            self.rgba = rgba
+        }
+    }
+
+    public struct Shadow: Sendable, Hashable {
+        public var xOffset: Double
+        public var yOffset: Double
+        public var radius: Double
+        /// 0xRRGGBBAA.
+        public var rgba: UInt32
+
+        public init(xOffset: Double, yOffset: Double, radius: Double, rgba: UInt32) {
+            self.xOffset = xOffset
+            self.yOffset = yOffset
+            self.radius = radius
+            self.rgba = rgba
+        }
     }
 
     public var id: String
@@ -66,9 +88,70 @@ public struct SevenTvPaint: Sendable, Hashable {
     public var kind: Kind
     /// Degrees, CSS style (0 points up, 90 right).
     public var angle: Double
+    public var repeats: Bool
     public var stops: [Stop]
-    /// A plain paint's colour (0xRRGGBBAA), or the first stop's.
+    /// A plain paint's colour (0xRRGGBBAA), or a fallback colour while an image paint loads.
     public var color: UInt32?
+    /// An image (`URL`) paint's texture URL.
+    public var imageURL: URL?
+    public var shadows: [Shadow]
+
+    public init(
+        id: String, name: String, kind: Kind, angle: Double = 90, repeats: Bool = false, stops: [Stop] = [],
+        color: UInt32? = nil, imageURL: URL? = nil, shadows: [Shadow] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.kind = kind
+        self.angle = angle
+        self.repeats = repeats
+        self.stops = stops
+        self.color = color
+        self.imageURL = imageURL
+        self.shadows = shadows
+    }
+
+    /// Gradient stops sorted by position; repeating gradients are tiled across `0...1` so SwiftUI draws CSS repeating gradients.
+    public var resolvedStops: [Stop] {
+        let sorted = stops.sorted { $0.at < $1.at }
+        guard repeats, sorted.count >= 2, let first = sorted.first?.at, let last = sorted.last?.at else {
+            return sorted
+        }
+        let period = last - first
+        guard period > 0.005, last < 0.999 else { return sorted }
+        var out: [Stop] = []
+        let maxCycles = 24
+        for cycle in 0..<maxCycles {
+            let offset = Double(cycle) * period
+            if first + offset >= 1.0 { break }
+            var hitEnd = false
+            for s in sorted {
+                let pos = s.at + offset
+                if pos > 1.0 {
+                    if let prev = out.last, prev.at < 1.0 {
+                        let span = pos - prev.at
+                        let t = span > 0 ? (1.0 - prev.at) / span : 1.0
+                        out.append(Stop(at: 1.0, rgba: Self.lerpRGBA(prev.rgba, s.rgba, t: t)))
+                    }
+                    hitEnd = true
+                    break
+                }
+                out.append(Stop(at: pos, rgba: s.rgba))
+            }
+            if hitEnd { break }
+        }
+        return out
+    }
+
+    private static func lerpRGBA(_ a: UInt32, _ b: UInt32, t: Double) -> UInt32 {
+        let k = max(0, min(1, t))
+        func mix(_ shift: UInt32) -> UInt32 {
+            let ca = Double((a >> shift) & 0xFF)
+            let cb = Double((b >> shift) & 0xFF)
+            return UInt32((ca + (cb - ca) * k).rounded()) & 0xFF
+        }
+        return (mix(24) << 24) | (mix(16) << 16) | (mix(8) << 8) | mix(0)
+    }
 }
 
 /// One part of a message.

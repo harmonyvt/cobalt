@@ -109,9 +109,13 @@ struct TwitchChatRow: View, Equatable {
         return Array(out.prefix(4))
     }
 
+    private var fallbackNameColor: Color {
+        TwitchChatPalette.color(line.color, login: line.login, dark: scheme == .dark)
+    }
+
     private var nameStyle: AnyShapeStyle {
         if let paint, let style = TwitchChatPalette.style(for: paint) { return style }
-        return AnyShapeStyle(TwitchChatPalette.color(line.color, login: line.login, dark: scheme == .dark))
+        return AnyShapeStyle(fallbackNameColor)
     }
 
     private var message: some View {
@@ -120,9 +124,7 @@ struct TwitchChatRow: View, Equatable {
                 badgeView(badge)
             }
             if let sevenTvBadge { badgeView(sevenTvBadge) }
-            Text(line.displayName)
-                .font(TwitchChatMetrics.font.weight(.bold))
-                .foregroundStyle(nameStyle)
+            nameView
             if line.kind == .message {
                 Text(":").font(TwitchChatMetrics.font).foregroundStyle(CobaltColor.caption).padding(.leading, -4)
             }
@@ -132,8 +134,30 @@ struct TwitchChatRow: View, Equatable {
         }
     }
 
+    @ViewBuilder private var nameView: some View {
+        let label = Text(line.displayName).font(TwitchChatMetrics.font.weight(.bold))
+        if let paint, paint.kind == .image, let imageURL = paint.imageURL {
+            let base = paint.color.map { TwitchChatPalette.rgba($0) } ?? fallbackNameColor
+            label
+                .foregroundStyle(.clear)
+                .overlay {
+                    base
+                        .overlay { EmotePicture(url: imageURL, animated: true, side: 96, fill: true) }
+                        .clipped()
+                }
+                .mask { label }
+                .sevenTvShadows(paint.shadows)
+        } else if let paint, let style = TwitchChatPalette.style(for: paint) {
+            label
+                .foregroundStyle(style)
+                .sevenTvShadows(paint.shadows)
+        } else {
+            label.foregroundStyle(fallbackNameColor)
+        }
+    }
+
     private func badgeView(_ badge: ChatBadge) -> some View {
-        EmotePicture(url: badge.url, animated: false, side: TwitchChatMetrics.badge)
+        EmotePicture(url: badge.url, animated: badge.animated, side: TwitchChatMetrics.badge)
             .frame(width: TwitchChatMetrics.badge, height: TwitchChatMetrics.badge)
             .accessibilityLabel(badge.title)
             .help(badge.title)
@@ -309,14 +333,21 @@ enum TwitchChatPalette {
             blue: Double((v >> 8) & 0xFF) / 255, opacity: max(0.35, Double(v & 0xFF) / 255))
     }
 
+    static func shadowColor(_ v: UInt32) -> Color {
+        Color(
+            .sRGB, red: Double((v >> 24) & 0xFF) / 255, green: Double((v >> 16) & 0xFF) / 255,
+            blue: Double((v >> 8) & 0xFF) / 255, opacity: Double(v & 0xFF) / 255)
+    }
+
     /// A 7TV paint as a fill for the name.
     static func style(for paint: SevenTvPaint) -> AnyShapeStyle? {
-        let stops = paint.stops.map { Gradient.Stop(color: rgba($0.rgba), location: $0.at) }
+        let stops = paint.resolvedStops.map { Gradient.Stop(color: rgba($0.rgba), location: $0.at) }
         switch paint.kind {
         case .plain:
             guard let c = paint.color else { return nil }
             return AnyShapeStyle(rgba(c))
         case .linear:
+            guard !stops.isEmpty else { return paint.color.map { AnyShapeStyle(rgba($0)) } }
             // CSS angles: 0 points up, 90 right
             let a = paint.angle * .pi / 180
             let dx = sin(a) / 2
@@ -324,8 +355,47 @@ enum TwitchChatPalette {
             return AnyShapeStyle(LinearGradient(
                 stops: stops, startPoint: UnitPoint(x: 0.5 - dx, y: 0.5 - dy), endPoint: UnitPoint(x: 0.5 + dx, y: 0.5 + dy)))
         case .radial:
-            return AnyShapeStyle(RadialGradient(stops: stops, center: .center, startRadius: 0, endRadius: 60))
+            guard !stops.isEmpty else { return paint.color.map { AnyShapeStyle(rgba($0)) } }
+            return AnyShapeStyle(EllipticalGradient(stops: stops, center: .center, startRadiusFraction: 0, endRadiusFraction: 0.5))
+        case .image:
+            return paint.color.map { AnyShapeStyle(rgba($0)) }
         }
+    }
+}
+
+private struct SevenTvShadows: ViewModifier {
+    let shadows: [SevenTvPaint.Shadow]
+
+    func body(content: Content) -> some View {
+        let s0 = shadows.count > 0 ? shadows[0] : nil
+        let s1 = shadows.count > 1 ? shadows[1] : nil
+        let s2 = shadows.count > 2 ? shadows[2] : nil
+        content
+            .modifier(SingleShadow(shadow: s0))
+            .modifier(SingleShadow(shadow: s1))
+            .modifier(SingleShadow(shadow: s2))
+    }
+
+    private struct SingleShadow: ViewModifier {
+        let shadow: SevenTvPaint.Shadow?
+
+        func body(content: Content) -> some View {
+            if let shadow {
+                content.shadow(
+                    color: TwitchChatPalette.shadowColor(shadow.rgba),
+                    radius: max(0.5, min(shadow.radius, 10) * 0.6),
+                    x: max(-4, min(4, shadow.xOffset)),
+                    y: max(-4, min(4, shadow.yOffset)))
+            } else {
+                content
+            }
+        }
+    }
+}
+
+private extension View {
+    func sevenTvShadows(_ shadows: [SevenTvPaint.Shadow]) -> some View {
+        modifier(SevenTvShadows(shadows: shadows))
     }
 }
 

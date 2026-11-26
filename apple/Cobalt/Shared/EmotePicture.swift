@@ -12,6 +12,7 @@ struct EmotePicture: View {
     let url: URL?
     var animated: Bool
     var side: CGFloat = 64
+    var fill: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
@@ -34,14 +35,14 @@ struct EmotePicture: View {
             // The still leaves once a frame is playing. An emote's frames are transparent, so a first frame left
             // underneath shows as a second, frozen copy.
             if !moves || !playing {
-                EmoteStill(url: url, maxPixel: maxPixel)
+                EmoteStill(url: url, maxPixel: maxPixel, fill: fill)
             }
             if moves, let url {
                 // a new emote is a new player: the old one's last frame never sits under the new animation
-                EmoteMotion(url: url, maxPixel: maxPixel, started: $playing).id(url)
+                EmoteMotion(url: url, maxPixel: maxPixel, fill: fill, started: $playing).id(url)
             }
         }
-        .frame(width: side, height: side)
+        .frame(width: fill ? nil : side, height: fill ? nil : side)
         .onChange(of: url) { _, _ in playing = false }
         .onChange(of: moves) { _, now in if !now { playing = false } }
         .onChange(of: wantsMotion) { _, _ in askBudget() }
@@ -81,6 +82,7 @@ private final class EmoteMotionModel {
 private struct EmoteMotion: View {
     let url: URL
     let maxPixel: Int
+    var fill: Bool = false
     var started: Binding<Bool>
     @State private var model = EmoteMotionModel()
 
@@ -91,9 +93,12 @@ private struct EmoteMotion: View {
         Color.clear
             .overlay {
                 if let image = model.image {
-                    Image(decorative: image.image, scale: 1).resizable().scaledToFit()
+                    Image(decorative: image.image, scale: 1)
+                        .resizable()
+                        .aspectRatio(contentMode: fill ? .fill : .fit)
                 }
             }
+            .clipped()
             .onChange(of: model.hasFrame) { _, up in
                 if up, started.wrappedValue != true { started.wrappedValue = true }
             }
@@ -111,6 +116,7 @@ private struct EmoteMotion: View {
 private struct EmoteStill: View {
     let url: URL?
     let maxPixel: Int
+    var fill: Bool = false
     @State private var still: ImageBox?
     @State private var shown: Key?
 
@@ -123,7 +129,15 @@ private struct EmoteStill: View {
 
     var body: some View {
         Group {
-            if let frame = current {
+            if fill {
+                Color.clear
+                    .overlay {
+                        if let frame = current {
+                            Image(decorative: frame.image, scale: 1).resizable().scaledToFill()
+                        }
+                    }
+                    .clipped()
+            } else if let frame = current {
                 Image(decorative: frame.image, scale: 1).resizable().scaledToFit()
             } else {
                 Color.clear
