@@ -322,6 +322,41 @@ struct MPEGTSDemuxerTests {
 
     // MARK: - Synthetic TS helpers
 
+    static func makeSyntheticSegment(basePTS: Int64 = 90_000, includeKeyframe: Bool = true) -> Data {
+        let helper = MPEGTSDemuxerTests()
+        let idrSlice = Data([0x65, 0x88, 0x84, 0x21, 0xA0])
+        let pSlice = Data([0x41, 0x9A, 0x22, 0x33])
+
+        var firstAU = Data()
+        if includeKeyframe {
+            firstAU.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+            firstAU.append(Self.sampleSPS)
+            firstAU.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+            firstAU.append(Self.samplePPS)
+            firstAU.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+            firstAU.append(idrSlice)
+        } else {
+            firstAU.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+            firstAU.append(pSlice)
+        }
+
+        var nextAU = Data([0x00, 0x00, 0x00, 0x01])
+        nextAU.append(pSlice)
+
+        let aacPayload = Data([0x21, 0x10, 0x04, 0x60, 0x8C, 0x1C])
+        let adts = helper.makeADTSFrame(payload: aacPayload, sampleRateIndex: 3, channels: 2, hasCRC: false)
+
+        var stream = Data()
+        stream.append(helper.makePAT(pmtPID: 0x0100))
+        stream.append(helper.makePMT(pmtPID: 0x0100, videoPID: 0x0101, videoStreamType: 0x1B, audioPID: 0x0102))
+        // Span 1.0 second (90_000 ticks) so SampleBufferPipeline reaches its startup cushion immediately.
+        stream.append(helper.makePESPackets(pid: 0x0101, streamID: 0xE0, pts: basePTS, dts: basePTS, payload: firstAU))
+        stream.append(helper.makePESPackets(pid: 0x0102, streamID: 0xC0, pts: basePTS, dts: nil, payload: adts))
+        stream.append(helper.makePESPackets(pid: 0x0101, streamID: 0xE0, pts: basePTS + 45_000, dts: basePTS + 45_000, payload: nextAU))
+        stream.append(helper.makePESPackets(pid: 0x0101, streamID: 0xE0, pts: basePTS + 90_000, dts: basePTS + 90_000, payload: nextAU))
+        return stream
+    }
+
     private func makePAT(pmtPID: UInt16) -> Data {
         var sec = Data([
             0x00, // pointer_field
@@ -563,5 +598,478 @@ struct TwitchStreamResolverTests {
         await #expect(throws: TwitchHLSError.integrityRequired) {
             _ = try await integrityResolver.resolve(channel: "guardedchan")
         }
+    }
+
+    @Test func resolveStreamReturnsSignedMasterURLAndVariants() async throws {
+        let resolver = TwitchStreamResolver { req in
+            let url = try #require(req.url)
+            if url.host() == "gql.twitch.tv" {
+                let body = Data(#"{"data":{"streamPlaybackAccessToken":{"value":"{\"channel\":\"capy\"}","signature":"sig123"}}}"#.utf8)
+                return (body, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            let master = """
+            #EXTM3U
+            #EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID="chunked",NAME="1080p60 (source)",AUTOSELECT=YES,DEFAULT=YES
+            #EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS="avc1.64002A,mp4a.40.2",VIDEO="chunked",FRAME-RATE=60.0
+            https://weaver.example.net/chunked.m3u8
+            """
+            return (Data(master.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+
+        let resolved = try await resolver.resolveStream(channel: "capy", authToken: nil)
+        #expect(resolved.variants.count == 1)
+        #expect(resolved.masterURL.host() == "usher.ttvnw.net")
+        #expect(resolved.masterURL.path() == "/api/channel/hls/capy.m3u8")
+        let query = URLComponents(url: resolved.masterURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(query.contains(where: { $0.name == "fast_bread" && $0.value == "true" }))
+        #expect(query.contains(where: { $0.name == "sig" && $0.value == "sig123" }))
+        #expect(query.contains(where: { $0.name == "token" && $0.value == "{\"channel\":\"capy\"}" }))
+    }
+}
+
+struct TwitchNativeEngineTests {
+    private actor EventRecorder {
+        var events: [TwitchNativeEvent] = []
+        private var waiters: [(predicate: @Sendable (TwitchNativeEvent) -> Bool, cont: CheckedContinuation<TwitchNativeEvent?, Never>)] = []
+
+        func record(_ event: TwitchNativeEvent) {
+            events.append(event)
+            var remaining: [(predicate: @Sendable (TwitchNativeEvent) -> Bool, cont: CheckedContinuation<TwitchNativeEvent?, Never>)] = []
+            for waiter in waiters {
+                if waiter.predicate(event) {
+                    waiter.cont.resume(returning: event)
+                } else {
+                    remaining.append(waiter)
+                }
+            }
+            waiters = remaining
+        }
+
+        func snapshot() -> [TwitchNativeEvent] { events }
+
+        func waitFor(
+            timeout: Duration = .seconds(3),
+            matching predicate: @escaping @Sendable (TwitchNativeEvent) -> Bool
+        ) async -> TwitchNativeEvent? {
+            if let existing = events.first(where: predicate) {
+                return existing
+            }
+            return await withTaskGroup(of: TwitchNativeEvent?.self) { group in
+                group.addTask {
+                    await self.awaitNext(matching: predicate)
+                }
+                group.addTask {
+                    try? await Task.sleep(for: timeout)
+                    return nil
+                }
+                let result = await group.next() ?? nil
+                group.cancelAll()
+                return result
+            }
+        }
+
+        private func awaitNext(matching predicate: @escaping @Sendable (TwitchNativeEvent) -> Bool) async -> TwitchNativeEvent? {
+            await withCheckedContinuation { cont in
+                if let existing = events.first(where: predicate) {
+                    cont.resume(returning: existing)
+                } else {
+                    waiters.append((predicate, cont))
+                }
+            }
+        }
+    }
+
+    private actor URLTracker {
+        var urls: [URL] = []
+        func record(_ url: URL) { urls.append(url) }
+        func snapshot() -> [URL] { urls }
+    }
+
+    private actor Counter {
+        var value = 0
+        func increment() -> Int {
+            value += 1
+            return value
+        }
+        func current() -> Int { value }
+    }
+
+    private static let sampleMaster = """
+    #EXTM3U
+    #EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID="chunked",NAME="1080p60 (source)",AUTOSELECT=YES,DEFAULT=YES
+    #EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS="avc1.64002A,mp4a.40.2",VIDEO="chunked",FRAME-RATE=60.0
+    https://weaver.example.net/chunked.m3u8
+    """
+
+    private static func sampleMediaPlaylist(seq: Int = 100, includePrefetch: Bool = true) -> String {
+        var lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:3",
+            "#EXT-X-TARGETDURATION:2",
+            "#EXT-X-MEDIA-SEQUENCE:\(seq)",
+            "#EXTINF:2.000,live",
+            "https://edge.example.net/seg/\(seq).ts",
+        ]
+        if includePrefetch {
+            lines.append("#EXT-X-TWITCH-PREFETCH:https://edge.example.net/prefetch/\(seq + 1).ts")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func makeResolver(
+        gqlCounter: Counter? = nil,
+        mediaPlaylist: @escaping @Sendable () async throws -> String
+    ) -> TwitchStreamResolver {
+        TwitchStreamResolver { req in
+            let url = req.url!
+            if url.host() == "gql.twitch.tv" {
+                let n = await gqlCounter?.increment() ?? 1
+                let body = Data("{\"data\":{\"streamPlaybackAccessToken\":{\"value\":\"tok\(n)\",\"signature\":\"sig\(n)\"}}}".utf8)
+                return (body, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            if url.host() == "usher.ttvnw.net" {
+                return (Data(sampleMaster.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            let pl = try await mediaPlaylist()
+            return (Data(pl.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+    }
+
+    @Test func firstJoinFailingPrefetchFallsBackToCompletedSegment() async throws {
+        let tracker = URLTracker()
+        let recorder = EventRecorder()
+        let validSegment = MPEGTSDemuxerTests.makeSyntheticSegment(basePTS: 90_000, includeKeyframe: true)
+
+        let resolver = Self.makeResolver {
+            Self.sampleMediaPlaylist(seq: 100, includePrefetch: true)
+        }
+        let engine = TwitchNativeEngine(
+            resolver: resolver,
+            startupTimeout: .seconds(5),
+            segmentStreamer: { url in
+                AsyncThrowingStream { cont in
+                    Task {
+                        await tracker.record(url)
+                        if url.path().contains("/prefetch/") {
+                            cont.finish(throwing: URLError(.timedOut))
+                        } else {
+                            cont.yield(validSegment)
+                            cont.finish()
+                        }
+                    }
+                }
+            }
+        )
+
+        await engine.setEventHandler { event in
+            Task { await recorder.record(event) }
+        }
+        await engine.start(channel: "capy", authToken: nil)
+
+        let playing = await recorder.waitFor(timeout: .seconds(3)) { $0 == .playing }
+        await engine.stop()
+
+        #expect(playing == .playing)
+        let events = await recorder.snapshot()
+        #expect(events.contains(.loading))
+        #expect(events.contains(where: { if case .streamURL = $0 { return true } else { return false } }))
+        #expect(!events.contains(where: { if case .failed = $0 { return true } else { return false } }))
+
+        let fetched = await tracker.snapshot().map(\.path)
+        #expect(fetched.contains("/prefetch/101.ts"))
+        #expect(fetched.contains("/seg/100.ts"))
+    }
+
+    @Test func startupTimeoutEmitsFailedWhenNoMediaArrives() async {
+        let recorder = EventRecorder()
+        let resolver = Self.makeResolver {
+            Self.sampleMediaPlaylist(seq: 100, includePrefetch: true)
+        }
+        let engine = TwitchNativeEngine(
+            resolver: resolver,
+            startupTimeout: .milliseconds(250),
+            segmentStreamer: { _ in
+                // Hang indefinitely without yielding bytes or closing.
+                AsyncThrowingStream { _ in }
+            }
+        )
+
+        await engine.setEventHandler { event in
+            Task { await recorder.record(event) }
+        }
+        await engine.start(channel: "capy", authToken: nil)
+
+        let failure = await recorder.waitFor(timeout: .seconds(3)) {
+            if case .failed = $0 { return true }
+            return false
+        }
+        await engine.stop()
+
+        #expect(failure == .failed("startup timeout"))
+    }
+
+    @Test func consecutiveSegmentFailuresRefreshTokenThenFail() async {
+        let gqlCount = Counter()
+        let recorder = EventRecorder()
+        let seqCounter = Counter()
+
+        let resolver = Self.makeResolver(gqlCounter: gqlCount) {
+            let seq = 100 + (await seqCounter.increment())
+            return Self.sampleMediaPlaylist(seq: seq, includePrefetch: false)
+        }
+        let engine = TwitchNativeEngine(
+            resolver: resolver,
+            startupTimeout: .seconds(10),
+            segmentStreamer: { _ in
+                AsyncThrowingStream { cont in
+                    cont.finish(throwing: URLError(.cannotConnectToHost))
+                }
+            }
+        )
+
+        await engine.setEventHandler { event in
+            Task { await recorder.record(event) }
+        }
+        await engine.start(channel: "capy", authToken: nil)
+
+        let failure = await recorder.waitFor(timeout: .seconds(5)) {
+            if case .failed = $0 { return true }
+            return false
+        }
+        await engine.stop()
+
+        #expect(failure == .failed("segment fetch failed"))
+        // Initial GQL call + at least 1 token refresh triggered after 2 consecutive segment failures.
+        let calls = await gqlCount.current()
+        #expect(calls >= 2)
+    }
+
+    @Test func rapidStopAndStartDoesNotStickLoading() async {
+        let recorder = EventRecorder()
+        let validSegment = MPEGTSDemuxerTests.makeSyntheticSegment(basePTS: 90_000, includeKeyframe: true)
+        let resolver = Self.makeResolver {
+            Self.sampleMediaPlaylist(seq: 200, includePrefetch: false)
+        }
+        let engine = TwitchNativeEngine(
+            resolver: resolver,
+            startupTimeout: .seconds(5),
+            segmentStreamer: { _ in
+                AsyncThrowingStream { cont in
+                    cont.yield(validSegment)
+                    cont.finish()
+                }
+            }
+        )
+
+        await engine.setEventHandler { event in
+            Task { await recorder.record(event) }
+        }
+        await engine.start(channel: "first", authToken: nil)
+        await engine.stop()
+        await engine.start(channel: "second", authToken: nil)
+
+        let playing = await recorder.waitFor(timeout: .seconds(3)) { $0 == .playing }
+        await engine.stop()
+
+        #expect(playing == .playing)
+    }
+
+    private struct NoopAudioBackend: AudioSessionBackend {
+        func setAmbientCategory() {}
+        func setPlaybackCategoryAndActivate() {}
+        func deactivateToAmbient(notifyOthers: Bool) {}
+    }
+
+    @Test func interruptionBeganHaltsPullsAndEndedShouldResumeJumpsToLive() async throws {
+        let recorder = EventRecorder()
+        let seqCounter = Counter()
+        let segmentFetches = Counter()
+        let coord = AudioSessionCoordinator(backend: NoopAudioBackend(), observeSystemNotifications: false)
+
+        let resolver = Self.makeResolver {
+            let seq = 500 + (await seqCounter.increment())
+            return Self.sampleMediaPlaylist(seq: seq, includePrefetch: false)
+        }
+        let engine = TwitchNativeEngine(
+            resolver: resolver,
+            startupTimeout: .seconds(5),
+            segmentStreamer: { url in
+                AsyncThrowingStream { cont in
+                    Task {
+                        let count = await segmentFetches.increment()
+                        let basePTS = Int64(count) * 180_000
+                        cont.yield(MPEGTSDemuxerTests.makeSyntheticSegment(basePTS: basePTS, includeKeyframe: true))
+                        cont.finish()
+                    }
+                }
+            },
+            audioSession: coord
+        )
+
+        await engine.setEventHandler { event in
+            Task { await recorder.record(event) }
+        }
+        await engine.start(channel: "capy", authToken: nil)
+
+        // 1. Wait until initial playback starts.
+        let initialPlaying = await recorder.waitFor(timeout: .seconds(3)) { $0 == .playing }
+        #expect(initialPlaying == .playing)
+        #expect(coord.hasActivePlaybackClaim())
+
+        // 2. Interruption begins: must emit `.paused` AND stop pulling segments (never overflow 480-frame cap).
+        coord.dispatchInterruptionBegan()
+        let pausedEvent = await recorder.waitFor(timeout: .seconds(3)) { $0 == .paused }
+        #expect(pausedEvent == .paused)
+        #expect(await engine.isUserPaused == false)
+
+        try? await Task.sleep(for: .milliseconds(150))
+        let fetchesAtInterrupt = await segmentFetches.current()
+        try? await Task.sleep(for: .milliseconds(300))
+        let fetchesDuringInterrupt = await segmentFetches.current()
+        #expect(fetchesDuringInterrupt == fetchesAtInterrupt)
+
+        // 3. Interruption ends with shouldResume: true -> jumps to live and resumes `.playing`.
+        let playingBeforeResume = await recorder.snapshot().filter { $0 == .playing }.count
+        coord.dispatchInterruptionEnded(shouldResume: true)
+
+        var resumed = false
+        for _ in 0..<40 {
+            let nowPlaying = await recorder.snapshot().filter { $0 == .playing }.count
+            if nowPlaying > playingBeforeResume {
+                resumed = true
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        let fetchesAfterResume = await segmentFetches.current()
+        await engine.stop()
+
+        #expect(resumed)
+        #expect(fetchesAfterResume > fetchesAtInterrupt)
+    }
+
+    @Test func interruptionEndedWithoutShouldResumeTransitionsToUserPaused() async {
+        let recorder = EventRecorder()
+        let segmentFetches = Counter()
+        let coord = AudioSessionCoordinator(backend: NoopAudioBackend(), observeSystemNotifications: false)
+
+        let resolver = Self.makeResolver {
+            Self.sampleMediaPlaylist(seq: 700, includePrefetch: false)
+        }
+        let engine = TwitchNativeEngine(
+            resolver: resolver,
+            startupTimeout: .seconds(5),
+            segmentStreamer: { _ in
+                AsyncThrowingStream { cont in
+                    Task {
+                        let n = await segmentFetches.increment()
+                        cont.yield(MPEGTSDemuxerTests.makeSyntheticSegment(basePTS: Int64(n) * 180_000, includeKeyframe: true))
+                        cont.finish()
+                    }
+                }
+            },
+            audioSession: coord
+        )
+
+        await engine.setEventHandler { event in
+            Task { await recorder.record(event) }
+        }
+        await engine.start(channel: "capy", authToken: nil)
+        let playing = await recorder.waitFor(timeout: .seconds(3)) { $0 == .playing }
+        #expect(playing == .playing)
+
+        coord.dispatchInterruptionBegan()
+        _ = await recorder.waitFor(timeout: .seconds(3)) { $0 == .paused }
+
+        coord.dispatchInterruptionEnded(shouldResume: false)
+        let userPausedEvent = await recorder.waitFor(timeout: .seconds(3)) { $0 == .userPausedChanged(true) }
+        coord.flush()
+
+        let fetchesAfter = await segmentFetches.current()
+        try? await Task.sleep(for: .milliseconds(250))
+        let fetchesLater = await segmentFetches.current()
+
+        #expect(userPausedEvent == .userPausedChanged(true))
+        #expect(await engine.isUserPaused == true)
+        #expect(!coord.hasActivePlaybackClaim())
+        #expect(fetchesLater == fetchesAfter)
+
+        await engine.stop()
+    }
+
+    @Test func routeOldDeviceUnavailablePausesStream() async {
+        let recorder = EventRecorder()
+        let coord = AudioSessionCoordinator(backend: NoopAudioBackend(), observeSystemNotifications: false)
+        let resolver = Self.makeResolver {
+            Self.sampleMediaPlaylist(seq: 800, includePrefetch: false)
+        }
+        let engine = TwitchNativeEngine(
+            resolver: resolver,
+            startupTimeout: .seconds(5),
+            segmentStreamer: { _ in
+                AsyncThrowingStream { cont in
+                    cont.yield(MPEGTSDemuxerTests.makeSyntheticSegment(basePTS: 90_000, includeKeyframe: true))
+                    cont.finish()
+                }
+            },
+            audioSession: coord
+        )
+
+        await engine.setEventHandler { event in
+            Task { await recorder.record(event) }
+        }
+        await engine.start(channel: "capy", authToken: nil)
+        _ = await recorder.waitFor(timeout: .seconds(3)) { $0 == .playing }
+
+        coord.dispatchRouteOldDeviceUnavailable()
+        let userPausedEvent = await recorder.waitFor(timeout: .seconds(3)) { $0 == .userPausedChanged(true) }
+        coord.flush()
+
+        #expect(userPausedEvent == .userPausedChanged(true))
+        #expect(await engine.isUserPaused == true)
+        #expect(!coord.hasActivePlaybackClaim())
+
+        await engine.stop()
+    }
+
+    @Test func volumeRampEqualPowerCurveAndEngineRampSettleCleanly() async {
+        // Constant-power crossfade property: sin²(t * π/2) + cos²(t * π/2) == 1.
+        for step in 0...10 {
+            let p = Double(step) / 10.0
+            let up = TwitchVolumeRampCurve.equalPower.interpolate(from: 0, to: 1, progress: p)
+            let down = TwitchVolumeRampCurve.equalPower.interpolate(from: 1, to: 0, progress: p)
+            let power = up * up + down * down
+            #expect(abs(power - 1.0) < 0.001)
+        }
+        let midUp = TwitchVolumeRampCurve.equalPower.interpolate(from: 0, to: 1, progress: 0.5)
+        #expect(abs(midUp - Float(sqrt(0.5))) < 0.001)
+
+        // Engine actor ramp reaches target volume smoothly.
+        let coord = AudioSessionCoordinator(backend: NoopAudioBackend(), observeSystemNotifications: false)
+        let engine = TwitchNativeEngine(audioSession: coord)
+        await engine.setVolume(1.0)
+        await engine.rampVolume(to: 0.0, duration: .milliseconds(50), curve: .equalPower)
+        let reachedZero = await waitUntil(timeout: .seconds(3)) {
+            abs((await engine.volume) - 0.0) < 0.001
+        }
+        #expect(reachedZero)
+
+        await engine.rampVolume(to: 0.75, duration: .milliseconds(50), curve: .equalPower)
+        let reachedTarget = await waitUntil(timeout: .seconds(3)) {
+            abs((await engine.volume) - 0.75) < 0.001
+        }
+        #expect(reachedTarget)
+    }
+
+    private func waitUntil(
+        timeout: Duration,
+        condition: @escaping @Sendable () async -> Bool
+    ) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(15))
+        }
+        return await condition()
     }
 }

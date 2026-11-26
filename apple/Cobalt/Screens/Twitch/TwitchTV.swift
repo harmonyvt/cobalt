@@ -34,6 +34,8 @@ final class TwitchTV {
     private(set) var onTV = false
     /// The phone is sending sound or video to an AirPlay device without screen mirroring (video only).
     private(set) var airPlayRoute = false
+    /// Port UID of the active AirPlay output, if any (distinguishes re-selecting a different TV from an audio-only speaker).
+    private(set) var airPlayOutputUID: String?
     /// The phone screen is dimmed for watching (tv mode only; restored when tv mode ends).
     private(set) var dimmed = false
 
@@ -52,7 +54,11 @@ final class TwitchTV {
 
     /// The delay chat runs with now: only while video goes out over AirPlay without capystore's own TV window.
     var activeChatDelay: TimeInterval {
-        airPlayRoute && !onTV && !screenConnected ? TimeInterval(chatDelay) : 0
+        guard !onTV, !screenConnected else { return 0 }
+        if TwitchPlayerHost.shared.activeMode == .lowLatency {
+            return TwitchPlayerHost.shared.isAirPlayingVideo ? TimeInterval(chatDelay) : 0
+        }
+        return airPlayRoute ? TimeInterval(chatDelay) : 0
     }
 
     @ObservationIgnored weak var model: AppModel?
@@ -91,6 +97,7 @@ final class TwitchTV {
     /// A watch view came on screen (or a channel changed under it).
     func watchStarted(_ model: AppModel) {
         self.model = model
+        TwitchPlayerHost.shared.attachModel(model)
         watching += 1
         refresh()
     }
@@ -106,7 +113,10 @@ final class TwitchTV {
         let show = tvChannel != nil
         for scene in scenes.values { scene.show(show ? model : nil) }
         let nowOnTV = show && scenes.values.contains { $0.isShowing }
-        if nowOnTV != onTV { onTV = nowOnTV }
+        if nowOnTV != onTV {
+            onTV = nowOnTV
+            if nowOnTV { TwitchPlayerHost.shared.handleTVModeActivated() }
+        }
         // Locking the phone ends screen mirroring: while the stream is on the TV the phone stays awake.
         UIApplication.shared.isIdleTimerDisabled = onTV
         if !onTV, dimmed { undim() }
@@ -159,8 +169,15 @@ final class TwitchTV {
 
     fileprivate func readRoute() {
         let out = AVAudioSession.sharedInstance().currentRoute.outputs
-        let airPlay = out.contains { $0.portType == .airPlay }
+        let port = out.first { $0.portType == .airPlay }
+        let airPlay = port != nil
+        let uid = port?.uid
+        let changed = (airPlay != airPlayRoute) || (uid != airPlayOutputUID)
         if airPlay != airPlayRoute { airPlayRoute = airPlay }
+        if uid != airPlayOutputUID { airPlayOutputUID = uid }
+        if changed {
+            TwitchPlayerHost.shared.airPlayRouteChanged(active: airPlay, outputUID: uid)
+        }
     }
     #endif
 }
@@ -320,14 +337,35 @@ private struct TwitchTVChat: View {
 
 /// The system's AirPlay device list (video only).
 struct TwitchAirPlayButton: UIViewRepresentable {
+    var tint: UIColor = .label
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
         picker.prioritizesVideoDevices = true
-        picker.tintColor = .label
+        picker.tintColor = tint
         picker.activeTintColor = UIColor(TwitchChatPalette.twitch)
+        picker.delegate = context.coordinator
         return picker
     }
 
-    func updateUIView(_ view: AVRoutePickerView, context: Context) {}
+    func updateUIView(_ view: AVRoutePickerView, context: Context) {
+        view.tintColor = tint
+    }
+
+    final class Coordinator: NSObject, AVRoutePickerViewDelegate {
+        nonisolated func routePickerViewWillBeginPresentingRoutes(_ routePickerView: AVRoutePickerView) {
+            Task { @MainActor in
+                TwitchPlayerHost.shared.prepareAirPlayRoutePicker()
+            }
+        }
+
+        nonisolated func routePickerViewDidEndPresentingRoutes(_ routePickerView: AVRoutePickerView) {
+            Task { @MainActor in
+                TwitchPlayerHost.shared.finishAirPlayRoutePicker()
+            }
+        }
+    }
 }
 #endif

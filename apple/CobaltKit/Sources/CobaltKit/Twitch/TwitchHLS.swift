@@ -76,6 +76,16 @@ public struct TwitchVariant: Sendable, Equatable, Identifiable {
     }
 }
 
+public struct TwitchResolvedStream: Sendable, Equatable {
+    public let masterURL: URL
+    public let variants: [TwitchVariant]
+
+    public init(masterURL: URL, variants: [TwitchVariant]) {
+        self.masterURL = masterURL
+        self.variants = variants
+    }
+}
+
 public struct TwitchSegment: Sendable, Equatable {
     public let sequence: Int
     public let url: URL
@@ -426,8 +436,9 @@ public actor TwitchStreamResolver {
         return try await requestToken(channel: clean, authToken: nil)
     }
 
-    /// Fetches and parses the Usher master playlist with `fast_bread=true` (Twitch low-latency HLS).
-    public func fetchMasterPlaylist(channel: String, token: TwitchPlaybackToken) async throws -> [TwitchVariant] {
+    /// Fetches and parses the Usher master playlist with `fast_bread=true` (Twitch low-latency HLS),
+    /// returning both the signed master URL (useful for AirPlay `AVPlayer` handoff) and parsed variants.
+    public func fetchMasterStream(channel: String, token: TwitchPlaybackToken) async throws -> TwitchResolvedStream {
         let clean = Self.sanitize(channel)
         guard !clean.isEmpty else { throw TwitchHLSError.invalidChannel }
         var comps = URLComponents(string: "https://usher.ttvnw.net/api/channel/hls/\(clean).m3u8")!
@@ -446,7 +457,7 @@ public actor TwitchStreamResolver {
             URLQueryItem(name: "token", value: token.value),
         ]
         guard let url = comps.url else { throw TwitchHLSError.invalidChannel }
-        var req = URLRequest(url: url, timeoutInterval: 12)
+        var req = URLRequest(url: url, timeoutInterval: 10)
         req.setValue("application/vnd.apple.mpegurl, */*", forHTTPHeaderField: "Accept")
         let (data, http) = try await fetch(req)
         if http.statusCode == 404 { throw TwitchHLSError.offline }
@@ -455,12 +466,17 @@ public actor TwitchStreamResolver {
         }
         let variants = TwitchHLSParser.parseMaster(text, baseURL: url)
         guard !variants.isEmpty else { throw TwitchHLSError.noPlayableVariant }
-        return variants
+        return TwitchResolvedStream(masterURL: url, variants: variants)
+    }
+
+    /// Fetches and parses the Usher master playlist with `fast_bread=true` (Twitch low-latency HLS).
+    public func fetchMasterPlaylist(channel: String, token: TwitchPlaybackToken) async throws -> [TwitchVariant] {
+        try await fetchMasterStream(channel: channel, token: token).variants
     }
 
     /// Fetches and parses a live variant media playlist.
     public func fetchMediaPlaylist(url: URL) async throws -> TwitchMediaPlaylist {
-        var req = URLRequest(url: url, timeoutInterval: 10)
+        var req = URLRequest(url: url, timeoutInterval: 8)
         req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         let (data, http) = try await fetch(req)
         if http.statusCode == 404 { throw TwitchHLSError.offline }
@@ -470,10 +486,15 @@ public actor TwitchStreamResolver {
         return TwitchHLSParser.parseMedia(text, baseURL: url)
     }
 
+    /// Resolves `channel` to both the signed Usher master playlist URL and its parsed variants.
+    public func resolveStream(channel: String, authToken: String? = nil) async throws -> TwitchResolvedStream {
+        let token = try await fetchPlaybackToken(channel: channel, authToken: authToken)
+        return try await fetchMasterStream(channel: channel, token: token)
+    }
+
     /// Resolves `channel` to Usher variants (token + master playlist).
     public func resolve(channel: String, authToken: String? = nil) async throws -> [TwitchVariant] {
-        let token = try await fetchPlaybackToken(channel: channel, authToken: authToken)
-        return try await fetchMasterPlaylist(channel: channel, token: token)
+        try await resolveStream(channel: channel, authToken: authToken).variants
     }
 
     public static func sanitize(_ channel: String) -> String {

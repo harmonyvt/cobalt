@@ -45,11 +45,8 @@ final class TrimPreview {
             return
         }
         stop()
-        #if os(iOS)
-        // muted and mixing: it never interrupts whatever the owner is listening to (AudioPolicy.ambient)
-        let session = AVAudioSession.sharedInstance()
-        if session.category != .ambient { try? session.setCategory(.ambient, mode: .default) }
-        #endif
+        // muted and mixing: off-main ambient hint that never interrupts active `.playback` claims (e.g. Twitch PiP/bar)
+        AudioSessionCoordinator.shared.ensureAmbient()
         self.url = url
         self.duration = duration
         self.selection = selection

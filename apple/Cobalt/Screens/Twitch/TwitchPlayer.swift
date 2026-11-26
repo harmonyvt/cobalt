@@ -124,6 +124,26 @@ final class TwitchNativeVideoView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 }
+
+/// Platform view backed by an `AVPlayerLayer` for Video-Only AirPlay handoff while in low-latency mode.
+final class TwitchAirPlayVideoView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+
+    var playerLayer: AVPlayerLayer {
+        // Guaranteed by `layerClass`.
+        layer as! AVPlayerLayer
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        playerLayer.videoGravity = .resizeAspect
+        playerLayer.backgroundColor = UIColor.black.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
 #else
 final class TwitchNativeVideoView: NSView {
     let displayLayer = AVSampleBufferDisplayLayer()
@@ -186,6 +206,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     /// The lowest delay seen on this channel: what this stream can do.
     private(set) var bestDelay: Double?
     private(set) var isPlaying = false
+    /// Explicit user-requested pause state (distinct from transient buffering; reported to PiP & Now Playing).
+    private(set) var userPaused = false
     private(set) var isLoading = false
     private(set) var isBuffering = false
     private(set) var isOffline = false
@@ -196,10 +218,28 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     /// Available quality variants when running in low-latency native mode.
     private(set) var variants: [TwitchVariant] = []
     private(set) var selectedVariantID: String?
+    /// True when low-latency native mode has handed video off to an AirPlay TV via `AVPlayer`.
+    private(set) var isAirPlayingVideo = false
+    /// True while probing an AirPlay route/picker with a muted `AVPlayer` before external playback activates.
+    private(set) var isAirPlayProbing = false
+    /// True while Picture-in-Picture is active over the native sample-buffer display layer.
+    private(set) var isPiPActive = false
+    /// True when the system reports PiP can start on the attached display layer.
+    private(set) var isPiPPossible = false
     /// The view holding the player surface now.
     private(set) var holder: UUID?
     /// Jump to live by itself when the stream drifts behind (on by default).
     var autoCatchUp = true
+    /// Guard hook for Wave 2 dual-stream mode: disables the parallel muted `AVPlayer` AirPlay probe when false.
+    var allowAirPlayProbe = true {
+        didSet {
+            #if os(iOS)
+            if !allowAirPlayProbe && (isAirPlayProbing || isAirPlayingVideo) {
+                stopAirPlay(reason: "probe_disabled", resumeNative: true)
+            }
+            #endif
+        }
+    }
     /// The popup the embed opened (Twitch's sign-in), shown in a sheet by the holding view.
     private(set) var popup: TwitchPopup?
 
@@ -208,7 +248,12 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     }
 
     var isAudioOnly: Bool {
-        activeMode == .lowLatency && selectedVariant?.isAudioOnly == true
+        activeMode == .lowLatency && !isAirPlayingVideo && selectedVariant?.isAudioOnly == true
+    }
+
+    var canTogglePiP: Bool {
+        activeMode == .lowLatency && !isAirPlayingVideo && !isAudioOnly
+            && channel != nil && !isOffline && (isPiPPossible || isPiPActive)
     }
 
     /// Seconds behind live more than this stream's best, nil until known.
@@ -218,14 +263,48 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     }
     var isBehind: Bool { (behind ?? 0) >= Self.behindBy }
 
+    private static let pipAudioClaimID = "twitch.pip"
+    private static let airPlayAudioClaimID = "twitch.airplay"
+
     /// The web view while there is one; `webView` builds it on demand.
     @ObservationIgnored private var made: WKWebView?
     /// The native display-layer view while there is one; `nativeView` builds it on demand.
     @ObservationIgnored private var madeNative: TwitchNativeVideoView?
     @ObservationIgnored private var nativeEngine: TwitchNativeEngine?
     @ObservationIgnored private var nativeSessionID: UInt64 = 0
-    @ObservationIgnored private var nativeStartTask: Task<Void, Never>?
+    /// Strictly serializes `stop` and `start` calls into `TwitchNativeEngine` so a stale stop can never cancel a newer start.
+    @ObservationIgnored private var nativeLifecycleTask: Task<Void, Never>?
+    /// Single MainActor consumer reading `TwitchNativeEvent`s in guaranteed FIFO order.
+    @ObservationIgnored private var nativeEventTask: Task<Void, Never>?
+    @ObservationIgnored private var nativeEventContinuation: AsyncStream<TwitchNativeEvent>.Continuation?
+    @ObservationIgnored private var nativeStartInstant: ContinuousClock.Instant?
+    @ObservationIgnored private var lastLoggedBuffering = false
+    @ObservationIgnored private var hasLoggedVariants = false
+    @ObservationIgnored private var resolvedMasterURL: URL?
     @ObservationIgnored private var preferredQualityID: String?
+
+    @ObservationIgnored private let pipController = TwitchPiPController()
+    @ObservationIgnored private let nowPlaying = TwitchNowPlayingController.shared
+    /// Held from PiP willStart through didStop so closing/replacing UI never tears down active PiP.
+    @ObservationIgnored private var hasPiPClaim = false
+    @ObservationIgnored private var isInBackground = false
+    @ObservationIgnored private var backgroundVideoOffTask: Task<Void, Never>?
+    @ObservationIgnored private var restoreHandler: ((String) -> Void)?
+    @ObservationIgnored private weak var attachedModel: AppModel?
+    @ObservationIgnored private var observingModel = false
+
+    #if os(iOS)
+    @ObservationIgnored private var madeAirPlay: TwitchAirPlayVideoView?
+    @ObservationIgnored private var airPlayPlayer: AVPlayer?
+    @ObservationIgnored private var airPlayExternalObs: NSKeyValueObservation?
+    @ObservationIgnored private var airPlayTimeControlObs: NSKeyValueObservation?
+    @ObservationIgnored private var airPlayItemStatusObs: NSKeyValueObservation?
+    @ObservationIgnored private var airPlayProbeTask: Task<Void, Never>?
+    @ObservationIgnored private var airPlayResolveTask: Task<Void, Never>?
+    @ObservationIgnored private var airPlayPickerOpen = false
+    @ObservationIgnored private var ignoredAudioOnlyAirPlayUID: String?
+    @ObservationIgnored private var airPlayRefreshAttempted = false
+    #endif
 
     @ObservationIgnored private let proxy: TwitchMessageProxy
     @ObservationIgnored private var releaseTask: Task<Void, Never>?
@@ -255,8 +334,166 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         let proxy = TwitchMessageProxy()
         self.proxy = proxy
         proxy.host = self
+        configurePiPAndNowPlaying()
         AppLifecycle.shared.register(self, order: .media)
         AppLifecycle.shared.register(purgeable: self)
+    }
+
+    private func configurePiPAndNowPlaying() {
+        pipController.onPossibleChange = { [weak self] possible in
+            self?.isPiPPossible = possible
+        }
+        pipController.onWillStart = { [weak self] in
+            guard let self else { return }
+            self.hasPiPClaim = true
+            self.stopTask?.cancel()
+            self.stopTask = nil
+            self.releaseTask?.cancel()
+            self.releaseTask = nil
+            self.backgroundVideoOffTask?.cancel()
+            self.backgroundVideoOffTask = nil
+            AudioSessionCoordinator.shared.claim(Self.pipAudioClaimID, kind: .playback(allowsPiP: true))
+            let engine = self.nativeEngine
+            Task { await engine?.setVideoOutputEnabled(true) }
+        }
+        pipController.onDidStart = { [weak self] in
+            guard let self else { return }
+            self.isPiPActive = true
+            Breadcrumbs.add("twitch.pip.start")
+        }
+        pipController.onFailedToStart = { [weak self] _ in
+            guard let self else { return }
+            self.hasPiPClaim = false
+            self.isPiPActive = false
+            AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
+            Breadcrumbs.add("twitch.pip.failed")
+        }
+        pipController.onDidStop = { [weak self] restoredUI in
+            guard let self else { return }
+            self.isPiPActive = false
+            self.hasPiPClaim = false
+            AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
+            Breadcrumbs.add("twitch.pip.stop", ["restored": .bool(restoredUI)])
+            if !restoredUI {
+                if self.claims.isEmpty {
+                    self.stop()
+                } else {
+                    self.setPaused(true)
+                }
+            }
+            self.syncPiPAndNowPlaying()
+        }
+        pipController.onSetPlaying = { [weak self] playing in
+            self?.setPaused(!playing)
+        }
+        pipController.onRestoreUI = { [weak self] completion in
+            guard let self else {
+                completion(true)
+                return
+            }
+            if let ch = self.channel {
+                self.restoreHandler?(ch)
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(120))
+                completion(true)
+            }
+        }
+
+        nowPlaying.onPlay = { [weak self] in
+            self?.setPaused(false)
+        }
+        nowPlaying.onPause = { [weak self] in
+            self?.setPaused(true)
+        }
+        nowPlaying.onTogglePlayPause = { [weak self] in
+            guard let self else { return }
+            self.setPaused(!self.userPaused)
+        }
+    }
+
+    /// Attaches the shared `AppModel` so Lock Screen / Control Center Now Playing reflects live stream metadata.
+    func attachModel(_ model: AppModel) {
+        let changed = attachedModel !== model
+        attachedModel = model
+        syncNowPlaying()
+        if changed || !observingModel {
+            observingModel = true
+            observeAttachedModel()
+        }
+    }
+
+    /// Registers how PiP's restore button re-opens the stream pane when the user returns to the app.
+    func registerRestoreHandler(_ handler: @escaping (String) -> Void) {
+        restoreHandler = handler
+    }
+
+    private func observeAttachedModel() {
+        guard let model = attachedModel else {
+            observingModel = false
+            return
+        }
+        withObservationTracking {
+            _ = model.twitch.channel
+            _ = model.twitch.stream
+            _ = model.twitch.channelInfo
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.syncNowPlaying()
+                self.observeAttachedModel()
+            }
+        }
+    }
+
+    func togglePiP() {
+        if isPiPActive {
+            pipController.stop()
+        } else if canTogglePiP {
+            pipController.attach(to: nativeView.displayLayer)
+            pipController.setUserPaused(userPaused)
+            pipController.start()
+        }
+    }
+
+    private func syncPiPAndNowPlaying() {
+        pipController.setUserPaused(userPaused)
+        let allowAutoPiP: Bool
+        #if os(iOS)
+        allowAutoPiP = activeMode == .lowLatency && !isAirPlayingVideo && !isAudioOnly
+            && channel != nil && !userPaused && !isOffline && !TwitchTV.shared.onTV
+        #else
+        allowAutoPiP = false
+        #endif
+        pipController.setAutoStartFromInline(allowAutoPiP)
+        syncNowPlaying()
+    }
+
+    private func syncNowPlaying() {
+        guard let ch = channel, !isOffline, (activeMode == .lowLatency || isAirPlayingVideo) else {
+            nowPlaying.clear()
+            return
+        }
+        var displayName = ch
+        var title: String?
+        var game: String?
+        var artworkURL: URL?
+        if let twitch = attachedModel?.twitch, twitch.channel == ch {
+            displayName = twitch.stream?.displayName ?? twitch.channelInfo?.displayName ?? ch
+            title = twitch.stream?.title
+            game = twitch.stream?.game
+            artworkURL = twitch.stream?.thumbnail ?? twitch.channelInfo?.avatar
+        }
+        let activePlaying = !userPaused && (isPlaying || isLoading || isBuffering)
+        nowPlaying.update(.init(
+            channel: ch,
+            displayName: displayName,
+            title: title,
+            game: game,
+            artworkURL: artworkURL,
+            isPlaying: activePlaying,
+            isLive: true
+        ))
     }
 
     /// The app's one player web view, built on first need and again after it was let go (`releaseResources`).
@@ -284,6 +521,16 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         return view
     }
 
+    #if os(iOS)
+    /// The app's one `AVPlayerLayer` view used during Video-Only AirPlay handoff from low-latency mode.
+    var airPlayView: TwitchAirPlayVideoView {
+        if let madeAirPlay { return madeAirPlay }
+        let view = TwitchAirPlayVideoView(frame: .zero)
+        madeAirPlay = view
+        return view
+    }
+    #endif
+
     // MARK: holders
 
     /// A view wants the stream. The newest claim holds the player surface.
@@ -298,16 +545,16 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         play(channel)
     }
 
-    /// A view went. The claim before it takes the player back; with none left the stream stops shortly after (a layout
-    /// change removes one view and adds another in the same moment, so this waits a beat).
+    /// A view went. The claim before it takes the player back; with none left (and no active PiP claim) the stream stops
+    /// shortly after (a layout change removes one view and adds another in the same moment, so this waits a beat).
     func release(_ id: UUID) {
         claims.removeAll { $0 == id }
         holder = claims.last
-        guard claims.isEmpty else { return }
+        guard claims.isEmpty && !hasPiPClaim else { return }
         stopTask?.cancel()
         stopTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1.5))
-            guard let self, !Task.isCancelled, self.claims.isEmpty else { return }
+            guard let self, !Task.isCancelled, self.claims.isEmpty, !self.hasPiPClaim else { return }
             self.stop()
         }
     }
@@ -323,6 +570,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         guard activeMode != mode else { return }
         let current = channel
         if activeMode == .lowLatency {
+            if isPiPActive { pipController.stop() }
             stopNative()
         } else {
             stopEmbed()
@@ -332,6 +580,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         if let current {
             startActive(current)
         }
+        syncPiPAndNowPlaying()
     }
 
     func selectVariant(_ id: String) {
@@ -339,12 +588,23 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         preferredQualityID = id
         UserDefaults.standard.set(id, forKey: Self.qualityKey)
         selectedVariantID = id
+        if isAudioOnly && isPiPActive {
+            pipController.stop()
+        }
+        syncPiPAndNowPlaying()
+        if isAirPlayingVideo { return }
         let engine = nativeEngine
         Task { await engine?.selectVariant(id: id) }
     }
 
     func setMuted(_ muted: Bool) {
         isMuted = muted
+        #if os(iOS)
+        if isAirPlayingVideo {
+            airPlayPlayer?.isMuted = muted
+            return
+        }
+        #endif
         if activeMode == .lowLatency {
             let engine = nativeEngine
             Task { await engine?.setMuted(muted) }
@@ -373,6 +633,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             }
         }
         self.channel = c
+        resolvedMasterURL = nil
         reset()
         startActive(c)
     }
@@ -380,6 +641,12 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     private func startActive(_ channel: String) {
         switch activeMode {
         case .lowLatency:
+            #if os(iOS)
+            if isAirPlayingVideo {
+                switchAirPlayChannel(channel)
+                return
+            }
+            #endif
             startNative(channel)
         case .embed:
             startEmbed(channel)
@@ -388,37 +655,84 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
 
     private func startNative(_ channel: String) {
         stopEmbed()
-        nativeStartTask?.cancel()
         nativeSessionID &+= 1
         let sessionID = nativeSessionID
-        let rendererBox = TwitchVideoRendererBox(nativeView.displayLayer.sampleBufferRenderer)
+        let displayLayer = nativeView.displayLayer
+        pipController.attach(to: displayLayer)
+        let rendererBox = TwitchVideoRendererBox(displayLayer.sampleBufferRenderer)
         let engine = ensureNativeEngine()
         let muted = isMuted
         let preferredQuality = preferredQualityID
-        isLoading = true
 
-        nativeStartTask = Task { [weak self] in
-            guard let self else { return }
+        nativeEventContinuation?.finish()
+        nativeEventContinuation = nil
+        nativeEventTask?.cancel()
+        let (stream, continuation) = AsyncStream.makeStream(of: TwitchNativeEvent.self)
+        nativeEventContinuation = continuation
+        nativeEventTask = Task { [weak self] in
+            for await event in stream {
+                guard let self, !Task.isCancelled else { break }
+                self.receiveNative(event, sessionID: sessionID)
+            }
+        }
+
+        userPaused = false
+        isLoading = true
+        nativeStartInstant = .now
+        lastLoggedBuffering = false
+        hasLoggedVariants = false
+        syncPiPAndNowPlaying()
+        Breadcrumbs.add("twitch.native.start", ["quality": .string(preferredQuality ?? "auto")])
+
+        let previous = nativeLifecycleTask
+        previous?.cancel()
+        nativeLifecycleTask = Task { [weak self] in
+            // Wait for any in-flight stop/start to finish on the engine actor before starting this session.
+            await previous?.value
+            guard let self, !Task.isCancelled, self.nativeSessionID == sessionID,
+                  self.activeMode == .lowLatency, self.channel == channel else { return }
             let authToken = await self.twitchAuthToken()
             guard !Task.isCancelled, self.nativeSessionID == sessionID,
                   self.activeMode == .lowLatency, self.channel == channel else { return }
-            await engine.setEventHandler { [weak self] event in
-                Task { @MainActor [weak self] in
-                    self?.receiveNative(event, sessionID: sessionID)
-                }
+            let videoEnabled = !self.isInBackground || self.isPiPActive || self.hasPiPClaim
+            await engine.setEventHandler { event in
+                continuation.yield(event)
             }
             await engine.attach(videoRenderer: rendererBox)
+            await engine.setVideoOutputEnabled(videoEnabled)
             await engine.setMuted(muted)
             await engine.start(channel: channel, authToken: authToken, preferredVariantID: preferredQuality)
         }
     }
 
-    private func stopNative() {
-        nativeStartTask?.cancel()
-        nativeStartTask = nil
+    private func stopNative(keepAirPlay: Bool = false) {
+        #if os(iOS)
+        if !keepAirPlay {
+            stopAirPlay(reason: "stop", resumeNative: false)
+        }
+        #endif
+        backgroundVideoOffTask?.cancel()
+        backgroundVideoOffTask = nil
+        let wasActive = nativeEventContinuation != nil || nativeStartInstant != nil
         nativeSessionID &+= 1
+        nativeEventContinuation?.finish()
+        nativeEventContinuation = nil
+        nativeEventTask?.cancel()
+        nativeEventTask = nil
+        nativeStartInstant = nil
+        lastLoggedBuffering = false
+        hasLoggedVariants = false
+        if wasActive && !keepAirPlay {
+            Breadcrumbs.add("twitch.native.stop")
+        }
+
         let engine = nativeEngine
-        Task { await engine?.stop() }
+        let previous = nativeLifecycleTask
+        previous?.cancel()
+        nativeLifecycleTask = Task {
+            await previous?.value
+            await engine?.stop()
+        }
     }
 
     private func ensureNativeEngine() -> TwitchNativeEngine {
@@ -469,19 +783,42 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
 
     /// Stops whichever engine is active. Views nobody wants go after `releaseAfter`.
     func stop() {
+        if isPiPActive {
+            pipController.stop()
+        }
+        hasPiPClaim = false
+        AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
+        backgroundVideoOffTask?.cancel()
+        backgroundVideoOffTask = nil
         channel = nil
+        resolvedMasterURL = nil
         stopEmbed()
         stopNative()
         reset()
+        syncPiPAndNowPlaying()
         scheduleRelease()
     }
 
-    /// The pane's play / pause button (and native HUD play / pause).
+    /// The pane's play / pause button (and native HUD, PiP, and Lock Screen play / pause).
     func setPaused(_ paused: Bool) {
         guard channel != nil else { return }
+        userPaused = paused
+        #if os(iOS)
+        if isAirPlayingVideo {
+            isPlaying = !paused
+            if paused {
+                airPlayPlayer?.pause()
+            } else {
+                airPlayPlayer?.play()
+            }
+            syncPiPAndNowPlaying()
+            return
+        }
+        #endif
         switch activeMode {
         case .lowLatency:
             isPlaying = !paused
+            syncPiPAndNowPlaying()
             let engine = nativeEngine
             Task { await engine?.setPaused(paused) }
         case .embed:
@@ -492,6 +829,18 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     /// Back to the live edge.
     func jumpToLive() {
         guard channel != nil else { return }
+        #if os(iOS)
+        if isAirPlayingVideo, let player = airPlayPlayer {
+            if let range = player.currentItem?.seekableTimeRanges.last?.timeRangeValue, range.isValid {
+                let end = CMTimeRangeGetEnd(range)
+                if end.isValid && end.isNumeric {
+                    player.seek(to: end)
+                }
+            }
+            player.play()
+            return
+        }
+        #endif
         lastJump = .now
         behindSince = nil
         isCatchingUp = true
@@ -527,14 +876,287 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     /// Reloads the active engine for the current channel (e.g. after a sign-in).
     func reload() {
         guard let channel else { return }
+        resolvedMasterURL = nil
         reset()
         switch activeMode {
         case .lowLatency:
+            #if os(iOS)
+            if isAirPlayingVideo {
+                switchAirPlayChannel(channel)
+                return
+            }
+            #endif
             startNative(channel)
         case .embed:
             loadEmbed(channel)
         }
     }
+
+    // MARK: Video-Only AirPlay handoff (iOS)
+
+    #if os(iOS)
+    /// Called when the user opens an `AVRoutePickerView`: primes a muted `AVPlayer` with `allowsExternalPlayback = true`
+    /// so iOS immediately negotiates Video-Only AirPlay if the user picks an Apple TV / AirPlay 2 TV.
+    func prepareAirPlayRoutePicker() {
+        airPlayPickerOpen = true
+        ignoredAudioOnlyAirPlayUID = nil
+        guard allowAirPlayProbe, activeMode == .lowLatency, channel != nil, !isAirPlayingVideo,
+              !TwitchTV.shared.onTV, !TwitchTV.shared.screenConnected else { return }
+        startAirPlayProbe(fromPicker: true)
+    }
+
+    /// Called when `AVRoutePickerView` finishes presenting routes.
+    func finishAirPlayRoutePicker() {
+        airPlayPickerOpen = false
+        guard !isAirPlayingVideo else { return }
+        if !TwitchTV.shared.airPlayRoute {
+            scheduleAirPlayProbeTimeout(after: .seconds(1.5), reason: "picker_dismissed", markAudioOnly: false)
+        } else {
+            scheduleAirPlayProbeTimeout(after: .seconds(6), reason: "audio_only_route", markAudioOnly: true)
+        }
+    }
+
+    /// Called when `AVAudioSession.routeChangeNotification` reports an AirPlay output joining or leaving.
+    func airPlayRouteChanged(active: Bool, outputUID: String?) {
+        if !active {
+            ignoredAudioOnlyAirPlayUID = nil
+            if isAirPlayingVideo || isAirPlayProbing {
+                stopAirPlay(reason: "route_ended", resumeNative: true)
+            }
+            return
+        }
+        guard allowAirPlayProbe, activeMode == .lowLatency, channel != nil, !isAirPlayingVideo,
+              !TwitchTV.shared.onTV, !TwitchTV.shared.screenConnected else { return }
+        if let outputUID, outputUID == ignoredAudioOnlyAirPlayUID { return }
+        startAirPlayProbe(fromPicker: false)
+    }
+
+    /// Called when Screen Mirroring TV Mode takes over: stop any Video-Only AirPlay `AVPlayer` so TV Mode renders natively.
+    func handleTVModeActivated() {
+        if isPiPActive { pipController.stop() }
+        if isAirPlayingVideo || isAirPlayProbing {
+            stopAirPlay(reason: "tv_mode", resumeNative: true)
+        }
+        syncPiPAndNowPlaying()
+    }
+
+    private func maybeStartAirPlayFromRoute() {
+        guard allowAirPlayProbe, TwitchTV.shared.airPlayRoute, !TwitchTV.shared.onTV, !TwitchTV.shared.screenConnected,
+              activeMode == .lowLatency, channel != nil, !isAirPlayingVideo, !isAirPlayProbing else { return }
+        if let uid = TwitchTV.shared.airPlayOutputUID, uid == ignoredAudioOnlyAirPlayUID { return }
+        startAirPlayProbe(fromPicker: false)
+    }
+
+    private func startAirPlayProbe(fromPicker: Bool) {
+        guard allowAirPlayProbe, let currentChannel = channel, activeMode == .lowLatency,
+              !TwitchTV.shared.onTV, !TwitchTV.shared.screenConnected else { return }
+        if airPlayPlayer != nil {
+            if !fromPicker {
+                scheduleAirPlayProbeTimeout(after: .seconds(6), reason: "audio_only_route", markAudioOnly: true)
+            }
+            return
+        }
+
+        isAirPlayProbing = true
+        airPlayRefreshAttempted = false
+        Breadcrumbs.add("twitch.airplay.start", ["picker": .bool(fromPicker)])
+
+        if let url = resolvedMasterURL {
+            attachAirPlayPlayer(url: url, fromPicker: fromPicker)
+            return
+        }
+
+        airPlayResolveTask?.cancel()
+        airPlayResolveTask = Task { [weak self] in
+            guard let self else { return }
+            let auth = await self.twitchAuthToken()
+            guard !Task.isCancelled, self.channel == currentChannel, self.activeMode == .lowLatency else { return }
+            do {
+                let resolved = try await TwitchStreamResolver().resolveStream(channel: currentChannel, authToken: auth)
+                guard !Task.isCancelled, self.channel == currentChannel, self.activeMode == .lowLatency,
+                      self.isAirPlayProbing || self.isAirPlayingVideo else { return }
+                self.resolvedMasterURL = resolved.masterURL
+                self.attachAirPlayPlayer(url: resolved.masterURL, fromPicker: fromPicker)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.stopAirPlay(reason: "resolve_failed", resumeNative: false)
+            }
+        }
+    }
+
+    private func attachAirPlayPlayer(url: URL, fromPicker: Bool) {
+        let item = AVPlayerItem(url: url)
+        let player = AVPlayer(playerItem: item)
+        player.allowsExternalPlayback = true
+        player.usesExternalPlaybackWhileExternalScreenIsActive = false
+        player.preventsDisplaySleepDuringVideoPlayback = false
+        // Keep muted while probing so native audio isn't doubled; unmuted as soon as external playback activates.
+        player.isMuted = !isAirPlayingVideo || isMuted
+
+        airPlayPlayer = player
+        airPlayView.playerLayer.player = player
+        observeAirPlayPlayer(player, item: item)
+        player.play()
+
+        if !fromPicker && !isAirPlayingVideo {
+            scheduleAirPlayProbeTimeout(after: .seconds(6), reason: "audio_only_route", markAudioOnly: true)
+        }
+    }
+
+    private func observeAirPlayPlayer(_ player: AVPlayer, item: AVPlayerItem) {
+        airPlayExternalObs?.invalidate()
+        airPlayTimeControlObs?.invalidate()
+        airPlayItemStatusObs?.invalidate()
+
+        airPlayExternalObs = player.observe(\.isExternalPlaybackActive, options: [.initial, .new]) { [weak self] p, _ in
+            let active = p.isExternalPlaybackActive
+            Task { @MainActor [weak self] in
+                self?.handleAirPlayExternalActive(active)
+            }
+        }
+
+        airPlayTimeControlObs = player.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
+            let status = p.timeControlStatus
+            Task { @MainActor [weak self] in
+                guard let self, self.isAirPlayingVideo, self.airPlayPlayer === p else { return }
+                switch status {
+                case .playing:
+                    self.isPlaying = true
+                    self.userPaused = false
+                    self.isLoading = false
+                    self.isBuffering = false
+                case .waitingToPlayAtSpecifiedRate:
+                    self.isBuffering = true
+                case .paused:
+                    self.isPlaying = false
+                    self.isBuffering = false
+                @unknown default:
+                    break
+                }
+                self.syncNowPlaying()
+            }
+        }
+
+        airPlayItemStatusObs = item.observe(\.status, options: [.new]) { [weak self] it, _ in
+            let status = it.status
+            Task { @MainActor [weak self] in
+                guard let self, status == .failed else { return }
+                if self.isAirPlayingVideo, !self.airPlayRefreshAttempted, let ch = self.channel {
+                    // Refresh expired Usher token once on long TV sessions before giving up.
+                    self.airPlayRefreshAttempted = true
+                    self.resolvedMasterURL = nil
+                    self.switchAirPlayChannel(ch)
+                } else {
+                    self.stopAirPlay(reason: "item_failed", resumeNative: true)
+                }
+            }
+        }
+    }
+
+    private func handleAirPlayExternalActive(_ active: Bool) {
+        if active {
+            guard !isAirPlayingVideo, let player = airPlayPlayer else { return }
+            if isPiPActive { pipController.stop() }
+            airPlayProbeTask?.cancel()
+            airPlayProbeTask = nil
+            isAirPlayProbing = false
+            isAirPlayingVideo = true
+            isLoading = false
+            isBuffering = false
+            isOffline = false
+            isPlaying = true
+            userPaused = false
+            delay = nil
+            bestDelay = nil
+            player.isMuted = isMuted
+            AudioSessionCoordinator.shared.claim(Self.airPlayAudioClaimID, kind: .playback(allowsPiP: false))
+            stopNative(keepAirPlay: true)
+            syncPiPAndNowPlaying()
+            Breadcrumbs.add("twitch.airplay.active")
+        } else if isAirPlayingVideo {
+            stopAirPlay(reason: "external_ended", resumeNative: true)
+        }
+    }
+
+    private func switchAirPlayChannel(_ newChannel: String) {
+        guard let player = airPlayPlayer else {
+            startNative(newChannel)
+            return
+        }
+        isLoading = true
+        airPlayResolveTask?.cancel()
+        airPlayResolveTask = Task { [weak self] in
+            guard let self else { return }
+            let auth = await self.twitchAuthToken()
+            guard !Task.isCancelled, self.channel == newChannel, self.isAirPlayingVideo else { return }
+            do {
+                let resolved = try await TwitchStreamResolver().resolveStream(channel: newChannel, authToken: auth)
+                guard !Task.isCancelled, self.channel == newChannel, self.isAirPlayingVideo else { return }
+                self.resolvedMasterURL = resolved.masterURL
+                let item = AVPlayerItem(url: resolved.masterURL)
+                self.observeAirPlayPlayer(player, item: item)
+                player.replaceCurrentItem(with: item)
+                player.isMuted = self.isMuted
+                player.play()
+                self.isLoading = false
+            } catch TwitchHLSError.offline {
+                guard !Task.isCancelled else { return }
+                self.isOffline = true
+                self.isLoading = false
+                self.isPlaying = false
+                self.syncNowPlaying()
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.stopAirPlay(reason: "switch_failed", resumeNative: true)
+            }
+        }
+    }
+
+    private func scheduleAirPlayProbeTimeout(after delay: Duration, reason: String, markAudioOnly: Bool) {
+        airPlayProbeTask?.cancel()
+        airPlayProbeTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self, !Task.isCancelled, !self.isAirPlayingVideo, !self.airPlayPickerOpen else { return }
+            if markAudioOnly {
+                self.ignoredAudioOnlyAirPlayUID = TwitchTV.shared.airPlayOutputUID
+            }
+            self.stopAirPlay(reason: reason, resumeNative: false)
+        }
+    }
+
+    private func stopAirPlay(reason: String, resumeNative: Bool) {
+        let wasActive = isAirPlayingVideo
+        airPlayProbeTask?.cancel()
+        airPlayProbeTask = nil
+        airPlayResolveTask?.cancel()
+        airPlayResolveTask = nil
+        airPlayExternalObs?.invalidate()
+        airPlayExternalObs = nil
+        airPlayTimeControlObs?.invalidate()
+        airPlayTimeControlObs = nil
+        airPlayItemStatusObs?.invalidate()
+        airPlayItemStatusObs = nil
+
+        if let player = airPlayPlayer {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+            airPlayPlayer = nil
+        }
+        madeAirPlay?.playerLayer.player = nil
+        isAirPlayingVideo = false
+        isAirPlayProbing = false
+        AudioSessionCoordinator.shared.release(Self.airPlayAudioClaimID)
+
+        if wasActive {
+            Breadcrumbs.add("twitch.airplay.stop", ["reason": .string(reason)])
+            if resumeNative, !suspended, activeMode == .lowLatency, (!claims.isEmpty || hasPiPClaim), let current = channel {
+                startNative(current)
+            } else {
+                syncPiPAndNowPlaying()
+            }
+        }
+    }
+    #endif
 
     // MARK: the app's state
 
@@ -546,20 +1168,53 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         }
     }
 
-    /// Stops the stream for the background, remembering the channel. Not while capystore's TV window shows it: the owner
-    /// is watching on the TV with the phone locked.
-    private func suspend() {
-        guard !suspended else { return }
+    /// Whether active low-latency playback (background audio or Picture-in-Picture) should keep running when the app
+    /// moves to the background or is hidden.
+    private var keepsAliveInBackground: Bool {
         #if os(iOS)
-        if TwitchTV.shared.onTV { return }
+        if TwitchTV.shared.onTV || isAirPlayingVideo { return true }
         #endif
+        if hasPiPClaim || isPiPActive { return true }
+        return activeMode == .lowLatency && channel != nil && !userPaused && !isOffline
+    }
+
+    /// Stops the stream for the background only when background audio, PiP, TV Mode, and AirPlay are all inactive.
+    /// When background audio continues without PiP on iOS, video decoding is paused after a brief grace window (so
+    /// auto-PiP can still engage on swipe-home) and seamlessly resumes on return.
+    private func suspend() {
+        isInBackground = true
+        guard !suspended else { return }
+        if keepsAliveInBackground {
+            #if os(iOS)
+            if activeMode == .lowLatency && !isAirPlayingVideo && !TwitchTV.shared.onTV && !isPiPActive && !hasPiPClaim {
+                backgroundVideoOffTask?.cancel()
+                backgroundVideoOffTask = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(450))
+                    guard let self, !Task.isCancelled, self.isInBackground,
+                          !self.isPiPActive, !self.hasPiPClaim, !TwitchTV.shared.onTV else { return }
+                    let engine = self.nativeEngine
+                    await engine?.setVideoOutputEnabled(false)
+                }
+            }
+            #endif
+            return
+        }
         suspended = true
         resumeChannel = channel
         if channel != nil { stop() }
     }
 
-    /// Back on screen: the stream starts again if a view still holds a claim.
+    /// Back on screen: re-enables video output for background-audio sessions, or restarts a suspended stream.
     private func resume() {
+        isInBackground = false
+        backgroundVideoOffTask?.cancel()
+        backgroundVideoOffTask = nil
+
+        if activeMode == .lowLatency && channel != nil && !isAirPlayingVideo {
+            let engine = nativeEngine
+            Task { await engine?.setVideoOutputEnabled(true) }
+        }
+
         guard suspended else { return }
         suspended = false
         let channel = resumeChannel
@@ -567,7 +1222,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         if let channel, !claims.isEmpty { play(channel) }
     }
 
-    /// A memory warning, or the app leaving the screen, lets unwanted views go at once.
+    /// A memory warning, or the app leaving the screen, lets unwanted views go at once (never touching active PiP or
+    /// background audio).
     func purge(_ level: PurgeLevel) {
         releaseResources()
     }
@@ -575,7 +1231,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     private func scheduleRelease() {
         releaseTask?.cancel()
         releaseTask = nil
-        guard claims.isEmpty, (made != nil || madeNative != nil || nativeEngine != nil) else { return }
+        guard claims.isEmpty, !hasPiPClaim, !isPiPActive,
+              (made != nil || madeNative != nil || nativeEngine != nil) else { return }
         releaseTask = Task { [weak self] in
             try? await Task.sleep(for: TwitchPlayerHost.releaseAfter)
             guard !Task.isCancelled else { return }
@@ -583,12 +1240,13 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         }
     }
 
-    /// Lets unused views and engines go when nothing wants them: no view, no channel, no sign-in open.
+    /// Lets unused views and engines go when nothing wants them: no view, no PiP, no channel, no sign-in open.
     private func releaseResources() {
-        guard claims.isEmpty, channel == nil, popup == nil else { return }
+        guard claims.isEmpty, !hasPiPClaim, !isPiPActive, channel == nil, popup == nil else { return }
         releaseTask?.cancel()
         releaseTask = nil
 
+        pipController.detach()
         if let view = made {
             made = nil
             pageLoaded = false
@@ -601,9 +1259,21 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             madeNative = nil
             native.removeFromSuperview()
         }
+        #if os(iOS)
+        stopAirPlay(reason: "purge", resumeNative: false)
+        if let ap = madeAirPlay {
+            madeAirPlay = nil
+            ap.removeFromSuperview()
+        }
+        #endif
         if let engine = nativeEngine {
             nativeEngine = nil
-            Task { await engine.stop() }
+            let prev = nativeLifecycleTask
+            prev?.cancel()
+            nativeLifecycleTask = Task {
+                await prev?.value
+                await engine.stop()
+            }
         }
     }
 
@@ -628,6 +1298,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         delay = nil
         bestDelay = nil
         isPlaying = false
+        userPaused = false
         isLoading = false
         isBuffering = false
         isOffline = false
@@ -663,42 +1334,95 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
 
     // MARK: native engine events
 
+    private static func shortFallbackReason(_ raw: String) -> String {
+        let lower = raw.lowercased()
+        if lower.contains("timeout") { return "startup_timeout" }
+        if lower.contains("segment") { return "segment_failed" }
+        if lower.contains("playlist") { return "playlist_unavailable" }
+        if lower.contains("codec") { return "unsupported_codec" }
+        if lower.contains("integrity") { return "integrity" }
+        if lower.contains("stall") { return "stalled" }
+        return "error"
+    }
+
     private func receiveNative(_ event: TwitchNativeEvent, sessionID: UInt64) {
         guard sessionID == nativeSessionID, activeMode == .lowLatency else { return }
         switch event {
         case .loading:
             isLoading = true
             isOffline = false
+        case .streamURL(let url):
+            resolvedMasterURL = url
+            #if os(iOS)
+            maybeStartAirPlayFromRoute()
+            #endif
         case .variants(let list, let selectedID):
             variants = list
             selectedVariantID = selectedID
+            if !hasLoggedVariants {
+                hasLoggedVariants = true
+                Breadcrumbs.add("twitch.native.variants", ["count": .int(list.count)])
+            }
+            syncPiPAndNowPlaying()
         case .playing:
             isPlaying = true
             isLoading = false
             isBuffering = false
             isOffline = false
+            if let started = nativeStartInstant {
+                let elapsed = ContinuousClock.now - started
+                let ms = Int(elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
+                nativeStartInstant = nil
+                Breadcrumbs.add("twitch.native.playing", ["ms": .int(max(0, ms))])
+            }
+            syncPiPAndNowPlaying()
         case .paused:
             isPlaying = false
+            syncNowPlaying()
+        case .userPausedChanged(let paused):
+            userPaused = paused
+            if paused {
+                isPlaying = false
+            }
+            syncPiPAndNowPlaying()
         case .offline:
             isOffline = true
             isPlaying = false
             isLoading = false
             isBuffering = false
             delay = nil
+            nativeStartInstant = nil
+            if isPiPActive { pipController.stop() }
+            syncPiPAndNowPlaying()
+            Breadcrumbs.add("twitch.native.offline")
         case .stats(let stats):
             isLowLatencyStream = stats.isLowLatency
+            // Self-heal if `.loading` ever raced past `.playing`: active synchronizer clock means playback is live.
+            if stats.isClockStarted && isLoading {
+                isLoading = false
+                if !isPlaying && stats.rate > 0 {
+                    isPlaying = true
+                }
+            }
+            if stats.isBuffering != lastLoggedBuffering {
+                lastLoggedBuffering = stats.isBuffering
+                Breadcrumbs.add("twitch.native.buffering", ["on": .bool(stats.isBuffering)])
+            }
             isBuffering = stats.isBuffering
             if let d = stats.delay, d > 0, isPlaying {
                 recordDelay(d)
             }
-        case .failed:
+        case .failed(let reason):
             // Native playback could not run for this stream: fall back to the Twitch embed for this session without
             // overwriting `preferredMode`, so the next channel tries low latency again.
+            Breadcrumbs.add("twitch.native.fallback", ["reason": .string(Self.shortFallbackReason(reason))])
             guard let current = channel else { return }
+            if isPiPActive { pipController.stop() }
             stopNative()
             fellBackToEmbed = true
             activeMode = .embed
             reset()
+            syncPiPAndNowPlaying()
             startEmbed(current)
         }
     }
@@ -799,6 +1523,7 @@ struct TwitchPlayer: View {
     let channel: String
     var showsDelay = true
 
+    @Environment(Pane.self) private var pane: Pane?
     @State private var id = UUID()
     @State private var showsNativeControls = false
     @State private var hideControlsTask: Task<Void, Never>?
@@ -810,7 +1535,13 @@ struct TwitchPlayer: View {
     // Session replay (APP-API-CONTRACT 58): media is always masked.
     var body: some View {
         ZStack {
-            TwitchPlayerSlot(holds: isHolder, mode: host.activeMode)
+            TwitchPlayerSlot(
+                holds: isHolder,
+                mode: host.activeMode,
+                airPlayActive: host.isAirPlayingVideo,
+                airPlayProbing: host.isAirPlayProbing,
+                pipActive: host.isPiPActive
+            )
                 .background(Color.black)
                 .mediaMask()
                 .overlay {
@@ -873,7 +1604,14 @@ struct TwitchPlayer: View {
                              set: { if $0 == nil, isHolder { host.dismissPopup() } })) { popup in
             TwitchPopupSheet(popup: popup) { host.dismissPopup() }
         }
-        .onAppear { host.claim(id, channel: channel) }
+        .onAppear {
+            host.claim(id, channel: channel)
+            if let pane {
+                host.registerRestoreHandler { [weak pane] ch in
+                    pane?.open(.stream(ch))
+                }
+            }
+        }
         .onDisappear {
             hideControlsTask?.cancel()
             hideControlsTask = nil
@@ -898,6 +1636,28 @@ struct TwitchPlayer: View {
                 .tint(.white)
                 .padding(12)
                 .mediaGlassCircle(interactive: false)
+        } else if host.isAirPlayingVideo {
+            HStack(spacing: 6) {
+                Image(systemName: Symbol.Twitch.airPlay)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(Copy.Twitch.airPlaying)
+                    .font(Font.cobalt(12, .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .mediaGlassCapsule(interactive: false)
+        } else if host.isPiPActive {
+            HStack(spacing: 6) {
+                Image(systemName: Symbol.Twitch.pipExit)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(Copy.Twitch.inPiP)
+                    .font(Font.cobalt(12, .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .mediaGlassCapsule(interactive: false)
         } else if host.isAudioOnly {
             HStack(spacing: 6) {
                 Image(systemName: Symbol.Twitch.audioOnly)
@@ -973,7 +1733,7 @@ struct TwitchModeMenu: View {
                 }
             }
 
-            if host.activeMode == .lowLatency, !host.variants.isEmpty {
+            if host.activeMode == .lowLatency, !host.isAirPlayingVideo, !host.variants.isEmpty {
                 Menu {
                     ForEach(host.variants) { variant in
                         Button {
@@ -1026,22 +1786,26 @@ private struct TwitchNativeControlBar: View {
     let host: TwitchPlayerHost
     let onInteract: () -> Void
 
+    private var showsPauseGlyph: Bool {
+        !host.userPaused && (host.isPlaying || host.isLoading || host.isBuffering)
+    }
+
     var body: some View {
         MediaGlassGroup(spacing: 8) {
             HStack(spacing: 4) {
                 Button {
-                    host.setPaused(host.isPlaying)
+                    host.setPaused(showsPauseGlyph)
                     onInteract()
                 } label: {
-                    Label(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play,
-                          systemImage: host.isPlaying ? "pause.fill" : "play.fill")
+                    Label(showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play,
+                          systemImage: showsPauseGlyph ? "pause.fill" : "play.fill")
                         .labelStyle(.iconOnly)
                         .font(.system(size: 14, weight: .semibold))
                         .frame(width: Metrics.hit, height: Metrics.hit)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
+                .accessibilityLabel(showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play)
 
                 Button {
                     host.toggleMute()
@@ -1059,7 +1823,31 @@ private struct TwitchNativeControlBar: View {
 
                 Spacer(minLength: 0)
 
-                if !host.variants.isEmpty {
+                if host.canTogglePiP {
+                    Button {
+                        host.togglePiP()
+                        onInteract()
+                    } label: {
+                        Label(
+                            host.isPiPActive ? Copy.Twitch.pipExit : Copy.Twitch.pipEnter,
+                            systemImage: host.isPiPActive ? Symbol.Twitch.pipExit : Symbol.Twitch.pipEnter
+                        )
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: Metrics.hit, height: Metrics.hit)
+                        .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(host.isPiPActive ? Copy.Twitch.pipExit : Copy.Twitch.pipEnter)
+                }
+
+                #if os(iOS)
+                TwitchAirPlayButton(tint: .white)
+                    .frame(width: Metrics.hit, height: Metrics.hit)
+                    .accessibilityLabel(Copy.Twitch.airPlay)
+                #endif
+
+                if !host.isAirPlayingVideo, !host.variants.isEmpty {
                     Menu {
                         ForEach(host.variants) { variant in
                             Button {
@@ -1127,8 +1915,8 @@ struct TwitchDelayBadge: View {
     }
 }
 
-/// Where the shared player view (native display layer or web view) sits while this view holds it. Holding is decided by
-/// `TwitchPlayer` (appear and disappear); the slot only moves the active view in and removes the inactive one.
+/// Where the shared player view (native display layer, AirPlay layer, or web view) sits while this view holds it.
+/// Holding is decided by `TwitchPlayer` (appear and disappear); the slot only moves the active view in and removes the inactive one.
 #if os(iOS)
 private final class TwitchPlayerSlotView: UIView {
     override func layoutSubviews() {
@@ -1142,6 +1930,9 @@ private final class TwitchPlayerSlotView: UIView {
 private struct TwitchPlayerSlot: UIViewRepresentable {
     let holds: Bool
     let mode: TwitchPlayerMode
+    let airPlayActive: Bool
+    let airPlayProbing: Bool
+    let pipActive: Bool
 
     func makeUIView(context: Context) -> TwitchPlayerSlotView {
         let slot = TwitchPlayerSlotView()
@@ -1153,19 +1944,49 @@ private struct TwitchPlayerSlot: UIViewRepresentable {
     func updateUIView(_ slot: TwitchPlayerSlotView, context: Context) {
         // only a holder asks for the active view, so a slot left on screen never rebuilds one that was let go
         guard holds else { return }
-        let target: UIView = mode == .lowLatency
-            ? TwitchPlayerHost.shared.nativeView
-            : TwitchPlayerHost.shared.webView
-        for sub in slot.subviews where sub !== target {
+        let host = TwitchPlayerHost.shared
+        let primary: UIView
+        var backing: UIView?
+        if mode == .lowLatency {
+            if airPlayActive {
+                primary = host.airPlayView
+            } else {
+                primary = host.nativeView
+                if airPlayProbing {
+                    backing = host.airPlayView
+                }
+            }
+        } else {
+            primary = host.webView
+        }
+
+        // Never yank `nativeView` out of Picture-in-Picture while PiP is hosting its `AVSampleBufferDisplayLayer`.
+        let holdNativeForPiP = pipActive && primary === host.nativeView
+
+        for sub in slot.subviews where sub !== primary && sub !== backing {
             sub.removeFromSuperview()
         }
-        if target.superview !== slot {
-            target.removeFromSuperview()
-            target.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            slot.addSubview(target)
+        if let backing {
+            if backing.superview !== slot {
+                backing.removeFromSuperview()
+                backing.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                slot.insertSubview(backing, at: 0)
+            }
+            if backing.frame != slot.bounds {
+                backing.frame = slot.bounds
+            }
         }
-        if target.frame != slot.bounds {
-            target.frame = slot.bounds
+        if !holdNativeForPiP {
+            if primary.superview !== slot {
+                primary.removeFromSuperview()
+                primary.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                slot.addSubview(primary)
+            } else if backing != nil {
+                slot.bringSubviewToFront(primary)
+            }
+            if primary.frame != slot.bounds {
+                primary.frame = slot.bounds
+            }
         }
     }
 }
@@ -1182,6 +2003,9 @@ private final class TwitchPlayerSlotView: NSView {
 private struct TwitchPlayerSlot: NSViewRepresentable {
     let holds: Bool
     let mode: TwitchPlayerMode
+    let airPlayActive: Bool
+    let airPlayProbing: Bool
+    let pipActive: Bool
 
     func makeNSView(context: Context) -> TwitchPlayerSlotView {
         let slot = TwitchPlayerSlotView()
@@ -1193,19 +2017,24 @@ private struct TwitchPlayerSlot: NSViewRepresentable {
     func updateNSView(_ slot: TwitchPlayerSlotView, context: Context) {
         // only a holder asks for the active view, so a slot left on screen never rebuilds one that was let go
         guard holds else { return }
+        let host = TwitchPlayerHost.shared
         let target: NSView = mode == .lowLatency
-            ? TwitchPlayerHost.shared.nativeView
-            : TwitchPlayerHost.shared.webView
+            ? host.nativeView
+            : host.webView
+        let holdNativeForPiP = pipActive && target === host.nativeView
+
         for sub in slot.subviews where sub !== target {
             sub.removeFromSuperview()
         }
-        if target.superview !== slot {
-            target.removeFromSuperview()
-            target.autoresizingMask = [.width, .height]
-            slot.addSubview(target)
-        }
-        if target.frame != slot.bounds {
-            target.frame = slot.bounds
+        if !holdNativeForPiP {
+            if target.superview !== slot {
+                target.removeFromSuperview()
+                target.autoresizingMask = [.width, .height]
+                slot.addSubview(target)
+            }
+            if target.frame != slot.bounds {
+                target.frame = slot.bounds
+            }
         }
     }
 }
