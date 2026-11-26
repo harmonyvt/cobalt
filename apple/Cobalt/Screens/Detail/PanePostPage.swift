@@ -184,24 +184,37 @@ struct PanePostContent: View {
 
     // MARK: the page
 
+    @ViewBuilder
     private func page(_ c: DetailContext) -> some View {
-        let item = c.item
-        // On the iPhone's sheet the grid is what the library's context menu was: share, add to link, edit, delete
-        // (the mockup, 2026-11-23); beside the tab it stays the plan's four, and those go to `more` with the rest.
-        let kit = kit
-        let arranged = kit.arranged(c)
-        return PanePage(
-            title: item.titleText, subtitle: subtitle(item), actions: headerActions(item),
-            more: kit.moreActions(c, rest: arranged.rest, openInLibrary: kit.openInLibraryAction(item))
-        ) {
-            hero(c)
-        } controls: {
-            controls(c, kit: kit)
-        } body: {
-            detailBody(c)
-        } shelf: {
-            PaneCard(Copy.PostPane.detailsCard) { details(c) }
-            PaneCard(Copy.PostPane.linkCard) { linkCard(c) }
+        if !pane.sitsBesideTab || shape == .wide {
+            AmbientCinemaPostStudio(
+                context: c,
+                kit: kit,
+                fromAlbum: fromAlbum,
+                showsCloseButton: !pane.sitsBesideTab,
+                onManageLinks: { managing = true }
+            )
+            .onChange(of: c.item.titleText, initial: true) { _, next in
+                pane.reportTitle(next, for: paneItem)
+            }
+        } else {
+            let item = c.item
+            // Mac narrow side column beside the tab keeps the compact vertical PanePage layout.
+            let kit = kit
+            let arranged = kit.arranged(c)
+            PanePage(
+                title: item.titleText, subtitle: subtitle(item), actions: headerActions(item),
+                more: kit.moreActions(c, rest: arranged.rest, openInLibrary: kit.openInLibraryAction(item))
+            ) {
+                hero(c)
+            } controls: {
+                controls(c, kit: kit)
+            } body: {
+                detailBody(c)
+            } shelf: {
+                PaneCard(Copy.PostPane.detailsCard) { details(c) }
+                PaneCard(Copy.PostPane.linkCard) { linkCard(c) }
+            }
         }
     }
 

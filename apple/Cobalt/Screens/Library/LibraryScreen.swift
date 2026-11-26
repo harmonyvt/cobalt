@@ -116,9 +116,9 @@ private struct LibraryContent: View {
     @Environment(\.shell) private var shell
     @Environment(Pane.self) private var pane: Pane?
     @Environment(\.horizontalSizeClass) private var sizeClass
-    /// The window has room for the screen pane beside the tab (not the one-screen phone layout): a hold's peek and the select
-    /// actions open there instead of being drawn over the grid. A post opens in the pane everywhere (a sheet when compact).
-    private var paneBeside: Bool { pane.map { $0.placement != .compact } ?? false }
+    /// The window docks the screen pane beside the tab (macOS column): a hold's peek and auto-open search results
+    /// open beside the grid. On iOS single-focus mode, hold-to-peek stays as `LibraryPeekOverlay` and taps open full-canvas.
+    private var paneBeside: Bool { pane?.sitsBesideTab ?? false }
     @Environment(\.hapticsEnabled) private var haptics
     /// The app's phase (`AppLifecycle`), not this window's scenePhase: the album relocks when the app goes away.
     @Environment(\.lifecycle) private var lifecycle
@@ -860,8 +860,8 @@ private struct LibraryPaneBridge: ViewModifier {
     /// The iPhone's way to show a post: push the unified detail instead of opening the pane's sheet (nil elsewhere).
     let push: (@MainActor (MediaDetailRoute) -> Void)?
 
-    /// The pane sits beside the tab (a column, or one of two screens), not over it as a sheet.
-    private var beside: Bool { pane.map { $0.placement != .compact } ?? false }
+    /// The pane sits beside the tab (macOS column), not as an iOS single-focus overlay or compact sheet.
+    private var beside: Bool { pane?.sitsBesideTab ?? false }
 
     func body(content: Content) -> some View {
         content

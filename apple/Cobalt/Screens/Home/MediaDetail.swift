@@ -161,10 +161,21 @@ struct MediaDetail: View {
                 Text(Copy.Media.deleted)
                     .font(CobaltType.body).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if width >= DetailWidth.wide, !typeSize.isAccessibilitySize {
-                WideDetail(c: context, maxSegments: width >= DetailWidth.sixTabs + 300 ? 6 : 4)
             } else {
-                CompactDetail(c: context, maxSegments: width >= DetailWidth.sixTabs ? 6 : 4)
+                #if os(iOS)
+                AmbientCinemaPostStudio(
+                    context: context,
+                    kit: kit,
+                    fromAlbum: fromAlbum,
+                    showsCloseButton: false
+                )
+                #else
+                if width >= DetailWidth.wide, !typeSize.isAccessibilitySize {
+                    WideDetail(c: context, maxSegments: width >= DetailWidth.sixTabs + 300 ? 6 : 4)
+                } else {
+                    CompactDetail(c: context, maxSegments: width >= DetailWidth.sixTabs ? 6 : 4)
+                }
+                #endif
             }
         }
         .duoToolbarCompression(.prefersToolbarItems)

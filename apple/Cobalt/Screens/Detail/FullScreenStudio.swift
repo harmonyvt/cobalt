@@ -73,6 +73,7 @@ struct FullScreenStudioVideo: View {
     @State private var loopObserver: NSObjectProtocol?
 
     @State private var viewingWebp = false
+    @State private var ambientEnabled = true
     @State private var inspectorOpen = false
     @State private var inspectorTab: StudioInspectorTab = .access
     @State private var showIdentityPopover = false
@@ -266,7 +267,7 @@ struct FullScreenStudioVideo: View {
     private func mediaStage(dockedInspector: Bool, inspectorWidth: CGFloat) -> some View {
         HStack(spacing: 0) {
             ZStack {
-                Color.black.ignoresSafeArea()
+                AmbientCinemaBackdrop(item: liveItem, enabled: ambientEnabled)
                 Group {
                     if viewingWebp, let source = webpSource {
                         AnimatedImageView(source: source)
@@ -463,6 +464,18 @@ struct FullScreenStudioVideo: View {
                 }
 
                 if studio != nil {
+                    Button {
+                        ambientEnabled.toggle()
+                        transport.reveal()
+                    } label: {
+                        Image(systemName: ambientEnabled ? "sun.max.fill" : "sun.max")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(ambientEnabled ? Color(hex: 0xfde68a) : .white.opacity(0.75))
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(ambientEnabled ? "Turn off ambient cinema glow" : "Turn on ambient cinema glow")
+
                     Button {
                         inspectorOpen.toggle()
                         transport.reveal()

@@ -36,6 +36,11 @@ extension EnvironmentValues {
     @Entry var paneOffline = false
     /// The height of the header when a page opts into a floating overlay header (0 when the pane draws its dedicated top bar).
     @Entry var paneHeaderHeight: CGFloat = 0
+    /// Live hardware reserved regions (`ReservedRegion(.division)` and `.occlusion`) measured by `PaneHost`.
+    @Entry var paneReservedRegions: DuoReservedRegions = .empty
+    /// Full keyboard-ignoring size of `PaneHost`, allowing single-focus pages (e.g. Twitch Watch) to detect software
+    /// keyboard height reliably in pure SwiftUI.
+    @Entry var paneHostSize: CGSize = .zero
 }
 
 /// One thing a pane page can do: a header icon button (`PanePage(actions:)`, up to 2), a big button in `PaneActionGrid`
@@ -114,6 +119,13 @@ struct PaneMoreKey: PreferenceKey {
 /// Whether the current page opts into floating the pane's header over full-bleed media (e.g. a stream filling the Duo's
 /// top screen). Default is `false`: `PaneChrome` reserves a dedicated top header bar above the page content.
 struct PaneFloatingHeaderKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
+/// Whether the current page renders its own Clear Liquid Glass single-focus top HUD (back/close, identity pill, actions)
+/// so `PaneChrome` suppresses its standard header slab and lets media run edge-to-edge.
+struct PaneHidesChromeHeaderKey: PreferenceKey {
     static let defaultValue = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }
