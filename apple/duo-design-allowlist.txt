@@ -1,0 +1,7 @@
+# Non-layout exceptions to the iPhone Duo & Liquid Glass architectural lints (apple/ARCHITECTURE.md rules 14-18).
+# One `<finding> # reason` per line; DuoDesignLintTests fails on anything new and on entries that no longer match,
+# so this list may only shrink. Hard rules (`[tab-bar-lock]`, `[text-only-toolbar]`, `[odd-grid-columns]`,
+# `[orientation-lock]`, `[arrangement-nesting]`, `[opaque-glass-backing]`) are never listable.
+# Regenerate with UPDATE_DUO_DESIGN_ALLOWLIST=1 swift test --filter DuoDesignLint (reasons are kept).
+[idiom-lock] Cobalt/Design/Copy.swift: return MainActor.assumeIsolated { UIDevice.current.userInterfaceIdiom == .pad } ? "ipad" : "iphone" # non-layout copy noun ("ipad"/"iphone")
+[idiom-lock] Cobalt/Screens/Home/GalleryFocus.swift: let device = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone" # non-layout copy noun for offline file badge

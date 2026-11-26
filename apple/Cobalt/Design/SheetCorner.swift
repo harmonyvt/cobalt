@@ -64,8 +64,11 @@ private struct SheetCorner<Extras: View>: ViewModifier {
             content.toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     extras()
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     CloseButton(cancels: true) { close.run() }
                 }
+                .duoVisibilityPriority(.high)
             }
             #endif
         } else {

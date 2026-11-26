@@ -43,7 +43,7 @@ struct ChatAttachSheet: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], spacing: 6) {
+                    DuoAdaptiveGrid(minItemWidth: 96, spacing: 6) {
                         ForEach(rows) { row in tile(row) }
                     }
                     .padding(.bottom, 12)

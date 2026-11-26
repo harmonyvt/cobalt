@@ -33,6 +33,7 @@ struct LibraryScreen: View {
 
     #if os(iOS)
     @Environment(Pane.self) private var pane: Pane?
+    @Environment(\.horizontalSizeClass) private var sizeClass
     private var measuredTier: Tier? { ownWidth > 0 ? Tier(width: ownWidth) : nil }
     /// The tier the library lays out for. Beside the screen pane (a window with room for it) the library never drops to
     /// the one-screen phone layout: opening, closing or peeking the pane halves the library's width (the Duo spread is
@@ -48,10 +49,10 @@ struct LibraryScreen: View {
     #endif
 
     #if os(iOS)
-    /// A tap on the iPhone pushes the unified detail onto the library's stack (owner, 2026-11-25: one detail, not the
-    /// pane's sheet). The iPad and the Mac keep the pane.
+    /// A tap in compact width pushes the unified detail onto the library's stack (one detail, not the pane's sheet).
+    /// Regular width (iPhone Duo inner, iPad, Mac) opens in the split pane.
     private var phonePush: (@MainActor (MediaDetailRoute) -> Void)? {
-        guard UIDevice.current.userInterfaceIdiom == .phone else { return nil }
+        guard sizeClass == .compact else { return nil }
         return { route in path.append(route) }
     }
     #endif
@@ -114,6 +115,7 @@ private struct LibraryContent: View {
 
     @Environment(\.shell) private var shell
     @Environment(Pane.self) private var pane: Pane?
+    @Environment(\.horizontalSizeClass) private var sizeClass
     /// The window has room for the screen pane beside the tab (not the one-screen phone layout): a hold's peek and the select
     /// actions open there instead of being drawn over the grid. A post opens in the pane everywhere (a sheet when compact).
     private var paneBeside: Bool { pane.map { $0.placement != .compact } ?? false }
@@ -526,28 +528,26 @@ private struct LibraryContent: View {
             .accessibilityIdentifier("library.sort")
     }
 
-    /// An iPad bar below `wide` (portrait, beside the pane) puts the sort menu with the view buttons. iPadOS folds the
-    /// whole trailing group into its "More" overflow there (the floating tab bar shares the row in portrait, and the
-    /// bar keeps the overflow after the select panel halves it); the leading group is never folded. The iPhone, the
-    /// wide iPad and the Mac keep it on the trailing side.
+    /// Regular width below `wide` (portrait or beside the pane) puts the sort menu with the view buttons so the
+    /// trailing bar doesn't crowd into overflow; compact, wide regular and Mac keep it trailing.
     private var sortLeads: Bool {
         #if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .pad && tier != .wide
+        sizeClass == .regular && tier != .wide
         #else
         false
         #endif
     }
 
     #if os(iOS)
-    /// The iPhone, not an iPad in a compact window: only the phone's bar is folded into one "…" menu.
-    private var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+    /// Compact width (iPhone, Duo Outer, narrow Split View): the bar folds secondary actions into one "…" menu.
+    private var isCompactWidth: Bool { sizeClass == .compact }
     #endif
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         #if os(iOS)
-        if isPhone {
-            // the iPhone: one "…" menu with every secondary action, then the activity pill and the settings gear (the
+        if isCompactWidth {
+            // Compact width: one "…" menu with every secondary action, then the activity pill and the settings gear (the
             // shell's header, `PhoneRootToolbar`), three trailing items at most, in select mode too. Nothing leading.
             PhoneRootToolbar(model: model) {
                 LibraryPhoneMenu(model: model, controller: controller, toggleSelecting: toggleSelecting)
@@ -565,7 +565,7 @@ private struct LibraryContent: View {
     }
 
     #if os(iOS)
-    /// The iPad's bar, as it was: the view buttons, sort, paste and file, the inspector toggle.
+    /// Regular-width bar (Duo inner display, iPad): view switcher, sort, paste & file, inspector toggle.
     @ToolbarContentBuilder
     private var padToolbar: some ToolbarContent {
         // Two plain buttons in one group, drawn as one glass capsule like the trailing group. A segmented `Picker` in a
@@ -578,6 +578,7 @@ private struct LibraryContent: View {
             // the sky map is a third way to look at the library (only where the search has embedded the posts)
             if model.capabilities.search, !controller.selecting { LibrarySkyMapButton(controller: controller) }
         }
+        .duoVisibilityPriority(.automatic)
         // the queue is a sheet on iPhone and iPad (not a tab); select mode keeps its controls and drops this button
         if !controller.selecting { QueueToolbarItem(model: model) }
         trailingToolbar
@@ -596,7 +597,6 @@ private struct LibraryContent: View {
                 .help(Copy.Library2.refresh)
             #endif
             #if os(iOS)
-            // an iPad in a compact window: the bar is full, so paste and file share one "more" menu (the iPhone has its own)
             if tier == .compact {
                 LibraryAddMenu(showsFile: model.capabilities.showsFileButton)
             } else {
@@ -616,6 +616,7 @@ private struct LibraryContent: View {
                 .help(Copy.Library2.toggleDetail)
             }
         }
+        .duoVisibilityPriority(.high)
     }
 
     private func toggleSelecting() {

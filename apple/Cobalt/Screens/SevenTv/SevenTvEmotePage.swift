@@ -324,7 +324,7 @@ private struct SevenTvVariantsList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             caption
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 12)], spacing: 12) {
+            DuoAdaptiveGrid(minItemWidth: 76, spacing: 12) {
                 ForEach(variants.items) { hit in
                     SevenTvVariantTile(
                         hit: hit, held: hit.id == variants.emote.emoteID, inSet: emoteSet?.memberIDs.contains(hit.id) == true,

@@ -189,7 +189,9 @@ struct SkyMapView: View {
     }
 
     private var centre: CGPoint {
-        CGPoint(x: insets.side + max(40, size.width - 2 * insets.side) / 2, y: insets.top + max(40, size.height - insets.top - insets.bottom) / 2)
+        CGPoint(
+            x: insets.leading + max(40, size.width - insets.leading - insets.trailing) / 2,
+            y: insets.top + max(40, size.height - insets.top - insets.bottom) / 2)
     }
 
     /// The star nearest `p` within the hit radius (only once the sky has settled).

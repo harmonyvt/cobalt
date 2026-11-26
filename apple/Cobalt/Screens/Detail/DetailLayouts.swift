@@ -120,7 +120,7 @@ struct WideDetail: View {
 
     var body: some View {
         GeometryReader { geometry in
-            HStack(spacing: 0) {
+            DuoSplit(ratio: 0.58) {
                 Form {
                     Section {
                         VStack(spacing: 16) {
@@ -136,6 +136,7 @@ struct WideDetail: View {
                     }
                 }
                 .formStyle(.grouped)
+            } secondary: {
                 Form {
                     if let missing = c.missingIndex {
                         Section { MissingInfo(item: c.item, index: missing) }
@@ -151,7 +152,7 @@ struct WideDetail: View {
                     DetailControls(c: c)
                 }
                 .formStyle(.grouped)
-                .frame(width: detailsWidth(geometry.size.width))
+                .frame(minWidth: 320, idealWidth: detailsWidth(geometry.size.width), maxWidth: .infinity)
             }
         }
         .motion(Motion.card, value: c.rendition.id)

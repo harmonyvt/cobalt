@@ -19,48 +19,46 @@ struct FullScreenPhoto: View {
     private static func isOn(_ on: Bool) -> Bool { on }
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(1 - min(Double(abs(dismissDrag)) / 500, 0.5)).ignoresSafeArea()
-            if let image {
-                ZoomablePhoto(image: image.image, zoomed: $zoomed)
-                    .offset(y: dismissDrag)
-                    .accessibilityLabel(Copy.Media.webpViewerA11y(name))
-                    .accessibilityAddTraits(.isImage)
-            } else {
-                ProgressView().controlSize(.large).tint(.white)
-            }
-            #if os(macOS)
-            VStack {
-                HStack {
-                    CloseButton(cancels: true, action: close)
-                    Spacer()
-                }
-                Spacer()
-            }
-            .padding(.leading, 12)
-            .padding(.top, 8)
-            #else
-            VStack {
-                HStack {
+        DuoMediaOverlay(edge: .bottom) { isSeparated in
+            if isSeparated {
+                VStack(spacing: 12) {
+                    Spacer(minLength: 0)
                     Button(action: close) {
-                        Image(systemName: Symbol.close)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(CobaltColor.badgeInk)
-                            .frame(width: 34, height: 34)
-                            .background(CobaltColor.badgeBack, in: Circle())
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
+                        Label(Copy.Media.exitFullScreen, systemImage: Symbol.close)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.cobaltSecondary(fullWidth: false))
                     .keyboardShortcut(.cancelAction)
-                    .accessibilityLabel(Copy.Media.exitFullScreen)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+            } else {
+                VStack {
+                    HStack {
+                        CloseButton(cancels: true, action: close)
+                            .accessibilityLabel(Copy.Media.exitFullScreen)
+                        Spacer()
+                    }
                     Spacer()
                 }
-                Spacer()
+                .padding(.leading, 12)
+                .padding(.top, 8)
+                .background(alignment: .top) {
+                    MediaEdgeVignette(edge: .top, height: 88, intensity: 0.42)
+                }
             }
-            .padding(.leading, 12)
-            .padding(.top, 8)
-            #endif
+        } media: {
+            ZStack {
+                Color.black.opacity(1 - min(Double(abs(dismissDrag)) / 500, 0.5)).ignoresSafeArea()
+                if let image {
+                    ZoomablePhoto(image: image.image, zoomed: $zoomed)
+                        .offset(y: dismissDrag)
+                        .accessibilityLabel(Copy.Media.webpViewerA11y(name))
+                        .accessibilityAddTraits(.isImage)
+                } else {
+                    ProgressView().controlSize(.large).tint(.white)
+                }
+            }
         }
         .contentShape(Rectangle())
         // a swipe down closes, until the picture is zoomed (then the drag pans it)

@@ -58,8 +58,6 @@ struct SevenTvUploadPage: View {
     private var library: LibraryModel { tab.model.library }
     private var pictures: [SevenTvLibraryPicture] { SevenTvLibraryPicture.all(in: library.posts) }
 
-    private var columns: [GridItem] { [GridItem(.adaptive(minimum: 92), spacing: 10)] }
-
     var body: some View {
         let uploaded = store.uploadedFileIDs
         ScrollView {
@@ -209,7 +207,7 @@ struct SevenTvUploadPage: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         } else {
-            LazyVGrid(columns: columns, spacing: 10) {
+            DuoAdaptiveGrid(minItemWidth: 92, spacing: 10) {
                 ForEach(pictures) { picture in
                     SevenTvLibraryTile(picture: picture, onSevenTv: uploaded.contains(picture.file.id)) { tap(picture) }
                         .disabled(!store.canUpload && !picking)

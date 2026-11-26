@@ -80,25 +80,26 @@ struct PaneChrome: View {
 
     @ViewBuilder
     private func header(_ more: [PaneAction], floating: Bool) -> some View {
-        Group {
+        MediaGlassGroup(spacing: 8) {
             if let halves = headerHalves {
                 // nothing on the hinge (split), nothing over the hero's edge (wide: the media is the left half): span on
                 // the left, the label centred on the right half with the closes
                 PaneHalves(hinge: halves) {
                     HStack { spanButton; Spacer(minLength: 0) }
-                    ZStack {
-                        contextLabel(floating: floating).padding(.horizontal, 100)
-                        HStack(spacing: 8) { Spacer(minLength: 0); trailing(more) }
-                    }
-                }
-            } else {
-                ZStack {
-                    contextLabel(floating: floating).padding(.horizontal, 110)
                     HStack(spacing: 8) {
-                        spanButton
+                        Spacer(minLength: 0)
+                        contextLabel(floating: floating)
                         Spacer(minLength: 0)
                         trailing(more)
                     }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    spanButton
+                    Spacer(minLength: 4)
+                    contextLabel(floating: floating)
+                    Spacer(minLength: 4)
+                    trailing(more)
                 }
             }
         }
@@ -124,11 +125,11 @@ struct PaneChrome: View {
         if floating {
             Text(Copy.Pane.context(item))
                 .font(Font.cobalt(12, .semibold, relativeTo: .caption))
-                .foregroundStyle(CobaltColor.text)
+                .foregroundStyle(.white)
                 .lineLimit(1)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .glassEffect(.regular, in: .capsule)
+                .mediaGlassCapsule(interactive: false)
                 .accessibilityHidden(true)                      // the container's label already says where this is
         } else {
             Text(Copy.Pane.context(item))
@@ -158,7 +159,8 @@ struct PaneChrome: View {
         let spanned = pane.state == .span
         let title = spanned ? Copy.Pane.unspan : Copy.Pane.span
         return Button { pane.toggleSpan() } label: {
-            Image(systemName: spanned ? Symbol.Pane.unspan : Symbol.Pane.span)
+            Label(title, systemImage: spanned ? Symbol.Pane.unspan : Symbol.Pane.span)
+                .labelStyle(.iconOnly)
                 .font(.system(size: Platform.isMac ? 12 : 14, weight: .semibold))
         }
         .buttonStyle(.glass)
@@ -177,7 +179,8 @@ struct PaneChrome: View {
             Menu {
                 PaneActionMenuItems(actions: more, offline: offline)
             } label: {
-                Image(systemName: Symbol.Pane.more)
+                Label(Copy.Pane.more, systemImage: Symbol.Pane.more)
+                    .labelStyle(.iconOnly)
                     .font(.system(size: Platform.isMac ? 13 : 14, weight: .semibold))
                     .frame(width: Platform.isMac ? 14 : 18, height: Platform.isMac ? 14 : 18)
             }

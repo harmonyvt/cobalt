@@ -18,7 +18,7 @@ struct CollectionFolderGrid: View {
     let open: (ShareCollection) -> Void
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+        DuoAdaptiveGrid(minItemWidth: 150, spacing: 10) {
             ForEach(controller.shownCollections) { collection in
                 Button { open(collection) } label: {
                     CollectionFolderCard(collection: collection, links: store.sets(in: collection))

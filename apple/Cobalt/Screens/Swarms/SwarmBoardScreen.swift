@@ -163,7 +163,7 @@ struct SwarmBoardScreen: View {
     }
 
     private func cards(_ board: SwarmBoard) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: cardMinimum), spacing: 12, alignment: .top)], spacing: 12) {
+        DuoAdaptiveGrid(minItemWidth: cardMinimum, spacing: 12, alignment: .leading) {
             ForEach(board.rows) { row in
                 Button { picked = row } label: {
                     SwarmBoardCard(row: row)
@@ -337,7 +337,10 @@ struct SwarmBoardDetail: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button(Copy.Swarms.done) { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    DuoToolbarButton(title: Copy.Swarms.done, systemImage: "checkmark") { dismiss() }
+                }
+                .duoVisibilityPriority(.high)
             }
         }
         #if os(macOS)

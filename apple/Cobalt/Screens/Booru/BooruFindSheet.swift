@@ -77,7 +77,10 @@ struct BooruFindSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button(Copy.Booru.done) { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    DuoToolbarButton(title: Copy.Booru.done, systemImage: "checkmark") { dismiss() }
+                }
+                .duoVisibilityPriority(.high)
             }
         }
         .task { await run() }

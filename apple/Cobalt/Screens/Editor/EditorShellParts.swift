@@ -289,7 +289,6 @@ struct EditorShellRenderButton: View {
             .foregroundStyle(CobaltColor.onText)
             .padding(.horizontal, 16)
             .frame(height: 34)
-            .background(CobaltColor.text, in: Capsule())
             .glassEffect(.regular.tint(CobaltColor.text).interactive(), in: .capsule)
             .frame(minHeight: Metrics.hit)
             .contentShape(Rectangle())

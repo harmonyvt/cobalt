@@ -44,6 +44,7 @@ struct ImageCropSheet: View {
     var secondary: ImageCropAction?
     let close: () -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var original: ImageCropPicture?
     @State private var small: ImageCropPicture?
     @State private var shown: ImageCropPicture?
@@ -64,12 +65,13 @@ struct ImageCropSheet: View {
 
     @ViewBuilder
     private var content: some View {
-        if Platform.isMac {
+        if Platform.isMac || sizeClass == .regular {
             VStack(alignment: .leading, spacing: 14) {
                 header
-                HStack(alignment: .top, spacing: 18) {
+                DuoSplit(ratio: 0.62, spacing: 18) {
                     stage.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    sidebar.frame(width: 248)
+                } secondary: {
+                    sidebar.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             }
         } else {

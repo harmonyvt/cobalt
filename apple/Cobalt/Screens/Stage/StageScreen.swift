@@ -150,15 +150,18 @@ private struct StageBody: View {
             StageHeader(stage: stage, controller: controller, showsCopy: true)
                 .padding(.horizontal, Metrics.gutter)
                 .padding(.vertical, 10)
-            HStack(alignment: .top, spacing: 16) {
+            DuoSplit(ratio: 0.58, spacing: 16) {
                 ScrollView {
                     VStack(spacing: 14) {
                         stale
                         StageSaveBar(store: store)
                         controls
                     }
+                    .padding(.leading, Metrics.gutter)
+                    .padding(.trailing, 8)
                     .padding(.bottom, 20)
                 }
+            } secondary: {
                 ScrollView {
                     VStack(spacing: 14) {
                         StageTwitchCard(model: model, stage: stage, controller: controller)
@@ -167,11 +170,11 @@ private struct StageBody: View {
                         StageFeedCard(store: store)
                         StageLinksCard(stage: stage, controller: controller)
                     }
+                    .padding(.leading, 8)
+                    .padding(.trailing, Metrics.gutter)
                     .padding(.bottom, 20)
                 }
-                .frame(width: 360)
             }
-            .padding(.horizontal, Metrics.gutter)
         }
     }
 

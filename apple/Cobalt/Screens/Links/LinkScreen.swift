@@ -117,11 +117,13 @@ struct LinkScreen: View {
     private var toolbarItems: some ToolbarContent {
         if editing {
             ToolbarItem(placement: .cancellationAction) {
-                Button(Copy.LinkEdit.cancel) { cancelEdit() }
+                DuoToolbarButton(title: Copy.LinkEdit.cancel, systemImage: "xmark", role: .cancel) { cancelEdit() }
             }
+            .duoVisibilityPriority(.high)
         } else {
             if canEdit, !inSheet {
                 ToolbarItem(placement: .primaryAction) { editButton }
+                    .duoVisibilityPriority(.high)
             }
         }
     }

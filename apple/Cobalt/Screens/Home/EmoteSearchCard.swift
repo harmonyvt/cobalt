@@ -72,7 +72,7 @@ struct EmoteSearchCard: View {
             sortChips
             caption
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 12)], spacing: 12) {
+                DuoAdaptiveGrid(minItemWidth: 72, spacing: 12) {
                     if showingHits {
                         ForEach(hits) { hit in
                             tile(

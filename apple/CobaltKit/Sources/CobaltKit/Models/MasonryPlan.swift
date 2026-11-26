@@ -27,6 +27,17 @@ public struct MasonryPlan: Equatable, Sendable {
         return max(2, Int((usable / per).rounded(.down)))
     }
 
+    /// Fold-safe column count for iPhone Duo and regular-width displays: snaps to even columns (2, 4, 6…)
+    /// when `isRegular` is true so mosaic tiles never straddle the center fold crease.
+    public static func duoColumns(
+        width: Double, minTile: Double, gap: Double, margin: Double, accessibility: Bool, isRegular: Bool
+    ) -> Int {
+        if accessibility { return 2 }
+        return DuoGrid.columnCount(
+            forWidth: width, minItemWidth: minTile, spacing: gap, margin: margin,
+            isRegular: isRegular, minColumns: 2)
+    }
+
     /// `aspects` are height ÷ width of each face, newest first.
     public static func make(aspects: [Double], width: Double, columns: Int, gap: Double, margin: Double) -> MasonryPlan {
         let n = max(1, columns)

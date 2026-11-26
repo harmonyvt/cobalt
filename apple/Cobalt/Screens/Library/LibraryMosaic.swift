@@ -62,6 +62,7 @@ struct LibraryMosaic: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.lifecycle) private var lifecycle
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     private static let gap: Double = 6
     private static let margin: Double = 12
@@ -100,8 +101,10 @@ struct LibraryMosaic: View {
     /// The plan and each column's tiles, made again only when the posts, their aspects, the width or the column
     /// count changed: a tick or a light redraws tiles, not the layout.
     private func layout(width: Double) -> MosaicLayout {
-        let columns = MasonryPlan.columns(
-            width: width, minTile: minTile, gap: Self.gap, margin: Self.margin, accessibility: typeSize.isAccessibilitySize)
+        let columns = MasonryPlan.duoColumns(
+            width: width, minTile: minTile, gap: Self.gap, margin: Self.margin,
+            accessibility: typeSize.isAccessibilitySize,
+            isRegular: sizeClass == .regular || Platform.isMac)
         let key = MosaicLayout.Key(
             skeleton: skeleton, ids: skeleton ? [] : rows.map(\.id), aspects: aspects, width: width, columns: columns)
         if let cached = layoutCache.layout, cached.key == key { return cached }

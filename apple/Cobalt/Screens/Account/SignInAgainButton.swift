@@ -54,18 +54,16 @@ struct SignInAgainButton: View {
     }
 }
 
-/// iPhone and iPad: "sign in again" floats bottom-right over whatever screen is showing, clear of the tab bar (which sits at
-/// the bottom only in the compact layout; the iPad's sidebar-adaptable bar is at the top).
+/// iPhone and iPad: "sign in again" floats bottom-right over whatever screen is showing, relying on system
+/// `safeAreaInset` so it clears both the bottom tab bar and iPhone Duo's asymmetric trailing vertical rail.
 struct SignInAgainPin: ViewModifier {
     let model: AppModel
-    /// The bottom tab bar is showing (compact width).
-    let overTabBar: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .bottomTrailing) {
+            .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
                 if model.signInPinned {
                     SignInAgainButton(model: model)
                         .controlSize(.large)
@@ -74,8 +72,7 @@ struct SignInAgainPin: ViewModifier {
                         #endif
                         .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
                         .padding(.trailing, 16)
-                        // the floating iOS 26 tab bar is about 62 pt tall above the home indicator's inset
-                        .padding(.bottom, overTabBar ? 74 : 20)
+                        .padding(.bottom, 12)
                         .transition(reduceMotion ? .opacity : .scale(scale: 0.6, anchor: .bottomTrailing).combined(with: .opacity))
                 }
             }

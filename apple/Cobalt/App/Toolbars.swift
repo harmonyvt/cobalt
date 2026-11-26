@@ -92,13 +92,14 @@ extension EnvironmentValues {
 struct PhoneGearItem: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) { PhoneGearButton() }
+            .duoVisibilityPriority(.high)
     }
 }
 
-/// A root screen's trailing bar items on the iPhone: its own `leading` control (optional), the activity pill, the settings gear.
-/// Use it in place of `QueueToolbarItem(model:)` on a screen that is a root of one of the four tabs and brings its own
-/// navigation stack (the library, iPhone only: `UIDevice.current.userInterfaceIdiom == .phone`); the other three tabs get theirs
-/// from the shell, which sets `phoneHeaderOwnsActivity` so the screen's own `QueueToolbarItem` is silent.
+/// A root screen's trailing bar items in compact width: its own `leading` control (optional), the activity pill,
+/// the settings gear. Use it in place of `QueueToolbarItem(model:)` on a compact root screen that brings its own
+/// navigation stack (the library); the other three tabs get theirs from the shell, which sets
+/// `phoneHeaderOwnsActivity` so the screen's own `QueueToolbarItem` is silent.
 ///
 ///     .toolbar {
 ///         PhoneRootToolbar(model: model) { Menu { ... } label: { Label("more", systemImage: "ellipsis").labelStyle(.iconOnly) } }
@@ -123,8 +124,10 @@ struct PhoneRootToolbar: ToolbarContent {
     var body: some ToolbarContent {
         if let leading {
             ToolbarItem(placement: .topBarTrailing) { leading }
+                .duoVisibilityPriority(.automatic)
         }
         ToolbarItem(placement: .topBarTrailing) { ActivityPill(model: model) }
+            .duoVisibilityPriority(.high)
         PhoneGearItem()
     }
 }

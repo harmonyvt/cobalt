@@ -119,9 +119,12 @@ struct PhoneTabs<Screen: View>: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button(Copy.PhoneNav.done) { nav.settingsShown = false }
-                            .accessibilityIdentifier("phone.settings.done")
+                        DuoToolbarButton(title: Copy.PhoneNav.done, systemImage: "checkmark") {
+                            nav.settingsShown = false
+                        }
+                        .accessibilityIdentifier("phone.settings.done")
                     }
+                    .duoVisibilityPriority(.high)
                 }
         }
         .presentationDetents([.large])

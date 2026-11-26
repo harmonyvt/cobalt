@@ -452,7 +452,6 @@ struct QueueRow: View {
         }
         .padding(EdgeInsets(top: 9, leading: 12, bottom: 10, trailing: 10))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CobaltColor.bg.opacity(0.8), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture { if actions.contains(.open) { perform(.open) } }

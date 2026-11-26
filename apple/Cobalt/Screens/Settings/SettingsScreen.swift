@@ -111,7 +111,12 @@ struct SettingsScreen: View {
     PreviewHost(.happy, tab: .settings) { model in
         NavigationStack {
             SettingsScreen(model: model)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("done") {} } }
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        DuoToolbarButton(title: Copy.PhoneNav.done, systemImage: "checkmark") {}
+                    }
+                    .duoVisibilityPriority(.high)
+                }
         }
     }
 }

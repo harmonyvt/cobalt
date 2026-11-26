@@ -174,11 +174,15 @@ private struct ActivityRow: View {
                     HStack(alignment: .top, spacing: 8) {
                         JobStepperView(status: status, collapsed: !expanded)
                         Button { withAnimation(Motion.rows) { expanded.toggle() } } label: {
-                            Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(CobaltColor.caption)
-                                .frame(width: 32, height: 24)
-                                .contentShape(Rectangle())
+                            Label(
+                                expanded ? Copy.Activity.hideSteps : Copy.Activity.showSteps,
+                                systemImage: expanded ? "chevron.up" : "chevron.down"
+                            )
+                            .labelStyle(.iconOnly)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(CobaltColor.caption)
+                            .frame(width: Metrics.hit, height: Metrics.hit)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(expanded ? Copy.Activity.hideSteps : Copy.Activity.showSteps)
