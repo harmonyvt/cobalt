@@ -130,8 +130,8 @@ struct EmoteEditorStage: View {
                 .font(CobaltType.captionSmall.monospacedDigit())
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.black.opacity(0.72), in: Capsule())
+                .padding(.vertical, 5)
+                .mediaGlassCapsule(interactive: false)
         }
     }
 }
@@ -156,12 +156,12 @@ struct SourceStatus: View {
 private struct RemakingChip: View {
     var body: some View {
         HStack(spacing: 6) {
-            ProgressView().controlSize(.mini)
+            ProgressView().controlSize(.mini).tint(.white)
             Text(Copy.EmoteEditor.remaking).font(CobaltType.badge).foregroundStyle(.white)
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(Color.black.opacity(0.7), in: Capsule())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .mediaGlassCapsule(interactive: false)
         .transition(.opacity)
         .accessibilityElement(children: .combine)
     }

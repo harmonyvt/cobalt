@@ -208,7 +208,7 @@ struct BooruScreen: View {
 
     private var grid: some View {
         VStack(spacing: 12) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: tier == .compact ? 108 : 150), spacing: 4)], spacing: 4) {
+            DuoAdaptiveGrid(minItemWidth: tier == .compact ? 108 : 150, spacing: 4) {
                 ForEach(store.posts) { post in
                     BooruTile(post: post, covered: post.blur && !store.revealed.contains(post.id)) {
                         if post.blur && !store.revealed.contains(post.id) {

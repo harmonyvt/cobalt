@@ -122,10 +122,11 @@ struct MediaDetail: View {
     /// `service · ref`; a file's name without its extension; `cobalt`), through `MediaTitle.resolve`.
     private func title(_ item: MediaItem) -> String { item.titleText }
 
-    /// The iPhone's detail: its controls are the pane's grid, over the actions it shares with `PanePostPage`.
-    private var isPhone: Bool {
+    /// Compact width (iPhone, Duo Outer, narrow Split View): controls use the pane's compact action grid over
+    /// the shared post actions (`PostActionKit`).
+    private var isCompactDetail: Bool {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone
+        return sizeClass == .compact
         #else
         return false
         #endif
@@ -154,7 +155,7 @@ struct MediaDetail: View {
             selection: Binding(
                 get: { controller.tabID(in: item) },
                 set: { id in withAnimation(Motion.card) { controller.selectTab(id, in: item) } }),
-            leave: { dismiss() }, kit: isPhone ? kit : nil)
+            leave: { dismiss() }, kit: isCompactDetail ? kit : nil)
         Group {
             if gone {
                 Text(Copy.Media.deleted)
@@ -166,6 +167,7 @@ struct MediaDetail: View {
                 CompactDetail(c: context, maxSegments: width >= DetailWidth.sixTabs ? 6 : 4)
             }
         }
+        .duoToolbarCompression(.prefersToolbarItems)
         .environment(\.subtitles, subtitlesShown(item, selected) ? subtitles : nil)
         // the UI tests (apple/CobaltUITests) tell the pushed detail by this
         .accessibilityElement(children: .contain)

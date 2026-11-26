@@ -22,11 +22,17 @@ struct SkyMapScreen: View {
         let theme = SkyTheme.of(scheme)
         GeometryReader { geo in
             let safe = geo.safeAreaInsets
-            let insets = SkyInsets(top: safe.top + 88, bottom: safe.bottom + 24, side: 28)
+            let insets = SkyInsets(
+                top: safe.top + 88,
+                bottom: safe.bottom + 24,
+                leading: safe.leading + 28,
+                trailing: safe.trailing + 28)
             // the sky runs under the status bar and the home indicator; the header stays inside the safe area
             ZStack(alignment: .topLeading) {
                 SkyMapView(sky: sky, camera: camera, insets: insets, onOpen: onOpen)
                     .ignoresSafeArea()
+                MediaEdgeVignette(edge: .top, height: 112, intensity: 0.34)
+                    .ignoresSafeArea(edges: .top)
                 message(theme: theme)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 header(theme: theme)
@@ -67,34 +73,38 @@ struct SkyMapScreen: View {
             .allowsHitTesting(false)
             .motion(Motion.rows, value: lines)
             Spacer(minLength: 8)
-            if !camera.viewport.isHome {
-                Button { camera.home(animated: !reduceMotion) } label: {
-                    Image(systemName: Symbol.SkyMap.reset)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(theme.label.color())
-                        .frame(width: 34, height: 34)
-                        .background(theme.tip.color(theme.tipAlpha), in: Circle())
-                        .overlay { Circle().strokeBorder(theme.line.color(theme.lineAlpha), lineWidth: 1) }
-                        .contentShape(Circle())
+            MediaGlassGroup(spacing: 8) {
+                HStack(spacing: 8) {
+                    if !camera.viewport.isHome {
+                        Button { camera.home(animated: !reduceMotion) } label: {
+                            Label(Copy.SkyMap.resetView, systemImage: Symbol.SkyMap.reset)
+                                .labelStyle(.iconOnly)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(theme.label.color())
+                                .frame(width: Metrics.hit, height: Metrics.hit)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .mediaGlassCircle()
+                        .accessibilityLabel(Copy.SkyMap.resetView)
+                        .help(Copy.SkyMap.resetHint)
+                        .transition(.opacity)
+                    }
+                    Button(action: onClose) {
+                        Label(Copy.SkyMap.close, systemImage: Symbol.SkyMap.close)
+                            .labelStyle(.iconOnly)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(theme.label.color())
+                            .frame(width: Metrics.hit, height: Metrics.hit)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .mediaGlassCircle()
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityLabel(Copy.SkyMap.close)
+                    .help(Copy.SkyMap.close)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Copy.SkyMap.resetView)
-                .help(Copy.SkyMap.resetHint)
-                .transition(.opacity)
             }
-            Button(action: onClose) {
-                Image(systemName: Symbol.SkyMap.close)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.label.color())
-                    .frame(width: 34, height: 34)
-                    .background(theme.tip.color(theme.tipAlpha), in: Circle())
-                    .overlay { Circle().strokeBorder(theme.line.color(theme.lineAlpha), lineWidth: 1) }
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.cancelAction)
-            .accessibilityLabel(Copy.SkyMap.close)
-            .help(Copy.SkyMap.close)
         }
         .motion(Motion.rows, value: camera.viewport.isHome)
     }

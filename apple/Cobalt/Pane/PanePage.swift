@@ -111,7 +111,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
             } else if fillsShelf {
-                HStack(spacing: 0) {
+                DuoSplit(ratio: 0.5) {
                     VStack(spacing: 0) {
                         ZStack { parts }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -125,6 +125,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity)
+                } secondary: {
                     VStack(alignment: .leading, spacing: 14) {
                         titleBlock
                         PaneShelf(stacked: true) { shelf }
@@ -134,10 +135,11 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             } else {
-                HStack(spacing: 0) {
+                DuoSplit(ratio: 0.5) {
                     ZStack { parts }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
+                } secondary: {
                     ScrollView { column(stackedShelf: false).padding(.top, 16).padding(.bottom, 24) }
                         .frame(maxWidth: .infinity)
                 }

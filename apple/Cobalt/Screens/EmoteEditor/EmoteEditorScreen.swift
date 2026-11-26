@@ -125,9 +125,9 @@ private struct EmoteEditorContent: View {
 
     // MARK: layouts
 
-    /// From 700 pt: the result on one side, the tabs on the other, the seam between.
+    /// From 700 pt (or folded Tabletop/Book on iPhone Duo): the result on one side, the controls on the other.
     private var spread: some View {
-        HStack(spacing: 0) {
+        DuoSplit(ratio: 0.48) {
             VStack(alignment: .leading, spacing: 12) {
                 header
                 EmoteEditorStage(editor: editor, loader: loader, playback: playback, crop: crop)
@@ -140,7 +140,7 @@ private struct EmoteEditorContent: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            EmoteSeam(active: editor.remaking)
+        } secondary: {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     EmoteTabBar(editor: editor)

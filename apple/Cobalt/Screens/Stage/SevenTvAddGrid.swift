@@ -44,7 +44,7 @@ struct SevenTvAddGrid: View {
             sortChips
             caption(editable: editable)
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 12)], spacing: 12) {
+                DuoAdaptiveGrid(minItemWidth: 72, spacing: 12) {
                     ForEach(hits) { hit in
                         SevenTvHitTile(
                             hit: hit, inSet: members.contains(hit.id), busy: emoteSet.busy.contains(hit.id), editable: editable

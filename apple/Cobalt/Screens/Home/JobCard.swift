@@ -271,8 +271,6 @@ struct JobCard: View {
         }
         .padding(EdgeInsets(top: 9, leading: 12, bottom: 10, trailing: 10))
         .frame(maxWidth: .infinity, alignment: .leading)
-        // a planet passing behind must not make the words hard to read: the glass sits on a quiet page-coloured wash
-        .background(CobaltColor.bg.opacity(0.8), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture { if f.kind != .failed || f.failureOpens { onOpen() } }

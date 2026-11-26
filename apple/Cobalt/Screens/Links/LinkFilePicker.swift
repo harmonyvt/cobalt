@@ -143,7 +143,7 @@ struct LinkFilePicker: View {
                 .padding(.top, 24)
         } else {
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96, maximum: 160), spacing: 6)], spacing: 6) {
+                DuoAdaptiveGrid(minItemWidth: 96, spacing: 6) {
                     ForEach(list) { candidate in
                         LinkPickTile(
                             candidate: candidate, number: number(of: candidate), full: picks.count >= room

@@ -832,22 +832,35 @@ struct TwitchPlayer: View {
             }
 
             if showsDelay, isHolder {
-                VStack(spacing: 0) {
-                    HStack(alignment: .top, spacing: 8) {
-                        TwitchModeMenu(host: host)
-                        Spacer(minLength: 8)
-                        TwitchDelayBadge(host: host)
+                ZStack {
+                    VStack(spacing: 0) {
+                        MediaEdgeVignette(edge: .top, height: 64, intensity: 0.34)
+                        Spacer(minLength: 0)
+                        if isNative, (showsNativeControls || (!host.isPlaying && !host.isLoading && !host.isOffline)) {
+                            MediaEdgeVignette(edge: .bottom, height: 80, intensity: 0.42)
+                        }
                     }
-                    .padding(8)
+                    .allowsHitTesting(false)
 
-                    Spacer(minLength: 0)
-
-                    if isNative, (showsNativeControls || (!host.isPlaying && !host.isLoading && !host.isOffline)) {
-                        TwitchNativeControlBar(host: host) {
-                            scheduleHideControls()
+                    VStack(spacing: 0) {
+                        MediaGlassGroup(spacing: 8) {
+                            HStack(alignment: .top, spacing: 8) {
+                                TwitchModeMenu(host: host)
+                                Spacer(minLength: 8)
+                                TwitchDelayBadge(host: host)
+                            }
                         }
                         .padding(8)
-                        .transition(.opacity)
+
+                        Spacer(minLength: 0)
+
+                        if isNative, (showsNativeControls || (!host.isPlaying && !host.isLoading && !host.isOffline)) {
+                            TwitchNativeControlBar(host: host) {
+                                scheduleHideControls()
+                            }
+                            .padding(8)
+                            .transition(.opacity)
+                        }
                     }
                 }
             }
@@ -877,14 +890,14 @@ struct TwitchPlayer: View {
             Text(Copy.Twitch.offline)
                 .font(Font.cobalt(12, .semibold))
                 .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(.black.opacity(0.6), in: Capsule())
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .mediaGlassCapsule(interactive: false)
         } else if host.isLoading || host.isBuffering {
             ProgressView()
                 .tint(.white)
-                .padding(10)
-                .background(.black.opacity(0.45), in: Circle())
+                .padding(12)
+                .mediaGlassCircle(interactive: false)
         } else if host.isAudioOnly {
             HStack(spacing: 6) {
                 Image(systemName: Symbol.Twitch.audioOnly)
@@ -893,9 +906,9 @@ struct TwitchPlayer: View {
                     .font(Font.cobalt(12, .semibold))
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.black.opacity(0.55), in: Capsule())
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .mediaGlassCapsule(interactive: false)
         }
     }
 
@@ -990,16 +1003,16 @@ struct TwitchModeMenu: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Image(systemName: pillIcon)
                     .font(.system(size: 10, weight: .bold))
                 Text(pillLabel)
                     .font(Font.cobalt(11, .semibold))
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.black.opacity(0.55), in: Capsule())
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .mediaGlassCapsule()
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Copy.Twitch.playerMode)
@@ -1008,66 +1021,74 @@ struct TwitchModeMenu: View {
     }
 }
 
-/// Translucent bottom HUD strip shown on tap in low-latency native mode.
+/// Clear Liquid Glass bottom HUD strip shown on tap in low-latency native mode.
 private struct TwitchNativeControlBar: View {
     let host: TwitchPlayerHost
     let onInteract: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button {
-                host.setPaused(host.isPlaying)
-                onInteract()
-            } label: {
-                Image(systemName: host.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
-
-            Button {
-                host.toggleMute()
-                onInteract()
-            } label: {
-                Image(systemName: host.isMuted ? Symbol.Twitch.muted : Symbol.Twitch.unmuted)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(host.isMuted ? Copy.Twitch.unmute : Copy.Twitch.mute)
-
-            Spacer(minLength: 0)
-
-            if !host.variants.isEmpty {
-                Menu {
-                    ForEach(host.variants) { variant in
-                        Button {
-                            host.selectVariant(variant.id)
-                            onInteract()
-                        } label: {
-                            if variant.id == host.selectedVariantID {
-                                Label(variant.shortLabel, systemImage: "checkmark")
-                            } else {
-                                Text(variant.shortLabel)
-                            }
-                        }
-                    }
+        MediaGlassGroup(spacing: 8) {
+            HStack(spacing: 4) {
+                Button {
+                    host.setPaused(host.isPlaying)
+                    onInteract()
                 } label: {
-                    Text(host.selectedVariant?.shortLabel ?? Copy.Twitch.quality)
-                        .font(Font.cobalt(11, .semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.white.opacity(0.14), in: Capsule())
+                    Label(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play,
+                          systemImage: host.isPlaying ? "pause.fill" : "play.fill")
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: Metrics.hit, height: Metrics.hit)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(Copy.Twitch.quality)
+                .accessibilityLabel(host.isPlaying ? Copy.Twitch.pause : Copy.Twitch.play)
+
+                Button {
+                    host.toggleMute()
+                    onInteract()
+                } label: {
+                    Label(host.isMuted ? Copy.Twitch.unmute : Copy.Twitch.mute,
+                          systemImage: host.isMuted ? Symbol.Twitch.muted : Symbol.Twitch.unmuted)
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: Metrics.hit, height: Metrics.hit)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(host.isMuted ? Copy.Twitch.unmute : Copy.Twitch.mute)
+
+                Spacer(minLength: 0)
+
+                if !host.variants.isEmpty {
+                    Menu {
+                        ForEach(host.variants) { variant in
+                            Button {
+                                host.selectVariant(variant.id)
+                                onInteract()
+                            } label: {
+                                if variant.id == host.selectedVariantID {
+                                    Label(variant.shortLabel, systemImage: "checkmark")
+                                } else {
+                                    Text(variant.shortLabel)
+                                }
+                            }
+                        }
+                    } label: {
+                        Text(host.selectedVariant?.shortLabel ?? Copy.Twitch.quality)
+                            .font(Font.cobalt(11, .semibold))
+                            .padding(.horizontal, 10)
+                            .frame(minHeight: 32)
+                            .mediaGlassCapsule()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Copy.Twitch.quality)
+                }
             }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .mediaGlassCapsule(interactive: false)
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.black.opacity(0.6), in: Capsule())
     }
 }
 
@@ -1093,9 +1114,9 @@ struct TwitchDelayBadge: View {
                     }
                 }
                 .foregroundStyle(.white)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.black.opacity(0.55), in: Capsule())
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .mediaGlassCapsule()
             }
             .buttonStyle(.plain)
             .accessibilityLabel(host.isBehind ? Copy.Twitch.behind(delay) : Copy.Twitch.delay(delay))

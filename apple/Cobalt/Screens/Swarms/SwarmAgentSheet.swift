@@ -31,13 +31,17 @@ private struct AgentPresenter: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        HStack(spacing: 0) {
-            content.frame(maxWidth: .infinity)
+        Group {
             if wide, agent != nil {
-                Divider()
-                SwarmAgentSheet(model: model, agent: $agent, wide: true, close: close)
-                    .frame(width: 340)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                DuoSplit(ratio: 0.62) {
+                    content.frame(maxWidth: .infinity, maxHeight: .infinity)
+                } secondary: {
+                    SwarmAgentSheet(model: model, agent: $agent, wide: true, close: close)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            } else {
+                content.frame(maxWidth: .infinity)
             }
         }
         .motion(Motion.card, value: agent != nil && wide)

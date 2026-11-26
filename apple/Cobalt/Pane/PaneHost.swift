@@ -32,9 +32,11 @@ struct PaneHost<Content: View>: View {
 
     @Environment(Pane.self) private var pane
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.lifecycle) private var lifecycle
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @SceneStorage("pane") private var saved: Data?
     @State private var size: CGSize = .zero
+    @State private var reservedRegions: DuoReservedRegions = .empty
     @State private var edgeTargeted = false
     /// Work waiting for the compact sheet to finish going down (`PaneAfterDismiss`).
     @State private var afterDismiss = PaneAfterDismiss()
@@ -45,25 +47,21 @@ struct PaneHost<Content: View>: View {
         self.content = content()
     }
 
-    private var idiom: PanePlacement.Idiom {
-        #if os(macOS)
-        return .mac
-        #else
-        return UIDevice.current.userInterfaceIdiom == .pad ? .pad : .phone
-        #endif
-    }
-
     private var measured: Bool { size.width > 0 && size.height > 0 }
 
-    /// Until iOS reports the Duo's hinge there is no display feature to pass (`PanePlacement.resolve` takes one).
+    /// Resolves placement from size class, window size, and live iOS 27.1+ `ReservedRegion(.division)`.
     ///
     /// In the background iOS lays the window out again at other sizes for the app switcher's snapshots. The placement the
     /// owner left stays meanwhile: a flip to `.compact` and back closed and reopened the pane (and the library's select
     /// actions with it), a 0.5-1 s main-thread stall on every trip away in the 8.40 sessions. Back in front it is measured
     /// again, so a fold made while away still lands.
     private var placement: PanePlacement {
-        guard measured, scenePhase != .background else { return pane.placement }
-        return PanePlacement.resolve(size: size, idiom: idiom, displayFeatureFrame: nil)
+        guard measured, lifecycle.phase != .background else { return pane.placement }
+        return PanePlacement.resolve(
+            size: size,
+            isRegular: sizeClass == .regular,
+            isMac: Platform.isMac,
+            displayFeatureFrame: reservedRegions.activeDivision)
     }
 
     /// The pane is drawn beside (or over) the tab, not in a sheet.
@@ -111,9 +109,12 @@ struct PaneHost<Content: View>: View {
         // typing in twitch chat. The window only changes shape on a fold, a rotation or a resize.
         .background {
             Color.clear
-                .onGeometryChange(for: CGSize.self) { $0.size } action: {
-                    size = $0
-                    pane.measure($0)
+                .onGeometryChange(for: PaneHostGeometry.self) { proxy in
+                    PaneHostGeometry(size: proxy.size, regions: DuoReservedRegions.readCompat(from: proxy))
+                } action: { measuredGeometry in
+                    size = measuredGeometry.size
+                    reservedRegions = measuredGeometry.regions
+                    pane.measure(measuredGeometry.size)
                 }
                 #if os(iOS)
                 .ignoresSafeArea(.keyboard)
@@ -248,6 +249,12 @@ struct PaneHost<Content: View>: View {
                 .accessibilityHidden(true)
         }
     }
+}
+
+/// Measured window geometry + active hardware reserved regions (`ReservedRegion(.division)`).
+private struct PaneHostGeometry: Equatable {
+    var size: CGSize
+    var regions: DuoReservedRegions
 }
 
 /// What the layout animation follows.

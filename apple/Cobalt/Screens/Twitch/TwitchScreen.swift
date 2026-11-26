@@ -206,7 +206,7 @@ private struct TwitchChannelList: View {
                 } else if store.following.isEmpty {
                     Text(Copy.Twitch.noneLive).foregroundStyle(CobaltColor.caption)
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 14)], alignment: .leading, spacing: 18) {
+                    DuoAdaptiveGrid(minItemWidth: 250, spacing: 14, rowSpacing: 18, alignment: .leading) {
                         ForEach(store.following) { s in
                             Button { watch(s.login) } label: { TwitchStreamCard(stream: s) }
                                 .buttonStyle(.plain)

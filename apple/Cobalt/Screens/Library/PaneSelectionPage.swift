@@ -145,7 +145,7 @@ struct PaneSelectionContent: View {
             }
         } else {
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
+                DuoAdaptiveGrid(minItemWidth: 76, spacing: 8) {
                     ForEach(Array(picks.enumerated()), id: \.element.id) { index, row in
                         SelectionThumb(row: row, number: index + 1, controller: controller, peeking: $peeking, side: nil)
                     }

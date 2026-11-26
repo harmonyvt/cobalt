@@ -634,11 +634,11 @@ private struct SevenTvWideLayout: View {
     let tab: SevenTvTabController
 
     var body: some View {
-        HStack(spacing: 0) {
+        DuoSplit(ratio: 0.36) {
             SevenTvMiddleColumn(tab: tab)
-                .frame(width: 280)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(CobaltColor.surface.opacity(0.5))
-            Rectangle().fill(CobaltColor.hairline).frame(width: 1)
+        } secondary: {
             SevenTvRightColumn(tab: tab)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

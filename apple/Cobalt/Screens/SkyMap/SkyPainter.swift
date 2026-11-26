@@ -30,11 +30,26 @@ struct SkyViewport: Equatable {
     }
 }
 
-/// The room the sky has on screen: the header sits over the top, a bar may sit under it.
+/// The room the sky has on screen: the header sits over the top, a vertical rail or bar may sit on the sides.
 struct SkyInsets: Equatable {
     var top: CGFloat = 0
     var bottom: CGFloat = 0
-    var side: CGFloat = 28
+    var leading: CGFloat = 28
+    var trailing: CGFloat = 28
+
+    init(top: CGFloat = 0, bottom: CGFloat = 0, side: CGFloat = 28) {
+        self.top = top
+        self.bottom = bottom
+        self.leading = side
+        self.trailing = side
+    }
+
+    init(top: CGFloat = 0, bottom: CGFloat = 0, leading: CGFloat = 28, trailing: CGFloat = 28) {
+        self.top = top
+        self.bottom = bottom
+        self.leading = leading
+        self.trailing = trailing
+    }
 }
 
 /// World (the unit square the model lays out in) to screen: fit the layout into the box, then the user's zoom and pan.
@@ -52,7 +67,7 @@ struct SkyFrame {
         let spanX = bounds.maxX - bounds.minX == 0 ? 1 : bounds.maxX - bounds.minX
         let spanY = bounds.maxY - bounds.minY == 0 ? 1 : bounds.maxY - bounds.minY
         let box = CGRect(
-            x: insets.side, y: insets.top, width: max(40, size.width - 2 * insets.side),
+            x: insets.leading, y: insets.top, width: max(40, size.width - insets.leading - insets.trailing),
             height: max(40, size.height - insets.top - insets.bottom))
         let fit = min(box.width / spanX, box.height / spanY)
         k = fit * viewport.zoom

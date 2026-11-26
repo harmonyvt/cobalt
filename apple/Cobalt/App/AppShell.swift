@@ -349,7 +349,7 @@ struct AppShell: View {
         } else {
             navigation
                 #if os(iOS)
-                .modifier(SignInAgainPin(model: model, overTabBar: tier == .compact))
+                .modifier(SignInAgainPin(model: model))
                 #else
                 .toolbar {
                     if model.signInPinned {
@@ -418,8 +418,8 @@ struct AppShell: View {
     @ViewBuilder
     private var iosTabs: some View {
         Group {
-            if UIDevice.current.userInterfaceIdiom == .phone {
-                // iPhone: capture, library, live and tools, no "more" (see `PhoneTabs`)
+            if sizeClass == .compact {
+                // Compact width (iPhone, Duo Outer, narrow Split View): four tabs, no "more" (see `PhoneTabs`)
                 PhoneTabs(model: model) { tab in
                     tabScreen(tab)
                 }
@@ -438,8 +438,6 @@ struct AppShell: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
-        // always expanded: a collapsed bar hid the other two tabs after any scroll (owner's live run)
-        .tabBarMinimizeBehavior(.never)
     }
     #endif
 

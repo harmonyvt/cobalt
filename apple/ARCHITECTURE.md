@@ -273,6 +273,82 @@ the first window appears), then `deploy/apple/layout-checks.sh` runs the UI chec
 Say where a new piece lives: "it lives for the window" (or the process, a view, a job); "it hears the app state from the
 listener"; "it takes a player from the pool".
 
+## Adaptive layout, iPhone Duo & Liquid Glass
+
+The app runs on iPhone, iPad, Mac, and **iPhone Duo** (Outer display, Inner Flat, Tabletop folded, Book folded; iOS 27.1+).
+These rules ensure every new screen automatically adapts across size classes, vertical-rail toolbars, center folds, and
+Liquid Glass without screen-by-screen heroics.
+
+### Rule 14: two size classes, never `userInterfaceIdiom` or orientation locks
+
+Layout branches on `@Environment(\.horizontalSizeClass)` (`.compact` vs `.regular`) and measured view width, never on
+`UIDevice.current.userInterfaceIdiom`, fixed orientation locks (`supportedInterfaceOrientations`), or hardware hinge
+angles. Never force `.tabBarMinimizeBehavior(.never)` on a `TabView`—the system manages tab minimization and vertical-rail
+placement on iPhone Duo.
+
+- Why: iPhone Duo transitions live between `.compact` (Outer) and `.regular` (Inner) while running; idiom checks freeze
+  unfolded views in phone chrome, and locking the tab bar collides with the iOS 27.1 trailing Vertical Controls side rail.
+- Enforced: `DuoDesignLintTests` rules `[idiom-lock]`, `[tab-bar-lock]`, and `[orientation-lock]` (with
+  `apple/duo-design-allowlist.txt` only for non-layout copy/hardware metadata).
+
+```swift
+// don't
+if UIDevice.current.userInterfaceIdiom == .phone { compactBody }
+TabView { ... }.tabBarMinimizeBehavior(.never)
+// do
+@Environment(\.horizontalSizeClass) private var sizeClass
+if sizeClass == .compact { compactBody } else { regularBody }
+```
+
+### Rule 15: every toolbar button carries an SF Symbol and survival priority
+
+On iPhone Duo (Outer display and Inner landscape), iOS 27.1 relocates toolbars onto a trailing vertical rail that renders
+icons (with titles as tooltips and overflow menu rows) and collapses items bottom-to-top when space tightens.
+
+- Every button inside `ToolbarItem` / `ToolbarItemGroup` MUST provide a `Label(title, systemImage:)`,
+  `Button(title, systemImage:)`, or `DuoToolbarButton(title:systemImage:)` — never a text-only `Button("Done")`.
+- Mark essential navigation/commit actions (Close, Done, Cancel, Edit, Activity pill) with `.duoVisibilityPriority(.high)`
+  and route secondary overflow actions into `DuoOverflowToolbarMenu`.
+- Balance toolbar items vs. tabs on the vertical rail with `.duoToolbarCompression(.prefersToolbarItems)` on detail/editor
+  screens.
+- Place floating bottom banners/buttons with `.safeAreaInset(edge: .bottom)` rather than hardcoded `.padding(.bottom, N)`
+  so they automatically clear asymmetric vertical-rail safe areas.
+- Enforced: `DuoDesignLintTests` rule `[text-only-toolbar]` (no allowlist escape).
+
+### Rule 16: fold-aware split workspaces (`DuoSplit`) and media HUDs (`DuoMediaOverlay`)
+
+Use `Cobalt/Design/DuoLayout.swift` primitives instead of fixed-width `HStack` splits or ad-hoc `ZStack` media overlays:
+
+- **Two-pane workspaces** (Inspector, Detail, Stage, 7TV, Emote Editor, Crop, Swarm Agent): use `DuoSplit(ratio:)`, which
+  wraps SwiftUI's `ArrangementView(.split)` on iOS/macOS 27.1+ and falls back to `horizontalSizeClass` on 26.
+- **Full-screen media + HUD** (Full-screen Photo/Video/WebP, Stream, SkyMap): use `DuoMediaOverlay(edge:)`, which wraps
+  `ArrangementView(.overlay)` on 27.1+ and exposes `isSeparated` (`\.duoOverlaySeparated` / `overlayArrangementZIndex == 0`)
+  so controls float in Clear Liquid Glass when flat and dock onto the adjacent display half when bent.
+- **Hard constraint**: never place `TabView` or `NavigationSplitView` inside `ArrangementView`, `DuoSplit`, or
+  `DuoMediaOverlay`, and never nest them inside `ScrollView`, `List`, or `Grid`.
+- **Custom canvases**: read `DuoReservedRegions.readCompat(from: proxy)` (`.division` / `.occlusion`) and pass
+  `activeDivision` into `PanePlacement.resolve` or `DuoDivisionSplit.resolve`.
+- Enforced: `DuoDesignLintTests` rule `[arrangement-nesting]` (no allowlist escape).
+
+### Rule 17: even column grids across the center fold (`DuoAdaptiveGrid` / `DuoGrid`)
+
+Any multi-column grid that appears in `.regular` width (or on Mac) MUST snap to an **even** column count (`2, 4, 6, ...`)
+so no tile straddles the center fold crease when the display is unfolded or bent in Book mode.
+
+- Use `DuoAdaptiveGrid(minItemWidth:spacing:)` instead of raw `LazyVGrid(columns: [GridItem(.adaptive(...))])`.
+- Use `MasonryPlan.duoColumns(..., isRegular:)` for masonry layouts and `DuoGrid.fixedGridItems(compact:regular:sizeClass:)`
+  for fixed grids. Never hardcode odd counts (`count: 3`, `count: 5`) in `LazyVGrid`.
+- Enforced: `DuoDesignLintTests` rule `[odd-grid-columns]` (no allowlist escape) and `DuoGridTests`.
+
+### Rule 18: Clear Liquid Glass over media, never opaque slabs behind glass
+
+- Over photos, videos, live streams, and full-bleed canvases, use `Cobalt/Design/MediaGlass.swift`:
+  `.mediaGlassCapsule()`, `.mediaGlassCircle()`, `.mediaGlassRounded()`, grouped in `MediaGlassGroup` (`GlassEffectContainer`)
+  with a subtle `MediaEdgeVignette` behind edge controls and `Metrics.hit` (44 pt) touch targets.
+- Never place an opaque `.background(Color..., in: ...)` directly behind `.glassEffect(...)`—it defeats Liquid Glass
+  refraction and contrast adaptation.
+- Enforced: `DuoDesignLintTests` rule `[opaque-glass-backing]`.
+
 ## Adding code: a checklist
 
 1. Does it touch disk, JSON or pixels? It goes in an engine (an actor, or `nonisolated` + `@concurrent`), starts with
@@ -281,6 +357,10 @@ listener"; "it takes a player from the pool".
 3. Does a view need it? Pass the values the view draws, not the model.
 4. Does it outlive a view, react to the app's state, or hold memory? Name its lifetime, register it with `AppLifecycle`,
    take players from the pool (rules 8 to 12).
-5. Run `cd apple/CobaltKit && swift test --filter MainThreadLint`. If you moved work off main, delete its allowlist
-   line; `UPDATE_MAIN_THREAD_ALLOWLIST=1` rewrites the list from the tree and keeps every reason. Same for
-   `--filter LifecycleLint` and `UPDATE_LIFECYCLE_ALLOWLIST=1`.
+5. Does it add a toolbar item, grid, two-pane split, or media overlay? Use `DuoToolbarButton` + `.duoVisibilityPriority`,
+   `DuoAdaptiveGrid`, `DuoSplit` / `DuoMediaOverlay`, and `MediaGlassGroup` / `.mediaGlass*` (rules 14 to 18); branch on
+   `horizontalSizeClass`, never `userInterfaceIdiom`.
+6. Run `cd apple/CobaltKit && swift test` (covers `MainThreadLint`, `LifecycleLint`, `DuoDesignLint`, and `DuoGridTests`).
+   If you moved work off main or cleaned a baseline entry, delete its allowlist line; `UPDATE_MAIN_THREAD_ALLOWLIST=1`,
+   `UPDATE_LIFECYCLE_ALLOWLIST=1`, and `UPDATE_DUO_DESIGN_ALLOWLIST=1` rewrite each list from the tree while keeping reasons.
+

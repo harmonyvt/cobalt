@@ -63,8 +63,7 @@ struct ActivityPill: View {
     }
 
     private func label(_ state: ActivityPillState) -> some View {
-        HStack(spacing: 5) {
-            symbol(state)
+        Label {
             if let text = Copy.Activity.pill(state) {
                 Text(text)
                     .font(Font.cobalt(13, .semibold, relativeTo: .footnote))
@@ -72,8 +71,13 @@ struct ActivityPill: View {
                     .lineLimit(1)
                     .contentTransition(reduceMotion ? .identity : .numericText())
                     .transition(.opacity)
+            } else {
+                Text(Copy.Activity.title)
             }
+        } icon: {
+            symbol(state)
         }
+        .labelStyle(ActivityPillLabelStyle(showsTitle: Copy.Activity.pill(state) != nil))
         .foregroundStyle(ink(state))
         .animation(reduceMotion ? Motion.fade : Motion.rows, value: state)
     }
@@ -109,6 +113,19 @@ struct ActivityPill: View {
         case .syncing: return ActivityInk.info
         case .waking: return ActivityInk.warn
         case .idle: return CobaltColor.caption
+        }
+    }
+}
+
+private struct ActivityPillLabelStyle: LabelStyle {
+    let showsTitle: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 5) {
+            configuration.icon
+            if showsTitle {
+                configuration.title
+            }
         }
     }
 }

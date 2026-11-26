@@ -160,7 +160,8 @@ struct CloseButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "xmark")
+            Label(Copy.closeA11y, systemImage: "xmark")
+                .labelStyle(.iconOnly)
                 .font(.system(size: 14, weight: .semibold))
         }
         .buttonStyle(.glass)

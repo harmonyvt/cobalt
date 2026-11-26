@@ -28,13 +28,13 @@ struct HeroFullScreenButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: DetailSymbol.fullScreen)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(CobaltColor.badgeInk)
-                .frame(width: 30, height: 30)
-                .background(CobaltColor.badgeBack, in: Circle())
-                .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.75))
-                .frame(width: 44, height: 44)
+            Label(Copy.Media.fullScreen, systemImage: DetailSymbol.fullScreen)
+                .labelStyle(.iconOnly)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .mediaGlassCircle()
+                .frame(width: Metrics.hit, height: Metrics.hit)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -119,24 +119,41 @@ private struct FullScreenVideo: View {
     var body: some View { mediaBody.mediaMask() }
 
     @ViewBuilder private var mediaBody: some View {
-        ZStack(alignment: .topLeading) {
-            Color.black.ignoresSafeArea()
-            SystemPlayer(player: player)
-                .ignoresSafeArea()
-            Button { finish() } label: {
-                Image(systemName: Symbol.close)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(CobaltColor.badgeInk)
-                    .frame(width: 34, height: 34)
-                    .background(CobaltColor.badgeBack, in: Circle())
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+        DuoMediaOverlay(edge: .bottom) { isSeparated in
+            if isSeparated {
+                VStack(spacing: 12) {
+                    Spacer(minLength: 0)
+                    Button { finish() } label: {
+                        Label(Copy.Media.exitFullScreen, systemImage: Symbol.close)
+                    }
+                    .buttonStyle(.cobaltSecondary(fullWidth: false))
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityLabel(Copy.Media.exitFullScreen)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+            } else {
+                VStack(spacing: 0) {
+                    HStack {
+                        CloseButton(cancels: true) { finish() }
+                            .accessibilityLabel(Copy.Media.exitFullScreen)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.leading, 12)
+                    .padding(.top, 8)
+                    Spacer(minLength: 0)
+                }
+                .background(alignment: .top) {
+                    MediaEdgeVignette(edge: .top, height: 88, intensity: 0.42)
+                }
             }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.cancelAction)
-            .padding(.leading, 12)
-            .padding(.top, 8)
-            .accessibilityLabel(Copy.Media.exitFullScreen)
+        } media: {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                SystemPlayer(player: player)
+                    .ignoresSafeArea()
+            }
         }
         .preferredColorScheme(.dark)
         .task {
@@ -231,40 +248,52 @@ private struct FullScreenWebp: View {
     private static func isOn(_ on: Bool) -> Bool { on }
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(1 - min(Double(abs(drag)) / 500, 0.5)).ignoresSafeArea()
-            AnimatedImageView(source: source)
-                .aspectRatio(aspect, contentMode: .fit)
-                .offset(y: drag)
-                .accessibilityLabel(Copy.Media.webpViewerA11y(name))
-                .accessibilityAddTraits(.isButton)
-            #if os(macOS)
-            // the Mac sheet has no swipe down: a visible close, top leading like the video's, that is also Escape
-            VStack {
-                HStack {
-                    CloseButton(cancels: true, action: close)
+        DuoMediaOverlay(edge: .bottom) { isSeparated in
+            if isSeparated {
+                VStack(spacing: 12) {
+                    Spacer(minLength: 0)
+                    Button(action: close) {
+                        Label(Copy.Media.exitFullScreen, systemImage: Symbol.close)
+                    }
+                    .buttonStyle(.cobaltSecondary(fullWidth: false))
+                    .keyboardShortcut(.cancelAction)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+            } else {
+                VStack {
+                    HStack {
+                        CloseButton(cancels: true, action: close)
+                            .accessibilityLabel(Copy.Media.exitFullScreen)
+                        Spacer()
+                    }
                     Spacer()
                 }
-                Spacer()
+                .padding(.leading, 12)
+                .padding(.top, 8)
+                .background(alignment: .top) {
+                    MediaEdgeVignette(edge: .top, height: 88, intensity: 0.42)
+                }
             }
-            .padding(.leading, 12)
-            .padding(.top, 8)
-            #else
-            Button(Copy.Media.exitFullScreen, action: close)
-                .keyboardShortcut(.cancelAction)
-                .frame(width: 0, height: 0)
-                .opacity(0)
-                .accessibilityHidden(true)
-            #endif
+        } media: {
+            ZStack {
+                Color.black.opacity(1 - min(Double(abs(drag)) / 500, 0.5)).ignoresSafeArea()
+                AnimatedImageView(source: source)
+                    .aspectRatio(aspect, contentMode: .fit)
+                    .offset(y: drag)
+                    .accessibilityLabel(Copy.Media.webpViewerA11y(name))
+                    .accessibilityAddTraits(.isButton)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: close)
+            .gesture(
+                DragGesture(minimumDistance: 12)
+                    .onChanged { drag = $0.translation.height }
+                    .onEnded { value in
+                        if abs(value.translation.height) > 90 { close() } else { withAnimation(Motion.card) { drag = 0 } }
+                    })
         }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: close)
-        .gesture(
-            DragGesture(minimumDistance: 12)
-                .onChanged { drag = $0.translation.height }
-                .onEnded { value in
-                    if abs(value.translation.height) > 90 { close() } else { withAnimation(Motion.card) { drag = 0 } }
-                })
         // a tick where letting go would close
         .haptic(.impact(weight: .light), trigger: pastClose, when: Self.isOn)
         .preferredColorScheme(.dark)

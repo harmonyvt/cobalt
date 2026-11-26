@@ -29,8 +29,7 @@ struct PhoneSegmentBar<Value: Hashable>: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity)
-        .background(CobaltColor.bg)
-        .overlay(alignment: .bottom) { Divider() }
+        .background(.bar)
     }
 }
 #endif

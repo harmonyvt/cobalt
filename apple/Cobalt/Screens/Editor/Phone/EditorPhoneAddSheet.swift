@@ -113,7 +113,7 @@ struct EditorPhoneAddSheet: View {
             Spacer(minLength: 0)
         } else {
             ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+                DuoAdaptiveGrid(minItemWidth: 100, spacing: 8) {
                     ForEach(shown) { entry in
                         EditorPhoneAddTile(entry: entry, isAdded: added.contains(entry.id)) { add(entry) }
                             .contextMenu {

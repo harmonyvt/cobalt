@@ -220,7 +220,7 @@ struct StagePickSheet: View {
                 Text(Copy.Stage.pickCount(videos.count))
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(CobaltColor.caption)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 10)], spacing: 12) {
+                DuoAdaptiveGrid(minItemWidth: 104, spacing: 10, rowSpacing: 12) {
                     ForEach(videos) { item in
                         PickTile(item: item) {
                             controller.pickShown = false

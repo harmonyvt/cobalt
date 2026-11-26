@@ -49,8 +49,9 @@ struct LibraryDeleteSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(Copy.Media.keep) { dismiss() }
+                    DuoToolbarButton(title: Copy.Media.keep, systemImage: "xmark") { dismiss() }
                 }
+                .duoVisibilityPriority(.high)
             }
         }
         #if os(iOS)
@@ -79,19 +80,11 @@ struct LibraryDeleteSheet: View {
             deleteChosen()
         } label: {
             Label(Copy.DeletePicks.button(files), systemImage: Symbol.Library.deleteEverything)
-                .labelStyle(.titleAndIcon)
-                .font(CobaltType.bodySemibold)
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .foregroundStyle(Color.white)
-                .background(CobaltColor.errorText, in: Capsule())
-                .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.cobaltDestructive())
         .disabled(files == 0 || blocked)
-        .opacity(files == 0 || blocked ? 0.4 : 1)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(.bar)
     }
 }
 

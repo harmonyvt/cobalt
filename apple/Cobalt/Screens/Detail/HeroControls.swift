@@ -287,41 +287,46 @@ struct HeroControls: View {
     // MARK: pieces
 
     private var bar: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 2) {
-                playButton
-                elapsed
-                scrubber
-                remaining
-                captionsButton
-                soundButton
-                fullScreenButton
-            }
-            .padding(.horizontal, 4)
-            .frame(height: 44)
-            .glassEffect(.regular.tint(CobaltColor.badgeBack), in: Capsule())
-            VStack(spacing: 0) {
-                HStack(spacing: 6) {
+        MediaGlassGroup(spacing: 8) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 2) {
+                    playButton
                     elapsed
                     scrubber
                     remaining
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 32)
-                HStack(spacing: 0) {
-                    playButton
-                    Spacer(minLength: 0)
                     captionsButton
                     soundButton
                     fullScreenButton
                 }
-                .frame(height: 44)
                 .padding(.horizontal, 4)
+                .frame(height: Metrics.hit)
+                .mediaGlassCapsule()
+                VStack(spacing: 0) {
+                    HStack(spacing: 6) {
+                        elapsed
+                        scrubber
+                        remaining
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    HStack(spacing: 0) {
+                        playButton
+                        Spacer(minLength: 0)
+                        captionsButton
+                        soundButton
+                        fullScreenButton
+                    }
+                    .frame(height: Metrics.hit)
+                    .padding(.horizontal, 4)
+                }
+                .padding(.top, 2)
+                .mediaGlassRounded(cornerRadius: 24)
             }
-            .padding(.top, 2)
-            .glassEffect(.regular.tint(CobaltColor.badgeBack), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
         .padding(8)
+        .background(alignment: .bottom) {
+            MediaEdgeVignette(edge: .bottom, height: 84, intensity: 0.36)
+        }
         .accessibilityElement(children: .contain)
     }
 
@@ -408,9 +413,9 @@ struct HeroControls: View {
     private var quietSoundBadge: some View {
         Image(systemName: muted ? Symbol.soundOff : Symbol.soundOn)
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(CobaltColor.badgeInk)
-            .frame(width: 24, height: 24)
-            .glassEffect(.regular.tint(CobaltColor.badgeBack), in: .circle)
+            .foregroundStyle(.white)
+            .frame(width: 26, height: 26)
+            .mediaGlassCircle(interactive: false)
             .padding(8)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             .allowsHitTesting(false)

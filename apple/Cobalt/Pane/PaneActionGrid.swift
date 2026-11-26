@@ -83,39 +83,41 @@ struct PaneActionGrid: View {
 
     @ViewBuilder
     private var grid: some View {
-        if typeSize.isAccessibilitySize || actions.count == 1 {
-            VStack(spacing: 8) {
-                ForEach(actions) { action in
-                    button(action, cornerRadius: 14, holdAlignment: .center) {
-                        PaneActionRow(action: action, caption: Self.caption(for: action, offline: offline))
-                    }
-                    .zIndex(activeHoldID == action.id ? 10 : 0)
-                }
-            }
-        } else {
-            VStack(spacing: 10) {
-                ForEach(Self.rows(actions.count), id: \.self) { row in
-                    let rowActive = row.contains { actions[$0].id == activeHoldID }
-                    Group {
-                        if row.count == 1, let index = row.first {
-                            button(actions[index], cornerRadius: 14, holdAlignment: .center) {
-                                PaneActionRow(action: actions[index], caption: Self.caption(for: actions[index], offline: offline))
-                            }
-                        } else {
-                            HStack(spacing: 10) {
-                                ForEach(Array(row.enumerated()), id: \.element) { col, index in
-                                    let action = actions[index]
-                                    let align: HorizontalAlignment = col == 0 ? .leading : .trailing
-                                    button(action, cornerRadius: 18, holdAlignment: align) {
-                                        PaneActionTile(action: action, caption: Self.caption(for: action, offline: offline))
-                                    }
-                                    .zIndex(activeHoldID == action.id ? 10 : 0)
-                                }
-                            }
-                            .fixedSize(horizontal: false, vertical: true)
+        GlassEffectContainer(spacing: 10) {
+            if typeSize.isAccessibilitySize || actions.count == 1 {
+                VStack(spacing: 8) {
+                    ForEach(actions) { action in
+                        button(action, cornerRadius: 14, holdAlignment: .center) {
+                            PaneActionRow(action: action, caption: Self.caption(for: action, offline: offline))
                         }
+                        .zIndex(activeHoldID == action.id ? 10 : 0)
                     }
-                    .zIndex(rowActive ? 10 : 0)
+                }
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(Self.rows(actions.count), id: \.self) { row in
+                        let rowActive = row.contains { actions[$0].id == activeHoldID }
+                        Group {
+                            if row.count == 1, let index = row.first {
+                                button(actions[index], cornerRadius: 14, holdAlignment: .center) {
+                                    PaneActionRow(action: actions[index], caption: Self.caption(for: actions[index], offline: offline))
+                                }
+                            } else {
+                                HStack(spacing: 10) {
+                                    ForEach(Array(row.enumerated()), id: \.element) { col, index in
+                                        let action = actions[index]
+                                        let align: HorizontalAlignment = col == 0 ? .leading : .trailing
+                                        button(action, cornerRadius: 18, holdAlignment: align) {
+                                            PaneActionTile(action: action, caption: Self.caption(for: action, offline: offline))
+                                        }
+                                        .zIndex(activeHoldID == action.id ? 10 : 0)
+                                    }
+                                }
+                                .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .zIndex(rowActive ? 10 : 0)
+                    }
                 }
             }
         }

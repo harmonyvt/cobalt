@@ -88,9 +88,12 @@ struct AddHiddenRuleSheet: View {
             .sheetClose { dismiss() }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(working ? Copy.Hidden.adding : Copy.Hidden.add) { Task { await add() } }
-                        .disabled(!canAdd)
+                    DuoToolbarButton(title: working ? Copy.Hidden.adding : Copy.Hidden.add, systemImage: "plus") {
+                        Task { await add() }
+                    }
+                    .disabled(!canAdd)
                 }
+                .duoVisibilityPriority(.high)
             }
             .onChange(of: kind) { _, _ in
                 problem = nil

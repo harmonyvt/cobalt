@@ -66,6 +66,37 @@ public enum PanePlacement: Equatable, Sendable {
         }
     }
 
+    /// Size-class-driven placement resolver (iPhone Duo HIG: two size classes, no `UIDevice` idiom locks).
+    ///
+    /// A reported display feature (`ReservedRegion(.division)`) always wins. Otherwise, on macOS a wide window
+    /// uses `.column(width: macColumn)`; on iOS a regular horizontal size class uses `.twoScreens` for foldable
+    /// aspect shapes (`width >= 600` & `height >= 560`) or `.column(width: padColumn)` for wide iPad windows
+    /// (`width >= 900`), and `.compact` otherwise.
+    public static func resolve(
+        size: CGSize, isRegular: Bool, isMac: Bool, displayFeatureFrame: CGRect?
+    ) -> PanePlacement {
+        if let feature = displayFeatureFrame, !feature.isNull, !feature.isInfinite, feature.width > 0 || feature.height > 0 {
+            return feature.height >= feature.width
+                ? .twoScreens(axis: .vertical, hinge: feature.midX)
+                : .twoScreens(axis: .horizontal, hinge: feature.midY)
+        }
+        if isMac {
+            return size.width >= columnMin ? .column(width: macColumn) : .compact
+        }
+        guard isRegular else { return .compact }
+        if size.width >= columnMin && size.height >= 700 {
+            // Wide iPad / large landscape regular canvas: docked leading column when flat.
+            return .column(width: padColumn)
+        }
+        if size.width >= phoneWideMin, size.height >= phoneWideMinHeight {
+            return .twoScreens(axis: .vertical, hinge: size.width / 2)
+        }
+        if size.width >= phoneTallMin, size.height > size.width {
+            return .twoScreens(axis: .horizontal, hinge: size.height / 2)
+        }
+        return .compact
+    }
+
     /// A short word for analytics and breadcrumbs: `wide`, `tall`, `column`, `compact`.
     public var name: String {
         switch self {

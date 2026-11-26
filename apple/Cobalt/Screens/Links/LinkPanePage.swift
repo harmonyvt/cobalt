@@ -303,8 +303,7 @@ private struct LinkPaneCollections: View {
                 Text(Copy.LinksPane.collectionsHint)
                     .font(CobaltType.captionSmall)
                     .foregroundStyle(CobaltColor.caption)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8, alignment: .leading)],
-                          alignment: .leading, spacing: 8) {
+                DuoAdaptiveGrid(minItemWidth: 130, spacing: 8, alignment: .leading) {
                     ForEach(collections) { collection in
                         chip(collection)
                     }
