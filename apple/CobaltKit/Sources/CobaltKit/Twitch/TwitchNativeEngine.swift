@@ -365,7 +365,11 @@ private actor OverlappedSegmentFetch {
         readerTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
                 for try await chunk in stream(url) {
-                    guard let self, !Task.isCancelled else { return }
+                    if Task.isCancelled {
+                        await self?.markDone(error: CancellationError())
+                        return
+                    }
+                    guard let self else { return }
                     await self.append(chunk)
                 }
                 await self?.markDone(error: nil)
@@ -382,20 +386,36 @@ private actor OverlappedSegmentFetch {
     }
 
     /// Consumes chunks in exact arrival order (draining any already-buffered chunks immediately).
+    /// Cancellation of the calling task cancels the underlying reader immediately so callers never hang.
     func nextChunk() async throws -> Data? {
         while true {
+            try Task.checkCancellation()
             if !buffered.isEmpty {
                 return buffered.removeFirst()
             }
             if let failure { throw failure }
             if finished { return nil }
-            await withCheckedContinuation { cont in
+            await withTaskCancellationHandler {
+                await self.waitForChunkOrDone()
+            } onCancel: {
+                Task { await self.cancel() }
+            }
+        }
+    }
+
+    private func waitForChunkOrDone() async {
+        guard buffered.isEmpty, failure == nil, !finished else { return }
+        await withCheckedContinuation { cont in
+            if !buffered.isEmpty || failure != nil || finished {
+                cont.resume()
+            } else {
                 waiter = cont
             }
         }
     }
 
     private func append(_ data: Data) {
+        guard !finished else { return }
         buffered.append(data)
         if let w = waiter {
             waiter = nil
@@ -404,7 +424,7 @@ private actor OverlappedSegmentFetch {
     }
 
     private func markDone(error: Error?) {
-        if let error { failure = error }
+        if let error, failure == nil { failure = error }
         finished = true
         if let w = waiter {
             waiter = nil
@@ -511,6 +531,7 @@ private final class SampleBufferPipeline: @unchecked Sendable {
             }
             if self.videoRenderer === vr {
                 self.recoverVideoRendererIfNeeded(vr)
+                self.drainVideo()
                 return
             }
             if let existing = self.videoRenderer {
@@ -523,6 +544,17 @@ private final class SampleBufferPipeline: @unchecked Sendable {
             vr.requestMediaDataWhenReady(on: self.queue) { [weak self] in
                 self?.drainVideo()
             }
+            self.drainVideo()
+        }
+    }
+
+    /// Re-checks the attached `AVSampleBufferVideoRenderer` immediately after a view reparenting or layout swap
+    /// (e.g., fold/unfold or span transition) so decoding resumes without waiting for the next telemetry tick.
+    func recoverVideoRenderer() {
+        queue.async { [weak self] in
+            guard let self, self.videoOutputEnabled, let vr = self.videoRenderer else { return }
+            self.recoverVideoRendererIfNeeded(vr)
+            self.drainVideo()
         }
     }
 
@@ -607,10 +639,16 @@ private final class SampleBufferPipeline: @unchecked Sendable {
             if !enabled {
                 self.pendingVideo.removeAll(keepingCapacity: true)
                 self.videoRenderer?.flush(removingDisplayedImage: false)
+                self.highestVideoPTS = nil
                 self.awaitingKeyframe = true
             } else {
                 // Require an IDR keyframe on resume so video recovers without macroblock artifacts.
+                // Clear any stale pre-background video PTS so telemetry doesn't trigger a false stall before the IDR arrives.
+                self.highestVideoPTS = nil
                 self.awaitingKeyframe = true
+                if let vr = self.videoRenderer {
+                    self.recoverVideoRendererIfNeeded(vr)
+                }
             }
         }
     }
@@ -682,11 +720,27 @@ private final class SampleBufferPipeline: @unchecked Sendable {
     private func recoverVideoRendererIfNeeded(_ vr: AVSampleBufferVideoRenderer) {
         guard vr.status == .failed || vr.requiresFlushToResumeDecoding else { return }
         let wasFailed = vr.status == .failed
+        let neededFlush = vr.requiresFlushToResumeDecoding
         Telemetry.log(.info, .live, "twitch.native.video_flush", data: ["failed": .bool(wasFailed)])
         vr.flush()
         pendingVideo.removeAll(keepingCapacity: true)
         awaitingKeyframe = true
-        if wasFailed {
+        if !clockStarted {
+            // If the renderer failed or was invalidated by view reparenting before playback started, clear the
+            // old flushed PTS anchors and audio queue so the synchronizer starts cleanly on the next IDR keyframe
+            // instead of starting the clock seconds behind the newly enqueued video frames.
+            firstSamplePTS = nil
+            highestVideoPTS = nil
+            highestAudioPTS = nil
+            pdtAnchorPTS = nil
+            pdtAnchorDate = nil
+            audioRenderer.flush()
+            pendingAudio.removeAll(keepingCapacity: true)
+        } else {
+            // Clear stale video PTS while waiting for the next IDR keyframe so live audio isn't falsely stalled.
+            highestVideoPTS = nil
+        }
+        if wasFailed || neededFlush {
             vr.stopRequestingMediaData()
             vr.requestMediaDataWhenReady(on: queue) { [weak self] in
                 self?.drainVideo()
@@ -798,7 +852,14 @@ private final class SampleBufferPipeline: @unchecked Sendable {
     private func startClockIfReady() {
         guard !clockStarted, !isPaused, !isInterrupted, let start = firstSamplePTS else { return }
         let skipVideo = audioOnly || !videoOutputEnabled
-        let highest = skipVideo ? (highestAudioPTS ?? start) : (highestVideoPTS ?? start)
+        let highest: Double
+        if skipVideo {
+            highest = highestAudioPTS ?? start
+        } else {
+            // Once an initial video keyframe has established `firstSamplePTS`, count either video or audio advance
+            // toward the startup cushion so low-FPS / static streams start promptly instead of stalling.
+            highest = max(highestVideoPTS ?? start, highestAudioPTS ?? start)
+        }
         let cushion = highest - start
         // Start playback once we have ~0.30 s buffered so the first frame shows almost instantly without immediate underrun.
         let minStartCushion = isLowLatency ? 0.30 : 0.80
@@ -820,7 +881,10 @@ private final class SampleBufferPipeline: @unchecked Sendable {
 
         let nowPTS = synchronizer.currentTime().seconds
         let skipVideo = audioOnly || !videoOutputEnabled
-        let highest: Double? = skipVideo ? highestAudioPTS : (highestVideoPTS ?? highestAudioPTS)
+        // While waiting for the next IDR keyframe after background-audio resume or renderer flush on an already-live
+        // clock, measure buffer health from audio so playback never falsely pauses/stalls during keyframe re-acquisition.
+        let useAudioBuffer = skipVideo || (clockStarted && awaitingKeyframe && highestAudioPTS != nil)
+        let highest: Double? = useAudioBuffer ? highestAudioPTS : (highestVideoPTS ?? highestAudioPTS)
         let bufferSec: Double
         if clockStarted, nowPTS.isFinite, let highest {
             bufferSec = max(0, highest - nowPTS)
@@ -922,6 +986,8 @@ public actor TwitchNativeEngine {
     private let resolver: TwitchStreamResolver
     private let customSegmentStreamer: SegmentStreamer?
     private let startupTimeout: Duration
+    private let firstJoinPrefetchTimeout: Duration
+    private let emptyPlaylistRefreshPolls: Int
     private let audioSession: AudioSessionCoordinator
     private let audioClaimID = "twitch.native.\(UUID().uuidString)"
     private let pipeline = SampleBufferPipeline()
@@ -956,11 +1022,15 @@ public actor TwitchNativeEngine {
     public init(
         resolver: TwitchStreamResolver = TwitchStreamResolver(),
         startupTimeout: Duration = .seconds(12),
+        firstJoinPrefetchTimeout: Duration = .seconds(4),
+        emptyPlaylistRefreshPolls: Int = 10,
         segmentStreamer: SegmentStreamer? = nil,
         audioSession: AudioSessionCoordinator = .shared
     ) {
         self.resolver = resolver
         self.startupTimeout = startupTimeout
+        self.firstJoinPrefetchTimeout = firstJoinPrefetchTimeout
+        self.emptyPlaylistRefreshPolls = max(2, emptyPlaylistRefreshPolls)
         self.customSegmentStreamer = segmentStreamer
         self.audioSession = audioSession
     }
@@ -984,6 +1054,11 @@ public actor TwitchNativeEngine {
 
     public func attach(videoRenderer box: TwitchVideoRendererBox) {
         pipeline.attach(videoRenderer: box.renderer)
+    }
+
+    /// Triggers immediate video-renderer recovery and queue drain (e.g., after view reparenting on layout swap / span).
+    public func recoverVideoRenderer() {
+        pipeline.recoverVideoRenderer()
     }
 
     public func start(channel: String, authToken: String?, preferredVariantID: String? = nil) {
@@ -1132,15 +1207,27 @@ public actor TwitchNativeEngine {
     }
 
     /// Flushes buffered frames and rejoins directly at the latest prefetch edge.
-    public func jumpToLive() {
-        guard let ch = channel else { return }
+    /// Pass `refreshStream: true` during stall recovery so a stale/reassigned Weaver URL is re-resolved from GQL/Usher.
+    public func jumpToLive(refreshStream: Bool = false) {
+        guard channel != nil else { return }
         if userPaused {
             setPaused(false)
             return
         }
         isInterrupted = false
-        guard let variant = selectedVariant else {
-            start(channel: ch, authToken: authToken, preferredVariantID: preferredVariantID)
+        guard let variant = selectedVariant, !refreshStream else {
+            runTask?.cancel()
+            telemetryTask?.cancel()
+            cancelOverlap()
+            demuxer.reset()
+            generation &+= 1
+            let gen = generation
+            pipeline.flush(clearImage: false, generation: gen)
+            loadingSince = .now
+            startTelemetryLoop(gen: gen)
+            runTask = Task.detached(priority: .userInitiated) { [weak self] in
+                await self?.runSession(gen: gen)
+            }
             return
         }
         runTask?.cancel()
@@ -1351,6 +1438,12 @@ public actor TwitchNativeEngine {
         return compatible[0]
     }
 
+    private enum RefreshResult {
+        case variant(TwitchVariant)
+        case offline
+        case failed
+    }
+
     private func streamVariantLoop(variant: TwitchVariant, gen: UInt64) async {
         pipeline.setMuted(isMuted)
         pipeline.setVolume(currentVolume)
@@ -1361,6 +1454,8 @@ public actor TwitchNativeEngine {
         var seenKeySet: Set<String> = []
         var playlistFailures = 0
         var segmentFailures = 0
+        var consecutiveEmptySegments = 0
+        var emptyCandidatePolls = 0
         var tokenRefreshes = 0
         var startupCompletedFallbackUsed = false
         var activeVariant = variant
@@ -1385,6 +1480,16 @@ public actor TwitchNativeEngine {
             return true
         }
 
+        func resetSequenceStateForRefresh() {
+            lastConsumedSeq = nil
+            seenKeys.removeAll()
+            seenKeySet.removeAll()
+            emptyCandidatePolls = 0
+            cancelOverlap()
+            let flushed = demuxer.beginDiscontinuity()
+            pipeline.enqueue(flushed)
+        }
+
         while gen == generation, !Task.isCancelled {
             // 1. Poll the live media playlist.
             let playlist: TwitchMediaPlaylist
@@ -1397,6 +1502,28 @@ public actor TwitchNativeEngine {
                 }
                 pipeline.configure(audioOnly: activeVariant.isAudioOnly, isLowLatency: playlist.isLowLatency)
             } catch TwitchHLSError.offline {
+                // Twitch Weaver variant URLs can 404 after edge reassignment or token expiry even while the
+                // broadcaster is still live: re-resolve Usher once before declaring the stream offline.
+                if tokenRefreshes < 3 {
+                    tokenRefreshes += 1
+                    switch await refreshStreamURL(preferredID: activeVariant.id, attempt: tokenRefreshes) {
+                    case .variant(let refreshed):
+                        activeVariant = refreshed
+                        playlistFailures = 0
+                        resetSequenceStateForRefresh()
+                        continue
+                    case .offline:
+                        break
+                    case .failed:
+                        playlistFailures += 1
+                        if playlistFailures >= 4 {
+                            failSession(gen: gen, reason: "playlist unavailable")
+                            return
+                        }
+                        try? await Task.sleep(for: .milliseconds(500))
+                        continue
+                    }
+                }
                 if gen == generation {
                     telemetryTask?.cancel()
                     telemetryTask = nil
@@ -1412,9 +1539,10 @@ public actor TwitchNativeEngine {
                 // Twitch playback tokens expire periodically (~20 min) or weaver reassigns: refresh before failing.
                 if playlistFailures >= 2, tokenRefreshes < 3 {
                     tokenRefreshes += 1
-                    if let refreshed = await refreshStreamURL(preferredID: activeVariant.id, attempt: tokenRefreshes) {
+                    if case .variant(let refreshed) = await refreshStreamURL(preferredID: activeVariant.id, attempt: tokenRefreshes) {
                         activeVariant = refreshed
                         playlistFailures = 0
+                        resetSequenceStateForRefresh()
                         continue
                     }
                 }
@@ -1438,7 +1566,18 @@ public actor TwitchNativeEngine {
 
             let all = playlist.allSegments
             guard !all.isEmpty else {
-                try? await Task.sleep(for: .milliseconds(450))
+                emptyCandidatePolls += 1
+                if emptyCandidatePolls >= emptyPlaylistRefreshPolls, tokenRefreshes < 3 {
+                    tokenRefreshes += 1
+                    Telemetry.log(.warn, .live, "twitch.native.playlist_frozen", data: ["polls": .int(emptyCandidatePolls)])
+                    if case .variant(let refreshed) = await refreshStreamURL(preferredID: activeVariant.id, attempt: tokenRefreshes) {
+                        activeVariant = refreshed
+                        resetSequenceStateForRefresh()
+                        continue
+                    }
+                }
+                let waitMs = startupTimeout < .seconds(2) ? 40 : 450
+                try? await Task.sleep(for: .milliseconds(waitMs))
                 continue
             }
 
@@ -1475,11 +1614,24 @@ public actor TwitchNativeEngine {
             }
 
             guard !candidates.isEmpty else {
+                emptyCandidatePolls += 1
+                // If Weaver returns a frozen playlist whose sequence stops advancing, refresh the stream URL
+                // proactively instead of waiting for buffer drain + stall recovery + startup timeout.
+                if emptyCandidatePolls >= emptyPlaylistRefreshPolls, tokenRefreshes < 3 {
+                    tokenRefreshes += 1
+                    Telemetry.log(.warn, .live, "twitch.native.playlist_frozen", data: ["polls": .int(emptyCandidatePolls)])
+                    if case .variant(let refreshed) = await refreshStreamURL(preferredID: activeVariant.id, attempt: tokenRefreshes) {
+                        activeVariant = refreshed
+                        resetSequenceStateForRefresh()
+                        continue
+                    }
+                }
                 // Already caught up to the latest prefetch segment; wait a short beat and poll again.
-                let waitMs = playlist.isLowLatency ? 450 : 900
+                let waitMs = startupTimeout < .seconds(2) ? 40 : (playlist.isLowLatency ? 450 : 900)
                 try? await Task.sleep(for: .milliseconds(waitMs))
                 continue
             }
+            emptyCandidatePolls = 0
 
             let current = candidates[0]
             let nextSegment = candidates.count > 1 ? candidates[1] : nil
@@ -1497,7 +1649,15 @@ public actor TwitchNativeEngine {
 
             // 3. Consume `current` (reusing overlapped fetch if we already started it on the previous turn!).
             let isFirstJoin = (lastConsumedSeq == nil)
-            let result = await consumeSegment(current, gen: gen)
+            let keyframeLimit: Duration? = (isFirstJoin && current.isPrefetch && !startupCompletedFallbackUsed)
+                ? firstJoinPrefetchTimeout
+                : nil
+            let result = await consumeSegment(
+                current,
+                gen: gen,
+                firstKeyframeTimeout: keyframeLimit,
+                audioOnly: activeVariant.isAudioOnly
+            )
             guard gen == generation, !Task.isCancelled else { return }
 
             if let bad = demuxer.unsupportedVideoCodec {
@@ -1505,9 +1665,9 @@ public actor TwitchNativeEngine {
                 return
             }
 
-            // On first join onto a prefetch segment: if the prefetch failed OR ended without a video keyframe,
-            // don't pin `lastConsumedSeq` to it — immediately fall back to the latest completed segment so the
-            // decoder gets a clean IDR + SPS/PPS boundary instead of spinning indefinitely.
+            // On first join onto a prefetch segment: if the prefetch failed, timed out waiting for a keyframe,
+            // or ended without a video keyframe, don't pin `lastConsumedSeq` to it — immediately fall back to the
+            // latest completed segment so the decoder gets a clean IDR + SPS/PPS boundary instead of spinning.
             let missingInitialKeyframe = isFirstJoin && current.isPrefetch && !activeVariant.isAudioOnly && !result.hadKeyframe
             if isFirstJoin && current.isPrefetch && (!result.succeeded || missingInitialKeyframe) && !startupCompletedFallbackUsed {
                 startupCompletedFallbackUsed = true
@@ -1517,7 +1677,7 @@ public actor TwitchNativeEngine {
                     data: ["ok": .bool(result.succeeded), "keyframe": .bool(result.hadKeyframe)]
                 )
                 if let fallbackSeg = playlist.segments.last {
-                    let fb = await consumeSegment(fallbackSeg, gen: gen)
+                    let fb = await consumeSegment(fallbackSeg, gen: gen, firstKeyframeTimeout: nil, audioOnly: activeVariant.isAudioOnly)
                     guard gen == generation, !Task.isCancelled else { return }
                     if let bad = demuxer.unsupportedVideoCodec {
                         failSession(gen: gen, reason: "unsupported codec: \(bad)")
@@ -1526,17 +1686,29 @@ public actor TwitchNativeEngine {
                     if fb.succeeded && fb.sampleCount > 0 {
                         markSeen(fallbackSeg)
                         segmentFailures = 0
+                        consecutiveEmptySegments = 0
                         continue
                     }
                 }
             }
 
-            if result.succeeded {
+            let effectiveSuccess: Bool
+            if result.succeeded && result.sampleCount == 0 {
+                consecutiveEmptySegments += 1
                 markSeen(current)
-                if result.sampleCount > 0 {
-                    segmentFailures = 0
-                }
+                // 3 consecutive HTTP-200 segments with 0 decodable samples means the stream/edge is unreadable
+                // (e.g. corrupt TS, DRM/encrypted slate, or broken mux): escalate instead of spinning until timeout.
+                effectiveSuccess = consecutiveEmptySegments < 3
+            } else if result.succeeded {
+                consecutiveEmptySegments = 0
+                markSeen(current)
+                segmentFailures = 0
+                effectiveSuccess = true
             } else {
+                effectiveSuccess = false
+            }
+
+            if !effectiveSuccess {
                 segmentFailures += 1
                 // Once already playing, advance past a broken segment after one failure so we don't loop on a 404.
                 if !isFirstJoin {
@@ -1544,9 +1716,11 @@ public actor TwitchNativeEngine {
                 }
                 if segmentFailures >= 2, tokenRefreshes < 3 {
                     tokenRefreshes += 1
-                    if let refreshed = await refreshStreamURL(preferredID: activeVariant.id, attempt: tokenRefreshes) {
+                    if case .variant(let refreshed) = await refreshStreamURL(preferredID: activeVariant.id, attempt: tokenRefreshes) {
                         activeVariant = refreshed
                         segmentFailures = 0
+                        consecutiveEmptySegments = 0
+                        resetSequenceStateForRefresh()
                         continue
                     }
                 }
@@ -1559,21 +1733,32 @@ public actor TwitchNativeEngine {
         }
     }
 
-    private func refreshStreamURL(preferredID: String, attempt: Int) async -> TwitchVariant? {
-        guard let ch = channel else { return nil }
+    private func refreshStreamURL(preferredID: String, attempt: Int) async -> RefreshResult {
+        guard let ch = channel else { return .failed }
         Telemetry.log(.info, .live, "twitch.native.token_refresh", data: ["attempt": .int(attempt)])
-        guard let refreshed = try? await resolver.resolveStream(channel: ch, authToken: authToken) else { return nil }
-        let compat = refreshed.variants.filter(\.isNativeCompatible)
-        guard !compat.isEmpty else { return nil }
-        variants = refreshed.variants
-        let chosen = pickVariant(from: compat, preferredID: preferredID)
-        selectedVariant = chosen
-        emit(.streamURL(refreshed.masterURL))
-        return chosen
+        do {
+            let refreshed = try await resolver.resolveStream(channel: ch, authToken: authToken)
+            let compat = refreshed.variants.filter(\.isNativeCompatible)
+            guard !compat.isEmpty else { return .failed }
+            variants = refreshed.variants
+            let chosen = pickVariant(from: compat, preferredID: preferredID)
+            selectedVariant = chosen
+            emit(.streamURL(refreshed.masterURL))
+            return .variant(chosen)
+        } catch TwitchHLSError.offline {
+            return .offline
+        } catch {
+            return .failed
+        }
     }
 
     /// Streams one segment chunk-by-chunk into `MPEGTSDemuxer` and `SampleBufferPipeline`.
-    private func consumeSegment(_ segment: TwitchSegment, gen: UInt64) async -> SegmentConsumeResult {
+    private func consumeSegment(
+        _ segment: TwitchSegment,
+        gen: UInt64,
+        firstKeyframeTimeout: Duration?,
+        audioOnly: Bool
+    ) async -> SegmentConsumeResult {
         if segment.isDiscontinuity {
             let flushed = demuxer.beginDiscontinuity()
             pipeline.enqueue(flushed)
@@ -1596,24 +1781,54 @@ public actor TwitchNativeEngine {
             pipeline.enqueue(samples)
         }
 
-        // Reuse the overlapped prefetch stream if it matches this segment!
+        // Reuse the overlapped prefetch stream if it matches this segment, OR wrap in an OverlappedSegmentFetch
+        // when `firstKeyframeTimeout` is active so a stalled first-join prefetch aborts cleanly on deadline.
+        let activeFetch: OverlappedSegmentFetch?
         if let overlap = overlappedFetch, overlap.segment.sequence == segment.sequence {
             overlappedFetch = nil
+            activeFetch = overlap
+        } else if firstKeyframeTimeout != nil {
+            let fetch = OverlappedSegmentFetch(segment: segment)
+            await fetch.start(stream: activeSegmentStream())
+            activeFetch = fetch
+        } else {
+            activeFetch = nil
+        }
+
+        if let fetch = activeFetch {
+            var timeoutTask: Task<Void, Never>?
+            if let limit = firstKeyframeTimeout {
+                timeoutTask = Task {
+                    try? await Task.sleep(for: limit)
+                    guard !Task.isCancelled else { return }
+                    await fetch.cancel()
+                }
+            }
+            defer { timeoutTask?.cancel() }
+
             do {
                 while gen == generation, !Task.isCancelled {
-                    guard let chunk = try await overlap.nextChunk() else { break }
+                    guard let chunk = try await fetch.nextChunk() else { break }
                     let samples = demuxer.push(chunk)
                     if demuxer.unsupportedVideoCodec != nil {
-                        await overlap.cancel()
+                        await fetch.cancel()
                         return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
                     }
                     record(samples)
+                    if timeoutTask != nil, (hadKeyframe || (audioOnly && totalSamples > 0)) {
+                        timeoutTask?.cancel()
+                        timeoutTask = nil
+                    }
+                }
+                if gen != generation || Task.isCancelled {
+                    await fetch.cancel()
+                    return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
                 }
                 let tail = demuxer.flushSegment()
                 record(tail)
                 return SegmentConsumeResult(succeeded: true, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
             } catch {
-                await overlap.cancel()
+                await fetch.cancel()
                 return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
             }
         }
@@ -1656,7 +1871,8 @@ public actor TwitchNativeEngine {
             stallRecoveries += 1
             Telemetry.log(.warn, .live, "twitch.native.stall_recovery", data: ["attempt": .int(stallRecoveries)])
             if stallRecoveries <= 2 {
-                jumpToLive()
+                // Re-resolve fresh GQL/Usher URLs on stall recovery so a dead/frozen Weaver edge isn't reused.
+                jumpToLive(refreshStream: true)
             } else {
                 failSession(gen: gen, reason: "playback stalled")
             }
