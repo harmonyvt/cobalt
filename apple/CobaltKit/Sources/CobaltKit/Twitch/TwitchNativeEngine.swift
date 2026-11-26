@@ -482,6 +482,7 @@ private final class SampleBufferPipeline: @unchecked Sendable {
     private var onPlayingChange: (@Sendable (Bool, UInt64) -> Void)?
     private var audioRequestRegistered = false
     private var observers: [NSObjectProtocol] = []
+    private var videoFlushObserver: NSObjectProtocol?
 
     init() {
         audioRenderer.audioTimePitchAlgorithm = .timeDomain
@@ -495,6 +496,9 @@ private final class SampleBufferPipeline: @unchecked Sendable {
     deinit {
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)
+        }
+        if let videoFlushObserver {
+            NotificationCenter.default.removeObserver(videoFlushObserver)
         }
     }
 
@@ -538,7 +542,18 @@ private final class SampleBufferPipeline: @unchecked Sendable {
                 existing.stopRequestingMediaData()
                 self.synchronizer.removeRenderer(existing, at: .invalid)
             }
+            if let oldObserver = self.videoFlushObserver {
+                NotificationCenter.default.removeObserver(oldObserver)
+                self.videoFlushObserver = nil
+            }
             self.videoRenderer = vr
+            self.videoFlushObserver = NotificationCenter.default.addObserver(
+                forName: AVSampleBufferVideoRenderer.requiresFlushToResumeDecodingDidChangeNotification,
+                object: vr,
+                queue: nil
+            ) { [weak self] _ in
+                self?.recoverVideoRenderer()
+            }
             self.synchronizer.addRenderer(vr)
             self.recoverVideoRendererIfNeeded(vr)
             vr.requestMediaDataWhenReady(on: self.queue) { [weak self] in
@@ -836,6 +851,9 @@ private final class SampleBufferPipeline: @unchecked Sendable {
 
     private func drainVideo() {
         guard let vr = videoRenderer else { return }
+        if videoOutputEnabled {
+            recoverVideoRendererIfNeeded(vr)
+        }
         while !pendingVideo.isEmpty && vr.isReadyForMoreMediaData {
             let sb = pendingVideo.removeFirst()
             vr.enqueue(sb)
