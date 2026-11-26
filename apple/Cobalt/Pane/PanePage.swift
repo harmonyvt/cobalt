@@ -21,10 +21,6 @@ import SwiftUI
 /// - The title wraps to 2 lines; at accessibility sizes the hero shrinks and `PaneActionGrid` becomes a list.
 /// - Loading: `PaneLoadingPage`; a deleted item: `PaneGonePage`. Offline: keep what is loaded, mark actions that
 ///   need the server with `needsServer` (they dim on their own).
-/// - `wideStyle`: `.heroOnly` gives the hero the whole wide room (a stream filling the Duo's top screen); the page draws
-///   what it needs over it. `fillsShelf`: the shelf is a live view that takes the rest of the height instead of a card in
-///   a scrolling column: wide, the hero sits over the controls on the left and the title over the shelf on the right;
-///   split, the details screen stops scrolling and the shelf fills it under the controls.
 struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
     let title: String
     let subtitle: String?
@@ -35,8 +31,6 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
     let controls: Controls
     let details: Details
     let shelf: Shelf
-    let wideStyle: PaneWideStyle
-    let fillsShelf: Bool
 
     @Environment(\.paneShape) private var shape
     @Environment(\.paneHinge) private var hinge
@@ -46,12 +40,10 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
 
     init(
         title: String, subtitle: String? = nil, actions: [PaneAction] = [], more: [PaneAction] = [],
-        progress: Double? = nil, wideStyle: PaneWideStyle = .columns, fillsShelf: Bool = false,
+        progress: Double? = nil,
         @ViewBuilder hero: () -> Hero, @ViewBuilder controls: () -> Controls,
         @ViewBuilder body: () -> Details, @ViewBuilder shelf: () -> Shelf
     ) {
-        self.wideStyle = wideStyle
-        self.fillsShelf = fillsShelf
         self.title = title
         self.subtitle = subtitle
         self.actions = Array(actions.prefix(2))
@@ -73,7 +65,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
             }
         }
         .preference(key: PaneMoreKey.self, value: more)
-        .preference(key: PaneFloatingHeaderKey.self, value: shape == .wide && wideStyle == .heroOnly)
+        .preference(key: PaneFloatingHeaderKey.self, value: false)
         .onChange(of: title, initial: true) { pane?.reportTitle(title, for: paneItem) }
     }
 
@@ -106,34 +98,6 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
         Group(subviews: hero) { parts in
             if parts.isEmpty {
                 ScrollView { column(stackedShelf: false).padding(.top, 16).padding(.bottom, 24) }
-            } else if wideStyle == .heroOnly {
-                ZStack { parts }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-            } else if fillsShelf {
-                DuoSplit(ratio: 0.5) {
-                    VStack(spacing: 0) {
-                        ZStack { parts }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .clipped()
-                        VStack(alignment: .leading, spacing: 10) {
-                            if let progress { PaneProgressLine(fraction: progress) }
-                            controls
-                            details
-                        }
-                        .padding(16)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxWidth: .infinity)
-                } secondary: {
-                    VStack(alignment: .leading, spacing: 14) {
-                        titleBlock
-                        PaneShelf(stacked: true) { shelf }
-                    }
-                    .padding(.top, 16)
-                    .padding(.bottom, 16)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                }
             } else {
                 DuoSplit(ratio: 0.5) {
                     ZStack { parts }
@@ -154,17 +118,8 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .environment(\.paneShape, .split(.media))
-            Group {
-                if fillsShelf {
-                    column(stackedShelf: true)
-                        .padding(.top, 16)
-                        .padding(.bottom, 16)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                } else {
-                    ScrollView { column(stackedShelf: true).padding(.top, 16).padding(.bottom, 24) }
-                }
-            }
-            .environment(\.paneShape, .split(.details))
+            ScrollView { column(stackedShelf: true).padding(.top, 16).padding(.bottom, 24) }
+                .environment(\.paneShape, .split(.details))
         }
     }
 
@@ -267,14 +222,6 @@ extension PanePage where Details == EmptyView {
         self.init(title: title, subtitle: subtitle, actions: actions, more: more, progress: progress,
                   hero: hero, controls: controls, body: { EmptyView() }, shelf: shelf)
     }
-}
-
-/// How a page with a hero uses a wide room (`PanePage(wideStyle:)`).
-enum PaneWideStyle: Equatable, Sendable {
-    /// The hero on the left half, the title, controls, body and shelf on the right.
-    case columns
-    /// The hero alone, filling the room; the page draws its few controls over it.
-    case heroOnly
 }
 
 /// One shelf card: a small lowercase title over its content, on the surface colour.

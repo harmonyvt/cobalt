@@ -1,13 +1,10 @@
 import CobaltKit
 import SwiftUI
 
-// The twitch tab (APP-API-CONTRACT 70): a list of channels (search, your channel, who you follow that is live, recent).
-// A channel opens in the screen pane (`TwitchStreamPage`: the player in the hero, chat on the shelf), which keeps
-// playing in the bar when it is closed and while you switch tabs.
-//
-// While the pane plays a stream on screen BESIDE this tab (the Duo's other screen, the iPad / Mac column), this tab is the
-// right-hand panel of the watch: it shows the stream's live chat at full height, with a "channels" button back to the list
-// (and "show chat" back again). The pane then leaves the chat out (`Pane.twitchChatBeside`).
+// The twitch tab (APP-API-CONTRACT 70; CONTRACT-PANE section 5): always the channel browser (search, your channel, who
+// you follow that is live, recent). Tapping a channel opens or switches the stream in the screen pane (`TwitchStreamPage`),
+// which keeps playing in the bar when closed and stays consistent across every device posture (folded, Duo wide/tall,
+// iPad, Mac) and tab switch.
 
 struct TwitchScreen: View {
     let model: AppModel
@@ -15,91 +12,32 @@ struct TwitchScreen: View {
 
     @Environment(\.lifecycle) private var lifecycle
     @Environment(Pane.self) private var pane
-    /// Held here, handed to the pane weakly while this tab is up.
-    @State private var tabChat = TwitchTabChat()
 
     private var store: TwitchStore { model.twitch }
 
-    /// The channel whose chat this tab shows beside the pane (its display name once known).
-    private var besideName: String? {
-        guard let login = pane.twitchChatBeside else { return nil }
-        return (store.channel == login ? store.channelInfo?.displayName : nil) ?? login
+    /// The channel currently held by the pane (on screen, spanned, or minimized in the bar).
+    private var activeLogin: String? {
+        if case .stream(let login)? = pane.item, pane.state != .hidden { return login }
+        if case .stream(let login)? = pane.barItem { return login }
+        return nil
     }
 
     var body: some View {
-        Group {
-            if pane.twitchChatBeside != nil {
-                TwitchBesideChat(model: model)
-            } else {
-                TwitchChannelList(model: model, besideStream: pane.streamBesideTab) { tabChat.browsing = false }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(CobaltColor.bg)
-        .navigationTitle(besideName ?? Copy.Twitch.title)
-        // the chat beside a stream: the channel's name is the title and "channels" sits in the bar, so the lines get the
-        // whole height under it
-        .toolbar {
-            if besideName != nil {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { tabChat.browsing = true } label: {
-                        Label(Copy.Twitch.channels, systemImage: Symbol.Twitch.channels)
-                    }
-                    .accessibilityIdentifier("twitch.channels")
-                }
-            }
-        }
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .task {
-            await store.load()
-            if model.sevenTv.status == nil { await model.sevenTv.load() }
-        }
-        // back from studio (a reconnect) or from the background: a session that could not chat is asked again
-        .onChange(of: lifecycle.phase) { _, phase in
-            if phase == .active { Task { await store.load() } }
-        }
-        .onAppear { pane.provide(tabChat) }
-        .onDisappear {
-            if pane.provided(TwitchTabChat.self) === tabChat { pane.withdraw(TwitchTabChat.self) }
-        }
-        // a new stream opens with its chat up
-        .onChange(of: pane.streamBesideTab) { _, login in if login != nil { tabChat.browsing = false } }
-    }
-}
-
-/// The twitch tab is up (handed to the pane while it is): whether it shows the channel list instead of the chat.
-@MainActor
-@Observable
-final class TwitchTabChat {
-    var browsing = false
-}
-
-extension Pane {
-    /// The stream on screen beside the tab (a Duo's other screen, the iPad / Mac column), not spanned, not a sheet.
-    var streamBesideTab: String? {
-        guard state == .screen, tabSize != nil, case .stream(let login)? = item else { return nil }
-        return login
-    }
-
-    /// The stream whose chat the twitch tab beside the pane shows: the tab is up and not on its channel list.
-    var twitchChatBeside: String? {
-        guard let login = streamBesideTab, let tab = provided(TwitchTabChat.self), !tab.browsing else { return nil }
-        return login
-    }
-}
-
-// MARK: - the chat beside the pane
-
-private struct TwitchBesideChat: View {
-    let model: AppModel
-
-    var body: some View {
-        TwitchChatCard(model: model, delay: TwitchChatCard.tvDelay, fills: true)
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
+        TwitchChannelList(model: model, activeLogin: activeLogin)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(CobaltColor.bg)
+            .navigationTitle(Copy.Twitch.title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .task {
+                await store.load()
+                if model.sevenTv.status == nil { await model.sevenTv.load() }
+            }
+            // back from studio (a reconnect) or from the background: a session that could not chat is asked again
+            .onChange(of: lifecycle.phase) { _, phase in
+                if phase == .active { Task { await store.load() } }
+            }
     }
 }
 
@@ -107,31 +45,25 @@ private struct TwitchBesideChat: View {
 
 private struct TwitchChannelList: View {
     let model: AppModel
-
-    /// A stream playing in the pane beside this tab (its chat was put away for the list): offer it back.
-    var besideStream: String? = nil
-    var showChat: () -> Void = {}
+    var activeLogin: String?
 
     @Environment(Pane.self) private var pane
     @State private var query = ""
 
     private var store: TwitchStore { model.twitch }
 
+    private func isWatching(_ login: String) -> Bool {
+        activeLogin?.caseInsensitiveCompare(login) == .orderedSame
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                if besideStream != nil {
-                    Button(action: showChat) {
-                        Label(Copy.Twitch.showChat, systemImage: Symbol.Twitch.chat)
-                    }
-                    .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
-                    .accessibilityIdentifier("twitch.showChat")
-                }
                 search
                 banner
                 if let me = store.session?.credentials?.login {
                     section(Copy.Twitch.yourChannel) {
-                        TwitchRecentChip(login: me, icon: Symbol.Twitch.pin) { watch(me) }
+                        TwitchRecentChip(login: me, icon: Symbol.Twitch.pin, active: isWatching(me)) { watch(me) }
                     }
                 }
                 live
@@ -139,7 +71,7 @@ private struct TwitchChannelList: View {
                     section(Copy.Twitch.recent) {
                         TwitchFlow(spacing: 8, lineSpacing: 8) {
                             ForEach(store.recents, id: \.self) { login in
-                                TwitchRecentChip(login: login, icon: Symbol.Twitch.recent) { watch(login) }
+                                TwitchRecentChip(login: login, icon: Symbol.Twitch.recent, active: isWatching(login)) { watch(login) }
                             }
                         }
                     }
@@ -208,8 +140,10 @@ private struct TwitchChannelList: View {
                 } else {
                     DuoAdaptiveGrid(minItemWidth: 250, spacing: 14, rowSpacing: 18, alignment: .leading) {
                         ForEach(store.following) { s in
-                            Button { watch(s.login) } label: { TwitchStreamCard(stream: s) }
-                                .buttonStyle(.plain)
+                            Button { watch(s.login) } label: {
+                                TwitchStreamCard(stream: s, watching: isWatching(s.login))
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -254,23 +188,39 @@ private struct TwitchBanner: View {
 private struct TwitchRecentChip: View {
     let login: String
     let icon: String
+    var active = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Label(login, systemImage: icon)
-                .font(Font.cobalt(13.5, .medium))
-                .padding(.horizontal, 12)
-                .frame(minHeight: 34)
-                .background(CobaltColor.surface, in: Capsule())
+            HStack(spacing: 6) {
+                Label(login, systemImage: icon)
+                if active {
+                    Circle()
+                        .fill(TwitchChatPalette.twitch)
+                        .frame(width: 6, height: 6)
+                        .accessibilityHidden(true)
+                }
+            }
+            .font(Font.cobalt(13.5, .medium))
+            .padding(.horizontal, 12)
+            .frame(minHeight: 34)
+            .background(active ? TwitchChatPalette.twitch.opacity(0.14) : CobaltColor.surface, in: Capsule())
+            .overlay {
+                if active {
+                    Capsule().strokeBorder(TwitchChatPalette.twitch.opacity(0.55), lineWidth: 1)
+                }
+            }
         }
         .buttonStyle(.plain)
         .foregroundStyle(CobaltColor.text)
+        .accessibilityValue(active ? Copy.Twitch.watchingNow : "")
     }
 }
 
 private struct TwitchStreamCard: View {
     let stream: TwitchStreamInfo
+    var watching = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -288,12 +238,25 @@ private struct TwitchStreamCard: View {
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(CobaltColor.badgeBack, in: RoundedRectangle(cornerRadius: 4))
+                    if watching {
+                        Text(Copy.Twitch.watchingNow)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(TwitchChatPalette.twitch, in: RoundedRectangle(cornerRadius: 4))
+                    }
                 }
                 .foregroundStyle(.white)
                 .padding(7)
             }
             .aspectRatio(16 / 9, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                if watching {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(TwitchChatPalette.twitch, lineWidth: 2)
+                }
+            }
             Text(stream.displayName)
                 .font(Font.cobalt(14.5, .semibold))
                 .foregroundStyle(CobaltColor.text)
