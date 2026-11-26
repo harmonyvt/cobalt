@@ -21,6 +21,11 @@ extension PaneDestination {
     }
 
     @MainActor @ViewBuilder
+    static func dualStream(primary: String, secondary: String, model: AppModel, pane: Pane) -> some View {
+        TwitchStreamPage(login: primary, secondaryLogin: secondary, model: model)
+    }
+
+    @MainActor @ViewBuilder
     static func swarm(_ id: String, model: AppModel, pane: Pane) -> some View {
         SwarmPage(id: id, model: model)
     }

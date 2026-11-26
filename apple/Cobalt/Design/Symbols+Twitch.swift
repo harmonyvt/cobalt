@@ -41,5 +41,15 @@ extension Symbol {
         static let audioOnly = "waveform"
         static let pipEnter = "pip.enter"
         static let pipExit = "pip.exit"
+        // dual stream
+        static let addStream = "plus.rectangle.on.rectangle"
+        static let watchAlongside = "rectangle.split.2x1"
+        static let focusLayout = "rectangle.inset.bottomright.filled"
+        static let splitLayoutHorizontal = "rectangle.split.2x1.fill"
+        static let splitLayoutVertical = "rectangle.split.1x2.fill"
+        static let swapFocus = "arrow.left.arrow.right"
+        static let dropStream = "rectangle.badge.minus"
+        static let pinFill = "pin.fill"
+        static let floatingPanel = "macwindow.on.rectangle"
     }
 }

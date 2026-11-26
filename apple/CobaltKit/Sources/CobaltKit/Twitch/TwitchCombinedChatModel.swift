@@ -632,6 +632,25 @@ public final class TwitchCombinedChatModel {
         return accentsByChannel[lower]?.displayName ?? lower
     }
 
+    /// Updates cached display names for active channels without disturbing running sockets, messages, or composer state.
+    public func updateDisplayNames(_ displayNames: [String: String]) {
+        guard !channels.isEmpty, !displayNames.isEmpty else { return }
+        var updated = accentsByChannel
+        var changed = false
+        for (idx, ch) in channels.enumerated() {
+            guard let raw = displayNames[ch] ?? displayNames[ch.lowercased()], !raw.isEmpty else { continue }
+            let slot: TwitchChannelSlot = idx == 0 ? .primary : .secondary
+            let next = TwitchChannelAccent(slot: slot, channel: ch, displayName: raw)
+            if updated[ch] != next {
+                updated[ch] = next
+                changed = true
+            }
+        }
+        if changed {
+            accentsByChannel = updated
+        }
+    }
+
     // MARK: - focus, filter & Opus's Foolproof Composer Target Locking
 
     /// Updates which stream currently holds audio/visual focus.

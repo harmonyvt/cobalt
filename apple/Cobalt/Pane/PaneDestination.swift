@@ -37,6 +37,7 @@ struct PaneDestination: View {
         case .booruFilters: Self.booruFilters(model: model, pane: pane)
         // twitch, swarms, names and the queue
         case .stream(let login): Self.stream(login, model: model, pane: pane)
+        case .dualStream(let primary, let secondary): Self.dualStream(primary: primary, secondary: secondary, model: model, pane: pane)
         case .swarm(let id): Self.swarm(id, model: model, pane: pane)
         case .name(let id): Self.name(id, model: model, pane: pane)
         case .job(let id): Self.job(id, model: model, pane: pane)

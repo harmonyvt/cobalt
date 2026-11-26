@@ -129,3 +129,10 @@ struct PaneHidesChromeHeaderKey: PreferenceKey {
     static let defaultValue = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }
+
+/// Whether the current page supplies its own system `.toolbar` items (e.g. iPhone Duo Vertical Controls rail + Tabletop
+/// top bar) so `PaneChrome` keeps the navigation bar toolbar visible instead of hiding it.
+struct PaneShowsSystemToolbarKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}

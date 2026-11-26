@@ -125,9 +125,15 @@ public struct PaneMachine: Equatable, Sendable {
         }
         let wasBackground = item == background
         if wasBackground { background = nil }
-        moveAside()
+        let replacingStream = item.isStream && route.item?.isStream == true
+        if item.isStream, background?.isStream == true {
+            background = nil
+        }
+        if !replacingStream {
+            moveAside()
+        }
         route = PaneRoute(item: item, state: state, shelf: 0)
-        isRunning = wasBackground                        // the background item was running; anything else says so itself
+        isRunning = wasBackground || (replacingStream && isRunning)
         userOpened = userInitiated
         return true
     }

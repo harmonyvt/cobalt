@@ -176,7 +176,7 @@ final class TwitchNativeVideoView: NSView {
 /// it, and when that view goes the one before it takes it back (the TV window can borrow the stream from the phone this way).
 /// With no view left the stream stops.
 @MainActor @Observable
-final class TwitchPlayerHost: LifecycleAware, Purgeable {
+final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
     static let shared = TwitchPlayerHost()
 
     /// How long a stopped stream with no view wanting it keeps its views (and WebKit's page process) around.
@@ -199,8 +199,27 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     /// True when low-latency playback failed on this channel and the host automatically switched to the Twitch embed.
     private(set) var fellBackToEmbed = false
 
-    /// The channel playing now, nil while stopped.
+    /// The primary channel playing now, nil while stopped.
     private(set) var channel: String?
+    /// The secondary channel playing in dual-stream mode, nil in single-stream mode.
+    private(set) var secondaryChannel: String?
+    /// True when two concurrent Twitch streams are active.
+    var isDualStream: Bool { channel != nil && secondaryChannel != nil }
+    /// Dual-stream visual layout mode (Focus + Inset default; 1-tap 50/50 toggle).
+    var dualStageMode: TwitchDualStageMode = .focusInset {
+        didSet {
+            guard dualStageMode != oldValue else { return }
+            syncDualPiPLayout()
+        }
+    }
+    /// Equal-power audio crossfader + follow-focus pin state machine.
+    let dualMixer = TwitchDualAudioMixer()
+    /// Currently visually focused channel login in dual-stream mode (primary in single-stream mode).
+    var focusedChannel: String? {
+        guard isDualStream else { return channel }
+        return dualMixer.focusedSlot == .primary ? channel : secondaryChannel
+    }
+
     /// Latency to the broadcaster in seconds, nil until the stream plays.
     private(set) var delay: Double?
     /// The lowest delay seen on this channel: what this stream can do.
@@ -218,14 +237,30 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     /// Available quality variants when running in low-latency native mode.
     private(set) var variants: [TwitchVariant] = []
     private(set) var selectedVariantID: String?
+
+    // MARK: secondary stream (Slot B) observable state
+
+    private(set) var secondaryDelay: Double?
+    private(set) var secondaryIsPlaying = false
+    private(set) var secondaryIsLoading = false
+    private(set) var secondaryIsBuffering = false
+    private(set) var secondaryIsOffline = false
+    private(set) var secondaryVariants: [TwitchVariant] = []
+    private(set) var secondarySelectedVariantID: String?
+    /// True while the unfocused stream has been stepped down under `AppLifecycle.snapshot.shouldThrottle`.
+    private(set) var isThermalThrottled = false
+    private(set) var thermalThrottledSlot: TwitchDualSlot?
+
     /// True when low-latency native mode has handed video off to an AirPlay TV via `AVPlayer`.
     private(set) var isAirPlayingVideo = false
     /// True while probing an AirPlay route/picker with a muted `AVPlayer` before external playback activates.
     private(set) var isAirPlayProbing = false
-    /// True while Picture-in-Picture is active over the native sample-buffer display layer.
+    /// True while Picture-in-Picture (single, iOS dual PiP, or macOS floating panel) is active.
     private(set) var isPiPActive = false
-    /// True when the system reports PiP can start on the attached display layer.
+    /// True when the system reports single-stream PiP can start on the attached display layer.
     private(set) var isPiPPossible = false
+    /// True when dual-stream PiP (iOS `AVPictureInPictureVideoCallViewController` or macOS floating panel) can start.
+    private(set) var isDualPiPPossible = false
     /// The view holding the player surface now.
     private(set) var holder: UUID?
     /// Jump to live by itself when the stream drifts behind (on by default).
@@ -252,7 +287,15 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     }
 
     var canTogglePiP: Bool {
-        activeMode == .lowLatency && !isAirPlayingVideo && !isAudioOnly
+        if isDualStream {
+            guard activeMode == .lowLatency, channel != nil, secondaryChannel != nil else { return false }
+            #if os(macOS)
+            return true
+            #else
+            return isDualPiPPossible || isPiPActive
+            #endif
+        }
+        return activeMode == .lowLatency && !isAirPlayingVideo && !isAudioOnly
             && channel != nil && !isOffline && (isPiPPossible || isPiPActive)
     }
 
@@ -268,7 +311,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
 
     /// The web view while there is one; `webView` builds it on demand.
     @ObservationIgnored private var made: WKWebView?
-    /// The native display-layer view while there is one; `nativeView` builds it on demand.
+    /// The primary native display-layer view while there is one; `nativeView` builds it on demand.
     @ObservationIgnored private var madeNative: TwitchNativeVideoView?
     @ObservationIgnored private var nativeEngine: TwitchNativeEngine?
     @ObservationIgnored private var nativeSessionID: UInt64 = 0
@@ -283,13 +326,32 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     @ObservationIgnored private var resolvedMasterURL: URL?
     @ObservationIgnored private var preferredQualityID: String?
 
+    /// The secondary native display-layer view (Slot B) for dual-stream mode.
+    @ObservationIgnored private var madeSecondaryNative: TwitchNativeVideoView?
+    @ObservationIgnored private var secondaryNativeEngine: TwitchNativeEngine?
+    @ObservationIgnored private var secondaryNativeSessionID: UInt64 = 0
+    @ObservationIgnored private var secondaryNativeLifecycleTask: Task<Void, Never>?
+    @ObservationIgnored private var secondaryNativeEventTask: Task<Void, Never>?
+    @ObservationIgnored private var secondaryNativeEventContinuation: AsyncStream<TwitchNativeEvent>.Continuation?
+    @ObservationIgnored private var secondaryStartInstant: ContinuousClock.Instant?
+    @ObservationIgnored private var preThrottleVariantID: String?
+    @ObservationIgnored private var lastThermalShouldThrottle = false
+    @ObservationIgnored private var resumeSecondaryChannel: String?
+
     @ObservationIgnored private let pipController = TwitchPiPController()
+    #if os(iOS)
+    @ObservationIgnored private let dualPiPController = TwitchDualPiPController()
+    @ObservationIgnored private weak var dualPiPSourceView: UIView?
+    #else
+    @ObservationIgnored private let dualFloatingPanel = TwitchDualFloatingPanel()
+    #endif
     @ObservationIgnored private let nowPlaying = TwitchNowPlayingController.shared
     /// Held from PiP willStart through didStop so closing/replacing UI never tears down active PiP.
     @ObservationIgnored private var hasPiPClaim = false
     @ObservationIgnored private var isInBackground = false
     @ObservationIgnored private var backgroundVideoOffTask: Task<Void, Never>?
-    @ObservationIgnored private var restoreHandler: ((String) -> Void)?
+    @ObservationIgnored var restoreHandler: ((String) -> Void)?
+    @ObservationIgnored var restoreDualHandler: ((String, String) -> Void)?
     @ObservationIgnored private weak var attachedModel: AppModel?
     @ObservationIgnored private var observingModel = false
 
@@ -334,6 +396,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         let proxy = TwitchMessageProxy()
         self.proxy = proxy
         proxy.host = self
+        dualMixer.target = self
         configurePiPAndNowPlaying()
         AppLifecycle.shared.register(self, order: .media)
         AppLifecycle.shared.register(purgeable: self)
@@ -391,7 +454,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
                 completion(true)
                 return
             }
-            if let ch = self.channel {
+            if let primary = self.channel, let secondary = self.secondaryChannel {
+                self.restoreDualHandler?(primary, secondary)
+            } else if let ch = self.channel {
                 self.restoreHandler?(ch)
             }
             Task { @MainActor in
@@ -399,6 +464,104 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
                 completion(true)
             }
         }
+
+        #if os(iOS)
+        dualPiPController.onPossibleChange = { [weak self] possible in
+            self?.isDualPiPPossible = possible
+        }
+        dualPiPController.onWillStart = { [weak self] in
+            guard let self else { return }
+            self.hasPiPClaim = true
+            self.stopTask?.cancel()
+            self.stopTask = nil
+            self.releaseTask?.cancel()
+            self.releaseTask = nil
+            self.backgroundVideoOffTask?.cancel()
+            self.backgroundVideoOffTask = nil
+            self.dualMixer.handleForegrounded()
+            AudioSessionCoordinator.shared.claim(Self.pipAudioClaimID, kind: .playback(allowsPiP: true))
+            let primaryEngine = self.nativeEngine
+            let secondaryEngine = self.secondaryNativeEngine
+            Task {
+                await primaryEngine?.setVideoOutputEnabled(true)
+                await secondaryEngine?.setVideoOutputEnabled(true)
+            }
+        }
+        dualPiPController.onDidStart = { [weak self] in
+            guard let self else { return }
+            self.isPiPActive = true
+            Breadcrumbs.add("twitch.dual.pip.start")
+        }
+        dualPiPController.onFailedToStart = { [weak self] _ in
+            guard let self else { return }
+            self.hasPiPClaim = false
+            self.isPiPActive = false
+            AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
+            Breadcrumbs.add("twitch.dual.pip.failed")
+        }
+        dualPiPController.onDidStop = { [weak self] restoredUI in
+            guard let self else { return }
+            self.isPiPActive = false
+            self.hasPiPClaim = false
+            AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
+            Breadcrumbs.add("twitch.dual.pip.stop", ["restored": .bool(restoredUI)])
+            if !restoredUI {
+                if self.claims.isEmpty {
+                    self.stop()
+                } else {
+                    self.setPaused(true)
+                }
+            }
+            self.syncPiPAndNowPlaying()
+        }
+        dualPiPController.onRestoreUI = { [weak self] completion in
+            guard let self else {
+                completion(true)
+                return
+            }
+            if let primary = self.channel, let secondary = self.secondaryChannel {
+                self.restoreDualHandler?(primary, secondary)
+            } else if let ch = self.channel {
+                self.restoreHandler?(ch)
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(120))
+                completion(true)
+            }
+        }
+        #else
+        isDualPiPPossible = true
+        dualFloatingPanel.onDidOpen = { [weak self] in
+            guard let self else { return }
+            self.hasPiPClaim = true
+            self.isPiPActive = true
+            self.stopTask?.cancel()
+            self.stopTask = nil
+            self.releaseTask?.cancel()
+            self.releaseTask = nil
+            AudioSessionCoordinator.shared.claim(Self.pipAudioClaimID, kind: .playback(allowsPiP: true))
+            Breadcrumbs.add("twitch.dual.panel.open")
+        }
+        dualFloatingPanel.onDidClose = { [weak self] restoredUI in
+            guard let self else { return }
+            self.isPiPActive = false
+            self.hasPiPClaim = false
+            AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
+            Breadcrumbs.add("twitch.dual.panel.close", ["restored": .bool(restoredUI)])
+            if !restoredUI, self.claims.isEmpty {
+                self.stop()
+            }
+            self.syncPiPAndNowPlaying()
+        }
+        dualFloatingPanel.onRestoreUI = { [weak self] in
+            guard let self else { return }
+            if let primary = self.channel, let secondary = self.secondaryChannel {
+                self.restoreDualHandler?(primary, secondary)
+            } else if let ch = self.channel {
+                self.restoreHandler?(ch)
+            }
+        }
+        #endif
 
         nowPlaying.onPlay = { [weak self] in
             self?.setPaused(false)
@@ -423,9 +586,39 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         }
     }
 
-    /// Registers how PiP's restore button re-opens the stream pane when the user returns to the app.
+    /// Registers how single-stream PiP's restore button re-opens the stream pane when the user returns to the app.
     func registerRestoreHandler(_ handler: @escaping (String) -> Void) {
         restoreHandler = handler
+    }
+
+    /// Registers how dual-stream PiP's restore button re-opens `.dualStream(primary:secondary:)` in the pane.
+    func registerRestoreDualHandler(_ handler: @escaping (String, String) -> Void) {
+        restoreDualHandler = handler
+    }
+
+    #if os(iOS)
+    /// Registers the active `TwitchDualStage` host view as the source for iOS dual-stream VideoCall PiP.
+    /// Switches between single-stream and dual-stream PiP strictly while PiP is inactive.
+    func registerDualPiPSourceView(_ view: UIView?) {
+        dualPiPSourceView = view
+        guard isDualStream, let view, !isPiPActive else { return }
+        pipController.setAutoStartFromInline(false)
+        dualPiPController.attach(
+            sourceView: view,
+            primaryView: nativeView,
+            secondaryView: secondaryNativeView,
+            focusedSlot: dualMixer.focusedSlot,
+            layoutMode: dualStageMode
+        )
+        syncPiPAndNowPlaying()
+    }
+    #endif
+
+    private func syncDualPiPLayout() {
+        #if os(iOS)
+        guard isDualStream else { return }
+        dualPiPController.updateLayout(focusedSlot: dualMixer.focusedSlot, layoutMode: dualStageMode)
+        #endif
     }
 
     private func observeAttachedModel() {
@@ -437,6 +630,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             _ = model.twitch.channel
             _ = model.twitch.stream
             _ = model.twitch.channelInfo
+            _ = model.twitch.secondaryChannel
+            _ = model.twitch.secondaryStream
+            _ = model.twitch.secondaryChannelInfo
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -447,8 +643,48 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     }
 
     func togglePiP() {
+        if isDualStream {
+            #if os(iOS)
+            if dualPiPController.isActive {
+                dualPiPController.stop()
+            } else if pipController.isActive {
+                pipController.stop()
+            } else if let source = dualPiPSourceView {
+                pipController.setAutoStartFromInline(false)
+                dualPiPController.attach(
+                    sourceView: source,
+                    primaryView: nativeView,
+                    secondaryView: secondaryNativeView,
+                    focusedSlot: dualMixer.focusedSlot,
+                    layoutMode: dualStageMode
+                )
+                dualPiPController.start()
+            }
+            #else
+            if dualFloatingPanel.isOpen {
+                dualFloatingPanel.close(restoredUI: true)
+            } else {
+                if pipController.isActive { pipController.stop() }
+                dualFloatingPanel.open(host: self)
+            }
+            #endif
+            return
+        }
+
         if isPiPActive {
-            pipController.stop()
+            #if os(iOS)
+            if dualPiPController.isActive {
+                dualPiPController.stop()
+            } else {
+                pipController.stop()
+            }
+            #else
+            if dualFloatingPanel.isOpen {
+                dualFloatingPanel.close(restoredUI: true)
+            } else {
+                pipController.stop()
+            }
+            #endif
         } else if canTogglePiP {
             pipController.attach(to: nativeView.displayLayer)
             pipController.setUserPaused(userPaused)
@@ -458,19 +694,78 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
 
     private func syncPiPAndNowPlaying() {
         pipController.setUserPaused(userPaused)
-        let allowAutoPiP: Bool
+        let allowSingleAutoPiP: Bool
+        let allowDualAutoPiP: Bool
         #if os(iOS)
-        allowAutoPiP = activeMode == .lowLatency && !isAirPlayingVideo && !isAudioOnly
-            && channel != nil && !userPaused && !isOffline && !TwitchTV.shared.onTV
+        if isDualStream {
+            allowSingleAutoPiP = false
+            allowDualAutoPiP = activeMode == .lowLatency && channel != nil && secondaryChannel != nil
+                && !userPaused && !TwitchTV.shared.onTV
+        } else {
+            allowSingleAutoPiP = activeMode == .lowLatency && !isAirPlayingVideo && !isAudioOnly
+                && channel != nil && !userPaused && !isOffline && !TwitchTV.shared.onTV
+            allowDualAutoPiP = false
+        }
+        dualPiPController.setAutoStartFromInline(allowDualAutoPiP)
         #else
-        allowAutoPiP = false
+        allowSingleAutoPiP = false
+        allowDualAutoPiP = false
+        _ = allowDualAutoPiP
         #endif
-        pipController.setAutoStartFromInline(allowAutoPiP)
+        pipController.setAutoStartFromInline(allowSingleAutoPiP)
         syncNowPlaying()
     }
 
     private func syncNowPlaying() {
-        guard let ch = channel, !isOffline, (activeMode == .lowLatency || isAirPlayingVideo) else {
+        guard let ch = channel, (activeMode == .lowLatency || isAirPlayingVideo) else {
+            nowPlaying.onNextTrack = nil
+            nowPlaying.onPreviousTrack = nil
+            nowPlaying.clear()
+            return
+        }
+
+        if let sec = secondaryChannel {
+            // Dual-stream Now Playing: wire next/previous track buttons to swap audio focus A <-> B.
+            nowPlaying.onNextTrack = { [weak self] in
+                self?.swapDualAudioFocusFromRemote()
+            }
+            nowPlaying.onPreviousTrack = { [weak self] in
+                self?.swapDualAudioFocusFromRemote()
+            }
+            let twitch = attachedModel?.twitch
+            let nameA = twitch?.displayName(for: ch) ?? ch
+            let nameB = twitch?.displayName(for: sec) ?? sec
+            let louder = dualMixer.louderSlot
+            let combinedTitle: String
+            switch louder {
+            case .primary:
+                combinedTitle = "🔊 \(nameA) · \(nameB)"
+            case .secondary:
+                combinedTitle = "\(nameA) · 🔊 \(nameB)"
+            case nil:
+                combinedTitle = "\(nameA) · \(nameB)"
+            }
+            let audioChannel = (louder ?? dualMixer.focusedSlot) == .primary ? ch : sec
+            let info = twitch?.streamInfo(for: audioChannel)
+            let channelMeta = twitch?.channelInfo(for: audioChannel)
+            let game = info?.game
+            let artworkURL = info?.thumbnail ?? channelMeta?.avatar
+            let activePlaying = !userPaused && (isPlaying || secondaryIsPlaying || isLoading || secondaryIsLoading || isBuffering || secondaryIsBuffering)
+            nowPlaying.update(.init(
+                channel: audioChannel,
+                displayName: combinedTitle,
+                title: combinedTitle,
+                game: game,
+                artworkURL: artworkURL,
+                isPlaying: activePlaying,
+                isLive: true
+            ))
+            return
+        }
+
+        nowPlaying.onNextTrack = nil
+        nowPlaying.onPreviousTrack = nil
+        guard !isOffline else {
             nowPlaying.clear()
             return
         }
@@ -513,12 +808,28 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         return view
     }
 
-    /// The app's one native sample-buffer video view, built on first need and again after `releaseResources`.
+    /// The primary native sample-buffer video view (Slot A), built on first need and again after `releaseResources`.
     var nativeView: TwitchNativeVideoView {
         if let madeNative { return madeNative }
         let view = TwitchNativeVideoView(frame: .zero)
         madeNative = view
         return view
+    }
+
+    /// The secondary native sample-buffer video view (Slot B) for dual-stream mode.
+    var secondaryNativeView: TwitchNativeVideoView {
+        if let madeSecondaryNative { return madeSecondaryNative }
+        let view = TwitchNativeVideoView(frame: .zero)
+        madeSecondaryNative = view
+        return view
+    }
+
+    /// Returns the live `TwitchNativeVideoView` for the requested dual-stream slot.
+    func nativeView(for slot: TwitchDualSlot) -> TwitchNativeVideoView {
+        switch slot {
+        case .primary: nativeView
+        case .secondary: secondaryNativeView
+        }
     }
 
     #if os(iOS)
@@ -533,7 +844,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
 
     // MARK: holders
 
-    /// A view wants the stream. The newest claim holds the player surface.
+    /// A view wants a single stream. The newest claim holds the player surface.
     func claim(_ id: UUID, channel: String) {
         stopTask?.cancel()
         stopTask = nil
@@ -542,7 +853,23 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         claims.removeAll { $0 == id }
         claims.append(id)
         holder = id
-        play(channel)
+        if isDualStream {
+            demoteToSingle(keeping: channel)
+        } else {
+            play(channel)
+        }
+    }
+
+    /// A view wants two simultaneous streams (Zero-Flash promotion when `primary` is already running in Slot A).
+    func claimDual(_ id: UUID, primary: String, secondary: String) {
+        stopTask?.cancel()
+        stopTask = nil
+        releaseTask?.cancel()
+        releaseTask = nil
+        claims.removeAll { $0 == id }
+        claims.append(id)
+        holder = id
+        playDual(primary: primary, secondary: secondary)
     }
 
     /// A view went. The claim before it takes the player back; with none left (and no active PiP claim) the stream stops
@@ -605,6 +932,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             return
         }
         #endif
+        if isDualStream {
+            dualMixer.syncToTarget(animated: false)
+            return
+        }
         if activeMode == .lowLatency {
             let engine = nativeEngine
             Task { await engine?.setMuted(muted) }
@@ -618,9 +949,14 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     func play(_ channel: String) {
         let c = TwitchEmbed.safe(channel)
         guard !c.isEmpty else { return }
+        if isDualStream {
+            demoteToSingle(keeping: c)
+            return
+        }
         // off screen: nothing plays until the app is back, then this channel does
         if suspended {
             resumeChannel = c
+            resumeSecondaryChannel = nil
             return
         }
         guard c != self.channel else { return }
@@ -632,10 +968,392 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
                 activeMode = preferredMode
             }
         }
+        allowAirPlayProbe = true
         self.channel = c
         resolvedMasterURL = nil
         reset()
         startActive(c)
+    }
+
+    /// Starts or promotes into dual-stream mode (`primary` in Slot A + `secondary` in Slot B).
+    /// Keeps any already-running stream's `TwitchNativeEngine` and `AVSampleBufferDisplayLayer` alive with zero black flash.
+    func playDual(primary rawPrimary: String, secondary rawSecondary: String) {
+        let p = TwitchEmbed.safe(rawPrimary)
+        let s = TwitchEmbed.safe(rawSecondary)
+        guard !p.isEmpty, !s.isEmpty else { return }
+        if p == s {
+            demoteToSingle(keeping: p)
+            return
+        }
+        if suspended {
+            resumeChannel = p
+            resumeSecondaryChannel = s
+            return
+        }
+
+        // Disable the 3rd parallel AirPlay HLS probe whenever dual-stream is active.
+        allowAirPlayProbe = false
+
+        // Dual-stream always runs on the native low-latency engine pair.
+        if activeMode != .lowLatency {
+            stopEmbed()
+            fellBackToEmbed = false
+            activeMode = .lowLatency
+        }
+
+        // Already running this exact pair: just sync mixer/PiP/Now Playing.
+        if self.channel == p, self.secondaryChannel == s, nativeEngine != nil, secondaryNativeEngine != nil {
+            syncPiPAndNowPlaying()
+            attachedModel?.twitch.updateCombinedChatFocus(focusedChannel)
+            return
+        }
+
+        // Zero-flash slot swap if the requested pair is simply reversed.
+        if self.channel == s, self.secondaryChannel == p, nativeEngine != nil, secondaryNativeEngine != nil {
+            swapPrimaryAndSecondarySlots()
+            dualMixer.reset(focused: .primary, animated: true)
+            attachedModel?.twitch.updateCombinedChatFocus(focusedChannel)
+            syncPiPAndNowPlaying()
+            return
+        }
+
+        // Zero-flash promotion: if the requested primary is currently in Slot B, promote Slot B -> Slot A first.
+        if self.secondaryChannel == p, self.channel != p, secondaryNativeEngine != nil {
+            swapPrimaryAndSecondarySlots()
+        }
+
+        let primaryAlreadyLive = (self.channel == p && nativeEngine != nil && !isOffline)
+        let secondaryAlreadyLive = (self.secondaryChannel == s && secondaryNativeEngine != nil && !secondaryIsOffline)
+
+        self.channel = p
+        self.secondaryChannel = s
+
+        // Reset mixer to follow-focus on primary (A = 1.0, B = 0.0) without clicking primary audio.
+        dualMixer.reset(focused: .primary, animated: false)
+
+        if !primaryAlreadyLive {
+            resolvedMasterURL = nil
+            reset()
+            startNative(p)
+        } else {
+            // Keep Slot A alive with zero black flash; simply ensure its gain matches the mixer.
+            let engine = nativeEngine
+            let gain = isMuted ? Float(0) : dualMixer.gains.primary
+            Task {
+                await engine?.rampVolume(to: gain, duration: .seconds(0.08), curve: .equalPower, updateMuteOnEndpoints: true)
+            }
+        }
+
+        if !secondaryAlreadyLive {
+            resetSecondary()
+            startSecondaryNative(s)
+        } else {
+            dualMixer.syncToTarget(animated: false)
+        }
+
+        #if os(iOS)
+        if !isPiPActive, let source = dualPiPSourceView {
+            pipController.setAutoStartFromInline(false)
+            dualPiPController.attach(
+                sourceView: source,
+                primaryView: nativeView,
+                secondaryView: secondaryNativeView,
+                focusedSlot: dualMixer.focusedSlot,
+                layoutMode: dualStageMode
+            )
+        }
+        #endif
+
+        applyThermalThrottling(shouldThrottle: AppLifecycle.shared.snapshot.shouldThrottle)
+        attachedModel?.twitch.updateCombinedChatFocus(focusedChannel)
+        syncPiPAndNowPlaying()
+        Breadcrumbs.add("twitch.dual.start", ["primary_kept": .bool(primaryAlreadyLive)])
+    }
+
+    /// Demotes dual-stream mode down to a single stream, preserving the surviving stream's live engine and
+    /// `AVSampleBufferDisplayLayer` with zero black flash (even when keeping Slot B!).
+    func demoteToSingle(keeping rawChannel: String) {
+        let keep = TwitchEmbed.safe(rawChannel)
+        guard !keep.isEmpty else { return }
+
+        // If keeping Slot B, promote Slot B -> Slot A in place without dropping a frame.
+        if self.secondaryChannel == keep, self.channel != keep, secondaryNativeEngine != nil {
+            swapPrimaryAndSecondarySlots()
+        }
+
+        clearThermalThrottling(restoreVariant: false)
+        dualMixer.handleForegrounded()
+        stopSecondaryNative()
+        secondaryChannel = nil
+        resetSecondary()
+        allowAirPlayProbe = true
+
+        #if os(iOS)
+        // Guard: switch dual -> single PiP controller strictly while PiP is inactive.
+        if !isPiPActive {
+            dualPiPController.detach()
+            pipController.attach(to: nativeView.displayLayer)
+        }
+        #else
+        if dualFloatingPanel.isOpen {
+            dualFloatingPanel.close(restoredUI: true)
+        }
+        #endif
+
+        if self.channel == keep, nativeEngine != nil {
+            // Surviving stream stays live with zero flash; ramp audio back to full unmuted gain (unless user muted).
+            let engine = nativeEngine
+            let targetGain: Float = isMuted ? 0.0 : 1.0
+            Task {
+                await engine?.setPaused(userPaused)
+                await engine?.rampVolume(to: targetGain, duration: .seconds(0.16), curve: .equalPower, updateMuteOnEndpoints: true)
+            }
+            syncPiPAndNowPlaying()
+            Breadcrumbs.add("twitch.dual.demote", ["kept_live": .bool(true)])
+        } else {
+            self.channel = keep
+            resolvedMasterURL = nil
+            reset()
+            startActive(keep)
+            Breadcrumbs.add("twitch.dual.demote", ["kept_live": .bool(false)])
+        }
+    }
+
+    // MARK: dual-stream focus, audio mixer target & thermal throttling
+
+    func holds(_ id: UUID) -> Bool {
+        holder == id
+    }
+
+    func toggleDualStageMode() {
+        dualStageMode = dualStageMode == .focusInset ? .split5050 : .focusInset
+    }
+
+    func setDualFocus(_ slot: TwitchDualSlot) {
+        guard isDualStream else { return }
+        dualMixer.setFocus(slot, animated: true)
+        attachedModel?.twitch.updateCombinedChatFocus(focusedChannel)
+        syncDualPiPLayout()
+        syncNowPlaying()
+        if AppLifecycle.shared.snapshot.shouldThrottle {
+            applyThermalThrottling(shouldThrottle: true)
+        }
+    }
+
+    func swapDualFocus() {
+        setDualFocus(dualMixer.focusedSlot.other)
+    }
+
+    /// Invoked by Lock Screen / Control Center next/previous track buttons to swap audio focus A <-> B.
+    func swapDualAudioFocusFromRemote() {
+        guard isDualStream else { return }
+        dualMixer.swapAudioFocusForRemoteCommand(animated: true)
+        attachedModel?.twitch.updateCombinedChatFocus(focusedChannel)
+        syncDualPiPLayout()
+        syncNowPlaying()
+        Breadcrumbs.add("twitch.dual.remote_swap", ["focused": .string(dualMixer.focusedSlot.rawValue)])
+    }
+
+    func applyDualAudioRamp(
+        primaryGain: Float,
+        secondaryGain: Float,
+        duration: TimeInterval,
+        curve: TwitchVolumeRampCurve,
+        updateMuteOnEndpoints: Bool
+    ) {
+        let pGain: Float = isMuted ? 0.0 : primaryGain
+        let sGain: Float = isMuted ? 0.0 : secondaryGain
+        let rampDuration: Duration = .seconds(max(0, duration))
+        let primaryEngine = nativeEngine
+        let secondaryEngine = secondaryNativeEngine
+        Task {
+            async let p: Void = {
+                if let primaryEngine {
+                    await primaryEngine.rampVolume(
+                        to: pGain,
+                        duration: rampDuration,
+                        curve: curve,
+                        updateMuteOnEndpoints: updateMuteOnEndpoints
+                    )
+                }
+            }()
+            async let s: Void = {
+                if let secondaryEngine {
+                    await secondaryEngine.rampVolume(
+                        to: sGain,
+                        duration: rampDuration,
+                        curve: curve,
+                        updateMuteOnEndpoints: updateMuteOnEndpoints
+                    )
+                }
+            }()
+            _ = await (p, s)
+        }
+        syncNowPlaying()
+    }
+
+    func setDualSlotSuspended(_ slot: TwitchDualSlot, suspended: Bool) {
+        let engine = slot == .primary ? nativeEngine : secondaryNativeEngine
+        guard let engine else { return }
+        let allowVideo = !suspended && (!isInBackground || isPiPActive || hasPiPClaim)
+        let shouldPause = suspended || userPaused
+        Task {
+            await engine.setVideoOutputEnabled(allowVideo)
+            await engine.setPaused(shouldPause)
+        }
+        Breadcrumbs.add("twitch.dual.lock_suspend", [
+            "slot": .string(slot.rawValue),
+            "suspended": .bool(suspended),
+        ])
+    }
+
+    /// Selects quality variant for a specific slot in dual-stream mode.
+    func selectVariant(_ id: String, for slot: TwitchDualSlot) {
+        guard activeMode == .lowLatency else { return }
+        switch slot {
+        case .primary:
+            selectVariant(id)
+        case .secondary:
+            secondarySelectedVariantID = id
+            let engine = secondaryNativeEngine
+            Task { await engine?.selectVariant(id: id) }
+        }
+    }
+
+    /// Swaps Slot A and Slot B engines, views, and metadata in place with zero frame drop.
+    private func swapPrimaryAndSecondarySlots() {
+        swap(&channel, &secondaryChannel)
+        swap(&madeNative, &madeSecondaryNative)
+        swap(&nativeEngine, &secondaryNativeEngine)
+        swap(&nativeLifecycleTask, &secondaryNativeLifecycleTask)
+        swap(&delay, &secondaryDelay)
+        swap(&isPlaying, &secondaryIsPlaying)
+        swap(&isLoading, &secondaryIsLoading)
+        swap(&isBuffering, &secondaryIsBuffering)
+        swap(&isOffline, &secondaryIsOffline)
+        swap(&variants, &secondaryVariants)
+        swap(&selectedVariantID, &secondarySelectedVariantID)
+        bestDelay = delay
+
+        // Rebind FIFO event streams to the swapped slots without stopping or flushing either engine.
+        if let primary = nativeEngine {
+            rebindPrimaryEventStream(for: primary)
+        }
+        if let secondary = secondaryNativeEngine {
+            rebindSecondaryEventStream(for: secondary)
+        }
+    }
+
+    private func rebindPrimaryEventStream(for engine: TwitchNativeEngine) {
+        nativeSessionID &+= 1
+        let sessionID = nativeSessionID
+        nativeEventContinuation?.finish()
+        nativeEventTask?.cancel()
+        let (stream, continuation) = AsyncStream.makeStream(of: TwitchNativeEvent.self)
+        nativeEventContinuation = continuation
+        nativeEventTask = Task { [weak self] in
+            for await event in stream {
+                guard let self, !Task.isCancelled else { break }
+                self.receiveNative(event, sessionID: sessionID)
+            }
+        }
+        Task {
+            await engine.setEventHandler { event in
+                continuation.yield(event)
+            }
+        }
+    }
+
+    private func rebindSecondaryEventStream(for engine: TwitchNativeEngine) {
+        secondaryNativeSessionID &+= 1
+        let sessionID = secondaryNativeSessionID
+        secondaryNativeEventContinuation?.finish()
+        secondaryNativeEventTask?.cancel()
+        let (stream, continuation) = AsyncStream.makeStream(of: TwitchNativeEvent.self)
+        secondaryNativeEventContinuation = continuation
+        secondaryNativeEventTask = Task { [weak self] in
+            for await event in stream {
+                guard let self, !Task.isCancelled else { break }
+                self.receiveSecondaryNative(event, sessionID: sessionID)
+            }
+        }
+        Task {
+            await engine.setEventHandler { event in
+                continuation.yield(event)
+            }
+        }
+    }
+
+    /// Steps down the unfocused stream's quality under thermal or memory pressure (`AppLifecycle.snapshot.shouldThrottle`)
+    /// and restores it once pressure clears.
+    private func applyThermalThrottling(shouldThrottle: Bool) {
+        guard isDualStream else {
+            if isThermalThrottled { clearThermalThrottling(restoreVariant: false) }
+            return
+        }
+        if !shouldThrottle {
+            clearThermalThrottling(restoreVariant: true)
+            return
+        }
+
+        let targetSlot = dualMixer.focusedSlot.other
+        // If focus moved to the previously throttled slot, restore it before stepping down the newly unfocused slot.
+        if let existingSlot = thermalThrottledSlot, existingSlot != targetSlot {
+            clearThermalThrottling(restoreVariant: true)
+        }
+
+        let slotVariants = targetSlot == .primary ? variants : secondaryVariants
+        let currentID = targetSlot == .primary ? selectedVariantID : secondarySelectedVariantID
+        guard let steppedDown = Self.lowPowerVariant(from: slotVariants), steppedDown.id != currentID else { return }
+
+        if preThrottleVariantID == nil {
+            preThrottleVariantID = currentID
+        }
+        thermalThrottledSlot = targetSlot
+        isThermalThrottled = true
+        if targetSlot == .primary {
+            selectedVariantID = steppedDown.id
+            let engine = nativeEngine
+            Task { await engine?.selectVariant(id: steppedDown.id) }
+        } else {
+            secondarySelectedVariantID = steppedDown.id
+            let engine = secondaryNativeEngine
+            Task { await engine?.selectVariant(id: steppedDown.id) }
+        }
+        Breadcrumbs.add("twitch.dual.thermal_stepdown", [
+            "slot": .string(targetSlot.rawValue),
+            "variant": .string(steppedDown.shortLabel),
+        ])
+    }
+
+    private func clearThermalThrottling(restoreVariant: Bool) {
+        guard isThermalThrottled || thermalThrottledSlot != nil else { return }
+        let slot = thermalThrottledSlot
+        let previousID = preThrottleVariantID
+        isThermalThrottled = false
+        thermalThrottledSlot = nil
+        preThrottleVariantID = nil
+        guard restoreVariant, let slot, let previousID else { return }
+        if slot == .primary {
+            selectedVariantID = previousID
+            let engine = nativeEngine
+            Task { await engine?.selectVariant(id: previousID) }
+        } else {
+            secondarySelectedVariantID = previousID
+            let engine = secondaryNativeEngine
+            Task { await engine?.selectVariant(id: previousID) }
+        }
+    }
+
+    /// Picks a low-power video variant (preferring 480p/360p, else lowest non-audio-only video tier) for thermal step-down.
+    private static func lowPowerVariant(from list: [TwitchVariant]) -> TwitchVariant? {
+        let videoOnly = list.filter { !$0.isAudioOnly }
+        guard !videoOnly.isEmpty else { return nil }
+        let moderate = videoOnly
+            .filter { ($0.height ?? 0) > 0 && ($0.height ?? 0) <= 480 }
+            .sorted { ($0.height ?? 0) > ($1.height ?? 0) }
+        if let pick = moderate.first { return pick }
+        return videoOnly.min { ($0.bandwidth) < ($1.bandwidth) }
     }
 
     private func startActive(_ channel: String) {
@@ -658,10 +1376,13 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         nativeSessionID &+= 1
         let sessionID = nativeSessionID
         let displayLayer = nativeView.displayLayer
-        pipController.attach(to: displayLayer)
+        if !isDualStream && !isPiPActive {
+            pipController.attach(to: displayLayer)
+        }
         let rendererBox = TwitchVideoRendererBox(displayLayer.sampleBufferRenderer)
         let engine = ensureNativeEngine()
-        let muted = isMuted
+        let initialGain: Float = isMuted ? 0.0 : (isDualStream ? dualMixer.gains.primary : 1.0)
+        let initialMuted = initialGain <= 0.0001
         let preferredQuality = preferredQualityID
 
         nativeEventContinuation?.finish()
@@ -700,7 +1421,56 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             }
             await engine.attach(videoRenderer: rendererBox)
             await engine.setVideoOutputEnabled(videoEnabled)
-            await engine.setMuted(muted)
+            await engine.setVolume(initialGain)
+            await engine.setMuted(initialMuted)
+            await engine.start(channel: channel, authToken: authToken, preferredVariantID: preferredQuality)
+        }
+    }
+
+    private func startSecondaryNative(_ channel: String) {
+        secondaryNativeSessionID &+= 1
+        let sessionID = secondaryNativeSessionID
+        let displayLayer = secondaryNativeView.displayLayer
+        let rendererBox = TwitchVideoRendererBox(displayLayer.sampleBufferRenderer)
+        let engine = ensureSecondaryNativeEngine()
+        let initialGain: Float = isMuted ? 0.0 : dualMixer.gains.secondary
+        let initialMuted = initialGain <= 0.0001
+        let preferredQuality = preferredQualityID
+
+        secondaryNativeEventContinuation?.finish()
+        secondaryNativeEventContinuation = nil
+        secondaryNativeEventTask?.cancel()
+        let (stream, continuation) = AsyncStream.makeStream(of: TwitchNativeEvent.self)
+        secondaryNativeEventContinuation = continuation
+        secondaryNativeEventTask = Task { [weak self] in
+            for await event in stream {
+                guard let self, !Task.isCancelled else { break }
+                self.receiveSecondaryNative(event, sessionID: sessionID)
+            }
+        }
+
+        secondaryIsLoading = true
+        secondaryStartInstant = .now
+        syncPiPAndNowPlaying()
+        Breadcrumbs.add("twitch.native.secondary.start")
+
+        let previous = secondaryNativeLifecycleTask
+        previous?.cancel()
+        secondaryNativeLifecycleTask = Task { [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled, self.secondaryNativeSessionID == sessionID,
+                  self.activeMode == .lowLatency, self.secondaryChannel == channel else { return }
+            let authToken = await self.twitchAuthToken()
+            guard !Task.isCancelled, self.secondaryNativeSessionID == sessionID,
+                  self.activeMode == .lowLatency, self.secondaryChannel == channel else { return }
+            let videoEnabled = !self.isInBackground || self.isPiPActive || self.hasPiPClaim
+            await engine.setEventHandler { event in
+                continuation.yield(event)
+            }
+            await engine.attach(videoRenderer: rendererBox)
+            await engine.setVideoOutputEnabled(videoEnabled)
+            await engine.setVolume(initialGain)
+            await engine.setMuted(initialMuted)
             await engine.start(channel: channel, authToken: authToken, preferredVariantID: preferredQuality)
         }
     }
@@ -735,11 +1505,49 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         }
     }
 
+    private func stopSecondaryNative() {
+        let wasActive = secondaryNativeEventContinuation != nil || secondaryStartInstant != nil
+        secondaryNativeSessionID &+= 1
+        secondaryNativeEventContinuation?.finish()
+        secondaryNativeEventContinuation = nil
+        secondaryNativeEventTask?.cancel()
+        secondaryNativeEventTask = nil
+        secondaryStartInstant = nil
+        if wasActive {
+            Breadcrumbs.add("twitch.native.secondary.stop")
+        }
+
+        let engine = secondaryNativeEngine
+        let previous = secondaryNativeLifecycleTask
+        previous?.cancel()
+        secondaryNativeLifecycleTask = Task {
+            await previous?.value
+            await engine?.stop()
+        }
+    }
+
     private func ensureNativeEngine() -> TwitchNativeEngine {
         if let nativeEngine { return nativeEngine }
         let engine = TwitchNativeEngine()
         nativeEngine = engine
         return engine
+    }
+
+    private func ensureSecondaryNativeEngine() -> TwitchNativeEngine {
+        if let secondaryNativeEngine { return secondaryNativeEngine }
+        let engine = TwitchNativeEngine()
+        secondaryNativeEngine = engine
+        return engine
+    }
+
+    private func resetSecondary() {
+        secondaryDelay = nil
+        secondaryIsPlaying = false
+        secondaryIsLoading = false
+        secondaryIsBuffering = false
+        secondaryIsOffline = false
+        secondaryVariants = []
+        secondarySelectedVariantID = nil
     }
 
     /// Reads Twitch's `auth-token` cookie from WebKit's persistent store without instantiating a `WKWebView`.
@@ -781,20 +1589,32 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         made?.loadHTMLString("<html><body style=\"background:#000\"></body></html>", baseURL: nil)
     }
 
-    /// Stops whichever engine is active. Views nobody wants go after `releaseAfter`.
+    /// Stops whichever engine(s) are active. Views nobody wants go after `releaseAfter`.
     func stop() {
         if isPiPActive {
-            pipController.stop()
+            #if os(iOS)
+            if dualPiPController.isActive { dualPiPController.stop() }
+            if pipController.isActive { pipController.stop() }
+            #else
+            if dualFloatingPanel.isOpen { dualFloatingPanel.close(restoredUI: false) }
+            if pipController.isActive { pipController.stop() }
+            #endif
         }
         hasPiPClaim = false
         AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
         backgroundVideoOffTask?.cancel()
         backgroundVideoOffTask = nil
+        clearThermalThrottling(restoreVariant: false)
+        dualMixer.handleForegrounded()
         channel = nil
+        secondaryChannel = nil
+        allowAirPlayProbe = true
         resolvedMasterURL = nil
         stopEmbed()
         stopNative()
+        stopSecondaryNative()
         reset()
+        resetSecondary()
         syncPiPAndNowPlaying()
         scheduleRelease()
     }
@@ -818,15 +1638,25 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         switch activeMode {
         case .lowLatency:
             isPlaying = !paused
+            if isDualStream { secondaryIsPlaying = !paused }
             syncPiPAndNowPlaying()
-            let engine = nativeEngine
-            Task { await engine?.setPaused(paused) }
+            let primaryEngine = nativeEngine
+            let secondaryEngine = isDualStream ? secondaryNativeEngine : nil
+            let suspendedSlot = dualMixer.suspendedSlot
+            Task {
+                if suspendedSlot != .primary {
+                    await primaryEngine?.setPaused(paused)
+                }
+                if let secondaryEngine, suspendedSlot != .secondary {
+                    await secondaryEngine.setPaused(paused)
+                }
+            }
         case .embed:
             made?.evaluateJavaScript(paused ? "window.cobaltPause && window.cobaltPause()" : "window.cobaltPlay && window.cobaltPlay()")
         }
     }
 
-    /// Back to the live edge.
+    /// Back to the live edge (jumps both streams when in dual-stream mode).
     func jumpToLive() {
         guard channel != nil else { return }
         #if os(iOS)
@@ -848,8 +1678,12 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
 
         switch activeMode {
         case .lowLatency:
-            let engine = nativeEngine
-            Task { await engine?.jumpToLive() }
+            let primaryEngine = nativeEngine
+            let secondaryEngine = isDualStream ? secondaryNativeEngine : nil
+            Task {
+                await primaryEngine?.jumpToLive()
+                await secondaryEngine?.jumpToLive()
+            }
             jumpCheck = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(4))
                 guard let self, !Task.isCancelled else { return }
@@ -873,7 +1707,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         }
     }
 
-    /// Reloads the active engine for the current channel (e.g. after a sign-in).
+    /// Reloads the active engine(s) for the current channel(s) (e.g. after a sign-in).
     func reload() {
         guard let channel else { return }
         resolvedMasterURL = nil
@@ -887,6 +1721,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             }
             #endif
             startNative(channel)
+            if let sec = secondaryChannel {
+                resetSecondary()
+                startSecondaryNative(sec)
+            }
         case .embed:
             loadEmbed(channel)
         }
@@ -1161,6 +1999,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
     // MARK: the app's state
 
     func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        lastThermalShouldThrottle = snapshot.shouldThrottle
+        applyThermalThrottling(shouldThrottle: snapshot.shouldThrottle)
         switch event {
         case .didEnterBackground, .hidden: suspend()
         case .becameActive, .unhidden: resume()
@@ -1175,16 +2015,20 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         if TwitchTV.shared.onTV || isAirPlayingVideo { return true }
         #endif
         if hasPiPClaim || isPiPActive { return true }
-        return activeMode == .lowLatency && channel != nil && !userPaused && !isOffline
+        return activeMode == .lowLatency && channel != nil && !userPaused && (!isOffline || (isDualStream && !secondaryIsOffline))
     }
 
     /// Stops the stream for the background only when background audio, PiP, TV Mode, and AirPlay are all inactive.
     /// When background audio continues without PiP on iOS, video decoding is paused after a brief grace window (so
-    /// auto-PiP can still engage on swipe-home) and seamlessly resumes on return.
+    /// auto-PiP can still engage on swipe-home) and seamlessly resumes on return. In dual-stream mode when locked
+    /// without PiP, a muted secondary stream is immediately suspended (`dualMixer.handleBackgrounded`).
     private func suspend() {
         isInBackground = true
         guard !suspended else { return }
         if keepsAliveInBackground {
+            if isDualStream {
+                dualMixer.handleBackgrounded(isPiPActive: isPiPActive || hasPiPClaim)
+            }
             #if os(iOS)
             if activeMode == .lowLatency && !isAirPlayingVideo && !TwitchTV.shared.onTV && !isPiPActive && !hasPiPClaim {
                 backgroundVideoOffTask?.cancel()
@@ -1192,8 +2036,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
                     try? await Task.sleep(for: .milliseconds(450))
                     guard let self, !Task.isCancelled, self.isInBackground,
                           !self.isPiPActive, !self.hasPiPClaim, !TwitchTV.shared.onTV else { return }
-                    let engine = self.nativeEngine
-                    await engine?.setVideoOutputEnabled(false)
+                    let primary = self.nativeEngine
+                    let secondary = self.secondaryNativeEngine
+                    await primary?.setVideoOutputEnabled(false)
+                    await secondary?.setVideoOutputEnabled(false)
                 }
             }
             #endif
@@ -1201,30 +2047,54 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         }
         suspended = true
         resumeChannel = channel
+        resumeSecondaryChannel = secondaryChannel
         if channel != nil { stop() }
     }
 
-    /// Back on screen: re-enables video output for background-audio sessions, or restarts a suspended stream.
+    /// Back on screen: re-enables video output for background-audio sessions, resumes any lock-suspended dual slot,
+    /// or restarts a suspended stream.
     private func resume() {
         isInBackground = false
         backgroundVideoOffTask?.cancel()
         backgroundVideoOffTask = nil
 
+        if isDualStream {
+            dualMixer.handleForegrounded()
+        }
+
         if activeMode == .lowLatency && channel != nil && !isAirPlayingVideo {
-            let engine = nativeEngine
-            Task { await engine?.setVideoOutputEnabled(true) }
+            let primary = nativeEngine
+            let secondary = secondaryNativeEngine
+            let allowSecondary = isDualStream && dualMixer.suspendedSlot != .secondary
+            Task {
+                await primary?.setVideoOutputEnabled(true)
+                if allowSecondary {
+                    await secondary?.setVideoOutputEnabled(true)
+                }
+            }
         }
 
         guard suspended else { return }
         suspended = false
-        let channel = resumeChannel
+        let primary = resumeChannel
+        let secondary = resumeSecondaryChannel
         resumeChannel = nil
-        if let channel, !claims.isEmpty { play(channel) }
+        resumeSecondaryChannel = nil
+        if let primary, !claims.isEmpty {
+            if let secondary {
+                playDual(primary: primary, secondary: secondary)
+            } else {
+                play(primary)
+            }
+        }
     }
 
     /// A memory warning, or the app leaving the screen, lets unwanted views go at once (never touching active PiP or
     /// background audio).
     func purge(_ level: PurgeLevel) {
+        if isDualStream {
+            applyThermalThrottling(shouldThrottle: true)
+        }
         releaseResources()
     }
 
@@ -1232,7 +2102,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         releaseTask?.cancel()
         releaseTask = nil
         guard claims.isEmpty, !hasPiPClaim, !isPiPActive,
-              (made != nil || madeNative != nil || nativeEngine != nil) else { return }
+              (made != nil || madeNative != nil || madeSecondaryNative != nil || nativeEngine != nil || secondaryNativeEngine != nil) else { return }
         releaseTask = Task { [weak self] in
             try? await Task.sleep(for: TwitchPlayerHost.releaseAfter)
             guard !Task.isCancelled else { return }
@@ -1242,11 +2112,16 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
 
     /// Lets unused views and engines go when nothing wants them: no view, no PiP, no channel, no sign-in open.
     private func releaseResources() {
-        guard claims.isEmpty, !hasPiPClaim, !isPiPActive, channel == nil, popup == nil else { return }
+        guard claims.isEmpty, !hasPiPClaim, !isPiPActive, channel == nil, secondaryChannel == nil, popup == nil else { return }
         releaseTask?.cancel()
         releaseTask = nil
 
         pipController.detach()
+        #if os(iOS)
+        dualPiPController.detach()
+        #else
+        dualFloatingPanel.close(restoredUI: false)
+        #endif
         if let view = made {
             made = nil
             pageLoaded = false
@@ -1258,6 +2133,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
         if let native = madeNative {
             madeNative = nil
             native.removeFromSuperview()
+        }
+        if let secondary = madeSecondaryNative {
+            madeSecondaryNative = nil
+            secondary.removeFromSuperview()
         }
         #if os(iOS)
         stopAirPlay(reason: "purge", resumeNative: false)
@@ -1271,6 +2150,15 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             let prev = nativeLifecycleTask
             prev?.cancel()
             nativeLifecycleTask = Task {
+                await prev?.value
+                await engine.stop()
+            }
+        }
+        if let engine = secondaryNativeEngine {
+            secondaryNativeEngine = nil
+            let prev = secondaryNativeLifecycleTask
+            prev?.cancel()
+            secondaryNativeLifecycleTask = Task {
                 await prev?.value
                 await engine.stop()
             }
@@ -1363,6 +2251,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
                 hasLoggedVariants = true
                 Breadcrumbs.add("twitch.native.variants", ["count": .int(list.count)])
             }
+            if isDualStream && lastThermalShouldThrottle {
+                applyThermalThrottling(shouldThrottle: true)
+            }
             syncPiPAndNowPlaying()
         case .playing:
             isPlaying = true
@@ -1392,7 +2283,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             isBuffering = false
             delay = nil
             nativeStartInstant = nil
-            if isPiPActive { pipController.stop() }
+            if isPiPActive && !isDualStream { pipController.stop() }
             syncPiPAndNowPlaying()
             Breadcrumbs.add("twitch.native.offline")
         case .stats(let stats):
@@ -1413,9 +2304,18 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
                 recordDelay(d)
             }
         case .failed(let reason):
+            Breadcrumbs.add("twitch.native.fallback", ["reason": .string(Self.shortFallbackReason(reason))])
+            // Dual-stream runs two native display layers; never drop into a single WebView embed while dual is active.
+            if isDualStream {
+                isOffline = true
+                isPlaying = false
+                isLoading = false
+                isBuffering = false
+                syncPiPAndNowPlaying()
+                return
+            }
             // Native playback could not run for this stream: fall back to the Twitch embed for this session without
             // overwriting `preferredMode`, so the next channel tries low latency again.
-            Breadcrumbs.add("twitch.native.fallback", ["reason": .string(Self.shortFallbackReason(reason))])
             guard let current = channel else { return }
             if isPiPActive { pipController.stop() }
             stopNative()
@@ -1424,6 +2324,72 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable {
             reset()
             syncPiPAndNowPlaying()
             startEmbed(current)
+        }
+    }
+
+    private func receiveSecondaryNative(_ event: TwitchNativeEvent, sessionID: UInt64) {
+        guard sessionID == secondaryNativeSessionID, activeMode == .lowLatency else { return }
+        switch event {
+        case .loading:
+            secondaryIsLoading = true
+            secondaryIsOffline = false
+        case .streamURL:
+            break
+        case .variants(let list, let selectedID):
+            secondaryVariants = list
+            secondarySelectedVariantID = selectedID
+            if lastThermalShouldThrottle {
+                applyThermalThrottling(shouldThrottle: true)
+            }
+            syncPiPAndNowPlaying()
+        case .playing:
+            secondaryIsPlaying = true
+            secondaryIsLoading = false
+            secondaryIsBuffering = false
+            secondaryIsOffline = false
+            if let started = secondaryStartInstant {
+                let elapsed = ContinuousClock.now - started
+                let ms = Int(elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
+                secondaryStartInstant = nil
+                Breadcrumbs.add("twitch.native.secondary.playing", ["ms": .int(max(0, ms))])
+            }
+            syncPiPAndNowPlaying()
+        case .paused:
+            secondaryIsPlaying = false
+            syncNowPlaying()
+        case .userPausedChanged(let paused):
+            if paused {
+                secondaryIsPlaying = false
+            }
+            syncPiPAndNowPlaying()
+        case .offline:
+            secondaryIsOffline = true
+            secondaryIsPlaying = false
+            secondaryIsLoading = false
+            secondaryIsBuffering = false
+            secondaryDelay = nil
+            secondaryStartInstant = nil
+            syncPiPAndNowPlaying()
+            Breadcrumbs.add("twitch.native.secondary.offline")
+        case .stats(let stats):
+            if stats.isClockStarted && secondaryIsLoading {
+                secondaryIsLoading = false
+                if !secondaryIsPlaying && stats.rate > 0 {
+                    secondaryIsPlaying = true
+                }
+            }
+            secondaryIsBuffering = stats.isBuffering
+            if let d = stats.delay, d > 0, secondaryIsPlaying {
+                secondaryDelay = d
+            }
+        case .failed(let reason):
+            secondaryIsOffline = true
+            secondaryIsPlaying = false
+            secondaryIsLoading = false
+            secondaryIsBuffering = false
+            secondaryStartInstant = nil
+            syncPiPAndNowPlaying()
+            Breadcrumbs.add("twitch.native.secondary.failed", ["reason": .string(Self.shortFallbackReason(reason))])
         }
     }
 
@@ -2039,3 +3005,116 @@ private struct TwitchPlayerSlot: NSViewRepresentable {
     }
 }
 #endif
+
+// MARK: - Dual-Stream Native Video Slot Surfaces & iOS PiP Source Anchor
+
+#if os(iOS)
+/// Embeds a single `TwitchNativeVideoView` (Slot A or Slot B) in `TwitchDualStage` while holding a live claim.
+/// Never yanks the view away while dual PiP owns both `AVSampleBufferDisplayLayer` views.
+struct TwitchNativeSlotSurface: UIViewRepresentable {
+    let slot: TwitchDualSlot
+    let holds: Bool
+    let pipActive: Bool
+
+    func makeUIView(context: Context) -> UIView {
+        let container = TwitchDualSurfaceContainerView()
+        container.backgroundColor = .black
+        container.clipsToBounds = true
+        return container
+    }
+
+    func updateUIView(_ container: UIView, context: Context) {
+        guard holds else { return }
+        let target = TwitchPlayerHost.shared.nativeView(for: slot)
+        for sub in container.subviews where sub !== target {
+            sub.removeFromSuperview()
+        }
+        guard !pipActive else { return }
+        if target.superview !== container {
+            target.removeFromSuperview()
+            target.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            container.addSubview(target)
+        }
+        if target.frame != container.bounds {
+            target.frame = container.bounds
+        }
+    }
+}
+
+private final class TwitchDualSurfaceContainerView: UIView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        for sub in subviews where sub.frame != bounds {
+            sub.frame = bounds
+        }
+    }
+}
+
+/// Zero-chrome `UIView` mounted behind `TwitchDualStage` so `AVPictureInPictureController.ContentSource`
+/// has a live `activeVideoCallSourceView` in the window hierarchy for dual-stream PiP.
+struct TwitchDualPiPSourceAnchor: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let view = TwitchDualPiPAnchorView()
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        if view.window != nil {
+            TwitchPlayerHost.shared.registerDualPiPSourceView(view)
+        }
+    }
+}
+
+private final class TwitchDualPiPAnchorView: UIView {
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            TwitchPlayerHost.shared.registerDualPiPSourceView(self)
+        }
+    }
+}
+#else
+/// Embeds a single `TwitchNativeVideoView` (Slot A or Slot B) in `TwitchDualStage` on macOS.
+/// Never yanks the view away while `TwitchDualFloatingPanel` is presenting both streams.
+struct TwitchNativeSlotSurface: NSViewRepresentable {
+    let slot: TwitchDualSlot
+    let holds: Bool
+    let pipActive: Bool
+
+    func makeNSView(context: Context) -> NSView {
+        let container = TwitchDualSurfaceContainerView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.black.cgColor
+        return container
+    }
+
+    func updateNSView(_ container: NSView, context: Context) {
+        guard holds else { return }
+        let target = TwitchPlayerHost.shared.nativeView(for: slot)
+        for sub in container.subviews where sub !== target {
+            sub.removeFromSuperview()
+        }
+        guard !pipActive else { return }
+        if target.superview !== container {
+            target.removeFromSuperview()
+            target.autoresizingMask = [.width, .height]
+            container.addSubview(target)
+        }
+        if target.frame != container.bounds {
+            target.frame = container.bounds
+        }
+    }
+}
+
+private final class TwitchDualSurfaceContainerView: NSView {
+    override func layout() {
+        super.layout()
+        for sub in subviews where sub.frame != bounds {
+            sub.frame = bounds
+        }
+    }
+}
+#endif
+

@@ -49,7 +49,7 @@ extension Copy {
             case .collection: "collection"
             case .emote, .emoteAddToSet: "7tv"
             case .reward, .poolVideo: "live stage"
-            case .stream: "twitch"
+            case .stream, .dualStream: "twitch"
             case .booruPost, .booruFilters: "booru"
             case .swarm: "swarm"
             case .name: "name"
