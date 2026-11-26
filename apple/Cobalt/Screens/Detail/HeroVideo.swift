@@ -43,6 +43,12 @@ final class HeroVideo {
     /// The shape this clip was measured at earlier in this launch.
     static func knownShape(of url: URL) -> CGFloat? { shapes[url.absoluteString] }
 
+    /// Remembers a clip's measured width ÷ height for this launch (shared by the detail hero and the library peek).
+    static func recordShape(_ aspect: CGFloat, for url: URL) {
+        guard aspect.isFinite, aspect > 0 else { return }
+        shapes[url.absoluteString] = aspect
+    }
+
     /// The clip this hero was last told to play.
     var loadedURL: URL? { url }
 

@@ -205,6 +205,8 @@ final class LibraryController {
     /// The select panel's `public` / `private` choice for the next gallery link (APP-API-CONTRACT 36.6); nil follows
     /// settings › sharing (`new_links`).
     var shareLinkPrivate: Bool?
+    /// Rows confirmed made public during this select session (bridges sync-engine URL hydration before creating a link).
+    var recentlyMadePublic: Set<String> = []
     /// Bumped when a copy, a save, a visibility switch or a delete lands (success haptic), half lands (warning) or
     /// fails (error).
     var doneTick = 0
@@ -333,6 +335,7 @@ final class LibraryController {
     func endSelecting() {
         selecting = false
         pickAnchor = nil
+        recentlyMadePublic = []
         setPicks([])
         peek = nil
     }
@@ -408,6 +411,12 @@ final class LibraryController {
     /// Unticks one post (the pill's thumbnail).
     func unpick(_ id: String) {
         setPicks(pickOrder.filter { $0 != id })
+    }
+
+    /// Clears all ticked posts while keeping select mode open.
+    func clearPicks() {
+        pickAnchor = nil
+        setPicks([])
     }
 
     /// Ticks every post on screen that can be shared (the kind chip, the search and the show filter decide which), or
@@ -587,7 +596,130 @@ final class LibraryController {
     /// bar's verdict and the button both read, so they cannot disagree.
     func shareLinkPicks(_ rows: [LibraryRow]) -> [(row: LibraryRow, fileID: String?)] {
         let isPrivate = makesPrivateLink
-        return pickedRows(rows).map { ($0, isPrivate ? ShareSetRule.privateFileID(for: $0.item) : ShareSetRule.fileID(for: $0.item)) }
+        return pickedRows(rows).map { row in
+            if isPrivate {
+                return (row, ShareSetRule.privateFileID(for: row.item))
+            }
+            let publicID = ShareSetRule.fileID(for: row.item)
+            if let publicID { return (row, publicID) }
+            if recentlyMadePublic.contains(row.id) {
+                return (row, ShareSetRule.privateFileID(for: row.item))
+            }
+            return (row, nil)
+        }
+    }
+
+    /// Picked rows on screen that currently lack a public file (in public link mode).
+    func nonPublicSharePicks(_ rows: [LibraryRow]) -> [LibraryRow] {
+        guard !makesPrivateLink else { return [] }
+        return shareLinkPicks(rows).compactMap { $0.fileID == nil ? $0.row : nil }
+    }
+
+    /// Whether tapping `make link` or `collection` can offer to make all non-public picked items public first.
+    /// True only when the sole blocker is `.notPublic` (in public link mode) and every missing pick has a server file
+    /// that can be switched public.
+    func canMakePicksPublicForLink(_ rows: [LibraryRow]) -> Bool {
+        guard !makesPrivateLink, case .notPublic = shareLinkVerdict(rows) else { return false }
+        let missing = nonPublicSharePicks(rows)
+        guard !missing.isEmpty else { return false }
+        return missing.allSatisfy { row in
+            guard ShareSetRule.privateFileID(for: row.item) != nil else { return false }
+            return (model.capabilities.hidden && row.item.post != nil)
+                || row.item.face.canToggleVisibility
+                || canSwitchVisibility(row.item)
+        }
+    }
+
+    /// Re-reads the latest `MediaItem` from `model.library` for each row (after a visibility/status change)
+    /// without waiting for a SwiftUI render pass or losing the current screen's filter.
+    func freshRows(from rows: [LibraryRow]) -> [LibraryRow] {
+        rows.map { row in
+            guard let postID = row.item.post?.id, let fresh = model.library.post(id: postID) else { return row }
+            return LibraryRow(item: model.mediaItem(for: fresh))
+        }
+    }
+
+    /// Flips every non-public picked item in `rows` to public without leaving select mode.
+    /// Returns true only when all non-public picks are confirmed public on the server and ready for a share link.
+    func makeNonPublicPicksPublic(_ rows: [LibraryRow]) async -> Bool {
+        let missing = nonPublicSharePicks(rows)
+        guard !missing.isEmpty else { return true }
+        guard !changingStatus, !library.statusInFlight else { return false }
+        changingStatus = true
+        defer { changingStatus = false }
+
+        if model.capabilities.hidden {
+            let posts = missing.compactMap { $0.item.post }
+            guard posts.count == missing.count else {
+                showStatus(Copy.actionFailed)
+                failTick += 1
+                return false
+            }
+            let outcome = await library.setStatus(.public, posts: posts)
+            if model.libraryHoldsEditsForServer {
+                if outcome.changed > 0 {
+                    showStatus(Copy.HiddenAlbum.queued(.public, count: outcome.changed))
+                    warnTick += 1
+                } else {
+                    showStatus(Copy.actionFailed)
+                    failTick += 1
+                }
+                return false
+            }
+            let failedPostIDs = Set(outcome.failed.map(\.id))
+            let failedFileIDs = Set(outcome.fileFailures.map(\.id))
+            for row in missing {
+                let post = row.item.post
+                let postFailed = post.map { failedPostIDs.contains($0.id) } ?? true
+                let fileFailed = post.map { p in p.files.contains { failedFileIDs.contains($0.id) } } ?? false
+                if !postFailed && !fileFailed {
+                    recentlyMadePublic.insert(row.id)
+                }
+            }
+            if !outcome.failed.isEmpty || !outcome.fileFailures.isEmpty {
+                var parts: [String] = []
+                if !outcome.failed.isEmpty { parts.append(Copy.HiddenAlbum.failed(outcome.failed.count)) }
+                if !outcome.fileFailures.isEmpty { parts.append(Copy.HiddenAlbum.filesFailed(outcome.fileFailures.count)) }
+                showStatus(parts.joined(separator: " · "))
+                if outcome.changed > 0 { warnTick += 1 } else { failTick += 1 }
+                return false
+            }
+            doneTick += 1
+            return true
+        }
+
+        // Fallback for servers with per-file visibility only (`!capabilities.hidden`).
+        var anyFailed = false
+        for row in missing {
+            do {
+                if row.item.face.canToggleVisibility {
+                    _ = try await model.setVisibility(row.item.face, public: true)
+                } else if let video = row.item.video, video.canToggleVisibility {
+                    _ = try await model.setVisibility(video, public: true)
+                } else if holdsItems(row.item) {
+                    _ = try await model.setPublic(true, for: row.item)
+                } else {
+                    anyFailed = true
+                    continue
+                }
+                recentlyMadePublic.insert(row.id)
+            } catch {
+                anyFailed = true
+            }
+        }
+        if anyFailed {
+            showStatus(Copy.Media.makeLinkFailed)
+            failTick += 1
+            return false
+        }
+        doneTick += 1
+        return true
+    }
+
+    /// Makes non-public picked items public first, then immediately creates the share link and leaves select mode.
+    func makePublicThenLinkAndEnd(_ rows: [LibraryRow]) async {
+        guard await makeNonPublicPicksPublic(rows) else { return }
+        await makeLinkAndEnd(freshRows(from: rows))
     }
 
     /// The next gallery link is private: the panel's choice, else what new links start as. Only while the server has

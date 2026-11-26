@@ -210,18 +210,26 @@ struct ShowInFilesButton: View {
 struct LibraryRowMenu: ViewModifier {
     let row: LibraryRow
     let controller: LibraryController
+    /// False on iPhone tiles where a hold always previews instead of opening a context menu: skipping `.contextMenu`
+    /// completely avoids registering an unused UIContextMenuInteraction on every tile in the scroll view.
+    /// Fixed per placement (never changes when select mode toggles), so tile identity stays stable.
+    var attach = true
     let enabled: Bool
     @Binding var removing: MediaItem?
 
-    /// One structure either way: an `if` around the modifier gave every tile a new identity when select mode toggled
-    /// (pictures reloaded and fell back to the failed glyph, animations restarted). With no items no menu is shown.
+    /// One structure when `attach == true`: an `if` around `.contextMenu` keyed on `enabled` gave every tile a new
+    /// identity when select mode toggled (pictures reloaded, animations restarted). With no items no menu is shown.
     func body(content: Content) -> some View {
-        content.contextMenu {
-            if enabled {
-                LibraryMenuItems(row: row, controller: controller) { removing = $0 }
+        if attach {
+            content.contextMenu {
+                if enabled {
+                    LibraryMenuItems(row: row, controller: controller) { removing = $0 }
+                }
+            } preview: {
+                LibraryPreviewCard(row: row)
             }
-        } preview: {
-            LibraryPreviewCard(row: row)
+        } else {
+            content
         }
     }
 }
@@ -237,6 +245,8 @@ struct LibraryTileActions: ViewModifier {
     let enabled: Bool
     let selecting: Bool
     @Binding var removing: MediaItem?
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
     #if os(iOS)
     @Environment(\.openURL) private var openURL
     #endif
@@ -249,7 +259,7 @@ struct LibraryTileActions: ViewModifier {
 
     func body(content: Content) -> some View {
         content.accessibilityActions {
-            if enabled {
+            if enabled, voiceOver || switchControl {
                 ForEach(entries()) { entry in Button(entry.title, action: entry.run) }
             }
         }

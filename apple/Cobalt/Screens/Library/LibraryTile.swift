@@ -4,22 +4,18 @@ import SwiftUI
 /// A press only dims: the tile sits in a scroll view and nothing may scale or move.
 private struct TilePress: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.opacity(configuration.isPressed ? 0.8 : 1)
+        configuration.label.opacity(configuration.isPressed ? 0.84 : 1)
     }
 }
 
-/// One mosaic tile (CONTRACT-LIBRARY2 decision 12): the face's picture at its real aspect, filling the slot
-/// `MasonryPlan` gave it, with badges (the face's type top right, a `globe` (public) or `lock.fill` (private) dot top left,
-/// or in its place the blue link badge when the post is already in a share link,
-/// the length bottom left on a video face tall enough to hold it) and a one-line title on a soft dark scrim.
-/// A webp face moves while the budget lets it. A tile whose picture failed keeps its frame, badges and caption
-/// with a glyph, and still opens. Tap opens, unless the library is selecting: then it ticks this post, a hold shows
-/// its media full size (`LibraryPeek`), and the context menu is not offered. Shift-click and ⌘-click (Mac, iPad with
-/// a keyboard) start selecting and tick a run or this one post (`LibraryController.click`).
+/// One mosaic tile: the face's picture at its real aspect filling the slot `MasonryPlan` gave it, with only
+/// high-signal badges (private lock when private, consolidated shared pill, offline mark, gallery count or animated
+/// webp pill, crisp bottom-trailing video duration pill, and a bottom caption scrim only when the post has a real
+/// custom title). A webp face moves while the budget lets it.
 ///
-/// On the iPhone (`holdOpens`, select mode or not) a hold is a preview and lifting the finger opens the post in the pane;
-/// sliding off the tile first cancels. There is no context menu there: its actions are the post page's (its grid and
-/// `more`) and, for VoiceOver, custom actions on the tile (`LibraryTileActions`).
+/// On the iPhone (`holdOpens`, select mode or not) a hold previews the media in its true dimensions and lifting opens
+/// the post in the pane; sliding off cancels. There is no context menu there (`attach: !holdOpens`); its actions are
+/// on the post page and, for VoiceOver, custom actions on the tile (`LibraryTileActions`).
 ///
 /// `Equatable` on what it draws, so a new page of tiles (or a refresh that changed nothing) re-evaluates none of
 /// the tiles already there.
@@ -62,8 +58,20 @@ struct LibraryTile: View, Equatable {
     }
 
     private var face: Rendition { row.item.face }
-    private var narrow: Bool { size.width < 90 }
-    private var radius: CGFloat { 10 }
+    private var narrow: Bool { size.width < 96 }
+    private var radius: CGFloat { Metrics.thumbRadius }
+
+    /// Only show a bottom caption overlay when the post has a real custom title (not raw `service · id` or `cobalt`).
+    private var customTitle: String? {
+        if case .custom(let title) = row.item.title { return title }
+        return nil
+    }
+
+    private var showsCustomCaption: Bool { showsCaption && customTitle != nil }
+
+    private var isPlayableVideo: Bool {
+        !face.playsAsWebp && row.kind != .gallery && row.kind != .photo && !row.originalIsImage
+    }
 
     /// The file a moving tile plays: this device's webp, else its public link.
     private var animationURL: URL? {
@@ -72,17 +80,6 @@ struct LibraryTile: View, Equatable {
     }
 
     private var isRemote: Bool { face.local?.fileURL == nil }
-
-    /// The meta line, whether the link is public, and (when it is true) that the picture did not load. The offline
-    /// state goes between, read in `OfflineSpokenValue` so a download tick does not redraw the tile.
-    private var accessibilityValue: OfflineSpokenValue {
-        var before = [LibraryRowCopy.meta(row, now: Date()), row.isPublic ? Copy.Library2.publicBadgeA11y : Copy.Library2.privateBadgeA11y]
-        if let by = row.hiddenBy { before.append(Copy.HiddenAlbum.byA11y(by)) }
-        var after: [String] = []
-        if let shared = Copy.Library2.sharedA11y(share) { after.append(shared) }
-        if failed { after.append(Copy.Library2.pictureFailed) }
-        return OfflineSpokenValue(item: row.item, model: controller.model, before: before, after: after)
-    }
 
     var body: some View {
         Button {
@@ -99,12 +96,12 @@ struct LibraryTile: View, Equatable {
             .buttonStyle(TilePress())
             // while selecting, a hold shows the media full size (out of select mode the hold is the context menu); on the
             // iPhone the hold previews in both, and lifting the finger opens the post in the pane
-            .peekOnHold(row, controller: controller, enabled: selecting || holdOpens, opensOnRelease: holdOpens)
+            .peekOnHold(row, controller: controller, enabled: selecting || holdOpens, opensOnRelease: holdOpens, knownSize: size)
             // a gallery cannot be ticked (galleries are not shared): dimmer, and no tick
-            .opacity(selecting ? (row.shareable ? (ticked ? 1 : 0.7) : 0.35) : 1)
+            .opacity(selecting ? (row.shareable ? (ticked ? 1 : 0.72) : 0.35) : 1)
             .frame(width: size.width, height: size.height)
             .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting && !holdOpens, removing: $removing))
+            .modifier(LibraryRowMenu(row: row, controller: controller, attach: !holdOpens, enabled: !selecting && !holdOpens, removing: $removing))
             .modifier(LibraryTileActions(row: row, controller: controller, enabled: holdOpens, selecting: selecting, removing: $removing))
             .offlineRemoveConfirm($removing, model: controller.model)
             .zoomSource(id: row.id, in: zoom)
@@ -116,7 +113,7 @@ struct LibraryTile: View, Equatable {
             .onAppear { if nearEnd { controller.loadMoreIfNeeded() } }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(LibraryRowCopy.a11yLabel(row))
-            .modifier(accessibilityValue)
+            .modifier(LibraryTileSpokenValue(row: row, share: share, failed: failed, model: controller.model))
             .accessibilityAddTraits(selected || ticked ? [.isButton, .isSelected] : .isButton)
             // the layout checks (apple/CobaltUITests) find the tiles by this, whatever their titles
             .accessibilityIdentifier("library.tile")
@@ -125,129 +122,138 @@ struct LibraryTile: View, Equatable {
     }
 
     private var tile: some View {
-        ZStack {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        return ZStack {
             FacePicture(
                 item: row.item, maxPixel: maxPixel, reload: reload, gradient: FrameGradient.variant(forIndex: index),
                 failed: $failed)
             if let url = animationURL {
                 TileAnimationSlot(id: row.id, url: url, budget: budget)
             }
-            if showsCaption {
-                LinearGradient(colors: [.clear, .black.opacity(0.62)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: min(size.height, 38))
+            if showsCustomCaption {
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.26), .black.opacity(0.68)],
+                    startPoint: .top, endPoint: .bottom)
+                    .frame(height: min(size.height * 0.45, 48))
                     .frame(maxHeight: .infinity, alignment: .bottom)
                     .allowsHitTesting(false)
             }
             overlays
             if lit { LitRing(radius: radius, reduceMotion: reduceMotion) }
-            if selected {
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(CobaltColor.focus, lineWidth: 2)
+            if selected || (selecting && ticked) {
+                shape.strokeBorder(CobaltColor.focus, lineWidth: 2)
+            } else {
+                shape.strokeBorder(CobaltColor.hairline, lineWidth: 0.5)
             }
         }
         .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .clipShape(shape)
     }
 
     private var overlays: some View {
         ZStack {
-            // top left: the video's switch (CONTRACT-VISIBILITY decision 13): a globe while its link is public, a lock
-            // while it is private; never "some webp is public". Beside it the offline badge (CONTRACT-OFFLINE
-            // decision 11): filled when all is kept, outline for some, a ring while it downloads, nothing otherwise.
+            // top left: only high-signal status pills (hidden-by, private lock when private, shared links, offline)
             HStack(spacing: 4) {
-                // Already shared: the link badge (how many links hold the post, then a folder when one of them is in a
-                // collection). A shared post that is public needs no globe beside it (the link says so), which keeps
-                // a 3-column iPhone tile clear of the type badge.
                 let showsShared = share.isShared && !narrow
                 if let by = row.hiddenBy {
-                    // the hidden album: every file is off, so the lock says nothing; who hid the post does
                     HiddenByBadge(by: by)
-                } else if !(showsShared && row.isPublic) {
-                    Image(systemName: row.isPublic ? Symbol.Library.isPublic : Symbol.Library.isPrivate)
-                        .font(.system(size: 10, weight: .bold))
+                } else if !row.isPublic {
+                    Image(systemName: Symbol.Library.isPrivate)
+                        .font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(CobaltColor.badgeInk)
                         .frame(width: 20, height: 20)
-                        .background(CobaltColor.badgeBack, in: Circle())
-                        .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+                        .background(TileBadgeSurface.fill, in: Circle())
+                        .overlay(Circle().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
                 }
                 if showsShared {
                     SharedTileBadges(share: share)
                 }
                 OfflineBadge(item: row.item, model: controller.model, style: .tile)
             }
-            .padding(5)
+            .padding(6)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // top right: the select tick, or the face's type. While selecting the type moves to the bottom right, so
-            // what is being ticked (a video, a photo, a webp) stays clear. A gallery gets no tick.
+
+            // top right: select tick while selecting, otherwise only gallery count or animated webp
             if selecting {
                 if row.shareable {
                     LibraryPickMark(ticked: ticked, onPhoto: true, number: pickNumber)
-                        .padding(5)
+                        .padding(6)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 }
-                kindDot
-                    .padding(5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             } else {
-                typeBadge
-                    .padding(5)
+                topRightBadge
+                    .padding(6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
-            // bottom: the length, then the caption
-            VStack(alignment: .leading, spacing: 1) {
-                if !face.playsAsWebp, row.kind != .gallery, row.length > 0, size.height >= 80 {
-                    Text(Format.seconds(row.length))
-                        .font(Font.cobalt(9.5, .regular, relativeTo: .caption2))
-                        .monospacedDigit()
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.5), radius: 1, y: 1)
+
+            // bottom bar: custom title on the left (only when user-named), crisp duration pill on the right for videos
+            if showsCustomCaption || (isPlayableVideo && size.height >= 68) {
+                HStack(alignment: .bottom, spacing: 6) {
+                    if let title = customTitle, showsCaption {
+                        Text(title)
+                            .font(Font.cobalt(11, .medium, relativeTo: .caption2))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 0)
+                    if isPlayableVideo, size.height >= 68 {
+                        durationPill
+                    }
                 }
-                if showsCaption {
-                    Text(row.title)
-                        .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+                .padding(.horizontal, 7)
+                .padding(.bottom, 6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
-            .padding(.horizontal, 6)
-            .padding(.trailing, selecting ? 22 : 0)                   // clear of the kind dot
-            .padding(.bottom, showsCaption ? 5 : 6)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         }
         .allowsHitTesting(false)
     }
 
-    /// The face's kind as one symbol in a dot (film, photo, sparkles, stack): the narrow tile's badge, and every tile's
-    /// while selecting.
-    private var kindDot: some View {
-        Image(systemName: LibraryRowCopy.typeSymbol(row))
-            .font(.system(size: 9.5, weight: .semibold))
-            .foregroundStyle(CobaltColor.badgeInk)
-            .frame(width: 20, height: 20)
-            .background(CobaltColor.badgeBack, in: Circle())
-            .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+    @ViewBuilder
+    private var topRightBadge: some View {
+        if row.kind == .gallery {
+            GalleryCountBadge(count: row.itemCount, style: .tile)
+        } else if face.playsAsWebp {
+            if narrow || (share.isShared && size.width < 150) {
+                Image(systemName: Symbol.Library.typeWebp)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(CobaltColor.badgeInk)
+                    .frame(width: 20, height: 20)
+                    .background(TileBadgeSurface.fill, in: Circle())
+                    .overlay(Circle().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
+            } else {
+                Text(LibraryRowCopy.type(row))
+                    .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
+                    .foregroundStyle(CobaltColor.badgeInk)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 6.5)
+                    .frame(height: 20)
+                    .background(TileBadgeSurface.fill, in: Capsule())
+                    .overlay(Capsule().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
+            }
+        }
     }
 
-    @ViewBuilder
-    private var typeBadge: some View {
-        if row.kind == .gallery {
-            // a gallery: the stack and how many items it holds, however narrow the tile
-            GalleryCountBadge(count: row.itemCount, style: .tile)
-        } else if narrow || (share.isShared && size.width < 150) {
-            // a narrow tile, or one whose top left holds the link badges: the dot, so the two never meet
-            kindDot
-        } else {
-            Text(LibraryRowCopy.type(row))
-                .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
-                .foregroundStyle(CobaltColor.badgeInk)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(CobaltColor.badgeBack, in: Capsule())
-                .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+    /// Quiet dark duration pill (bottom-trailing) for videos; shows a small play mark when duration is unknown.
+    private var durationPill: some View {
+        Group {
+            if row.length > 0 {
+                Text(Format.seconds(row.length))
+                    .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.94))
+                    .padding(.horizontal, 5.5)
+                    .padding(.vertical, 2)
+            } else {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .frame(width: 18, height: 18)
+            }
         }
+        .background(TileBadgeSurface.fill, in: Capsule())
+        .fixedSize()
     }
 }
 
@@ -275,7 +281,7 @@ struct LibraryGhostTile: View {
     let index: Int
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous)
             .fill(CobaltColor.elevated)
             .frame(width: size.width, height: size.height)
             .accessibilityHidden(true)
@@ -294,8 +300,8 @@ extension View {
     }
 }
 
-/// A tile's "already shared" badges: a blue link capsule with how many links hold the post, then an amber folder dot
-/// when one of those links is in a collection. Same back and ring as the tile's other badges.
+/// A tile's "already shared" badge: one unified dark pill holding the blue link count and (when in a collection) the
+/// amber folder glyph, avoiding stacked multi-badge clutter.
 struct SharedTileBadges: View {
     let share: ShareStatus
 
@@ -303,26 +309,23 @@ struct SharedTileBadges: View {
         HStack(spacing: 4) {
             HStack(spacing: 2) {
                 Image(systemName: Symbol.link)
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: 8.5, weight: .bold))
                 Text("\(share.links)")
                     .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
                     .monospacedDigit()
             }
             .foregroundStyle(CobaltColor.sharedInk)
-            .padding(.horizontal, 6)
-            .frame(height: 20)
-            .background(CobaltColor.badgeBack, in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
             if share.collections > 0 {
                 Image(systemName: Symbol.collection)
                     .symbolVariant(.fill)
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: 8.5, weight: .bold))
                     .foregroundStyle(CobaltColor.collectionOnTile)
-                    .frame(width: 20, height: 20)
-                    .background(CobaltColor.badgeBack, in: Circle())
-                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
             }
         }
+        .padding(.horizontal, 6.5)
+        .frame(height: 20)
+        .background(TileBadgeSurface.fill, in: Capsule())
+        .overlay(Capsule().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
         .fixedSize()
     }
 }

@@ -35,10 +35,12 @@ struct LibraryShareMenu: View {
     let index: ShareSetIndex
     @Binding var filter: LibraryShareFilter
 
+    @State private var countsCache = CountsCache()
+
     private var store: ShareSetStore { model.shareSets }
 
     var body: some View {
-        let counts = counts
+        let counts = countsCache.counts(for: rows, index: index)
         Menu {
             Picker(Copy.Library2.shareFilter, selection: $filter) {
                 Text(Copy.Library2.shareEverything).tag(LibraryShareFilter.all)
@@ -107,6 +109,7 @@ struct LibraryShareMenu: View {
         .padding(.horizontal, 12)
         .frame(minWidth: 40, minHeight: 30)
         .background(Capsule().fill(on ? CobaltColor.text : CobaltColor.elevated))
+        .overlay(Capsule().strokeBorder(on ? Color.clear : CobaltColor.hairline, lineWidth: 0.5))
         .contentShape(Capsule())
         .motion(Motion.chip, value: filter)
     }
@@ -164,24 +167,39 @@ struct LibraryShareMenu: View {
         var postCollections: [Set<String>] = []
     }
 
+    private final class CountsCache {
+        private var lastRows: [LibraryRow] = []
+        private var lastIndex: ShareSetIndex?
+        private var cached: Counts?
+
+        func counts(for rows: [LibraryRow], index: ShareSetIndex) -> Counts {
+            if let cached, lastIndex == index, rows.count == lastRows.count {
+                let sameStorage = rows.withUnsafeBufferPointer { a in
+                    lastRows.withUnsafeBufferPointer { b in a.baseAddress == b.baseAddress }
+                }
+                if sameStorage { return cached }
+            }
+            var out = Counts()
+            for row in rows {
+                let sets = index.setIDs(for: row.item)
+                if sets.isEmpty {
+                    if row.shareable { out.notShared += 1 }
+                    continue
+                }
+                out.shared += 1
+                let collections = index.collectionIDs(for: row.item)
+                for id in collections { out.byCollection[id, default: 0] += 1 }
+                if !collections.isEmpty { out.postCollections.append(collections) }
+            }
+            lastRows = rows
+            lastIndex = index
+            cached = out
+            return out
+        }
+    }
+
     private func count(of set: CollectionGroup, _ counts: Counts) -> Int {
         let ids = Set(set.collectionIDs)
         return counts.postCollections.reduce(0) { $0 + ($1.isDisjoint(with: ids) ? 0 : 1) }
-    }
-
-    private var counts: Counts {
-        var out = Counts()
-        for row in rows {
-            let sets = index.setIDs(for: row.item)
-            if sets.isEmpty {
-                if row.shareable { out.notShared += 1 }
-                continue
-            }
-            out.shared += 1
-            let collections = index.collectionIDs(for: row.item)
-            for id in collections { out.byCollection[id, default: 0] += 1 }
-            if !collections.isEmpty { out.postCollections.append(collections) }
-        }
-        return out
     }
 }

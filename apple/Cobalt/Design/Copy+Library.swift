@@ -38,8 +38,8 @@ extension Copy {
         // the select pill (bottom of the library): its picks as thumbnails, then make link, collection, share
         static func pickedCount(_ n: Int) -> String { n == 0 ? "tap posts to pick" : "\(n) picked" }
         static let stopSelecting = "stop selecting"
-        static let all = "all", noneShort = "none"                             // the pill's select all / none
-        static let collection = "collection"                                   // the pill's button: file the link
+        static let all = "all", noneShort = "none", clearPicks = "clear"        // select all / none / clear picks
+        static let collection = "collection"                                   // the select grid's button: file the link
         static let newCollection = "new collection…"
         static let newCollectionTitle = "new collection"
         static let collectionNamePrompt = "name"

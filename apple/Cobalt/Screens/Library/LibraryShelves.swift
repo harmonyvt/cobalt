@@ -309,6 +309,7 @@ struct ShelfCard<Cover: View, Lines: View>: View {
     @ViewBuilder let lines: Lines
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
         HStack(spacing: 10) {
             cover
                 .frame(height: 56)
@@ -318,7 +319,8 @@ struct ShelfCard<Cover: View, Lines: View>: View {
         }
         .padding(8)
         .frame(height: LibraryShelves.cardHeight)
-        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(CobaltColor.surface, in: shape)
+        .overlay(shape.strokeBorder(CobaltColor.hairline, lineWidth: 0.5))
+        .contentShape(shape)
     }
 }

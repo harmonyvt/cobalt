@@ -106,6 +106,19 @@ final class LibraryPictureCache: Sendable {
         return nil
     }
 
+    /// Common decoded long-side buckets, largest first, for instant fallback before an exact-size decode finishes.
+    private static let fallbackBuckets = [1024, 768, 704, 640, 576, 512, 448, 384, 320, 256, 192, 160, 128]
+
+    /// The first of `chain` the cache already holds at `maxPixel`, else the sharpest cached size already in memory.
+    /// `exact` is true only when the hit is at `maxPixel` (so a fallback still upgrades to `maxPixel` off the main thread).
+    func best(in chain: [LibraryPictureSource], maxPixel: Int) -> (box: ImageBox, exact: Bool)? {
+        if let hit = first(in: chain, maxPixel: maxPixel) { return (hit, true) }
+        for size in Self.fallbackBuckets where size != maxPixel {
+            if let hit = first(in: chain, maxPixel: size) { return (hit, false) }
+        }
+        return nil
+    }
+
     func store(_ box: ImageBox, _ source: LibraryPictureSource, maxPixel: Int) {
         MediaPipeline.memory.store(box, forKey: Self.key(source, maxPixel))
     }
@@ -145,7 +158,9 @@ actor LibraryPictureLoader {
     }
 
     private var flights: [Key: Flight] = [:]
+    private var prefetches: [Key: Task<Void, Never>] = [:]
     private let gate = LoadGate(limit: 6)
+    private let prefetchGate = LoadGate(limit: 2)
 
     /// The picture, or nil when it failed to load or the caller was cancelled.
     func picture(_ source: LibraryPictureSource, maxPixel: Int) async -> ImageBox? {
@@ -178,6 +193,32 @@ actor LibraryPictureLoader {
         if flights[key]?.id == flightID { flights[key] = nil }
         if let box { cache.store(box, source, maxPixel: maxPixel) }
         return box
+    }
+
+    /// Warms upcoming mosaic thumbnails at low priority without competing with visible tiles.
+    /// Decodes only the first source of each chain (skipping video frames which are heavier to seek).
+    func prefetch(_ requests: [(source: LibraryPictureSource, maxPixel: Int)]) {
+        let cache = LibraryPictureCache.shared
+        for req in requests {
+            if case .videoFrame = req.source { continue }
+            if cache.image(req.source, maxPixel: req.maxPixel) != nil { continue }
+            let key = Key(source: req.source, maxPixel: req.maxPixel)
+            guard flights[key] == nil, prefetches[key] == nil else { continue }
+            // cap queued prefetch work so a rapid fling never builds a backlog
+            if prefetches.count >= 12 { break }
+            let gate = self.prefetchGate
+            prefetches[key] = Task.detached(priority: .utility) { [weak self] in
+                await gate.enter()
+                let box = Task.isCancelled ? nil : await Self.decode(req.source, maxPixel: req.maxPixel)
+                await gate.leave()
+                if let box { cache.store(box, req.source, maxPixel: req.maxPixel) }
+                await self?.finishPrefetch(key)
+            }
+        }
+    }
+
+    private func finishPrefetch(_ key: Key) {
+        prefetches[key] = nil
     }
 
     private func waiterLeft(_ key: Key, flight id: UUID) {

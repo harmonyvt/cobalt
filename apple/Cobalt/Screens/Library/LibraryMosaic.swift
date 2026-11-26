@@ -64,12 +64,17 @@ struct LibraryMosaic: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.horizontalSizeClass) private var sizeClass
 
-    private static let gap: Double = 6
+    private var gap: Double { tier == .compact ? 7 : 10 }
     private static let margin: Double = 12
-    private static let topInset: Double = 6
+    private static let topInset: Double = 8
 
-    /// The scroll viewport's height, read when a reveal scrolls (not observed).
-    final class ViewportBox { var height: Double = 0 }
+    /// Scroll viewport height and prefetch watermark, read without triggering SwiftUI invalidation.
+    final class ViewportBox {
+        var height: Double = 0
+        var prefetchedHeadID: String?
+        var prefetchedCount: Int = 0
+        var prefetchedThrough: Int = -1
+    }
 
     init(
         rows: [LibraryRow], controller: LibraryController, tier: Tier, footer: LibraryFooter, skeleton: Bool,
@@ -91,24 +96,29 @@ struct LibraryMosaic: View {
         return Platform.isMac ? 160 : 150
     }
 
-    private var aspects: [Double] {
-        skeleton ? Self.skeletonAspects : rows.map(\.faceAspect)
-    }
-
     /// Nine grey tiles at mixed aspects while the first page loads.
     private static let skeletonAspects: [Double] = [16 / 9, 9 / 16, 1, 9 / 16, 4 / 3, 9 / 16, 1, 16 / 9, 9 / 16]
 
-    /// The plan and each column's tiles, made again only when the posts, their aspects, the width or the column
-    /// count changed: a tick or a light redraws tiles, not the layout.
+    /// The plan and each column's tiles, made again only when the posts, their aspects, the width, gap, or column
+    /// count changed. Fast-paths in O(1) when the `rows` array storage is identical (zero per-render `rows.map` work).
     private func layout(width: Double) -> MosaicLayout {
+        let gap = self.gap
         let columns = MasonryPlan.duoColumns(
-            width: width, minTile: minTile, gap: Self.gap, margin: Self.margin,
+            width: width, minTile: minTile, gap: gap, margin: Self.margin,
             accessibility: typeSize.isAccessibilitySize,
             isRegular: sizeClass == .regular || Platform.isMac)
+        if let fast = layoutCache.fastHit(skeleton: skeleton, rows: rows, width: width, columns: columns, gap: gap) {
+            return fast
+        }
+        let ids = skeleton ? [] : rows.map(\.id)
+        let aspects = skeleton ? Self.skeletonAspects : rows.map(\.faceAspect)
         let key = MosaicLayout.Key(
-            skeleton: skeleton, ids: skeleton ? [] : rows.map(\.id), aspects: aspects, width: width, columns: columns)
-        if let cached = layoutCache.layout, cached.key == key { return cached }
-        let plan = MasonryPlan.make(aspects: key.aspects, width: width, columns: columns, gap: Self.gap, margin: Self.margin)
+            skeleton: skeleton, ids: ids, aspects: aspects, width: width, columns: columns, gap: gap)
+        if let cached = layoutCache.layout, cached.key == key {
+            layoutCache.record(rows: rows, layout: cached)
+            return cached
+        }
+        let plan = MasonryPlan.make(aspects: key.aspects, width: width, columns: columns, gap: gap, margin: Self.margin)
         // slots come in index order, so each column's tiles stay top to bottom
         var byColumn = [[MosaicTile]](repeating: [], count: plan.columns)
         for slot in plan.slots where byColumn.indices.contains(slot.column) {
@@ -119,7 +129,7 @@ struct LibraryMosaic: View {
             }
         }
         let layout = MosaicLayout(key: key, plan: plan, columns: byColumn)
-        layoutCache.layout = layout
+        layoutCache.record(rows: rows, layout: layout)
         return layout
     }
 
@@ -158,8 +168,11 @@ struct LibraryMosaic: View {
         .scrollPosition($position)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport.height = Double($0) }
-        .onScrollGeometryChange(for: Double.self) { Double($0.contentOffset.y + $0.containerSize.height / 2) } action: { _, center in
-            budget.setCenter(center)
+        // Quantized to 48 pt buckets so fast flings don't wake the animation budget on every single scroll pixel.
+        .onScrollGeometryChange(for: Int.self) {
+            Int((Double($0.contentOffset.y + $0.containerSize.height / 2) / 48).rounded())
+        } action: { _, bucket in
+            budget.setCenter(Double(bucket) * 48)
         }
         .onScrollPhaseChange { _, phase in budget.setScrolling(phase != .idle) }
         .onChange(of: reduceMotion, initial: true) { budget.setEnvironment(reduceMotion: reduceMotion, sceneActive: lifecycle.isForeground) }
@@ -184,9 +197,10 @@ struct LibraryMosaic: View {
     /// The columns: one `LazyVStack` each, so only the tiles on screen are built and measured.
     private func columns(_ layout: MosaicLayout, numbers: [String: Int]) -> some View {
         let plan = layout.plan
-        return HStack(alignment: .top, spacing: Self.gap) {
+        let gap = self.gap
+        return HStack(alignment: .top, spacing: gap) {
             ForEach(0..<plan.columns, id: \.self) { column in
-                LazyVStack(spacing: Self.gap) {
+                LazyVStack(spacing: gap) {
                     ForEach(layout.columns.indices.contains(column) ? layout.columns[column] : []) { tile in
                         tileView(tile.slot, plan: plan, numbers: numbers)
                     }
@@ -217,6 +231,36 @@ struct LibraryMosaic: View {
                 share: shareIndex.status(for: row.item), controller: controller, budget: budget, zoom: zoom,
                 nearEnd: slot.index >= rows.count - 6)
             .equatable()
+            .onAppear { prefetchAhead(from: slot.index, plan: plan) }
+        }
+    }
+
+    /// Warms thumbnails for the next few tiles below the viewport at `.utility` priority so fast scrolling hits RAM.
+    private func prefetchAhead(from index: Int, plan: MasonryPlan) {
+        guard !skeleton, !rows.isEmpty else { return }
+        let headID = rows.first?.id
+        if viewport.prefetchedHeadID != headID || viewport.prefetchedCount != rows.count {
+            viewport.prefetchedHeadID = headID
+            viewport.prefetchedCount = rows.count
+            viewport.prefetchedThrough = -1
+        }
+        let targetEnd = min(rows.count - 1, index + plan.columns * 2)
+        guard targetEnd > viewport.prefetchedThrough else { return }
+        let start = max(index + 1, viewport.prefetchedThrough + 1)
+        guard start <= targetEnd else { return }
+        viewport.prefetchedThrough = targetEnd
+        let scale = Double(displayScale)
+        var requests: [(source: LibraryPictureSource, maxPixel: Int)] = []
+        requests.reserveCapacity(targetEnd - start + 1)
+        for i in start...targetEnd where rows.indices.contains(i) && plan.slots.indices.contains(i) {
+            guard let source = FaceChain.sources(for: rows[i].item).first else { continue }
+            let slot = plan.slots[i]
+            let px = Self.bucket(max(plan.columnWidth, slot.height) * scale)
+            requests.append((source, px))
+        }
+        guard !requests.isEmpty else { return }
+        Task(priority: .utility) {
+            await LibraryPictureLoader.shared.prefetch(requests)
         }
     }
 
@@ -256,6 +300,7 @@ private struct MosaicLayout {
         var aspects: [Double]
         var width: Double
         var columns: Int
+        var gap: Double
     }
     let key: Key
     let plan: MasonryPlan
@@ -263,6 +308,30 @@ private struct MosaicLayout {
 }
 
 /// Holds the last layout across body passes (not observed: reading it never redraws).
+/// Keeps a reference to the last `rows` array so unchanged CoW buffers hit in O(1) without allocating `ids`/`aspects`.
 private final class MosaicLayoutCache {
     var layout: MosaicLayout?
+    private var lastRows: [LibraryRow] = []
+    private var hasRows = false
+
+    func fastHit(skeleton: Bool, rows: [LibraryRow], width: Double, columns: Int, gap: Double) -> MosaicLayout? {
+        guard let layout else { return nil }
+        guard layout.key.skeleton == skeleton,
+              layout.key.width == width,
+              layout.key.columns == columns,
+              layout.key.gap == gap
+        else { return nil }
+        if skeleton { return layout }
+        guard hasRows, rows.count == lastRows.count else { return nil }
+        let sameStorage = rows.withUnsafeBufferPointer { a in
+            lastRows.withUnsafeBufferPointer { b in a.baseAddress == b.baseAddress }
+        }
+        return sameStorage ? layout : nil
+    }
+
+    func record(rows: [LibraryRow], layout: MosaicLayout) {
+        self.layout = layout
+        self.lastRows = layout.key.skeleton ? [] : rows
+        self.hasRows = !layout.key.skeleton
+    }
 }
