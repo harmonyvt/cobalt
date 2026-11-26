@@ -305,8 +305,10 @@ struct HeroVideoBox: View {
     @State private var fullScreen: HeroFullScreen?
     /// The clip was running when the full-screen player took over.
     @State private var wasPlaying = false
+    @State private var ambientOwnerID = UUID()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.lifecycle) private var lifecycle
+    @Environment(\.ambientVideoSampler) private var ambientVideoSampler
 
     private var video: HeroVideo { kept?.video ?? ownVideo }
     private var transport: HeroTransport { kept?.transport ?? ownTransport }
@@ -362,9 +364,19 @@ struct HeroVideoBox: View {
         .task(id: url) { await start() }
         .onChange(of: video.phase) { _, phase in
             if phase == .ready || phase == .failed { Breadcrumbs.add("video.\(phase)") }
+            if phase == .ready { ambientVideoSampler?.attach(player: video.player, owner: ambientOwnerID) }
         }
-        .onAppear { kept?.attach() }
-        .onDisappear { if let kept { kept.detach() } else { leave() } }
+        .onChange(of: video.player.map(ObjectIdentifier.init)) { _, _ in
+            ambientVideoSampler?.attach(player: video.player, owner: ambientOwnerID)
+        }
+        .onAppear {
+            kept?.attach()
+            ambientVideoSampler?.attach(player: video.player, owner: ambientOwnerID)
+        }
+        .onDisappear {
+            ambientVideoSampler?.detach(owner: ambientOwnerID)
+            if let kept { kept.detach() } else { leave() }
+        }
         .onChange(of: lifecycle.isForeground) { _, onScreen in
             if onScreen { video.appBack() } else { appLeft() }
         }

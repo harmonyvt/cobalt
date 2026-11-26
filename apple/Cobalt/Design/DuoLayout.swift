@@ -155,14 +155,22 @@ private struct DuoMediaOverlay27<Controls: View, Media: View>: View {
     @ViewBuilder let controls: (_ isSeparated: Bool) -> Controls
     @ViewBuilder let media: () -> Media
 
+    @State private var isSeparated = false
+
     var body: some View {
         ArrangementView {
-            DuoOverlayControlsBridge(controls: controls)
+            DuoOverlayControlsBridge(controls: controls) { separated in
+                if isSeparated != separated {
+                    isSeparated = separated
+                }
+            }
+            .modifier(DuoOverlayEdgeModifier(edge: edge, axes: axes, isPrimary: true))
         } secondary: {
             media()
+                .environment(\.duoOverlaySeparated, isSeparated)
+                .modifier(DuoOverlayEdgeModifier(edge: edge, axes: axes, isPrimary: false))
         }
         .arrangementViewStyle(.overlay.axes(axes))
-        .modifier(DuoOverlayEdgeModifier(edge: edge))
     }
 }
 
@@ -170,17 +178,26 @@ private struct DuoMediaOverlay27<Controls: View, Media: View>: View {
 private struct DuoOverlayControlsBridge<Controls: View>: View {
     @Environment(\.overlayArrangementZIndex) private var overlayZIndex
     @ViewBuilder let controls: (_ isSeparated: Bool) -> Controls
+    let onSeparatedChange: (Bool) -> Void
 
     var body: some View {
         let isSeparated = overlayZIndex == 0
         controls(isSeparated)
             .environment(\.duoOverlaySeparated, isSeparated)
+            .onChange(of: isSeparated, initial: true) { _, separated in
+                onSeparatedChange(separated)
+            }
     }
 }
 
+/// Anchors primary controls and secondary media to opposite edges when `ArrangementView(.overlay)` separates
+/// across an active iPhone Duo fold. Applying `overlayArrangementEdge(_:)` to the outer `ArrangementView` would
+/// propagate the same edge into both children and stack media behind controls in Tabletop vertical splits.
 @available(iOS 27.1, macOS 27.1, *)
 private struct DuoOverlayEdgeModifier: ViewModifier {
     let edge: DuoOverlayEdge
+    let axes: Axis.Set
+    let isPrimary: Bool
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -188,13 +205,19 @@ private struct DuoOverlayEdgeModifier: ViewModifier {
         case .automatic:
             content
         case .top:
-            content.overlayArrangementEdge(VerticalEdge.top)
+            content.overlayArrangementEdge(isPrimary ? VerticalEdge.top : VerticalEdge.bottom)
         case .bottom:
-            content.overlayArrangementEdge(VerticalEdge.bottom)
+            if axes.contains(.horizontal) {
+                content
+                    .overlayArrangementEdge(isPrimary ? VerticalEdge.bottom : VerticalEdge.top)
+                    .overlayArrangementEdge(isPrimary ? HorizontalEdge.trailing : HorizontalEdge.leading)
+            } else {
+                content.overlayArrangementEdge(isPrimary ? VerticalEdge.bottom : VerticalEdge.top)
+            }
         case .leading:
-            content.overlayArrangementEdge(HorizontalEdge.leading)
+            content.overlayArrangementEdge(isPrimary ? HorizontalEdge.leading : HorizontalEdge.trailing)
         case .trailing:
-            content.overlayArrangementEdge(HorizontalEdge.trailing)
+            content.overlayArrangementEdge(isPrimary ? HorizontalEdge.trailing : HorizontalEdge.leading)
         }
     }
 }

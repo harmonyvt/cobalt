@@ -194,47 +194,32 @@ struct MediaDetail: View {
             Color.clear.selectionSubtitle(
                 !gone && controller.selecting ? DetailWords.selected(controller.pickedRenditions(in: item).count) : nil)
         }
-        // the title is a menu (iOS inline title, the Mac window title): `rename`
+        #if os(macOS)
+        // the title is a menu (the Mac window title): `rename`
         .toolbarTitleMenu {
             if !gone { renameButton }
         }
-        #if os(iOS)
+        #else
         .navigationBarTitleDisplayMode(.inline)
-        // iPadOS 26 floats the tab bar at the top centre when the sidebar is collapsed, in the same row as this
-        // bar, and the system's centred title slides under it. Regular width therefore drops the centred title
-        // and shows it beside the menu, at the trailing edge, where nothing floats.
-        .toolbar(removing: sizeClass == .regular ? .title : nil)
+        // AmbientCinemaPostStudio owns the Clear Liquid Glass identity pill, inline rename, and more menu on iOS.
+        // Removing `.title` and hiding the bar background lets AmbientCinemaBackdrop bleed edge-to-edge while
+        // preserving the system back button (both standard iPhone nav bar and iPhone Duo outer Vertical Controls rail).
+        .toolbar(removing: gone ? nil : .title)
+        .toolbarBackground(gone ? .automatic : .hidden, for: .navigationBar)
         #endif
         .toolbar {
-            #if os(iOS)
-            if !gone, sizeClass == .regular {
-                ToolbarItem(placement: .topBarTrailing) {
-                    // the centred title is gone here, so the trailing title carries the same menu
-                    Menu {
-                        renameButton
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(title(item))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 10, weight: .semibold))
-                                .accessibilityHidden(true)
-                        }
-                        .font(.headline)
-                    }
-                    .accessibilityLabel(title(item))
-                    .accessibilityAddTraits(.isHeader)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            }
-            #endif
+            #if os(macOS)
             // a Mac sheet draws toolbar items at the bottom: there the menu sits in the sheet's top-right corner instead
             if !gone, !inMacSheet {
                 ToolbarItem(placement: .primaryAction) { menu(context, kit: kit) }
             }
+            #endif
         }
-        .sheetCorner { if !gone, inMacSheet { menu(context, kit: kit) } }
+        .sheetCorner {
+            #if os(macOS)
+            if !gone, inMacSheet { menu(context, kit: kit) }
+            #endif
+        }
         .postActionPresenters(kit: kit, item: item)
         // the pane's offline words (`needs network`, `queued`) wherever this screen is pushed or presented
         .environment(\.paneOffline, model.serverIsAway)
@@ -286,6 +271,7 @@ struct MediaDetail: View {
 
     // MARK: actions
 
+    #if os(macOS)
     /// `rename` (`pencil`): the title menu's one item; the `more` menu has the same one, first. After the entries it always
     /// had, the pane's own post actions (`PostActionKit.menuExtras`): add to link, edit, hide / unhide, `this is…`.
     private func menu(_ c: DetailContext, kit: PostActionKit) -> some View {
@@ -302,6 +288,7 @@ struct MediaDetail: View {
     private var renameButton: some View {
         Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) { renaming = true }
     }
+    #endif
 
     /// Nothing of the media is left: the screen underneath says `deleted.` (when it was deleted) and this pops.
     private func finishGone() {
