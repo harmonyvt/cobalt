@@ -111,20 +111,33 @@ struct PhoneTabs<Screen: View>: View {
 
     // MARK: settings
 
-    /// The settings sheet: the whole screen in a large sheet, closed with `done`. It wears what the shell's other sheets wear, so
-    /// a screen pane opened from under it waits for it to go (one narrow screen).
+    /// The settings sheet: the whole screen in a large sheet, closed with the unified circular `<` back button.
     private var settingsSheet: some View {
+        CobaltSettingsSheet(model: model, shell: shell, pane: pane) {
+            nav.settingsShown = false
+        }
+    }
+}
+
+/// Shared Settings modal sheet for compact iPhone (`PhoneTabs`) and iPhone Duo (`RegularFourTabs`),
+/// using the unified Spotify-style circular Liquid Glass `<` back button below the Duo status circle.
+struct CobaltSettingsSheet: View {
+    let model: AppModel
+    let shell: ShellActions
+    let pane: Pane?
+    let onClose: () -> Void
+
+    var body: some View {
         NavigationStack {
             SettingsScreen(model: model)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        DuoToolbarButton(title: Copy.PhoneNav.done, systemImage: "checkmark") {
-                            nav.settingsShown = false
-                        }
-                        .accessibilityIdentifier("phone.settings.done")
-                    }
-                    .duoVisibilityPriority(.high)
+                    CobaltBackToolbarItem(
+                        title: Copy.PhoneNav.done,
+                        accessibilityIdentifier: "phone.settings.done",
+                        cancels: true,
+                        action: onClose
+                    )
                 }
         }
         .presentationDetents([.large])

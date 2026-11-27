@@ -174,13 +174,9 @@ struct TwitchStreamPage: View {
 
     @ToolbarContentBuilder
     private var watchToolbar: some ToolbarContent {
-        ToolbarItem(placement: .cancellationAction) {
-            DuoToolbarButton(title: Copy.close, systemImage: "chevron.backward") {
-                pane.close()
-            }
-            .accessibilityIdentifier("pane.close")
+        CobaltBackToolbarItem(title: Copy.close, accessibilityIdentifier: "pane.close") {
+            pane.close()
         }
-        .duoVisibilityPriority(.high)
 
         ToolbarItem(placement: .primaryAction) {
             DuoToolbarButton(
@@ -1037,12 +1033,9 @@ struct TwitchAddSecondStreamSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    DuoToolbarButton(title: Copy.Twitch.close, systemImage: Symbol.Twitch.close) {
-                        dismiss()
-                    }
+                CobaltBackToolbarItem(title: Copy.Twitch.close, cancels: true) {
+                    dismiss()
                 }
-                .duoVisibilityPriority(.high)
             }
             .task {
                 if !store.followingLoaded {

@@ -1025,8 +1025,9 @@ struct HomeScreen: View {
     /// Opens the media's detail (CONTRACT-MEDIA 1.8): on the face's tab. On the phone the planet's own
     /// player is lent to it when the face is the video, so the zoom carries the picture and nothing restarts.
     private func open(_ media: StoredMedia) {
-        // with room for the pane the media opens beside the orbit, which keeps turning
-        if let pane, pane.placement != .compact {
+        // with room for a side-by-side pane (macOS column) the media opens beside the orbit; on iOS / iPhone Duo
+        // it pushes inside the Save tab's stack so the Duo vertical nav rail and native `<` back button stay visible
+        if let pane, pane.sitsBesideTab {
             pane.open(.post(baseID(media.id)))
             return
         }

@@ -158,9 +158,17 @@ struct CloseButton: View {
     var cancels = false
     let action: () -> Void
 
+    private var symbolName: String {
+        #if os(iOS)
+        return "chevron.backward"
+        #else
+        return "xmark"
+        #endif
+    }
+
     var body: some View {
         Button(action: action) {
-            Label(Copy.closeA11y, systemImage: "xmark")
+            Label(Copy.closeA11y, systemImage: symbolName)
                 .labelStyle(.iconOnly)
                 .font(.system(size: 14, weight: .semibold))
         }

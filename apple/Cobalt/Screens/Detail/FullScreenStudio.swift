@@ -403,11 +403,19 @@ struct FullScreenStudioVideo: View {
 
     // MARK: - Top Glass Bar
 
+    private var exitSymbol: String {
+        #if os(iOS)
+        "chevron.backward"
+        #else
+        Symbol.close
+        #endif
+    }
+
     private var topGlassBar: some View {
         MediaGlassGroup(spacing: 10) {
             HStack(spacing: 10) {
                 Button { finish() } label: {
-                    Label(Copy.Media.exitFullScreen, systemImage: Symbol.close)
+                    Label(Copy.Media.exitFullScreen, systemImage: exitSymbol)
                         .labelStyle(.iconOnly)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white)

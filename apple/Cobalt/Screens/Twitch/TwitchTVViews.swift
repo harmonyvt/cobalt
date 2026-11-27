@@ -93,23 +93,25 @@ struct TwitchTVSheet: View {
     @Bindable private var tv = TwitchTV.shared
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text(Copy.Twitch.tvTitle)
-                        .font(Font.cobalt(18, .semibold))
-                        .foregroundStyle(CobaltColor.text)
-                    Spacer()
-                    Button(Copy.Twitch.close, systemImage: Symbol.Twitch.close) { dismiss() }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.cobaltSecondary(fullWidth: false, compact: true))
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    tvMode
+                    videoOnly
                 }
-                tvMode
-                videoOnly
+                .padding(16)
             }
-            .padding(16)
+            .background(CobaltColor.bg)
+            .navigationTitle(Copy.Twitch.tvTitle)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                CobaltBackToolbarItem(title: Copy.Twitch.close, cancels: true) {
+                    dismiss()
+                }
+            }
         }
-        .background(CobaltColor.bg)
         // tv mode took over: nothing left to choose here
         .onChange(of: tv.onTV) { _, on in if on { dismiss() } }
     }

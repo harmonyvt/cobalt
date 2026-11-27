@@ -119,3 +119,63 @@ struct DuoToolbarButton: View {
         }
     }
 }
+
+/// Spotify-style unified circular Liquid Glass `<` back button for toolbars, sheets, and single-focus panes.
+///
+/// Uses `ToolbarItem(placement: .cancellationAction)` with `.duoVisibilityPriority(.high)` so iOS 27.1+
+/// places the circular chevron directly below the top-right status indicator on iPhone Duo's Vertical Controls
+/// side rail, and at top-leading on compact iPhone horizontal navigation bars.
+struct CobaltBackToolbarItem: ToolbarContent {
+    let title: String
+    var accessibilityIdentifier: String? = nil
+    var cancels: Bool = false
+    let action: () -> Void
+
+    init(
+        title: String = Copy.close,
+        accessibilityIdentifier: String? = nil,
+        cancels: Bool = false,
+        action: @escaping () -> Void
+    ) {
+        self.title = title
+        self.accessibilityIdentifier = accessibilityIdentifier
+        self.cancels = cancels
+        self.action = action
+    }
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            DuoToolbarButton(title: title, systemImage: "chevron.backward", action: action)
+                .modifier(OptionalToolbarIdentifier(id: accessibilityIdentifier))
+                .modifier(OptionalCancelShortcut(enabled: cancels))
+        }
+        .duoVisibilityPriority(.high)
+    }
+}
+
+private struct OptionalToolbarIdentifier: ViewModifier {
+    let id: String?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let id {
+            content.accessibilityIdentifier(id)
+        } else {
+            content
+        }
+    }
+}
+
+private struct OptionalCancelShortcut: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.keyboardShortcut(.cancelAction)
+        } else {
+            content
+        }
+    }
+}
+

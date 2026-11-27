@@ -49,10 +49,11 @@ struct LibraryScreen: View {
     #endif
 
     #if os(iOS)
-    /// A tap in compact width pushes the unified detail onto the library's stack (one detail, not the pane's sheet).
-    /// Regular width (iPhone Duo inner, iPad, Mac) opens in the split pane.
+    /// A tap pushes the unified detail onto the library's navigation stack across compact and regular iOS widths
+    /// (iPhone, iPhone Duo, iPad) so the system TabView / Duo Vertical Controls side rail stays visible and the
+    /// native circular Liquid Glass back button sits below the status circle. Only macOS opens posts beside the tab.
     private var phonePush: (@MainActor (MediaDetailRoute) -> Void)? {
-        guard sizeClass == .compact else { return nil }
+        guard !(pane?.sitsBesideTab ?? false) else { return nil }
         return { route in path.append(route) }
     }
     #endif
@@ -116,6 +117,9 @@ private struct LibraryContent: View {
     @Environment(\.shell) private var shell
     @Environment(Pane.self) private var pane: Pane?
     @Environment(\.horizontalSizeClass) private var sizeClass
+    #if os(iOS)
+    @Environment(PhoneNavState.self) private var phoneNav: PhoneNavState?
+    #endif
     /// The window docks the screen pane beside the tab (macOS column): a hold's peek and auto-open search results
     /// open beside the grid. On iOS single-focus mode, hold-to-peek stays as `LibraryPeekOverlay` and taps open full-canvas.
     private var paneBeside: Bool { pane?.sitsBesideTab ?? false }
@@ -595,6 +599,7 @@ private struct LibraryContent: View {
         // the queue is a sheet on iPhone and iPad (not a tab); select mode keeps its controls and drops this button
         if !controller.selecting { QueueToolbarItem(model: model) }
         trailingToolbar
+        if phoneNav != nil { PhoneGearItem() }
     }
     #endif
 
