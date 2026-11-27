@@ -16,7 +16,11 @@ struct TwitchEmotePicker: View {
     let onAddEmote: (ChatEmote) -> Void
     let onPick: (ChatEmote) -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var filter = ""
+    @State private var gridWidth: CGFloat = 0
+    @State private var isScrolling = false
+    @State private var shownSections: [Shown] = []
 
     private static let recentID = "recent"
 
@@ -27,15 +31,38 @@ struct TwitchEmotePicker: View {
         var locked: Set<String>
     }
 
+    private struct FilterKey: Equatable {
+        let filter: String
+        let emotes: TwitchEmoteList
+        let recents: [ChatEmote]
+        let channelName: String
+    }
+
     private var activeEmotes: TwitchEmoteList { emotesOverride ?? store.emotes }
     private var activeRecents: [ChatEmote] { recentOverride ?? store.recentEmotesHere }
     private var channelName: String { channelNameOverride ?? store.channelInfo?.displayName ?? store.channel ?? "" }
 
     private static let tile: CGFloat = 34
-    private let columns = [GridItem(.adaptive(minimum: 52, maximum: 72), spacing: 4)]
 
-    /// Recent (no filter), then each section with an emote matching the filter.
-    private var sections: [Shown] {
+    private var columns: [GridItem] {
+        if gridWidth > 0 {
+            return DuoGrid.gridItems(
+                forWidth: gridWidth,
+                minItemWidth: 54,
+                spacing: 4,
+                sizeClass: sizeClass,
+                minColumns: 4
+            )
+        }
+        return DuoGrid.fixedGridItems(compact: 4, regular: 6, spacing: 4, sizeClass: sizeClass)
+    }
+
+    private var filterKey: FilterKey {
+        FilterKey(filter: filter, emotes: activeEmotes, recents: activeRecents, channelName: channelName)
+    }
+
+    /// Recomputes visible sections only when filter text, emote list, recents, or channel name actually change.
+    private func recomputeSections() -> [Shown] {
         let needle = filter.trimmingCharacters(in: .whitespaces)
         var out: [Shown] = []
         if needle.isEmpty {
@@ -75,17 +102,27 @@ struct TwitchEmotePicker: View {
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
+                if !filter.isEmpty {
+                    Button { filter = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(CobaltColor.caption)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .font(Font.cobalt(13.5))
             .padding(.horizontal, 10)
             .frame(height: 32)
             .background(CobaltColor.surface, in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
+            }
             .padding(.horizontal, 10)
             .padding(.top, 8)
             .padding(.bottom, 4)
 
-            let shown = sections
-            if shown.isEmpty {
+            if shownSections.isEmpty {
                 Text(emptyText)
                     .font(CobaltType.caption)
                     .foregroundStyle(CobaltColor.caption)
@@ -93,10 +130,10 @@ struct TwitchEmotePicker: View {
             } else {
                 ScrollViewReader { proxy in
                     VStack(spacing: 0) {
-                        if shown.count > 1 { jumps(shown, proxy: proxy) }
+                        if shownSections.count > 1 { jumps(shownSections, proxy: proxy) }
                         ScrollView {
                             LazyVGrid(columns: columns, alignment: .leading, spacing: 4, pinnedViews: [.sectionHeaders]) {
-                                ForEach(shown) { section in
+                                ForEach(shownSections) { section in
                                     Section {
                                         ForEach(section.emotes, id: \.self) { emote in
                                             tile(emote, locked: section.locked.contains(emote.id))
@@ -109,13 +146,27 @@ struct TwitchEmotePicker: View {
                             }
                             .padding(.horizontal, 8)
                             .padding(.bottom, 8)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                                if abs(width - gridWidth) > 1 {
+                                    gridWidth = width
+                                }
+                            }
                         }
                         .scrollDismissesKeyboard(.immediately)
+                        .onScrollPhaseChange { _, newPhase in
+                            let scrolling = newPhase == .tracking || newPhase == .interacting || newPhase == .decelerating
+                            if isScrolling != scrolling {
+                                isScrolling = scrolling
+                            }
+                        }
                     }
                 }
             }
         }
         .background(CobaltColor.bg)
+        .onChange(of: filterKey, initial: true) { _, _ in
+            shownSections = recomputeSections()
+        }
         .accessibilityIdentifier("twitch.emotePicker")
     }
 
@@ -138,6 +189,10 @@ struct TwitchEmotePicker: View {
                         }
                         .frame(width: 32, height: 28)
                         .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
+                        }
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(section.title)
@@ -174,7 +229,7 @@ struct TwitchEmotePicker: View {
             onPick(emote)
         } label: {
             VStack(spacing: 2) {
-                EmotePicture(url: emote.url, animated: emote.animated, side: Self.tile)
+                EmotePicture(url: emote.url, animated: emote.animated && !isScrolling, side: Self.tile)
                     .opacity(locked ? 0.35 : 1)
                     .overlay(alignment: .bottomTrailing) {
                         if locked {

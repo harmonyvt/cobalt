@@ -9,7 +9,11 @@ public struct ChatEmote: Sendable, Hashable, Identifiable {
 
     /// Twitch's or 7TV's emote id.
     public var id: String
-    public var name: String
+    public var name: String {
+        didSet { lowercasedName = name.lowercased() }
+    }
+    /// Precomputed lowercased name for allocation-free picker filtering and composer autocomplete.
+    public private(set) var lowercasedName: String
     /// The 2x picture.
     public var url: URL
     public var animated: Bool
@@ -22,6 +26,7 @@ public struct ChatEmote: Sendable, Hashable, Identifiable {
     public init(id: String, name: String, url: URL, animated: Bool, zeroWidth: Bool = false, aspect: Double = 1, source: Source) {
         self.id = id
         self.name = name
+        self.lowercasedName = name.lowercased()
         self.url = url
         self.animated = animated
         self.zeroWidth = zeroWidth
@@ -165,6 +170,14 @@ public enum ChatFragment: Sendable, Hashable {
     case link(URL)
 }
 
+/// One wrap-able visual piece of a chat message, pre-tokenized once when the line is built off-main.
+public enum ChatRenderPiece: Sendable, Hashable {
+    case word(String)
+    case emote(ChatEmote, [ChatEmote])
+    case mention(String)
+    case link(URL)
+}
+
 public struct TwitchChatLine: Sendable, Hashable, Identifiable {
     public enum Kind: Sendable, Hashable {
         case message
@@ -186,7 +199,11 @@ public struct TwitchChatLine: Sendable, Hashable, Identifiable {
     /// 0xRRGGBB, nil when the user never picked one (the view picks a steady colour from the name).
     public var color: UInt32?
     public var badges: [ChatBadge]
-    public var fragments: [ChatFragment]
+    public var fragments: [ChatFragment] {
+        didSet { renderPieces = Self.tokenize(fragments) }
+    }
+    /// Pre-tokenized words/emotes/mentions/links so `TwitchChatRow.body` never calls `String.split` per evaluation.
+    public private(set) var renderPieces: [ChatRenderPiece]
     public var timestamp: Date
     /// The message @-mentions the signed-in user.
     public var mentionsMe: Bool
@@ -232,11 +249,35 @@ public struct TwitchChatLine: Sendable, Hashable, Identifiable {
         self.color = color
         self.badges = badges
         self.fragments = fragments
+        self.renderPieces = Self.tokenize(fragments)
         self.timestamp = timestamp
         self.mentionsMe = mentionsMe
         self.mine = mine
         self.replyTo = replyTo
         self.deleted = deleted
+    }
+
+    /// Splits `.text` fragments into word tokens once when constructing or updating a line.
+    public static func tokenize(_ fragments: [ChatFragment]) -> [ChatRenderPiece] {
+        var out: [ChatRenderPiece] = []
+        out.reserveCapacity(fragments.count * 2)
+        for f in fragments {
+            switch f {
+            case .text(let s):
+                for w in s.split(separator: " ", omittingEmptySubsequences: true) {
+                    out.append(.word(String(w)))
+                }
+            case .emote(let e):
+                out.append(.emote(e, []))
+            case .stack(let e, let more):
+                out.append(.emote(e, more))
+            case .mention(let m):
+                out.append(.mention(m))
+            case .link(let u):
+                out.append(.link(u))
+            }
+        }
+        return out
     }
 
     /// True when `id` was minted locally (`local-*`, `sys-*`, or channel-namespaced `ch:local-*` / `ch:sys-*`),
@@ -330,7 +371,7 @@ public struct TwitchEmoteList: Sendable, Equatable {
             var starts: [ChatEmote] = []
             var contains: [ChatEmote] = []
             for e in section.emotes {
-                let n = e.name.lowercased()
+                let n = e.lowercasedName
                 if n.hasPrefix(q) { starts.append(e) } else if n.contains(q) { contains.append(e) }
             }
             guard !starts.isEmpty || !contains.isEmpty else { return nil }
@@ -346,7 +387,7 @@ public struct TwitchEmoteList: Sendable, Equatable {
         sevenTvChannel: [ChatEmote], channelTwitch: [ChatEmote], user: [TwitchUserEmote], roomID: String?,
         sevenTvGlobal: [ChatEmote]
     ) -> [TwitchEmoteSection] {
-        let byName: ([ChatEmote]) -> [ChatEmote] = { $0.sorted { $0.name.lowercased() < $1.name.lowercased() } }
+        let byName: ([ChatEmote]) -> [ChatEmote] = { $0.sorted { $0.lowercasedName < $1.lowercasedName } }
         let usable = Set(user.map(\.emote.id))
 
         var channel: [ChatEmote] = []
@@ -384,7 +425,7 @@ public struct TwitchEmoteList: Sendable, Equatable {
         var starts: [ChatEmote] = []
         var seen = Set<String>()
         for e in emotes {
-            let n = e.name.lowercased()
+            let n = e.lowercasedName
             guard n.hasPrefix(p), seen.insert(e.name).inserted else { continue }
             if n == p { exact.append(e) } else { starts.append(e) }
             if exact.count + starts.count >= limit * 3 { break }
@@ -392,7 +433,7 @@ public struct TwitchEmoteList: Sendable, Equatable {
         // then names with the letters anywhere ("cat" finds "catJAM" first, then "PETTHECAT")
         var inside: [ChatEmote] = []
         if exact.count + starts.count < limit {
-            for e in emotes where inside.count < limit && !seen.contains(e.name) && e.name.lowercased().contains(p) {
+            for e in emotes where inside.count < limit && !seen.contains(e.name) && e.lowercasedName.contains(p) {
                 seen.insert(e.name)
                 inside.append(e)
             }

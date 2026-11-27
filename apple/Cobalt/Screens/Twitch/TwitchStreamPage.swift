@@ -265,10 +265,7 @@ struct TwitchStreamPage: View {
                 ) {
                     host.setMode(host.activeMode == .lowLatency ? .embed : .lowLatency)
                 }
-                Button(Copy.Twitch.jumpToLive, systemImage: Symbol.Twitch.jumpToLive) {
-                    host.jumpToLive()
-                }
-                .disabled(host.delay == nil || host.isCatchingUp)
+                TwitchJumpToLiveMenuButton(host: host)
                 Button(Copy.Twitch.openOnTwitch, systemImage: Symbol.Twitch.open) {
                     openChannelOnTwitch(login)
                 }
@@ -383,15 +380,13 @@ struct TwitchStreamPage: View {
 
     private var streamBar: some View {
         TwitchStreamBar(
+            host: host,
             title: title, subtitle: subtitle, isLive: isLive,
             clipNote: clipText, clipFailed: store.clipState == .failed,
             isPlaying: host.isPlaying,
-            jumpDisabled: host.delay == nil || host.isCatchingUp,
-            isCatchingUp: host.isCatchingUp,
             canClip: store.canClip, clipState: store.clipState, offline: offline,
             onTV: onTV,
             onPlayPause: { host.setPaused(host.isPlaying) },
-            onJumpToLive: { host.jumpToLive() },
             onAddSecondStream: { pickingSecondStream = true },
             onClip: makeClip,
             onTVTap: { choosingTV = true },
@@ -457,30 +452,54 @@ struct TwitchStreamPage: View {
         }
     }
 
-    /// Subtle non-overlapping channel identity pill below the transparent system toolbar in single-focus single-stream mode.
+    /// Clear Liquid Glass channel identity pill anchored top-leading so it stays crisp over video without colliding
+    /// with `TwitchPlayer`'s top-trailing latency/mode pills.
     private func singleStreamChannelPill(compact: Bool) -> some View {
-        HStack(spacing: 6) {
-            if isLive {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: .red.opacity(0.7), radius: 3)
-            }
-            Text(title)
-                .font(Font.cobalt(12.5, .semibold, relativeTo: .subheadline))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-            if !compact, let subtitle {
-                Text(subtitle)
-                    .font(Font.cobalt(11, .regular, relativeTo: .caption))
-                    .foregroundStyle(.white.opacity(0.76))
+        HStack(spacing: 0) {
+            HStack(spacing: 6) {
+                if isLive {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: .red.opacity(0.75), radius: 3)
+                }
+                Text(title)
+                    .font(Font.cobalt(12.5, .semibold, relativeTo: .subheadline))
+                    .foregroundStyle(.white)
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                if holdsChannel, let stream = store.stream {
+                    Text("·")
+                        .font(Font.cobalt(11, .medium))
+                        .foregroundStyle(.white.opacity(0.55))
+                    Text(Copy.Twitch.viewers(stream.viewers))
+                        .font(Font.cobalt(11.5, .semibold, relativeTo: .caption).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.88))
+                        .lineLimit(1)
+                    if !compact, !stream.game.isEmpty {
+                        Text("·")
+                            .font(Font.cobalt(11, .medium))
+                            .foregroundStyle(.white.opacity(0.55))
+                        Text(stream.game)
+                            .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
+                            .foregroundStyle(.white.opacity(0.78))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                } else if !compact, let subtitle {
+                    Text(subtitle)
+                        .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
+                        .foregroundStyle(.white.opacity(0.76))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
-            Spacer(minLength: 0)
+            .padding(.horizontal, 11)
+            .padding(.vertical, compact ? 5 : 6)
+            .mediaGlassCapsule(interactive: false)
+            Spacer(minLength: 92)
         }
-        .padding(.horizontal, 12)
-        .padding(.top, compact ? 4 : 8)
+        .padding(.horizontal, 10)
+        .padding(.top, compact ? 6 : 8)
         .allowsHitTesting(false)
     }
 
@@ -523,17 +542,7 @@ struct TwitchStreamPage: View {
                     .accessibilityLabel(Copy.Twitch.addSecondStream)
                     .accessibilityIdentifier("twitch.addSecondStream")
 
-                    Button { host.jumpToLive() } label: {
-                        Image(systemName: Symbol.Twitch.jumpToLive)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle((host.delay == nil || host.isCatchingUp) ? .white.opacity(0.42) : .white)
-                            .frame(width: Metrics.hit, height: Metrics.hit)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(host.delay == nil || host.isCatchingUp)
-                    .accessibilityLabel(Copy.Twitch.jumpToLive)
-                    .accessibilityIdentifier("twitch.jumpToLive")
+                    TwitchFloatingJumpToLiveButton(host: host)
 
                     if store.canClip {
                         Button(action: makeClip) {
@@ -584,7 +593,11 @@ struct TwitchStreamPage: View {
         HStack(spacing: 10) {
             ZStack { barThumb }
                 .frame(width: 40, height: 40)
-                .clipShape(.rect(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
+                }
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
@@ -1066,25 +1079,71 @@ struct TwitchAddSecondStreamSheet: View {
     }
 }
 
+// MARK: - Isolated 1 Hz Delay Leaf Observers
+
+/// Leaf menu button observing `host.delay` / `host.isCatchingUp` so `TwitchStreamPage.body` never re-evaluates at 1 Hz.
+private struct TwitchJumpToLiveMenuButton: View {
+    let host: TwitchPlayerHost
+
+    var body: some View {
+        Button(Copy.Twitch.jumpToLive, systemImage: Symbol.Twitch.jumpToLive) {
+            host.jumpToLive()
+        }
+        .disabled(host.delay == nil || host.isCatchingUp)
+    }
+}
+
+/// Leaf floating HUD button observing `host.delay` / `host.isCatchingUp` in compact/tabletop mode.
+private struct TwitchFloatingJumpToLiveButton: View {
+    let host: TwitchPlayerHost
+
+    var body: some View {
+        let disabled = host.delay == nil || host.isCatchingUp
+        Button { host.jumpToLive() } label: {
+            Image(systemName: Symbol.Twitch.jumpToLive)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(disabled ? .white.opacity(0.42) : .white)
+                .frame(width: Metrics.hit, height: Metrics.hit)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel(Copy.Twitch.jumpToLive)
+        .accessibilityIdentifier("twitch.jumpToLive")
+    }
+}
+
+/// Leaf stream-bar button observing `host.delay` / `host.isCatchingUp` in docked wide/stacked layouts.
+private struct TwitchStreamBarJumpButton: View {
+    let host: TwitchPlayerHost
+
+    var body: some View {
+        Button { host.jumpToLive() } label: {
+            Label(Copy.Twitch.jumpToLive, systemImage: Symbol.Twitch.jumpToLive)
+        }
+        .buttonStyle(.cobaltIcon(.small, state: host.isCatchingUp ? .working : .idle))
+        .disabled(host.delay == nil || host.isCatchingUp)
+        .accessibilityIdentifier("twitch.jumpToLive")
+    }
+}
+
 // MARK: - unified stream bar
 
 /// The one consistent control and identity bar for watching Twitch across every posture:
 /// collapses to a single row when wide (`TwitchWatchLayout.isInlineStreamBar`), or two crisp rows when compact.
 private struct TwitchStreamBar: View {
+    let host: TwitchPlayerHost
     let title: String
     let subtitle: String?
     let isLive: Bool
     let clipNote: String?
     let clipFailed: Bool
     let isPlaying: Bool
-    let jumpDisabled: Bool
-    let isCatchingUp: Bool
     let canClip: Bool
     let clipState: TwitchStore.ClipState
     let offline: Bool
     let onTV: Bool
     let onPlayPause: () -> Void
-    let onJumpToLive: () -> Void
     let onAddSecondStream: () -> Void
     let onClip: () -> Void
     let onTVTap: () -> Void
@@ -1180,12 +1239,7 @@ private struct TwitchStreamBar: View {
                 .buttonStyle(.cobaltIcon(.small))
                 .accessibilityIdentifier("twitch.addSecondStream")
 
-                Button(action: onJumpToLive) {
-                    Label(Copy.Twitch.jumpToLive, systemImage: Symbol.Twitch.jumpToLive)
-                }
-                .buttonStyle(.cobaltIcon(.small, state: isCatchingUp ? .working : .idle))
-                .disabled(jumpDisabled)
-                .accessibilityIdentifier("twitch.jumpToLive")
+                TwitchStreamBarJumpButton(host: host)
 
                 if canClip {
                     Button(action: onClip) {

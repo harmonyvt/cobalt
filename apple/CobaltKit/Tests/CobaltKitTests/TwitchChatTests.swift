@@ -84,6 +84,50 @@ struct ChatFragmenterTests {
         let list = TwitchEmoteList(emotes: [seven("PETTHECAT"), seven("catJAM"), seven("other")])
         #expect(list.completions(for: "cat").map(\.name) == ["catJAM", "PETTHECAT"])
     }
+
+    @Test func emoteLowercasedNameStaysInSyncOnRename() {
+        var emote = seven("CatJAM")
+        #expect(emote.lowercasedName == "catjam")
+        emote.name = "PogU"
+        #expect(emote.lowercasedName == "pogu")
+    }
+
+    @Test func chatLinePreTokenizesRenderPiecesAndSyncsOnFragmentUpdate() throws {
+        let link = try #require(URL(string: "https://twitch.tv/caedrel"))
+        let base = seven("liaBox")
+        let hat = seven("Hat", zero: true)
+        var line = TwitchChatLine(
+            id: "m1",
+            channel: "caedrel",
+            kind: .message,
+            login: "harmony",
+            displayName: "harmony",
+            color: nil,
+            badges: [],
+            fragments: [
+                .text("hello   world"),
+                .emote(base),
+                .stack(base, [hat]),
+                .mention("caedrel"),
+                .link(link),
+            ],
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            mentionsMe: false,
+            mine: true,
+            replyTo: nil
+        )
+        #expect(line.renderPieces == [
+            .word("hello"),
+            .word("world"),
+            .emote(base, []),
+            .emote(base, [hat]),
+            .mention("caedrel"),
+            .link(link),
+        ])
+
+        line.fragments = [.text("updated line")]
+        #expect(line.renderPieces == [.word("updated"), .word("line")])
+    }
 }
 
 struct SevenTvChatWireTests {
