@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>capystore — Home &amp; Downloads Redesign Concepts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--wb-fg:var(--foreground,#141416);--wb-muted:var(--muted-foreground,#6b6b73);--wb-card:var(--card,rgba(128,128,136,.08));--wb-secondary:var(--secondary,rgba(128,128,136,.12));--wb-border:var(--border,rgba(128,128,136,.22));--wb-primary:var(--primary,#2f8af9);--wb-radius:var(--radius,12px);--wb-mono:'IBM Plex Mono',var(--font-mono,ui-monospace,'SF Mono',Menlo,monospace);--wb-sans:var(--font-sans,-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif)}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0;font-family:var(--wb-sans);color:var(--wb-fg);-webkit-font-smoothing:antialiased}
+.wb{width:100%;max-width:740px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.cgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+@media(max-width:560px){.cgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.ctab{appearance:none;text-align:left;padding:9px 10px;border-radius:var(--wb-radius);border:1px solid var(--wb-border);background:var(--wb-card);color:var(--wb-fg);cursor:pointer;transition:all .16s ease;display:flex;flex-direction:column;gap:2px}
+.ctab:hover{border-color:var(--wb-primary);transform:translateY(-1px)}
+.ctab.on{border-color:var(--wb-primary);background:color-mix(in srgb,var(--wb-primary) 14%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--wb-primary) 34%,transparent)}
+.cnum{font:600 9.5px/1 var(--wb-mono);color:var(--wb-muted);display:flex;justify-content:space-between}
+.ctab.on .cnum{color:var(--wb-primary)}
+.cname{font-size:12.5px;font-weight:700;letter-spacing:-.01em;margin-top:2px}
+.csub{font:400 9.5px/1.2 var(--wb-mono);color:var(--wb-muted)}
+.cbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px;padding:7px 9px;border-radius:var(--wb-radius);border:1px solid var(--wb-border);background:var(--wb-card)}
+.cg{display:flex;align-items:center;gap:3px;flex-wrap:wrap}
+.clbl{font:600 9px/1 var(--wb-mono);text-transform:uppercase;letter-spacing:.06em;color:var(--wb-muted);margin-right:3px}
+.pbtn{appearance:none;border:0;background:transparent;color:var(--wb-muted);font:500 10px/1 var(--wb-mono);padding:5px 7.5px;border-radius:7px;cursor:pointer;transition:all .14s ease;white-space:nowrap}
+.pbtn:hover{color:var(--wb-fg);background:var(--wb-secondary)}
+.pbtn.on{background:var(--wb-fg);color:var(--background,#fff);font-weight:600}
+.pbtn.s-err.on{background:#ed2236;color:#fff}
+.pbtn.s-dl.on{background:#196bd4;color:#fff}
+.pbtn.s-clip.on{background:#0e8f5b;color:#fff}
+.dv{width:1px;height:14px;background:var(--wb-border);margin:0 2px}
+.stage-wrap{display:flex;justify-content:center;align-items:center;padding:4px 0;overflow-x:auto}
+.bezel{position:relative;padding:9px;background:linear-gradient(145deg,#2d2e33 0%,#141417 55%,#232429 100%);box-shadow:0 22px 44px -18px rgba(0,0,0,.48),0 4px 12px rgba(0,0,0,.22),inset 0 1px 1px rgba(255,255,255,.22),inset 0 -1px 1px rgba(0,0,0,.6);transition:width .32s cubic-bezier(.22,1,.36,1),height .32s cubic-bezier(.22,1,.36,1),border-radius .32s ease;flex-shrink:0}
+.bezel.vp-duo-outer{width:388px;height:562px;border-radius:42px}
+.bezel.vp-duo-unfolded{width:684px;height:482px;border-radius:32px}
+.bezel.vp-iphone{width:328px;height:624px;border-radius:46px}
+.scr{position:relative;width:100%;height:100%;border-radius:33px;overflow:hidden;font-family:var(--wb-mono);transition:background-color .22s ease,color .22s ease;user-select:none;display:flex}
+.vp-duo-unfolded .scr{border-radius:24px}
+.vp-iphone .scr{border-radius:38px;flex-direction:column}
+.t-light{--bg:#fff;--bgs:#f6f6f8;--surf:#f1f1f4;--elev:#e7e7ec;--txt:#0a0a0c;--cap:#6b6b73;--bd:rgba(0,0,0,.09);--bds:rgba(0,0,0,.17);--gl:rgba(255,255,255,.74);--gls:rgba(255,255,255,.88);--rim:inset 0 1px 0 rgba(255,255,255,.94),inset 0 -.5px 0 rgba(0,0,0,.06);--sh:0 8px 22px -6px rgba(0,0,0,.12),0 1px 3px rgba(0,0,0,.06);--cta:#0b0b0e;--ctaf:#fff;--blu:#196bd4;--blus:rgba(25,107,212,.11);--red:#c4142a;--redv:#ed2236;--reds:rgba(237,34,54,.10);--grn:#1b9414;--grns:rgba(48,189,27,.13);--amb:#9a6300;--dot:rgba(0,0,0,.09);background:var(--bg);color:var(--txt)}
+.t-dark{--bg:#000;--bgs:#0b0b0e;--surf:#16161a;--elev:#232329;--txt:#eeeef2;--cap:#8e8e97;--bd:rgba(255,255,255,.10);--bds:rgba(255,255,255,.19);--gl:rgba(30,30,36,.72);--gls:rgba(38,38,45,.86);--rim:inset 0 1px 0 rgba(255,255,255,.18),inset 0 -.5px 0 rgba(255,255,255,.04);--sh:0 12px 28px -8px rgba(0,0,0,.65),0 1px 3px rgba(0,0,0,.4);--cta:#f2f2f6;--ctaf:#09090b;--blu:#3b95ff;--blus:rgba(47,138,249,.18);--red:#ff6473;--redv:#ff4558;--reds:rgba(255,69,88,.16);--grn:#3cd027;--grns:rgba(60,208,39,.16);--amb:#f0b44c;--dot:rgba(255,255,255,.09);background:var(--bg);color:var(--txt)}
+.gl{background:var(--gl);backdrop-filter:blur(18px) saturate(175%);-webkit-backdrop-filter:blur(18px) saturate(175%);border:1px solid var(--bd);box-shadow:var(--rim),var(--sh)}
+.gls{background:var(--gls);backdrop-filter:blur(22px) saturate(190%);-webkit-backdrop-filter:blur(22px) saturate(190%);border:1px solid var(--bds);box-shadow:var(--rim),var(--sh)}
+.row{display:flex;align-items:center}.jb{justify-content:space-between}.col{display:flex;flex-direction:column}.g4{gap:4px}.g6{gap:6px}.g8{gap:8px}.f1{flex:1;min-width:0}
+.t-xs{font-size:8.5px}.t-sm{font-size:9.5px}.t-md{font-size:10.5px}.t-lg{font-size:12px}.b{font-weight:700}.m{font-weight:600}.cap{color:var(--cap)}.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* HIG Overlay */
+.hig{position:absolute;inset:0;pointer-events:none;z-index:60;opacity:0;transition:opacity .18s ease}
+.show-hig .hig{opacity:1}
+.hig-r{position:absolute;top:0;right:0;bottom:0;width:56px;background:rgba(255,59,48,.09);border-left:1.5px dashed rgba(255,59,48,.7);display:flex;justify-content:center;padding-top:6px}
+.hig-b{position:absolute;left:0;right:0;bottom:0;height:68px;background:rgba(255,59,48,.09);border-top:1.5px dashed rgba(255,59,48,.7);display:flex;justify-content:flex-end;align-items:flex-start;padding:4px 10px}
+.hig-f{position:absolute;top:0;bottom:0;left:calc((100% - 56px)/2);width:14px;transform:translateX(-50%);background:rgba(47,138,249,.15);border-left:1px dashed rgba(47,138,249,.75);border-right:1px dashed rgba(47,138,249,.75);display:flex;align-items:center;justify-content:center}
+.htag{font:600 7px/1 var(--wb-mono);padding:2px 4px;border-radius:4px;background:rgba(255,59,48,.9);color:#fff;height:fit-content}
+.hftag{writing-mode:vertical-rl;transform:rotate(180deg);font:600 7px/1 var(--wb-mono);padding:4px 2px;border-radius:4px;background:rgba(47,138,249,.92);color:#fff}
+/* Duo Rail & iPhone Bars */
+.rail{width:56px;flex-shrink:0;height:100%;padding:12px 6px 13px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;z-index:30}
+.rtop{display:flex;flex-direction:column;align-items:center;gap:7px;font-family:var(--wb-sans)}
+.rcam{width:27px;height:27px;border-radius:50%;background:#0c0c0e;display:flex;align-items:center;justify-content:center;box-shadow:inset 0 1px 2px rgba(255,255,255,.16)}
+.rcam::after{content:'';width:7px;height:7px;border-radius:50%;background:#e53935;box-shadow:0 0 6px rgba(229,57,53,.75)}
+.rtime{font-size:11px;font-weight:700;letter-spacing:-.02em}
+.rbatt{width:30px;height:30px;position:relative;display:flex;align-items:center;justify-content:center}
+.rbt{font-size:6.8px;font-weight:800;position:absolute;top:-2px;left:50%;transform:translateX(-50%);background:var(--bg);padding:0 2px;line-height:1}
+.rgear{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:.85;transition:transform .2s ease}
+.rgear:hover{transform:rotate(25deg)}
+.rtabs{width:40px;padding:4px;border-radius:21px;display:flex;flex-direction:column;align-items:center;gap:9px}
+.rtab{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--txt);opacity:.72;cursor:pointer}
+.rtab.on{background:var(--cta);color:var(--ctaf);opacity:1;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.itop{height:36px;padding:8px 18px 0;display:flex;align-items:center;justify-content:space-between;font:650 11px/1 var(--wb-sans);position:relative;flex-shrink:0;z-index:30}
+.di{position:absolute;left:50%;top:7px;transform:translateX(-50%);width:82px;height:22px;border-radius:13px;background:#08080a;display:flex;align-items:center;justify-content:flex-end;padding-right:6px}
+.di::after{content:'';width:6px;height:6px;border-radius:50%;background:#1e293d;box-shadow:inset 0 0 2px #5282d6}
+.ibot{padding:5px 12px 11px;flex-shrink:0;z-index:30}
+.itabs{height:44px;padding:4px 5px;border-radius:24px;display:flex;align-items:center;justify-content:space-around}
+.itab{height:34px;padding:0 11px;border-radius:18px;display:flex;align-items:center;font-size:9.5px;font-weight:600;color:var(--cap);cursor:pointer}
+.itab.on{background:var(--cta);color:var(--ctaf)}
+/* App Canvas & Header */
+.canvas{flex:1;min-width:0;min-height:0;position:relative;display:flex;flex-direction:column;overflow:hidden}
+.hdr{padding:12px 13px 6px;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-shrink:0}
+.htitle{font-size:15px;font-weight:700;letter-spacing:-.03em;line-height:1.15}
+.hsub{font-size:9.5px;color:var(--cap);letter-spacing:-.01em;margin-top:2px}
+.hchip{appearance:none;font:600 9px/1 var(--wb-mono);padding:5px 8px;border-radius:99px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap;border:1px solid var(--bd);background:var(--surf);color:var(--txt);transition:transform .14s ease}
+.hchip:hover{transform:scale(1.03)}
+.hchip.err{background:var(--reds);border-color:color-mix(in srgb,var(--redv) 38%,transparent);color:var(--red)}
+.hchip.dl{background:var(--blus);border-color:color-mix(in srgb,var(--blu) 38%,transparent);color:var(--blu)}
+.hchip.clip{background:var(--grns);border-color:color-mix(in srgb,var(--grn) 38%,transparent);color:var(--grn)}
+.pdot{width:5.5px;height:5.5px;border-radius:50%;background:currentColor;animation:pl 1.3s infinite ease-in-out}
+@keyframes pl{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.7)}}
+/* Thumbs, Stepper, Buttons */
+.thumb{position:relative;border-radius:13px;overflow:hidden;background:#121216;cursor:pointer;transition:transform .18s ease}
+.thumb:hover{transform:translateY(-2px)}
+.tsvg{width:100%;height:100%;display:block}
+.tbdg{position:absolute;top:5px;right:5px;padding:2px 5px;border-radius:6px;font-size:8px;font-weight:600;color:#f4f4f8;background:rgba(14,14,18,.64);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:.5px solid rgba(255,255,255,.22);line-height:1.1}
+.tbdg.w{color:#ffd584;border-color:rgba(240,180,76,.45)}
+.tdur{position:absolute;bottom:5px;left:5px;padding:1.5px 5px;border-radius:5px;font-size:8px;color:#f0f0f5;background:rgba(0,0,0,.62);line-height:1.15}
+.steps{display:flex;align-items:center;width:100%;margin-top:5px}
+.snode{display:flex;flex-direction:column;align-items:center;gap:2.5px;z-index:2}
+.sdot{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--bds);background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:6.5px;font-weight:700}
+.sdot.d{background:var(--txt);border-color:var(--txt);color:var(--bg)}
+.sdot.c{border-color:var(--blu);background:var(--blus);box-shadow:0 0 0 2.5px var(--blus)}
+.slbl{font-size:7.5px;color:var(--cap)}
+.snode.c .slbl{color:var(--txt);font-weight:600}
+.sline{flex:1;height:1.5px;background:var(--bd);margin:-10px 2px 0}
+.sline.d{background:var(--txt)}
+.ptrk{width:100%;height:4px;border-radius:99px;background:var(--bd);overflow:hidden}
+.pfil{height:100%;border-radius:99px;background:var(--blu);transition:width .24s linear}
+.dbtn{appearance:none;border:1px solid var(--bd);background:var(--gl);color:var(--txt);font:600 10px/1 var(--wb-mono);border-radius:99px;padding:8px 10px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:4px;transition:transform .12s ease;box-shadow:var(--rim)}
+.dbtn:active{transform:scale(.96)}
+.dbtn.pri{background:var(--cta);color:var(--ctaf);border-color:transparent;box-shadow:0 5px 14px -4px rgba(0,0,0,.28)}
+.dbtn.blu{background:var(--blu);color:#fff;border-color:transparent;box-shadow:0 5px 14px -4px rgba(25,107,212,.45)}
+.dbtn.red{background:var(--redv);color:#fff;border-color:transparent}
+.dbtn.sm{font-size:9px;padding:5px 8px}
+.split{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:0 12px 12px}
+.pane{min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px}
+/* Concept 1: Tactile Desk */
+.c1-mat{background-image:radial-gradient(var(--dot) 1px,transparent 1px);background-size:13px 13px}
+.c1-body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:space-between;padding:2px 13px 12px;gap:8px}
+.c1-stack{position:relative;flex:1;min-height:150px;display:flex;align-items:center;justify-content:center}
+.c1-card{position:absolute;width:118px;padding:5px 5px 21px;border-radius:14px;background:var(--gls);border:1px solid var(--bds);box-shadow:0 14px 26px -10px rgba(0,0,0,.28),var(--rim);cursor:pointer;transition:transform .3s cubic-bezier(.22,1,.36,1),box-shadow .22s ease}
+.c1-card:hover{z-index:20!important;box-shadow:0 20px 34px -10px rgba(0,0,0,.38),var(--rim)}
+.c1-card .thumb{width:100%;height:116px;border-radius:9px}
+.c1-cap{position:absolute;bottom:5px;left:7px;right:7px;display:flex;justify-content:space-between;font-size:8px;color:var(--cap)}
+.p0{transform:translate(-62px,10px) rotate(-11deg) scale(.91);z-index:1}
+.p1{transform:translate(62px,8px) rotate(10deg) scale(.92);z-index:2}
+.p2{transform:translate(-18px,-6px) rotate(-3.5deg) scale(.97);z-index:3}
+.p3{transform:translate(16px,2px) rotate(2.5deg) scale(1.02);z-index:4}
+.p0:hover{transform:translate(-68px,-6px) rotate(-5deg) scale(1.03)}
+.p1:hover{transform:translate(68px,-6px) rotate(5deg) scale(1.03)}
+.p2:hover{transform:translate(-16px,-13px) rotate(0) scale(1.05)}
+.p3:hover{transform:translate(14px,-8px) rotate(0) scale(1.06)}
+.c1-tkt{border-radius:16px;padding:9px 11px;display:flex;flex-direction:column;gap:5px;animation:sup .2s ease}
+.c1-tkt.err{border-color:color-mix(in srgb,var(--redv) 44%,transparent);background:color-mix(in srgb,var(--redv) 8%,var(--gls))}
+.c1-well{border-radius:19px;padding:9px;border:1.5px dashed var(--bds);background:var(--surf);display:flex;flex-direction:column;gap:7px;transition:all .18s ease}
+.c1-well.det{border-style:solid;border-color:var(--blu);background:var(--blus)}
+.c1-acts{display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:5px}
+/* Concept 2: Glass Command Stage */
+.c2-body{flex:1;min-height:0;display:flex;flex-direction:column;padding:2px 13px 12px;gap:8px}
+.c2-stage{flex:1;min-height:178px;border-radius:22px;position:relative;overflow:hidden;background:#0d0d11;border:1px solid var(--bds);box-shadow:0 16px 34px -14px rgba(0,0,0,.44);display:flex;flex-direction:column;justify-content:flex-end}
+.c2-bg{position:absolute;inset:0;cursor:pointer}
+.c2-vig{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.3) 0%,rgba(0,0,0,.04) 36%,rgba(0,0,0,.74) 100%);pointer-events:none}
+.c2-top{position:absolute;top:9px;left:9px;right:9px;display:flex;justify-content:space-between;z-index:4}
+.c2-pill{font:600 8.5px/1 var(--wb-mono);color:#f4f4f8;background:rgba(18,18,22,.56);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:.5px solid rgba(255,255,255,.22);padding:5px 8px;border-radius:99px;display:inline-flex;align-items:center;gap:4px;cursor:pointer}
+.c2-bot{position:relative;z-index:4;padding:11px;color:#fff;display:flex;flex-direction:column;gap:7px}
+.c2-tel{position:absolute;inset:0;z-index:6;padding:14px;display:flex;flex-direction:column;justify-content:space-between;background:radial-gradient(circle at 20% 15%,rgba(47,138,249,.18),transparent 62%),var(--bgs);color:var(--txt)}
+.c2-tel.err{background:radial-gradient(circle at 20% 15%,rgba(237,34,54,.17),transparent 62%),var(--bgs)}
+.c2-strip{display:flex;gap:6px;overflow-x:auto;padding:2px 1px;scrollbar-width:none;flex-shrink:0}
+.c2-strip::-webkit-scrollbar{display:none}
+.c2-si{width:48px;height:55px;border-radius:10px;flex-shrink:0;position:relative;overflow:hidden;border:1.5px solid transparent;cursor:pointer;transition:transform .14s ease}
+.c2-si.on{border-color:var(--txt);transform:scale(1.04)}
+.c2-dock{border-radius:24px;padding:5px;display:flex;align-items:center;gap:5px;flex-shrink:0}
+/* Concept 3: Magnetic Shelf */
+.c3-body{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 13px 11px;gap:8px}
+.c3-gauge{display:flex;flex-direction:column;gap:4px;padding:7px 9px;border-radius:12px;background:var(--surf);border:1px solid var(--bd)}
+.c3-seg{height:5px;border-radius:99px;background:var(--bd);overflow:hidden;display:flex;gap:2px}
+.c3-bay{position:relative;border-radius:16px;padding:10px 11px;background:var(--bgs);border:1px solid var(--bds);display:flex;flex-direction:column;gap:8px}
+.c3-bay::before,.c3-bay::after{content:'';position:absolute;width:8px;height:8px;pointer-events:none;border-color:var(--cap);border-style:solid;opacity:.55}
+.c3-bay::before{top:5px;left:5px;border-width:1.5px 0 0 1.5px;border-top-left-radius:4px}
+.c3-bay::after{bottom:5px;right:5px;border-width:0 1.5px 1.5px 0;border-bottom-right-radius:4px}
+.c3-bay.on{border-color:var(--blu);background:var(--blus)}
+.c3-acts{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+.c3-led{border-radius:13px;border:1px solid var(--bd);background:var(--surf);overflow:hidden}
+.c3-lh{padding:6px 9px;font-size:8.5px;font-weight:600;color:var(--cap);border-bottom:1px solid var(--bd);display:flex;justify-content:space-between}
+.c3-lr{padding:8px 9px;display:flex;flex-direction:column;gap:5px}
+.c3-rack{display:flex;gap:7px;overflow-x:auto;scrollbar-width:none;flex:1;min-height:110px}
+.c3-rack::-webkit-scrollbar{display:none}
+.c3-cas{width:88px;flex-shrink:0;border-radius:13px;border:1px solid var(--bd);background:var(--surf);padding:4px;display:flex;flex-direction:column;gap:3px;cursor:pointer;transition:transform .15s ease}
+.c3-cas:hover{transform:translateY(-2px);border-color:var(--bds)}
+.c3-cas .thumb{width:100%;flex:1;min-height:76px;border-radius:9px}
+/* Concept 4: Bento Cockpit */
+.c4-body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:none;padding:2px 13px 11px;display:flex;flex-direction:column;gap:7px}
+.c4-body::-webkit-scrollbar{display:none}
+.c4-top{display:grid;grid-template-columns:1.32fr 1fr;gap:7px}
+.c4-paste{border-radius:20px;padding:12px;background:var(--cta);color:var(--ctaf);display:flex;flex-direction:column;justify-content:space-between;min-height:112px;cursor:pointer;box-shadow:0 12px 24px -10px rgba(0,0,0,.35);transition:transform .14s ease}
+.c4-paste:active{transform:scale(.98)}
+.c4-paste.on{background:var(--blu);color:#fff}
+.c4-mp{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.c4-mt{border-radius:15px;padding:8px 5px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font:600 9px/1 var(--wb-mono);cursor:pointer;color:var(--txt)}
+.c4-st{border-radius:15px;padding:8px 10px;display:flex;align-items:baseline;justify-content:space-between;flex:1}
+.c4-sb{border-radius:16px;padding:9px 11px;display:flex;flex-direction:column;gap:5px;animation:sup .18s ease}
+.c4-sb.err{background:var(--reds);border:1px solid color-mix(in srgb,var(--redv) 38%,transparent)}
+.c4-mos{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.c4-mos .thumb{height:96px;border-radius:15px}
+/* Peek Sheet & Toast */
+.scrim{position:absolute;inset:0;z-index:40;background:rgba(0,0,0,.36);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;padding:10px;animation:fin .16s ease}
+.peek{width:100%;max-width:332px;border-radius:24px;padding:11px;display:flex;flex-direction:column;gap:9px;animation:sup .22s cubic-bezier(.22,1,.36,1)}
+.pprev{width:100%;height:158px;border-radius:16px;overflow:hidden;position:relative;background:#111}
+.prow{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.toast{position:absolute;top:11px;left:50%;transform:translateX(-50%);z-index:55;padding:6px 11px;border-radius:99px;font-size:9.5px;font-weight:600;background:var(--cta);color:var(--ctaf);box-shadow:0 10px 22px rgba(0,0,0,.3);white-space:nowrap;pointer-events:none;animation:sdn .18s ease}
+@keyframes sup{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
+@keyframes sdn{from{opacity:0;transform:translate(-50%,-7px)}to{opacity:1;transform:translate(-50%,0)}}
+@keyframes fin{from{opacity:0}to{opacity:1}}
+/* Spec Card */
+.spec{border-radius:var(--wb-radius);border:1px solid var(--wb-border);background:var(--wb-card);padding:11px 13px;display:grid;grid-template-columns:1.38fr 1fr;gap:12px}
+@media(max-width:580px){.spec{grid-template-columns:1fr}}
+.stitle{font-size:12.5px;font-weight:700;margin-bottom:4px;display:flex;align-items:center;gap:7px}
+.sbdg{font:600 9px/1 var(--wb-mono);padding:3px 6px;border-radius:99px;background:color-mix(in srgb,var(--wb-primary) 15%,transparent);color:var(--wb-primary)}
+.sdesc{font-size:11.5px;line-height:1.45;color:var(--wb-muted);margin:0}
+.smets{display:flex;flex-direction:column;gap:5px;border-left:1px solid var(--wb-border);padding-left:12px}
+@media(max-width:580px){.smets{border-left:0;border-top:1px solid var(--wb-border);padding-left:0;padding-top:9px}}
+.srow{display:flex;justify-content:space-between;gap:8px;font-family:var(--wb-mono);font-size:9.5px}
+.srow span:first-child{color:var(--wb-muted);flex-shrink:0}
+.srow span:last-child{font-weight:600;text-align:right}
+.tip{font:400 9.5px/1.3 var(--wb-mono);color:var(--wb-muted);text-align:center}
+</style>
+</head>
+<body>
+<div class="wb">
+  <div class="cgrid" id="cgrid" role="tablist"></div>
+  <div class="cbar">
+    <div class="cg" id="sgrp"></div>
+    <div class="cg">
+      <div class="cg" id="vgrp"></div>
+      <div class="dv"></div>
+      <button class="pbtn" id="tbtn" type="button"></button>
+      <button class="pbtn" id="hbtn" type="button">HIG</button>
+    </div>
+  </div>
+  <div class="stage-wrap">
+    <div class="bezel vp-duo-outer" id="bezel"><div class="scr t-light" id="scr"></div></div>
+  </div>
+  <div class="tip">interactive: click any clip to peek · click paste / link banner to download · click try again on error</div>
+  <div class="spec" id="spec"></div>
+</div>
+<script>
+const MEDIA=[
+  {id:'m1',t:'sunset_skate',s:'instagram',ext:'mp4',d:'0:14',sz:'4.3 MB',res:'1080×1920',c:['#ff6b4a','#9c2d6e','#1a1230'],m:0},
+  {id:'m2',t:'tokyo_rain',s:'x',ext:'mp4',d:'0:09',sz:'6.8 MB',res:'1080×1920',c:['#00d2ff','#1b2a6b','#090b18'],m:1},
+  {id:'m3',t:'capy_onsen',s:'7tv',ext:'webp',d:'0:04',sz:'1.2 MB',res:'512×512',c:['#f2b65a','#8c5327','#26170d'],m:2},
+  {id:'m4',t:'synth_jam',s:'tiktok',ext:'mov',d:'0:28',sz:'18.4 MB',res:'1080×1920',c:['#ff9d2e','#382a24','#111014'],m:3},
+  {id:'m5',t:'rooftop_dusk',s:'youtube',ext:'mp4',d:'0:11',sz:'5.1 MB',res:'1920×1080',c:['#c47dff','#583d9e','#151226'],m:4},
+  {id:'m6',t:'arcade_win',s:'twitch',ext:'webp',d:'0:06',sz:'2.1 MB',res:'720×720',c:['#33e68c','#105442','#091815'],m:5}
+];
+const CONCEPTS=[
+  {id:'desk',n:'01',name:'Tactile Desk',sub:'Stack & Drop Well',b:'Spatial Physicality',
+   desc:'Replaces the spinning orbit with a calm resting fan-stack of recent offline clips on a proofing mat. A dedicated drop well sits cleanly below, and active downloads or retry slips slide into a reserved lane—never colliding with the Duo vertical rail.',
+   duo:'DuoSplit: Intake Well + Live Ticket left, Fanned Stack right',
+   perf:'0 TimelineView · 0 idle decoders · Spring on touch only',
+   eff:'Low–Med (2–3d · ZStack + matched peek)'},
+  {id:'stage',n:'02',name:'Command Stage',sub:'Focal Viewport',b:'Cinematic Studio',
+   desc:'Turns Home into a studio viewfinder. At rest, your latest clip fills a crisp stage with quick Share/WebP actions and a filmstrip scrubber below. Active jobs and errors take over the stage itself (no exploding glass egg), while the bottom intake dock stays reachable.',
+   duo:'DuoMediaOverlay/Split: Stage left, Filmstrip + Dock right',
+   perf:'Max 1 preview · Zero background orbit players',
+   eff:'Medium (3–4d · Reuses FocusView controls)'},
+  {id:'shelf',n:'03',name:'Magnetic Shelf',sub:'Cassette Rail',b:'Industrial Precision',
+   desc:'Zero overlapping chrome. Clean horizontal shelves: a storage breakdown gauge, a bracketed Magnetic Intake Bay that snaps onto clipboard links, a dedicated Status Ledger with inline retry pills, and a scrolling cassette rack of offline saves.',
+   duo:'DuoSplit: Gauge + Bay + Ledger left; 2-col Rack right',
+   perf:'120fps lock · Pure VStack/LazyHStack · Minimal blur',
+   eff:'Lowest (1–2d · Standard SwiftUI stacks)'},
+  {id:'bento',n:'04',name:'Bento Cockpit',sub:'Editorial Grid',b:'Modular & Fold-First',
+   desc:'An asymmetric Swiss-grid cockpit built for iPhone Duo. Gives Paste a bold hero tile alongside Photos/Files mini-tiles, a Storage/Pulse readout, and an even-column Recent Mosaic. Progress and Retry expand as first-class bento cards without clipping.',
+   duo:'DuoAdaptiveGrid (2/4 even cols): zero crease straddle',
+   perf:'0 continuous loops · Native LazyVGrid + crisp glass',
+   eff:'Low–Med (2d · Fits existing DuoAdaptiveGrid)'}
+];
+const STATES=[
+  {id:'idle',l:'Idle',c:''},{id:'clipboard',l:'Clipboard',c:'s-clip'},
+  {id:'downloading',l:'Downloading',c:'s-dl'},{id:'error',l:'Error / Retry',c:'s-err'},{id:'peek',l:'Recent Peek',c:''}
+];
+const VPS=[{id:'duo-outer',l:'Duo Outer'},{id:'duo-unfolded',l:'Duo Unfolded'},{id:'iphone',l:'iPhone'}];
+let st={concept:'desk',state:'idle',vp:'duo-outer',theme:'light',hig:false,sel:'m1',peek:null,pct:48,toast:null,tT:0,dT:0,copied:false};
+
+function art(m){
+  const[a,b,c]=m.c;
+  const shapes=[
+    `<circle cx="72" cy="48" r="24" fill="${a}" opacity=".9"/><path d="M0 96 Q45 72 95 86 T140 78 L140 160 L0 160Z" fill="${c}" opacity=".9"/><path d="M18 112 L54 88 L64 94 L32 120Z" fill="#fff" opacity=".18"/>`,
+    `<rect x="18" y="22" width="32" height="58" rx="4" fill="${a}" opacity=".24" stroke="${a}" stroke-width="1.5"/><rect x="66" y="34" width="44" height="22" rx="3" fill="#ff3b7a" opacity=".76"/><line x1="0" y1="108" x2="140" y2="108" stroke="${a}" opacity=".5"/><ellipse cx="70" cy="126" rx="46" ry="8" fill="${a}" opacity=".25"/>`,
+    `<ellipse cx="70" cy="108" rx="54" ry="26" fill="${a}" opacity=".3"/><ellipse cx="70" cy="86" rx="28" ry="20" fill="#a87042"/><circle cx="60" cy="82" r="2.2" fill="#1a120b"/><circle cx="78" cy="82" r="2.2" fill="#1a120b"/><circle cx="70" cy="64" r="7" fill="#f7a81b"/><path d="M36 48 Q42 36 36 24 M98 52 Q104 40 98 28" stroke="#fff" stroke-width="2" fill="none" opacity=".35" stroke-linecap="round"/>`,
+    `<rect x="14" y="26" width="112" height="84" rx="8" fill="#1b1a1f" stroke="rgba(255,255,255,.16)"/><circle cx="38" cy="52" r="9" fill="#2d2b33" stroke="${a}" stroke-width="2"/><circle cx="70" cy="52" r="9" fill="#2d2b33" stroke="#fff" stroke-width="1.5" opacity=".7"/><circle cx="102" cy="52" r="9" fill="#2d2b33" stroke="${a}" stroke-width="2"/><path d="M38 61 C42 96,86 96,102 61" stroke="${a}" stroke-width="2.5" fill="none"/><rect x="26" y="84" width="16" height="6" rx="2" fill="#3cd027"/><rect x="48" y="84" width="16" height="6" rx="2" fill="${a}"/>`,
+    `<rect x="0" y="92" width="140" height="68" fill="${c}"/><rect x="12" y="64" width="24" height="44" fill="#231c3d"/><rect x="44" y="50" width="28" height="58" fill="#1d1734"/><rect x="82" y="70" width="42" height="38" fill="#282047"/><circle cx="104" cy="34" r="11" fill="#ffe7c2" opacity=".9"/>`,
+    `<rect x="16" y="24" width="108" height="72" rx="10" fill="${c}" stroke="${a}" stroke-width="2"/><path d="M34 62 L54 44 L72 68 L92 48 L108 60" stroke="${a}" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/><line x1="20" y1="42" x2="120" y2="42" stroke="${a}" stroke-opacity=".2"/><line x1="20" y1="60" x2="120" y2="60" stroke="${a}" stroke-opacity=".2"/>`
+  ];
+  return `<svg class="tsvg" viewBox="0 0 140 140" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><defs><linearGradient id="g${m.id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${a}"/><stop offset="52%" stop-color="${b}"/><stop offset="100%" stop-color="${c}"/></linearGradient></defs><rect width="140" height="140" fill="url(#g${m.id})"/>${shapes[m.m]}</svg>`;
+}
+const thumb=(m,s='')=>`<div class="thumb" data-peek="${m.id}" ${s}>${art(m)}<span class="tbdg ${m.ext==='webp'?'w':''}">${m.ext}</span><span class="tdur">${m.d}</span></div>`;
+function stepper(p){
+  const idx=p<25?0:p<65?1:p<90?2:3;
+  return `<div class="steps">${['fetch','save','read','webp'].map((l,i)=>`${i?`<div class="sline ${i<=idx?'d':''}"></div>`:''}<div class="snode ${i===idx?'c':''}"><div class="sdot ${i<idx?'d':i===idx?'c':''}">${i<idx?'✓':''}</div><span class="slbl">${l}</span></div>`).join('')}</div>`;
+}
+function dlInfo(){
+  const mb=((st.pct/100)*4.3).toFixed(1),step=st.pct<25?1:st.pct<65?2:st.pct<90?3:4;
+  return{
+    step,
+    h:['downloading from instagram','saving to your library','reading the video','making your webp'][step-1],
+    d:step<=2?`${mb} of 4.3 MB · step ${step} of 4`:`frame ${Math.min(150,Math.round(st.pct*1.5))} of 150 · step ${step} of 4`
+  };
+}
+function hdr(){
+  const chip=st.state==='error'?`<button class="hchip err" data-act="retry"><span class="pdot"></span>1 retry</button>`
+    :st.state==='downloading'?`<button class="hchip dl" data-act="stop"><span class="pdot"></span>1 active · 1 queued</button>`
+    :st.state==='clipboard'?`<button class="hchip clip" data-act="paste"><span class="pdot"></span>link ready</button>`
+    :`<button class="hchip" data-act="lib">library →</button>`;
+  return `<div class="hdr"><div class="f1"><div class="htitle">capystore</div><div class="hsub ell">73 videos · 463.2 MB on this iphone</div></div>${chip}</div>`;
+}
+
+function rDesk(){
+  const unf=st.vp==='duo-unfolded',dl=dlInfo();
+  const stack=`<div class="c1-stack">${[MEDIA[3],MEDIA[2],MEDIA[1],MEDIA[0]].map((m,i)=>`<div class="c1-card p${i}" data-peek="${m.id}">${thumb(m)}<div class="c1-cap"><span>${m.s}</span><span>${m.sz}</span></div></div>`).join('')}</div>`;
+  let slot='';
+  if(st.state==='downloading') slot=`<div class="c1-tkt gls"><div class="row jb g6"><span class="t-md b">${dl.h}</span><button class="dbtn sm" data-act="stop">stop</button></div><div class="t-sm cap">${dl.d}</div><div class="ptrk"><div class="pfil" style="width:${st.pct}%"></div></div>${stepper(st.pct)}</div>`;
+  else if(st.state==='error') slot=`<div class="c1-tkt gls err"><div class="row g6" style="align-items:flex-start"><span style="color:var(--redv);font-size:12px;line-height:1">▲</span><div class="f1"><div class="t-sm m" style="color:var(--red);line-height:1.3">there's no video in that post for capystore to save.</div><div class="t-xs cap" style="margin-top:2px">x · 1894021847 · 1 retry queued</div></div></div><div class="row g6"><button class="dbtn sm red f1" data-act="retry">↻ try again</button><button class="dbtn sm" data-act="dismiss">dismiss</button></div></div>`;
+  const well=`<div class="c1-well ${st.state==='clipboard'?'det':''}"><div class="row jb g6">${st.state==='clipboard'?`<div class="f1"><div class="t-xs b" style="color:var(--blu);text-transform:uppercase">clipboard link detected</div><div class="t-sm m ell">instagram.com/reel/Dd7P496…</div></div><button class="dbtn sm blu" data-act="paste">save now</button>`:`<span class="t-sm cap">drop link, video, or tap paste</span><span class="t-xs cap">⌘V</span>`}</div><div class="c1-acts"><button class="dbtn ${st.state==='clipboard'?'blu':'pri'}" data-act="paste">↓ paste</button><button class="dbtn" data-act="photos">photos</button><button class="dbtn" data-act="files">files</button></div></div>`;
+  if(unf) return `<div class="canvas c1-mat">${hdr()}<div class="split"><div class="pane jb"><div class="t-sm cap">intake &amp; active queue · fold-safe left pane</div><div class="col g8" style="margin-top:auto">${slot||`<div class="c1-tkt gl"><div class="t-sm m">ready for links or local clips</div><div class="t-xs cap">parallel queue idle · 0 retries waiting</div></div>`}${well}</div></div><div class="pane"><div class="row jb t-sm"><span class="cap">recent proofing desk</span><span class="m" style="cursor:pointer" data-act="lib">see all 73 →</span></div>${stack}</div></div></div>`;
+  return `<div class="canvas c1-mat">${hdr()}<div class="c1-body">${stack}<div class="col g8">${slot}${well}</div></div></div>`;
+}
+
+function rStage(){
+  const unf=st.vp==='duo-unfolded',cur=MEDIA.find(m=>m.id===st.sel)||MEDIA[0],dl=dlInfo();
+  let inner='';
+  if(st.state==='downloading') inner=`<div class="c2-tel"><div class="row jb"><span class="hchip dl" style="pointer-events:none"><span class="pdot"></span>step ${dl.step} of 4</span><button class="dbtn sm" data-act="stop">stop</button></div><div class="col g6"><div style="font-size:25px;font-weight:700;letter-spacing:-.04em;line-height:1">${st.pct}%</div><div class="t-lg m">${dl.h}</div><div class="t-sm cap">${dl.d}</div><div class="ptrk" style="height:5px;margin-top:3px"><div class="pfil" style="width:${st.pct}%"></div></div></div>${stepper(st.pct)}</div>`;
+  else if(st.state==='error') inner=`<div class="c2-tel err"><div class="row jb"><span class="hchip err" style="pointer-events:none">▲ 1 retry</span><button class="dbtn sm" data-act="dismiss">dismiss</button></div><div class="col g4"><div class="t-lg b" style="color:var(--red);line-height:1.35">there's no video in that post for capystore to save.</div><div class="t-sm cap">source: x · 1894021847 · kept in tray</div></div><div class="row g6"><button class="dbtn red f1" data-act="retry">↻ try again</button><button class="dbtn" data-act="paste">paste new</button></div></div>`;
+  else inner=`<div class="c2-bg" data-peek="${cur.id}">${art(cur)}</div><div class="c2-vig"></div><div class="c2-top"><span class="c2-pill">${cur.s} · ${cur.ext}</span><span class="c2-pill">${cur.d} · ${cur.sz}</span></div><div class="c2-bot"><div><div class="t-lg b">${cur.t}.${cur.ext}</div><div class="t-xs" style="opacity:.8">tap stage for focus · muted preview</div></div><div class="row g6"><button class="c2-pill" data-act="share">↗ share</button><button class="c2-pill" data-act="webp">✦ webp</button><button class="c2-pill" style="margin-left:auto" data-peek="${cur.id}">open</button></div></div>`;
+  const dock=`<div class="c2-dock gls"><button class="dbtn ${st.state==='clipboard'?'blu':'pri'} f1" data-act="paste">${st.state==='clipboard'?'↓ paste reel/Dd7P…':'↓ paste link'}</button><button class="dbtn" data-act="photos">photos</button><button class="dbtn" data-act="files">files</button></div>`;
+  if(unf) return `<div class="canvas">${hdr()}<div class="split"><div class="pane"><div class="c2-stage">${inner}</div></div><div class="pane jb"><div class="col g8"><div class="row jb t-sm"><span class="cap">recent reel strip</span><span class="m" style="cursor:pointer" data-act="lib">all 73 →</span></div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px">${MEDIA.map(m=>`<div class="thumb" style="height:80px;border:${m.id===cur.id?'2px solid var(--txt)':'1px solid var(--bd)'}" data-sel="${m.id}">${art(m)}<span class="tbdg ${m.ext==='webp'?'w':''}">${m.ext}</span><span class="tdur">${m.d}</span></div>`).join('')}</div></div><div class="col g6">${st.state==='clipboard'?`<div class="t-sm m" style="color:var(--blu)">⚡ clipboard: instagram.com/reel/Dd7P496wolG</div>`:''}${dock}</div></div></div></div>`;
+  return `<div class="canvas">${hdr()}<div class="c2-body"><div class="c2-stage">${inner}</div><div class="c2-strip">${MEDIA.map(m=>`<div class="c2-si ${m.id===cur.id?'on':''}" data-sel="${m.id}">${art(m)}<span class="tbdg" style="top:3px;right:3px;font-size:7px;padding:1px 4px">${m.ext}</span></div>`).join('')}</div>${dock}</div></div>`;
+}
+
+function rShelf(){
+  const unf=st.vp==='duo-unfolded',dl=dlInfo();
+  const gauge=`<div class="c3-gauge"><div class="row jb t-xs cap"><span><strong style="color:var(--txt)">463.2 MB</strong> local · 73 items</span><span>58 mp4 · 11 webp · 4 mov</span></div><div class="c3-seg"><div style="width:68%;background:var(--txt);border-radius:99px"></div><div style="width:20%;background:var(--amb);border-radius:99px"></div><div style="width:12%;background:var(--blu);border-radius:99px"></div></div></div>`;
+  const bay=`<div class="c3-bay ${st.state==='clipboard'?'on':''}"><div class="row jb g6"><div class="f1"><div class="t-xs m" style="color:${st.state==='clipboard'?'var(--blu)':'var(--cap)'};text-transform:uppercase">${st.state==='clipboard'?'⚡ magnetic snap · clipboard':'intake bay · drop or paste'}</div><div class="t-md m ell" style="margin-top:2px">${st.state==='clipboard'?'instagram.com/reel/Dd7P496wolG':'ready for url, photo, or video file'}</div></div>${st.state==='clipboard'?`<button class="dbtn sm blu" data-act="paste">save</button>`:''}</div><div class="c3-acts"><button class="dbtn sm ${st.state==='clipboard'?'blu':'pri'}" data-act="paste" style="border-radius:9px">↓ paste</button><button class="dbtn sm" data-act="photos" style="border-radius:9px">photos</button><button class="dbtn sm" data-act="files" style="border-radius:9px">files</button></div></div>`;
+  let lb=`<div class="c3-lr row jb" style="flex-direction:row"><span class="t-sm cap">no active downloads · queue clear</span><span class="t-xs m" style="color:var(--grn)">● online</span></div>`,lbdg='idle';
+  if(st.state==='downloading'){lbdg='1 running · 1 waiting';lb=`<div class="c3-lr"><div class="row jb g6"><span class="t-sm b">${dl.h}</span><button class="dbtn sm" data-act="stop" style="padding:2px 6px">stop</button></div><div class="row jb t-xs cap"><span>${dl.d}</span><span>${st.pct}%</span></div><div class="ptrk"><div class="pfil" style="width:${st.pct}%"></div></div>${stepper(st.pct)}</div>`;}
+  else if(st.state==='error'){lbdg='1 retry needed';lb=`<div class="c3-lr" style="background:var(--reds)"><div class="t-sm m" style="color:var(--red);line-height:1.3">▲ there's no video in that post for capystore to save.</div><div class="row jb g6"><span class="t-xs cap">x · 1894021847</span><div class="row g4"><button class="dbtn sm red" data-act="retry" style="padding:3px 8px">retry</button><button class="dbtn sm" data-act="dismiss" style="padding:3px 7px">×</button></div></div></div>`;}
+  const led=`<div class="c3-led"><div class="c3-lh"><span>status ledger</span><span style="color:${st.state==='error'?'var(--red)':st.state==='downloading'?'var(--blu)':'var(--cap)'}">${lbdg}</span></div>${lb}</div>`;
+  if(unf) return `<div class="canvas">${hdr()}<div class="split"><div class="pane">${gauge}${bay}${led}</div><div class="pane"><div class="row jb t-sm"><span class="cap">cassette rack · recent offline</span><span class="m" style="cursor:pointer" data-act="lib">see all →</span></div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:7px;overflow-y:auto;scrollbar-width:none">${MEDIA.slice(0,4).map(m=>`<div class="c3-cas" style="width:100%" data-peek="${m.id}">${thumb(m)}<div class="row jb t-xs" style="padding:1px 2px"><span class="m ell">${m.t}</span><span class="cap">${m.sz}</span></div></div>`).join('')}</div></div></div></div>`;
+  return `<div class="canvas">${hdr()}<div class="c3-body">${gauge}${bay}${led}<div class="col g6 f1" style="min-height:0"><div class="row jb t-sm"><span class="cap">recent cassettes</span><span class="m" style="cursor:pointer" data-act="lib">see all →</span></div><div class="c3-rack">${MEDIA.map(m=>`<div class="c3-cas" data-peek="${m.id}">${thumb(m)}<div class="t-xs m ell" style="padding:0 2px">${m.t}</div><div class="t-xs cap" style="padding:0 2px">${m.sz}</div></div>`).join('')}</div></div></div></div>`;
+}
+
+function rBento(){
+  const unf=st.vp==='duo-unfolded',dl=dlInfo();
+  const top=`<div class="c4-top"><div class="c4-paste ${st.state==='clipboard'?'on':''}" data-act="paste"><div class="row jb"><span style="font-size:17px;font-weight:700;line-height:1">↓</span><span class="t-xs" style="opacity:.78;padding:2px 6px;border-radius:99px;border:1px solid currentColor">${st.state==='clipboard'?'1 link':'⌘V'}</span></div><div><div style="font-size:13.5px;font-weight:700;letter-spacing:-.02em">${st.state==='clipboard'?'paste reel':'paste link'}</div><div class="t-xs ell" style="opacity:.8;margin-top:2px">${st.state==='clipboard'?'instagram.com/Dd7P…':'or drop anywhere'}</div></div></div><div class="col g6"><div class="c4-mp"><button class="c4-mt gl" data-act="photos"><span style="font-size:13px">▣</span><span>photos</span></button><button class="c4-mt gl" data-act="files"><span style="font-size:13px">▤</span><span>files</span></button></div><div class="c4-st gl"><div><div style="font-size:16px;font-weight:700;line-height:1">73</div><div class="t-xs cap" style="margin-top:2px">offline</div></div><div style="text-align:right"><div class="t-sm m">463 MB</div><div class="t-xs" style="color:var(--grn)">ready</div></div></div></div></div>`;
+  let sb='';
+  if(st.state==='downloading') sb=`<div class="c4-sb gls"><div class="row jb"><span class="t-sm b" style="color:var(--blu)">● ${dl.h}</span><button class="dbtn sm" data-act="stop" style="padding:2px 7px">stop</button></div><div class="t-xs cap">${dl.d}</div><div class="ptrk"><div class="pfil" style="width:${st.pct}%"></div></div>${stepper(st.pct)}</div>`;
+  else if(st.state==='error') sb=`<div class="c4-sb err"><div class="row jb g6" style="align-items:flex-start"><div class="t-sm m" style="color:var(--red);line-height:1.3">▲ there's no video in that post for capystore to save.</div><span class="t-xs b" style="color:var(--red);white-space:nowrap">1 retry</span></div><div class="row g6"><button class="dbtn sm red f1" data-act="retry">↻ try again</button><button class="dbtn sm" data-act="dismiss">dismiss</button></div></div>`;
+  if(unf) return `<div class="canvas">${hdr()}<div class="split"><div class="pane">${top}${sb||`<div class="c4-sb gl" style="margin-top:auto"><div class="row jb t-sm"><span class="m">parallel queue</span><span class="cap">0 running · fold-safe</span></div><div class="t-xs cap">paste multiple links at once to batch save into your library.</div></div>`}</div><div class="pane"><div class="row jb t-sm"><span class="cap">recent mosaic (even 2-col grid)</span><span class="m" style="cursor:pointer" data-act="lib">see all →</span></div><div class="c4-mos f1">${MEDIA.slice(0,6).map(m=>thumb(m,'style="height:100%;min-height:92px"')).join('')}</div></div></div></div>`;
+  return `<div class="canvas">${hdr()}<div class="c4-body">${top}${sb}<div class="row jb t-sm" style="margin-top:2px"><span class="cap">recent saves</span><span class="m" style="cursor:pointer" data-act="lib">see all →</span></div><div class="c4-mos">${MEDIA.slice(0,4).map(m=>thumb(m)).join('')}</div></div></div>`;
+}
+
+function rPeek(){
+  if(st.state!=='peek'&&!st.peek) return '';
+  const m=MEDIA.find(x=>x.id===(st.peek||st.sel))||MEDIA[0];
+  return `<div class="scrim" data-act="close"><div class="peek gls" onclick="event.stopPropagation()"><div class="row jb"><div><div class="t-lg b">${m.t}.${m.ext}</div><div class="t-xs cap">${m.s} · ${m.d} · ${m.sz} · ${m.res}</div></div><button class="dbtn sm" data-act="close" style="width:26px;height:26px;padding:0">✕</button></div><div class="pprev">${art(m)}<span class="tbdg ${m.ext==='webp'?'w':''}">${m.ext}</span><span class="tdur">muted · tap for sound</span></div><button class="dbtn pri" data-act="copy" style="width:100%">${st.copied?'✓ link copied':'⧉ copy share link'}</button><div class="prow"><button class="dbtn sm" data-act="webp">✦ convert webp</button><button class="dbtn sm" data-act="savep">↓ save photos</button></div></div></div>`;
+}
+
+function railHTML(){
+  return `<div class="rail"><div class="rtop"><div class="rcam"></div><div class="col g4" style="align-items:center"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" opacity=".82"><circle cx="8" cy="5" r="3"/><path d="M3 14c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5"/></svg><span class="rtime">1:24</span><div class="rbatt"><svg width="30" height="30" viewBox="0 0 36 36"><path d="M9 28 A14 14 0 1 1 27 28" fill="none" stroke="#30bd1b" stroke-width="2.6" stroke-linecap="round"/><path d="M12.5 18.5a8 8 0 0 1 11 0M14.8 21a4.8 4.8 0 0 1 6.4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="18" cy="23.5" r="1.2" fill="currentColor"/></svg><span class="rbt">80⚡</span></div></div><div class="rgear" data-act="set" title="Settings"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09c-.66 0-1.25.4-1.51 1z"/></svg></div></div><div class="rtabs gls"><div class="rtab on" title="Save"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg></div><div class="rtab" data-act="lib" title="Library"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="M21 15l-5-5L5 19"/></svg></div><div class="rtab" title="Live"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19.1 4.9a10 10 0 0 1 0 14.2M4.9 19.1a10 10 0 0 1 0-14.2"/></svg></div><div class="rtab" title="Tools"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg></div></div></div>`;
+}
+function higHTML(){
+  return st.vp==='iphone'?`<div class="hig"><div class="hig-b"><span class="htag">Tab Bar Safe Area</span></div></div>`
+    :`<div class="hig"><div class="hig-r"><span class="htag">Duo Rail</span></div>${st.vp==='duo-unfolded'?`<div class="hig-f"><span class="hftag">ReservedRegion(.division)</span></div>`:''}</div>`;
+}
+
+function toast(msg){st.toast=msg;clearTimeout(st.tT);st.tT=setTimeout(()=>{st.toast=null;drawDev()},1800);drawDev();}
+function syncDL(){clearInterval(st.dT);if(st.state==='downloading')st.dT=setInterval(()=>{st.pct=st.pct>94?18:st.pct+4;drawDev()},650);}
+
+function drawCtrls(){
+  document.getElementById('cgrid').innerHTML=CONCEPTS.map(c=>`<button class="ctab ${st.concept===c.id?'on':''}" data-c="${c.id}" role="tab"><span class="cnum"><span>${c.n}</span><span>${st.concept===c.id?'●':''}</span></span><span class="cname">${c.name}</span><span class="csub">${c.sub}</span></button>`).join('');
+  document.getElementById('sgrp').innerHTML=`<span class="clbl">state</span>`+STATES.map(s=>`<button class="pbtn ${s.c} ${st.state===s.id?'on':''}" data-s="${s.id}" type="button">${s.l}</button>`).join('');
+  document.getElementById('vgrp').innerHTML=VPS.map(v=>`<button class="pbtn ${st.vp===v.id?'on':''}" data-v="${v.id}" type="button">${v.l}</button>`).join('');
+  const tb=document.getElementById('tbtn');tb.textContent=st.theme==='light'?'☀ Light':'☾ Dark';tb.className=`pbtn ${st.theme==='dark'?'on':''}`;
+  document.getElementById('hbtn').className=`pbtn ${st.hig?'on':''}`;
+}
+function drawSpec(){
+  const c=CONCEPTS.find(x=>x.id===st.concept);
+  document.getElementById('spec').innerHTML=`<div><div class="stitle">${c.n} · ${c.name} <span class="sbdg">${c.b}</span></div><p class="sdesc">${c.desc}</p></div><div class="smets"><div class="srow"><span>duo/fold</span><span>${c.duo}</span></div><div class="srow"><span>perf</span><span>${c.perf}</span></div><div class="srow"><span>swiftui</span><span>${c.eff}</span></div></div>`;
+}
+function drawDev(){
+  document.getElementById('bezel').className=`bezel vp-${st.vp}`;
+  const sc=document.getElementById('scr');
+  sc.className=`scr t-${st.theme} ${st.hig?'show-hig':''}`;
+  const body=st.concept==='desk'?rDesk():st.concept==='stage'?rStage():st.concept==='shelf'?rShelf():rBento();
+  const extra=rPeek()+(st.toast?`<div class="toast">${st.toast}</div>`:'')+higHTML();
+  sc.innerHTML=st.vp==='iphone'
+    ?`<div class="itop"><span>1:24</span><div class="di"></div><span style="font-size:10px">5G · 80⚡</span></div>${body}<div class="ibot"><div class="itabs gls"><div class="itab on">↓ save</div><div class="itab" data-act="lib">library</div><div class="itab">live</div><div class="itab">tools</div></div></div>${extra}`
+    :`${body}${railHTML()}${extra}`;
+}
+function draw(){drawCtrls();drawDev();drawSpec();}
+
+document.addEventListener('click',e=>{
+  const c=e.target.closest('[data-c]');if(c){st.concept=c.dataset.c;st.peek=st.state==='peek'?st.sel:null;draw();return;}
+  const s=e.target.closest('[data-s]');if(s){st.state=s.dataset.s;st.peek=st.state==='peek'?st.sel:null;st.copied=false;if(st.state==='downloading')st.pct=48;syncDL();draw();return;}
+  const v=e.target.closest('[data-v]');if(v){st.vp=v.dataset.v;draw();return;}
+  if(e.target.closest('#tbtn')){st.theme=st.theme==='light'?'dark':'light';draw();return;}
+  if(e.target.closest('#hbtn')){st.hig=!st.hig;draw();return;}
+  const sel=e.target.closest('[data-sel]');if(sel){st.sel=sel.dataset.sel;if(st.state==='downloading'||st.state==='error'){st.state='idle';syncDL();}draw();return;}
+  const pk=e.target.closest('[data-peek]');if(pk){st.sel=pk.dataset.peek;st.peek=pk.dataset.peek;st.state='peek';st.copied=false;syncDL();draw();return;}
+  const a=e.target.closest('[data-act]');if(!a)return;
+  const k=a.dataset.act;
+  if(k==='paste'||k==='retry'){st.state='downloading';st.peek=null;st.pct=22;syncDL();draw();toast(k==='retry'?'retrying job…':'queued from clipboard');}
+  else if(k==='stop'||k==='dismiss'){st.state='idle';st.peek=null;syncDL();draw();toast(k==='dismiss'?'dismissed failed job':'stopped following job');}
+  else if(k==='close'){st.peek=null;if(st.state==='peek')st.state='idle';draw();}
+  else if(k==='copy'){st.copied=true;drawDev();toast('share link copied');}
+  else if(k==='photos'||k==='files'){st.state='downloading';st.pct=32;syncDL();draw();toast(k==='photos'?'importing from photos…':'uploading local clip…');}
+  else if(k==='share')toast('public share link copied');
+  else if(k==='webp')toast('trim & webp studio ready');
+  else if(k==='savep')toast('saved to photos album');
+  else if(k==='lib')toast('switching to library (73 videos)');
+  else if(k==='set')toast('settings sheet');
+});
+draw();
+</script>
+</body>
+</html>

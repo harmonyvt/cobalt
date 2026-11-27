@@ -192,7 +192,7 @@ struct PanePostContent: View {
                 kit: kit,
                 fromAlbum: fromAlbum,
                 showsCloseButton: !pane.sitsBesideTab,
-                onManageLinks: { managing = true }
+                onOpenPost: { pane.open(.post($0.id)) }
             )
             .onChange(of: c.item.titleText, initial: true) { _, next in
                 pane.reportTitle(next, for: paneItem)

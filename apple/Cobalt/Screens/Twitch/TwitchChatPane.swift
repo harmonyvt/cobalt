@@ -192,14 +192,15 @@ private struct TwitchChatLines: View {
                         Label(
                             newSincePause > 0 ? "\(Copy.Twitch.paused) · \(Copy.Twitch.newLines(newSincePause))" : Copy.Twitch.jumpDown,
                             systemImage: Symbol.Twitch.down)
-                            .font(Font.cobalt(12.5, .medium))
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 32)
+                            .font(Font.cobalt(12.5, .semibold).monospacedDigit())
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 34)
                             .foregroundStyle(.white)
-                            .background(TwitchChatPalette.twitch, in: Capsule())
+                            .mediaGlassCapsule(tint: TwitchChatPalette.twitch)
+                            .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
                     }
                     .buttonStyle(.plain)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 10)
                     .transition(.opacity)
                 }
             }
@@ -447,7 +448,7 @@ private struct TwitchDualChatFilterBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 filterChip(
-                    title: Copy.TwitchDualChat.filterAll,
+                    title: Copy.TwitchDualChat.filterAllCount(accents.count),
                     accent: nil,
                     selected: selection == .all,
                     identifier: "twitch.dual.filter.all"
@@ -497,6 +498,7 @@ private struct TwitchDualChatFilterBar: View {
                     Circle()
                         .fill(tint)
                         .frame(width: 7, height: 7)
+                        .shadow(color: selected ? tint.opacity(0.65) : .clear, radius: 3)
                 }
                 Text(title)
                     .font(Font.cobalt(12.5, selected ? .semibold : .medium))
@@ -508,7 +510,9 @@ private struct TwitchDualChatFilterBar: View {
             .background(fill, in: Capsule())
             .overlay {
                 if selected, let tint {
-                    Capsule().strokeBorder(tint, lineWidth: 1.25)
+                    Capsule().strokeBorder(tint.opacity(0.85), lineWidth: 1.25)
+                } else if !selected {
+                    Capsule().strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
                 }
             }
             .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
@@ -603,14 +607,15 @@ private struct TwitchCombinedChatLines: View {
                         Label(
                             newSincePause > 0 ? "\(Copy.Twitch.paused) · \(Copy.Twitch.newLines(newSincePause))" : Copy.Twitch.jumpDown,
                             systemImage: Symbol.Twitch.down)
-                            .font(Font.cobalt(12.5, .medium))
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 32)
+                            .font(Font.cobalt(12.5, .semibold).monospacedDigit())
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 34)
                             .foregroundStyle(.white)
-                            .background(TwitchChatPalette.twitch, in: Capsule())
+                            .mediaGlassCapsule(tint: TwitchChatPalette.twitch)
+                            .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
                     }
                     .buttonStyle(.plain)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 10)
                     .transition(.opacity)
                 }
             }
@@ -650,10 +655,14 @@ private struct TwitchDualComposer: View {
         combined.composerTarget.channelLogin.flatMap { combined.accent(for: $0) }
     }
 
+    private var channelCount: Int {
+        max(2, combined.orderedAccents.count)
+    }
+
     private var targetDisplayName: String {
         switch combined.composerTarget {
         case .both:
-            return Copy.TwitchDualChat.bothChannels
+            return Copy.TwitchDualChat.allChannels(channelCount)
         case .channel(let ch):
             return combined.displayName(for: ch)
         }
@@ -663,7 +672,7 @@ private struct TwitchDualComposer: View {
         guard combined.canSendToTarget else { return Copy.Twitch.composerReadOnly }
         guard combined.isDualChannel else { return Copy.Twitch.composerPrompt }
         if combined.composerTarget.isBoth {
-            return Copy.TwitchDualChat.composerPromptBoth
+            return Copy.TwitchDualChat.composerPromptAll(channelCount)
         }
         return Copy.TwitchDualChat.composerPrompt(targetDisplayName)
     }
@@ -780,6 +789,7 @@ private struct TwitchDualComposer: View {
         let isBoth = combined.composerTarget.isBoth
         let singleTint = targetAccent.map { TwitchChatPalette.accentColor($0) } ?? TwitchChatPalette.twitch
         let gradient = TwitchChatPalette.dualAccentGradient(for: combined.orderedAccents)
+        let allLabel = Copy.TwitchDualChat.allChannels(channelCount)
 
         return Menu {
             ForEach(combined.orderedAccents, id: \.channel) { accent in
@@ -799,19 +809,22 @@ private struct TwitchDualComposer: View {
                 combined.selectSendTarget(.both)
             } label: {
                 if isBoth {
-                    Label(Copy.TwitchDualChat.bothChannels, systemImage: "checkmark")
+                    Label(allLabel, systemImage: "checkmark")
                 } else {
-                    Text(Copy.TwitchDualChat.bothChannels)
+                    Text(allLabel)
                 }
             }
         } label: {
             HStack(spacing: 4) {
                 if isBoth {
                     HStack(spacing: 2) {
-                        Circle().fill(TwitchChatPalette.primaryChannel).frame(width: 6, height: 6)
-                        Circle().fill(TwitchChatPalette.secondaryChannel).frame(width: 6, height: 6)
+                        ForEach(combined.orderedAccents, id: \.channel) { accent in
+                            Circle()
+                                .fill(TwitchChatPalette.accentColor(accent))
+                                .frame(width: 6, height: 6)
+                        }
                     }
-                    Text("2")
+                    Text("\(channelCount)")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(CobaltColor.text)
                 } else {
@@ -838,7 +851,7 @@ private struct TwitchDualComposer: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Copy.TwitchDualChat.sendTargetMenu)
-        .accessibilityValue(isBoth ? Copy.TwitchDualChat.bothChannels : Copy.TwitchDualChat.channelHandle(targetDisplayName))
+        .accessibilityValue(isBoth ? allLabel : Copy.TwitchDualChat.channelHandle(targetDisplayName))
         .accessibilityIdentifier("twitch.dual.targetMenu")
     }
 
@@ -859,9 +872,10 @@ private struct TwitchDualComposer: View {
     @ViewBuilder private var sendButton: some View {
         if combined.isDualChannel && combined.composerTarget.isBoth {
             let gradient = TwitchChatPalette.dualAccentGradient(for: combined.orderedAccents)
+            let sendAllLabel = Copy.TwitchDualChat.sendToAll(channelCount)
             Button(action: send) {
                 HStack(spacing: 4) {
-                    Text(Copy.TwitchDualChat.sendToBoth)
+                    Text(sendAllLabel)
                         .font(Font.cobalt(12.5, .semibold))
                     Image(systemName: Symbol.Twitch.send)
                         .font(.system(size: 12, weight: .bold))
@@ -879,7 +893,7 @@ private struct TwitchDualComposer: View {
             }
             .buttonStyle(.plain)
             .disabled(!canSendNow)
-            .accessibilityLabel(Copy.TwitchDualChat.sendToBoth)
+            .accessibilityLabel(sendAllLabel)
             .accessibilityIdentifier("twitch.dual.sendBoth")
         } else {
             let fill = canSendNow
@@ -925,7 +939,8 @@ private struct TwitchDualComposer: View {
                 Text(accent.mark)
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .foregroundStyle(tint)
-                    .frame(width: 16, height: 16)
+                    .padding(.horizontal, accent.mark.count > 1 ? 3 : 0)
+                    .frame(minWidth: 16, minHeight: 16)
                     .background(tint.opacity(0.18), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             }
             Image(systemName: Symbol.Twitch.reply)

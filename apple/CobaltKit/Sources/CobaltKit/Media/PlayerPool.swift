@@ -62,12 +62,43 @@ public final class PlayerPool: LifecycleAware, Purgeable {
     private var nextID = 0
     private var clock = 0
     private let cap: Int
+    /// Non-AVPlayer hardware video decoders (e.g. concurrent `TwitchNativeEngine` streams) borrowing decoder slots.
+    private var externalReservations: [String: Int] = [:]
+
+    /// Total hardware decoder slots currently reserved by external engines (e.g. Twitch multi-stream).
+    public var reservedExternalCount: Int {
+        externalReservations.values.reduce(0, +)
+    }
+
+    /// Effective AVPlayer cap after subtracting external decoder reservations.
+    public var effectiveCap: Int {
+        max(0, cap - reservedExternalCount)
+    }
 
     /// `lifecycle` is the app's listener; tests pass their own.
     init(lifecycle: AppLifecycle = .shared, cap: Int = PlayerPool.maxPlaying) {
         self.cap = cap
         lifecycle.register(self, order: .media)
         lifecycle.register(purgeable: self)
+    }
+
+    // MARK: external decoders
+
+    /// Reserves `count` hardware video decoder slots for an external subsystem (such as 1...4 live Twitch streams)
+    /// and immediately pauses excess unprotected background `AVPlayer` instances (e.g. Home orbit loops).
+    public func reserveExternalDecoders(id: String, count: Int) {
+        let clamped = max(0, count)
+        if clamped == 0 {
+            externalReservations.removeValue(forKey: id)
+        } else {
+            externalReservations[id] = clamped
+        }
+        enforceCap(keeping: nil)
+    }
+
+    /// Releases a previously registered external decoder reservation.
+    public func releaseExternalDecoders(id: String) {
+        externalReservations.removeValue(forKey: id)
     }
 
     // MARK: owners
@@ -124,10 +155,10 @@ public final class PlayerPool: LifecycleAware, Purgeable {
 
     // MARK: the cap
 
-    private func enforceCap(keeping id: Int) {
+    private func enforceCap(keeping id: Int?) {
         let playing = entries.filter(\.isPlaying)
         let slots = playing.map { PlayerCap.Slot(id: $0.id, started: $0.started, protected: $0.role.isProtected) }
-        let pause = Set(PlayerCap.toPause(slots, cap: cap, keep: id))
+        let pause = Set(PlayerCap.toPause(slots, cap: effectiveCap, keep: id))
         guard !pause.isEmpty else { return }
         for entry in playing where pause.contains(entry.id) { entry.player?.pause() }
         Telemetry.log(.info, .ui, "players.cap", data: ["paused": .int(pause.count)])

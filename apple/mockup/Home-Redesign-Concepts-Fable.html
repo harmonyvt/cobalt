@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>capystore home: four more directions (05–08)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" media="print" onload="this.media='all'">
+<style>
+:root{--p-fg:var(--foreground,#141416);--p-mut:var(--muted-foreground,#62626a);--p-card:var(--card,rgba(128,128,136,.08));--p-bd:var(--border,rgba(128,128,136,.26));--p-bg:var(--background,#fff);--p-acc:#196bd4;
+--mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;--sans:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif}
+@media(prefers-color-scheme:dark){:root{--p-fg:var(--foreground,#ececf0);--p-mut:var(--muted-foreground,#9a9aa3);--p-bg:var(--background,#0c0c0e);--p-acc:#5aa5ff}}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--p-bg);color:var(--p-fg);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.wb{width:100%;max-width:900px;margin:0 auto;padding:14px 12px 28px;display:flex;flex-direction:column;gap:10px}
+.lede h1{font:600 17px/1.25 var(--mono);margin:0 0 4px;letter-spacing:-.01em}
+.lede p{margin:0;font-size:13px;line-height:1.5;color:var(--p-mut);max-width:70ch}
+.tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+@media(max-width:560px){.tabs{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.tab{appearance:none;text-align:left;padding:9px 10px;border-radius:12px;border:1px solid var(--p-bd);background:var(--p-card);display:flex;flex-direction:column;gap:3px;min-width:0}
+.tab .n{font:600 10px/1 var(--mono);color:var(--p-mut)}
+.tab .nm{font:600 14px/1.1 var(--mono)}
+.tab .sb{font:400 10.5px/1.3 var(--mono);color:var(--p-mut)}
+.tab.on{border-color:var(--p-acc);box-shadow:inset 0 0 0 1px var(--p-acc)}
+.tab.on .n{color:var(--p-acc)}
+.bar{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding:7px 9px;border:1px solid var(--p-bd);border-radius:12px;background:var(--p-card)}
+.grp{display:flex;align-items:center;gap:2px;flex-wrap:wrap}
+.grp>span{font:600 9.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--p-mut);margin-right:4px}
+.pb{appearance:none;border:0;background:transparent;color:var(--p-mut);font:500 11px/1 var(--mono);padding:7px 8px;border-radius:8px;white-space:nowrap}
+.pb:hover{color:var(--p-fg)}
+.pb.on{background:var(--p-fg);color:var(--p-bg);font-weight:600}
+.stage{display:flex;justify-content:center;padding:6px 0;overflow:hidden}
+.fit{position:relative;flex:none}
+.bez{position:absolute;left:0;top:0;transform-origin:0 0;padding:10px;background:linear-gradient(145deg,#2f3035,#131316 55%,#26272c);box-shadow:0 24px 46px -20px rgba(0,0,0,.5),inset 0 1px 1px rgba(255,255,255,.22)}
+.claim{font:400 12.5px/1.5 var(--mono);padding:9px 11px;border-left:3px solid var(--p-acc);background:var(--p-card);border-radius:0 10px 10px 0}
+.claim b{font-weight:600}
+.notes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+@media(max-width:640px){.notes{grid-template-columns:1fr}}
+.nt{border:1px solid var(--p-bd);border-radius:12px;padding:10px 12px;background:var(--p-card)}
+.nt h3{font:600 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.07em;color:var(--p-mut);margin:0 0 6px}
+.nt p,.nt li{font-size:12.5px;line-height:1.5;margin:0}
+.nt ul{margin:0;padding-left:16px}
+.nt code{font:500 11.5px var(--mono)}
+details.cav{border:1px solid var(--p-bd);border-radius:12px;padding:9px 12px;background:var(--p-card);font-size:12.5px;line-height:1.55}
+details.cav summary{font:600 12px var(--mono);cursor:pointer}
+details.cav ul{margin:8px 0 0;padding-left:18px}
+
+/* ---------- device ---------- */
+.dev{position:relative;display:flex;overflow:hidden;font-family:var(--mono);background:var(--bg);color:var(--tx);user-select:none;font-size:13.5px;line-height:1.35}
+.dev.outer{width:466px;height:678px;border-radius:40px}
+.dev.inner{width:951px;height:669px;border-radius:30px}
+.dev.iphone{width:393px;height:852px;border-radius:48px;flex-direction:column}
+.bez.outer{border-radius:50px}.bez.inner{border-radius:40px}.bez.iphone{border-radius:58px}
+.t-light{--bg:#fff;--sf:#f4f4f4;--el:#e3e3e3;--tx:#000;--cp:#6e6e75;--cp2:#5c5c63;--bd:#adadb7;--hl:rgba(0,0,0,.07);--hl2:rgba(0,0,0,.16);--er:#c4142a;--erf:#ed2236;--ers:rgba(237,34,54,.07);--ok:#1a7f0f;--on:#fff;--gl:rgba(255,255,255,.68);--rim:rgba(0,0,0,.1);--spec:rgba(255,255,255,.95);--shd:rgba(0,0,0,.18);--tint:0,0,0}
+.t-dark{--bg:#000;--sf:#191919;--el:#282828;--tx:#e1e1e1;--cp:#8f8f8f;--cp2:#9a9a9a;--bd:#383838;--hl:rgba(255,255,255,.09);--hl2:rgba(255,255,255,.2);--er:#ff5c6c;--erf:#ed2236;--ers:rgba(255,92,108,.13);--ok:#3cd027;--on:#000;--gl:rgba(40,40,44,.62);--rim:rgba(255,255,255,.13);--spec:rgba(255,255,255,.17);--shd:rgba(0,0,0,.7);--tint:255,255,255}
+.g{background:var(--gl);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);border:1px solid var(--rim);box-shadow:inset 0 1px 0 var(--spec),0 8px 22px -12px var(--shd)}
+.cnt{position:relative;flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;padding:20px 16px 14px}
+.dev.inner .cnt{flex-direction:row;padding:0}
+.pane{min-width:0;min-height:0;display:flex;flex-direction:column;padding:20px 16px 14px;position:relative}
+.pane.l{width:469px;flex:none}.pane.r{flex:1}
+.seam{width:12px;flex:none;background:linear-gradient(90deg,transparent,rgba(var(--tint),.09) 45%,rgba(var(--tint),.02) 55%,transparent)}
+.scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:none;display:flex;flex-direction:column;gap:10px}
+.scroll::-webkit-scrollbar{display:none}
+.cap{color:var(--cp)}.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+svg.i{flex:none;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+/* system chrome */
+.rail{width:72px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:14px 0 16px;font-family:var(--sans)}
+.rtop{display:flex;flex-direction:column;align-items:center;gap:9px}
+.cam{width:40px;height:40px;border-radius:50%;background:#050506;display:grid;place-items:center}
+.cam::after{content:'';width:12px;height:12px;border-radius:50%;background:#e23b33}
+.rtime{font:700 15px/1 var(--sans)}
+.rbat{width:34px;height:34px;border-radius:50%;border:3px solid var(--hl2);border-top-color:#30bd1b;border-left-color:#30bd1b;display:grid;place-items:center;font:700 9px var(--sans)}
+.rtabs{display:flex;flex-direction:column;gap:6px;padding:5px;border-radius:26px}
+.rtabs span{width:44px;height:44px;border-radius:22px;display:grid;place-items:center}
+.rtabs span.on{background:var(--tx);color:var(--on)}
+.sbar{height:54px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:8px 30px 0;font:600 15px var(--sans)}
+.isl{width:110px;height:32px;border-radius:16px;background:#050506}
+.tbar{flex:none;height:92px;display:flex;justify-content:center;align-items:flex-start;padding-top:8px}
+.tbar div{display:flex;gap:6px;padding:6px;border-radius:32px}
+.tbar span{width:64px;height:48px;border-radius:24px;display:grid;place-items:center}
+.tbar span.on{background:var(--tx);color:var(--on)}
+/* HIG overlay */
+.hig{position:absolute;inset:0;pointer-events:none;z-index:50;display:none;font:600 9px/1 var(--mono)}
+.show-hig .hig{display:block}
+.hz{position:absolute;display:flex;align-items:flex-start;justify-content:center;padding:6px}
+.hz.red{background:repeating-linear-gradient(45deg,rgba(255,59,48,.16) 0 6px,rgba(255,59,48,.05) 6px 12px);outline:1.5px dashed rgba(255,59,48,.8);outline-offset:-1px}
+.hz.blue{background:rgba(47,138,249,.18);outline:1.5px dashed rgba(47,138,249,.9);outline-offset:-1px;align-items:center}
+.hz.safe{outline:1.5px dashed rgba(48,189,27,.9);outline-offset:-1px;align-items:flex-end;justify-content:flex-start}
+.hz b{background:#fff;color:#111;padding:3px 5px;border-radius:4px;font-weight:600;box-shadow:0 0 0 1px rgba(0,0,0,.2)}
+.hz.vert b{writing-mode:vertical-rl}
+/* shared parts */
+.hd{flex:none;margin-bottom:12px}
+.ttl{font:600 26px/1.1 var(--mono);letter-spacing:-.01em}
+.sub{font-size:12px;color:var(--cp);margin-top:4px}
+.b1,.b2{appearance:none;border:0;min-height:44px;border-radius:22px;display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:0 16px;white-space:nowrap;transition:transform .12s}
+.b1:active,.b2:active{transform:scale(.97)}
+.b1{background:var(--tx);color:var(--on);font:600 14.5px var(--mono)}
+.b2{background:var(--gl);border:1px solid var(--rim);box-shadow:inset 0 1px 0 var(--spec);font:400 12.5px var(--mono);color:var(--tx);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+.ink{flex:none;display:flex;gap:8px;margin-bottom:12px}
+.ink .b1{flex:1}
+.clipn{flex:none;font-size:12px;color:var(--cp);margin:-4px 0 12px;display:flex;gap:6px;align-items:center}
+.clipn i{width:7px;height:7px;border-radius:50%;background:#2f8af9;flex:none;animation:pulse 1.4s ease-in-out infinite}
+.pbar{height:4px;border-radius:2px;background:var(--hl2);overflow:hidden;position:relative}
+.pbar u{position:absolute;inset:0 auto 0 0;background:var(--tx);border-radius:2px;transition:width .12s linear}
+.pbar.ind u{width:34%!important;animation:sweep 1.2s ease-in-out infinite}
+.stp{display:flex;margin-top:10px}
+.sd{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;position:relative;font-size:11px;color:var(--cp)}
+.sd i{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--bd);background:var(--bg);z-index:1;display:grid;place-items:center;font-style:normal}
+.sd+.sd::before{content:'';position:absolute;top:6.5px;right:50%;width:100%;height:1.5px;background:var(--bd)}
+.sd.d i{background:var(--tx);border-color:var(--tx);color:var(--on)}
+.sd.d+.sd::before{background:var(--tx)}
+.sd.n{color:var(--tx);font-weight:600}
+.sd.n i{border-color:var(--tx);border-width:3px;animation:pulse 1.4s ease-in-out infinite}
+.sd.x{color:var(--er);font-weight:600}.sd.x i{border-color:var(--erf);background:var(--erf)}
+.job b.hl{font-weight:600;display:block}
+.job .dt{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--cp);margin:3px 0 8px}
+.flt .fh{display:flex;gap:8px;align-items:flex-start;color:var(--er)}
+.flt .fm{font-weight:500;line-height:1.4;overflow-wrap:anywhere}
+.flt .ft{font-size:12px;color:var(--cp);margin:6px 0 10px;overflow-wrap:anywhere}
+.flt .fb{display:flex;gap:8px;flex-wrap:wrap}
+.tag{display:inline-flex;align-items:center;gap:4px;font:500 10.5px/1 var(--mono);padding:4px 7px;border-radius:9px;background:var(--ers);color:var(--er);white-space:nowrap}
+.art{position:absolute;inset:0;width:100%;height:100%;display:block}
+.th{appearance:none;border:0;padding:0;position:relative;overflow:hidden;border-radius:9px;background:#232326;flex:none;display:block}
+.th .ty{position:absolute;top:3px;right:3px;font:400 9px/1 var(--mono);padding:2.5px 4px;border-radius:6px;background:rgba(0,0,0,.65);color:#e1e1e1}
+.th.sel{outline:3px solid #2f8af9;outline-offset:1px}
+.acts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.acts .b1,.acts .b2{padding:0 8px;font-size:12px;min-width:0}
+.acts .b1{font-weight:600}
+.acts .dn{color:var(--ok)}.acts .b1.dn{color:var(--on)}
+.pk{display:flex;gap:12px}
+.pk .th{width:104px;height:138px;border-radius:14px}
+.pk .pm{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.pk .pt{font-weight:600;font-size:14.5px;overflow-wrap:anywhere}
+.bdg{display:flex;gap:5px;flex-wrap:wrap;margin-top:4px}
+.bdg span{font:400 10.5px/1 var(--mono);padding:4px 6px;border-radius:7px;background:var(--hl);color:var(--tx);display:inline-flex;gap:4px;align-items:center}
+.xbtn{appearance:none;border:0;background:var(--hl);width:44px;height:44px;border-radius:22px;display:grid;place-items:center;flex:none;color:var(--tx)}
+.toast{position:absolute;left:16px;bottom:14px;max-width:calc(100% - 32px);z-index:40;padding:9px 13px;border-radius:16px;font-size:12px;display:flex;gap:7px;align-items:center;animation:rise .22s ease-out}
+.dropz{position:absolute;inset:8px;border:2px dashed #2f8af9;border-radius:22px;background:rgba(47,138,249,.12);z-index:45;display:none;place-items:center;font-weight:600;color:var(--tx)}
+.dragging .dropz{display:grid}
+@keyframes pulse{50%{opacity:.35}}
+@keyframes sweep{0%{left:-34%}100%{left:100%}}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}}
+@keyframes march{to{background-position:24px 0}}
+@keyframes blink{50%{opacity:.25}}
+
+/* ---------- 05 strata ---------- */
+.ly{display:flex;flex:none;border-radius:12px;overflow:hidden}
+.ly .ru{width:40px;flex:none;border-top:1.5px solid var(--tx);font-size:10px;color:var(--cp2);padding:3px 0 0 0;position:relative}
+.ly .ru::after{content:'';position:absolute;right:0;top:0;bottom:0;width:1px;background:var(--hl2)}
+.ly .bd{flex:1;min-width:0;padding:8px 10px;display:flex;flex-direction:column;gap:6px;background:rgba(var(--tint),calc(.035 + var(--d)*.024));border-radius:0 12px 12px 0}
+.ly .lh{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--cp2);flex:none}
+.ly .lh b{color:var(--tx);font-weight:600}
+.ly .lt{flex:1;min-height:0;display:flex;gap:6px;overflow:hidden;-webkit-mask-image:linear-gradient(90deg,#000 86%,transparent);mask-image:linear-gradient(90deg,#000 86%,transparent)}
+.ly .lt .th{height:100%;aspect-ratio:3/4;border-radius:8px}
+.ly .lt .an{opacity:.82}
+.surf{flex:none;border-radius:16px;padding:12px 14px}
+.surf.flt{background:var(--ers);border:1px solid color-mix(in srgb,var(--erf) 38%,transparent)}
+.surf.wt{padding:8px 14px;font-size:12px;color:var(--cp);display:flex;gap:8px;align-items:center;border:1px dashed var(--bd)}
+.core h4{margin:0 0 10px;font:400 11px/1 var(--mono);color:var(--cp);display:flex;justify-content:space-between;align-items:center}
+.core .acts{margin-top:12px}
+.foot{flex:none;font-size:10.5px;color:var(--cp);display:flex;gap:8px;padding:2px 0 0 0}
+.foot b{font-weight:600;color:var(--tx)}
+/* ---------- 06 line ---------- */
+.lg{display:flex;align-items:center;gap:6px;color:var(--cp);flex:none}
+.lg .lgs{flex:1;display:flex;gap:3px;font-size:11px;text-align:center}
+.lg .lgs span{flex:1;border-top:1.5px solid var(--bd);padding-top:4px}
+.trks{flex:none;display:flex;flex-direction:column;gap:8px;margin:8px 0 14px}
+.trk{border-radius:16px;padding:12px 0 12px}
+.trk .rl{position:relative;height:18px;margin:0 20px;display:flex;gap:3px;align-items:center}
+.trk .sg{flex:1;height:4px;border-radius:2px;background:var(--hl2);position:relative;overflow:hidden}
+.trk .sg.d{background:var(--tx)}
+.trk .sg u{position:absolute;inset:0 auto 0 0;background:var(--tx)}
+.trk .sg.ind{background:repeating-linear-gradient(90deg,var(--tx) 0 6px,transparent 6px 12px);background-size:24px 100%;animation:march .7s linear infinite}
+.trk .sg.x{background:repeating-linear-gradient(90deg,var(--erf) 0 5px,transparent 5px 10px)}
+.trk .tr{position:absolute;top:50%;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:var(--bg);border:4px solid var(--tx);transition:left .12s linear;box-shadow:0 0 0 3px var(--gl)}
+.trk.wa .tr{border-color:var(--cp);border-width:2px}
+.trk.x .tr{border-color:var(--erf);background:var(--erf)}
+.trk .ti{padding:8px 14px 0;display:flex;gap:10px;align-items:center}
+.trk .ti .tx{flex:1;min-width:0}
+.trk .ti b{font-weight:600;display:block}
+.trk .ti .cap{font-size:12px;display:block;margin-top:2px}
+.trk.x{background:var(--ers);border:1px solid color-mix(in srgb,var(--erf) 38%,transparent)}
+.trk.x .flt{padding:10px 14px 0}
+.trk.q{padding:12px 14px;font-size:12px;color:var(--cp);border:1px dashed var(--bd)}
+.arh{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--cp);margin-bottom:8px;flex:none}
+.arh b{color:var(--tx);font-weight:600;font-size:13.5px}
+.arr{appearance:none;border:0;background:none;text-align:left;width:100%;display:flex;gap:11px;align-items:center;padding:6px 0;border-top:1px solid var(--hl);min-height:60px;flex:none}
+.arr .th{width:40px;height:52px}
+.arr .am{flex:1;min-width:0}
+.arr .am b{font-weight:500;display:block}
+.arr .am span{font-size:12px;color:var(--cp);display:block}
+.arr .aw{font-size:11px;color:var(--cp);flex:none}
+.arx{border-radius:16px;padding:12px 14px;flex:none}
+.arx .acts{margin-top:12px}
+/* ---------- 07 prose ---------- */
+.pr{font:500 20px/44px var(--mono);letter-spacing:-.015em}
+.pr p{margin:0 0 10px;overflow-wrap:anywhere}
+.pr .k{font:400 12px/1.4 var(--mono);color:var(--cp);letter-spacing:0;margin-bottom:2px}
+.pr .q{color:var(--cp)}
+.pr .sm{font-size:15px;line-height:44px;font-weight:400}
+.pr .er{color:var(--er)}
+.w{appearance:none;border:0;background:none;padding:6px 1px;margin:0;font:inherit;letter-spacing:inherit;color:var(--tx);text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:5px;display:inline;line-height:inherit}
+.w.p{background:var(--tx);color:var(--on);text-decoration:none;padding:5px 11px;border-radius:12px}
+.w.dn{color:var(--ok);text-decoration:none}
+.it{display:inline-block;vertical-align:middle;width:24px;height:32px;border-radius:6px;position:relative;overflow:hidden;margin:0 5px 0 0;background:#232326}
+.pu{background:linear-gradient(var(--tx),var(--tx)) 0 88%/var(--p,0%) 3px no-repeat,linear-gradient(var(--hl2),var(--hl2)) 0 calc(88% - 1px)/100% 1px no-repeat;padding-bottom:2px}
+.pu.ind{background:repeating-linear-gradient(90deg,var(--tx) 0 6px,transparent 6px 12px) 0 88%/24px 3px repeat-x;animation:march .7s linear infinite}
+.pr .lr{margin:0;display:flex;align-items:center;gap:8px;white-space:nowrap}.pr .lr .w{flex:none}.pr .lr .it{margin:0}
+.ws{font-size:15px;line-height:30px;font-weight:400;color:var(--cp)}
+.ws .d{color:var(--tx)}.ws .n{color:var(--tx);font-weight:600;text-decoration:underline;text-underline-offset:5px}
+.pv{position:relative;width:132px;height:176px;border-radius:16px;overflow:hidden;float:right;margin:4px 0 8px 14px;background:#232326}
+.fol{flex:none;font-size:10.5px;color:var(--cp);padding-top:6px;display:flex;justify-content:space-between}
+/* ---------- 08 sampler ---------- */
+.lcd{flex:none;border-radius:22px;padding:14px 16px;min-height:160px;display:flex;flex-direction:column;position:relative}
+.lcd .lk{font-size:10.5px;color:var(--cp);display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;min-height:14px}
+.lcd .big{font:500 34px/1 var(--mono);letter-spacing:-.02em}
+.lcd .big small{font:400 13.5px var(--mono);color:var(--cp);letter-spacing:0;margin-left:6px}
+.lcd .ln{margin-top:6px;color:var(--cp);font-size:12px}
+.lcd .ln b{color:var(--tx);font-weight:500}
+.lcd.err{background:var(--ers);border-color:color-mix(in srgb,var(--erf) 38%,transparent)}
+.lcd .xbtn{position:absolute;top:8px;right:8px}
+.lcd .pk .th{width:84px;height:112px;border-radius:12px}
+.sks{flex:none;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 12px;padding:0 8px}
+.sk{appearance:none;border:0;position:relative;min-height:60px;border-radius:16px;margin-top:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:400 11px/1.15 var(--mono);text-align:center;padding:6px 2px;background:var(--sf);color:var(--tx);border:1px solid var(--rim);box-shadow:inset 0 1px 0 var(--spec),0 2px 0 var(--hl2)}
+.sk::before{content:'';position:absolute;top:-10px;left:50%;width:1.5px;height:9px;background:var(--bd)}
+.sk:active{transform:translateY(2px);box-shadow:inset 0 1px 0 var(--spec)}
+.sk.p{background:var(--tx);color:var(--on);font-weight:600}
+.sk.dn{color:var(--ok)}
+.sk[disabled]{opacity:.35;cursor:default}
+.chs{flex:none;display:flex;gap:8px;margin-bottom:12px}
+.ch{flex:1;min-width:0;border-radius:12px;padding:7px 10px;background:var(--sf);font-size:11px;color:var(--cp2);display:flex;flex-direction:column;gap:5px}
+.ch .leds{display:flex;gap:4px}
+.ch .leds i{flex:1;height:6px;border-radius:3px;background:var(--hl2)}
+.ch .leds i.d{background:var(--tx)}
+.ch .leds i.n{background:var(--tx);animation:blink .8s linear infinite}
+.ch .leds i.x{background:var(--erf)}
+.ch.e{flex:1;justify-content:center;min-height:42px}
+.pads{flex:1;min-height:0;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-content:start;overflow-y:auto;scrollbar-width:none}
+.pad{appearance:none;border:0;padding:0;position:relative;aspect-ratio:1/1.16;border-radius:14px;overflow:hidden;background:#232326;box-shadow:0 2px 0 var(--hl2)}
+.pad:active{transform:translateY(2px);box-shadow:none}
+.pad .pl{position:absolute;left:0;right:0;bottom:0;padding:14px 6px 5px;font:400 9.5px/1.15 var(--mono);color:#fff;text-align:left;background:linear-gradient(transparent,rgba(0,0,0,.78))}
+.pad .ty{position:absolute;top:4px;right:4px;font:400 9px/1 var(--mono);padding:2.5px 4px;border-radius:6px;background:rgba(0,0,0,.65);color:#e1e1e1}
+.pad.sel{outline:3px solid #2f8af9;outline-offset:1px}
+.pad.more{background:var(--sf);color:var(--tx);font:400 11px/1.3 var(--mono);display:grid;place-items:center;border:1px dashed var(--bd);box-shadow:none}
+.pane .pad{aspect-ratio:1/1.5}
+.pad.new{animation:rise .4s ease-out}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wb">
+  <div class="lede">
+    <h1>capystore home: four more directions (05–08)</h1>
+    <p>A second set of ideas for replacing the orbit on the downloads tab. None of them floats a panel over the page, so the error text and the "1 retry" line always have a row of their own and can't slide under the right-hand controls. Everything below is clickable: paste, stop, try again, dismiss, open a video, copy its link.</p>
+  </div>
+  <div class="tabs" id="tabs"></div>
+  <div class="bar">
+    <div class="grp" id="g-vp"><span>screen</span></div>
+    <div class="grp" id="g-st"><span>state</span></div>
+    <div class="grp" id="g-x"><span>view</span></div>
+  </div>
+  <div class="stage" id="stage"><div class="fit" id="fit"><div class="bez" id="bez"><div class="dev" id="dev"></div></div></div></div>
+  <div class="claim" id="claim"></div>
+  <div class="notes" id="notes"></div>
+  <details class="cav">
+    <summary>what this mockup does not prove</summary>
+    <ul>
+      <li><b>Sketches, not builds.</b> No Swift was written or changed. Effort and performance notes are estimates from reading the current home screen code, not measurements.</li>
+      <li><b>Sample numbers.</b> Titles and ids come from the app's preview data (the dog at the harbour, the timer one, coffee and the city…). File sizes, lengths, "2 m ago" and the per-day split of the 463.2 MB are made up so the totals add up; the failing link's id is invented.</li>
+      <li><b>The clipboard state never shows the link.</b> iOS shows a permission prompt when an app reads the clipboard, so the app can only know "there is a link" until you press paste. The mockup keeps to that. The current app reads the clipboard text directly; detecting a link without reading it would be new code.</li>
+      <li><b>Try again fails again, on purpose.</b> The seeded error is a post with no video in it. Retrying can't fix that, so the mockup counts the attempt and shows the same message. Dismiss is the way out.</li>
+      <li><b>Convert to webp is instant here.</b> In the app it is a job with its own progress; the mockup only flips the label.</li>
+      <li><b>Mac is described, not drawn.</b> Each concept's note says how it would lay out in a Mac window; there is no Mac frame in the switcher.</li>
+      <li><b>Unfolded is drawn flat-landscape with the book fold.</b> Tabletop (fold running left to right) is not drawn; each concept's two halves would stack top and bottom there.</li>
+      <li><b>Checked by script:</b> every button's action in every concept, screen and state was run against the page's own code (state changes and re-rendered markup asserted), every colour variable resolves in both themes, and text contrast was computed. Layout was checked in headless Chrome screenshots, not on a device.</li>
+    </ul>
+  </details>
+</div>
+<script>
+'use strict';
+/* ---------- data (titles and ids from CobaltKit preview fixtures; sizes are sample values) ---------- */
+const VP={outer:{w:466,h:678,l:'duo outer'},inner:{w:951,h:669,l:'duo unfolded'},iphone:{w:393,h:852,l:'iphone'}};
+const ITEMS0=[
+ {t:'the dog at the harbour',src:'instagram.com',len:'18 s',mb:8.4,ty:'mp4',a:0,when:'2 m ago',day:0},
+ {t:'coffee and the city',src:'instagram.com',len:'24 s',mb:11.6,ty:'mp4',a:1,when:'1 h ago',day:0},
+ {t:'harbour then the timer',src:'capystore edit',len:'34 s',mb:21.2,ty:'mp4',a:2,when:'3 h ago',day:0},
+ {t:'every cat',src:'x.com',len:'12 s',mb:6.3,ty:'webp',a:3,when:'yesterday',day:1},
+ {t:'capy cutout',src:'photos',len:'9 s',mb:3.9,ty:'webp',a:4,when:'yesterday',day:1},
+ {t:'harbour + catJAM',src:'capystore edit',len:'34 s',mb:19.8,ty:'mp4',a:5,when:'yesterday',day:1},
+ {t:'catJAM',src:'7tv.app',len:'6 s',mb:0.4,ty:'gif',a:6,when:'yesterday',day:1}];
+const JOBS=[
+ {ref:'instagram.com/reel/Dd55fEyN1Yy',svc:'instagram',mb:4.3,item:{t:'harbour and the dog',src:'instagram.com',len:'37 s',mb:4.3,ty:'mp4',a:7,when:'just now',day:0}},
+ {ref:'x.com/i/status/2105435404002562056',svc:'x',mb:5.1,item:{t:'the timer one',src:'x.com',len:'16 s',mb:5.1,ty:'mp4',a:8,when:'just now',day:0}}];
+const BAD={ref:'x.com/i/status/1903377126458',msg:"there's no video in that post for capystore to save."};
+const STEPS=['fetch','save','read','webp'];
+const LAYERS=[['today',3,41.2],['yesterday',5,96.8],['this week',14,121.0],['november',22,118.6],['older',29,85.6]];
+const CONCEPTS=[
+ {n:'05',nm:'strata',sb:'the library is a core sample',
+  meta:'Your saves settle in layers by day, newest on top. Each layer is as tall as the megabytes it holds, and a ruler down the side adds them up to the total. A new download is a layer forming at the surface.',
+  good:['Storage is the browsing: you see what a day cost without opening settings.','Errors and progress are ordinary full-width layers at the top, so they wrap and never overlap anything.','Unfolded: the column is the left half, the surface (paste, the running job, the opened video) is the right half by your thumb.'],
+  perf:'Cheap. One lazy vertical stack of at most a few dozen rows with small poster thumbnails; no per-frame animation at rest. Only the running job row updates.',
+  sw:'<code>LazyVStack</code> in a <code>ScrollView</code>, layer height from bytes, <code>DuoSplit</code> for the two halves, <code>.glassEffect</code> only on the surface cards. Reuses <code>JobQueue</code> and the job card facts as they are. Estimate: small to medium, about 3–4 days. Needs a per-day byte sum from the offline store (new, simple).',
+  mac:'Mac: column on the left at a fixed 420 pt, surface on the right; drop a file anywhere on the window.'},
+ {n:'06',nm:'line',sb:'four named stretches, one track per save',
+  meta:'A save travels a line with four stretches: fetch, save, read, webp. Every job gets its own track and a marker that shows where it is. Waiting jobs sit at the start. A failed job stops where it failed and says why underneath.',
+  good:['Position is the progress, so "what is it doing" is answered without reading. This is the owner\'s "progress, not tabs" rule made spatial.','Queue is visible as stacked tracks; nothing hides behind a count.','The marker only moves when the app has real bytes or frames. Otherwise the stretch shows a moving dash, never a made-up percent.'],
+  perf:'Cheap. A handful of track rows; the marker is one offset animation driven by the same progress value the star uses today. The arrivals list is the existing recent-saves data.',
+  sw:'<code>Grid</code> or <code>HStack</code> of four <code>Capsule</code>s per track, marker with <code>.offset</code> + <code>.animation(.linear)</code>, <code>DisclosureGroup</code>-style expand for an arrival. <code>DuoSplit</code>: line on the left, arrivals on the right. Estimate: small, about 2–3 days, the least new code of the four.',
+  mac:'Mac: tracks across the top of the window at full width (they like the room), arrivals as a table below.'},
+ {n:'07',nm:'prose',sb:'the page writes itself',
+  meta:'No cards at all. The home screen is a few sentences in the app\'s own voice that rewrite themselves as things happen, and the underlined words are the buttons. The underline of the status sentence fills up as the download goes.',
+  good:['Text reflows by nature, so a long error can\'t clip on any screen or text size. It is the structural fix for the bug in the screenshot.','VoiceOver reads the screen exactly as it looks. Dynamic Type just works.','Unfolded: a book spread. What is happening on the left page, what you saved lately on the right.'],
+  perf:'The cheapest. Text and a few 24 pt thumbnails. Nothing animates at rest; the only moving thing is one underline.',
+  sw:'A custom flow <code>Layout</code> (or <code>Text</code> built from <code>AttributedString</code> with links handled by <code>OpenURLAction</code>) so words can be buttons and thumbnails sit inline; every line is 44 pt tall for touch. Estimate: medium, about 4–5 days, most of it the inline layout and accessibility actions. Biggest design risk: it is unusual, and discoverability rests on the underline.',
+  mac:'Mac: one centred column at reading width (about 620 pt), words respond to hover.'},
+ {n:'08',nm:'sampler',sb:'one display, four keys, eight pads',
+  meta:'Borrowed from a drum machine. One display says what is going on. Four keys sit under it and always hold the actions for whatever the display shows. Recent saves are pads you tap.',
+  good:['The action you need is always in the same four places, in thumb reach, so it becomes muscle memory.','One place for messages: the display is full width and wraps. Errors can\'t collide with anything because nothing else is allowed to float.','Four keys and four pad columns are even numbers, so nothing sits on the fold when the phone is open.'],
+  perf:'Cheap. Fixed layout, eight thumbnails, a few LED dots. Pad posters can autoplay only when selected.',
+  sw:'<code>GlassEffectContainer</code> for the display and keys, <code>DuoAdaptiveGrid</code> (even columns) for pads, <code>.sensoryFeedback</code> on key press, one small "what is on the display" enum driving both the display and the key set. Estimate: medium, about 4 days. Trade-off to weigh: the display shows one thing at a time, so opening a video hides the running job\'s text (its lights stay visible).',
+  mac:'Mac: display and keys in a 360 pt sidebar, pads fill the rest; keys map to ⌘1–⌘4.'}];
+const CLAIMS=[
+ {idle:'<b>Storage you can read.</b> Layer height is megabytes; the ruler adds up to 463.2 MB at the bottom.',
+  clip:'<b>One tap.</b> A dot says there is a link; paste is the only prominent button.',
+  dl:'<b>A job is just the top layer.</b> Headline, real numbers, four steps, time. The waiting one sits above it.',
+  err:'<b>The error owns a full-width row.</b> It wraps to as many lines as it needs and stays left of the side controls. Try again is honest: this post has no video, so it fails again.',
+  peek:'<b>Pull a sample.</b> Tap a thumbnail and it comes to the surface with its four actions. Copy share link really copies.'},
+ {idle:'<b>The steps have names before anything runs.</b> Fetch, save, read, webp are stretches of one line, not tabs.',
+  clip:'<b>One tap.</b> Paste puts a marker at the start of the line.',
+  dl:'<b>Where the marker is, is what it is doing.</b> It only moves on real bytes and frames; a dashed stretch means "working, no number".',
+  err:'<b>It stopped at fetch and says why, under its own track.</b> The message gets the track\'s full width.',
+  peek:'<b>Arrivals open in place.</b> The row grows into the preview and four actions; nothing covers the line.'},
+ {idle:'<b>Words are the buttons.</b> Paste, photos, files and each recent title are tappable; every line is 44 pt tall.',
+  clip:'<b>The sentence changes.</b> The app says there is a link and offers one word to press.',
+  dl:'<b>The underline is the progress bar.</b> It fills across the sentence, wrapping with it.',
+  err:'<b>An error is a sentence, so it can\'t clip.</b> Narrow the screen to iphone and it simply wraps.',
+  peek:'<b>The video joins the paragraph.</b> Its four actions are four words; done ones turn green.'},
+ {idle:'<b>Four keys, always in the same place.</b> Paste is the first key in every state.',
+  clip:'<b>The display tells you, the first key does it.</b>',
+  dl:'<b>Display for words, lights for steps.</b> You can still paste another link while one runs.',
+  err:'<b>The one message area is full width.</b> Try again and dismiss take over the first two keys.',
+  peek:'<b>Tap a pad, the keys become its actions.</b> The running job\'s lights stay visible underneath.'}];
+
+/* ---------- state ---------- */
+const S={c:0,vp:'outer',theme:'light',hig:false};
+function reset(st){Object.assign(S,{st:'idle',sel:null,items:ITEMS0.map(x=>({...x,f:{}})),count:73,mb:463.2,added:0,addedMb:0,q:[],t:0,tries:1,retrying:false,rt:0,toast:'',fresh:null});preset(st||'idle')}
+function preset(st){S.sel=null;S.q=[];S.t=0;S.via=null;S.retrying=false;S.rt=0;S.toast='';
+ if(st==='peek'){S.st='idle';S.sel=0}else S.st=st;
+ if(st==='dl')S.q=[0,1];
+ if(st==='err')S.tries=1}
+function ui(){return S.sel!=null&&S.st==='idle'?'peek':S.st}
+function fmtEl(t){const s=Math.floor(t);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+/* what the running job says: headline, real numbers only, step 0..3, fraction or null when there is no number */
+function job(){const j=JOBS[S.q[0]]||JOBS[0],t=S.t;let step,hl,dt,fr;
+ if(t<5){step=0;fr=t/5;hl=(S.via?'copying from '+S.via:'downloading from '+j.svc);dt=(j.mb*fr).toFixed(1)+' of '+j.mb+' MB'}
+ else if(t<7.5){step=1;fr=null;hl='saving to your library';dt=Math.floor(t-5)+' s'}
+ else if(t<10.5){step=2;fr=(t-7.5)/3;hl='reading the video';dt='frame '+Math.min(9,1+Math.floor(fr*9))+' of 9'}
+ else if(t<15){step=3;fr=(t-10.5)/4.5;hl='making your webp';dt='frame '+Math.min(150,1+Math.floor(fr*150))+' of 150'}
+ else{step=3;fr=null;hl='packing the webp';dt=Math.floor(t-15)+' s'}
+ return{step,hl,dt,fr,el:fmtEl(t),stept:'step '+(step+1)+' of 4',ref:j.ref,key:step+(fr==null?'i':'d')+(t>=15?'p':'')}}
+function say(m){S.toast=m;if(typeof setTimeout!=='undefined'){clearTimeout(say.h);say.h=setTimeout(()=>{S.toast='';paint()},2400)}}
+function act(a,arg){
+ switch(a){
+  case 'c':S.c=+arg;break;
+  case 'vp':S.vp=arg;break;
+  case 'theme':S.theme=S.theme==='light'?'dark':'light';break;
+  case 'hig':S.hig=!S.hig;break;
+  case 'state':preset(arg);break;
+  case 'reset':reset('idle');break;
+  case 'paste':case 'import':{
+   const via=a==='import'?arg:null;
+   if(S.st==='dl'){if(S.q.length<2){S.q.push(S.q[0]===0?1:0);say('added · '+(S.q.length-1)+' waiting')}else say('2 is all this demo queues')}
+   else{S.st='dl';S.via=via;S.t=0;S.retrying=false;S.q=[S.items.some(x=>x.t===JOBS[0].item.t)?1:0]}
+   break}
+  case 'stop':S.q.shift();S.t=0;S.via=null;if(!S.q.length)S.st='idle';say('stopped');break;
+  case 'retry':if(S.st==='err'&&!S.retrying){S.retrying=true;S.rt=0}break;
+  case 'dismiss':if(S.st==='err'){S.st='idle';S.retrying=false;say('dismissed')}break;
+  case 'peek':S.sel=+arg;break;
+  case 'close':S.sel=null;break;
+  case 'all':say('opens the library tab');break;
+  case 'do':{const it=S.items[S.sel];if(!it)break;const f=it.f;
+   if(arg==='share'){f.share=true;say('public link is live')}
+   if(arg==='webp'){f.webp=true;say('webp ready')}
+   if(arg==='photos'){f.photos=true;say('saved to photos')}
+   if(arg==='copy'){f.share=true;f.copy=true;say('link copied');try{navigator.clipboard.writeText('https://share.capybaraharmony.com/vFhaasY6GA').catch(()=>{})}catch(e){}}
+   break}
+ }
+ paint()}
+function tick(dt){
+ if(S.st==='err'&&S.retrying){S.rt+=dt;if(S.rt>=1.8){S.retrying=false;S.tries++;paint()}return}
+ if(S.st!=='dl')return;
+ const k0=job().key;S.t+=dt;
+ if(S.t>=16){const j=JOBS[S.q.shift()];
+  if(!S.items.some(x=>x.t===j.item.t)){S.items.unshift({...j.item,f:{}});if(S.sel!=null)S.sel++;S.count++;S.mb+=j.mb;S.added++;S.addedMb+=j.mb;S.fresh=j.item.t}
+  S.t=0;S.via=null;if(!S.q.length)S.st='idle';say('saved on this iphone.');paint();return}
+ if(job().key!==k0)paint();else live()}
+
+/* ---------- drawing helpers ---------- */
+const IC={paste:'<rect x="6" y="5" width="12" height="15" rx="2.5"/><rect x="9" y="3" width="6" height="4" rx="1.5"/>',photos:'<rect x="3.5" y="5" width="17" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-4.5 3.5 3 3-2.5 4.5 4"/>',files:'<path d="M3.5 8a2 2 0 012-2h4l2 2h7a2 2 0 012 2v7a2 2 0 01-2 2h-13a2 2 0 01-2-2z"/>',warn:'<path d="M12 4l9 16H3z"/><path d="M12 10v4.5M12 17.3v.2"/>',retry:'<path d="M19 12a7 7 0 11-2.2-5.1"/><path d="M19 4.5V8h-3.5"/>',x:'<path d="M6 6l12 12M18 6L6 18"/>',link:'<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',spark:'<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16v4M17 18h4"/>',photodown:'<rect x="3.5" y="4.5" width="14" height="12" rx="2.5"/><path d="M18 14v6M15.5 17.5L18 20l2.5-2.5"/>',copy:'<rect x="8" y="8" width="11" height="12" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 017.5 4H14"/>',check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',down:'<path d="M12 5v13M6.5 12.5L12 18l5.5-5.5"/>',gear:'<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',grid:'<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',live:'<circle cx="12" cy="12" r="1.5"/><path d="M8.5 8.5a5 5 0 000 7M15.5 8.5a5 5 0 010 7M5.5 5.5a9 9 0 000 13M18.5 5.5a9 9 0 010 13"/>',stop:'<rect x="6.5" y="6.5" width="11" height="11" rx="2"/>',film:'<rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M8 5v14M16 5v14M4 9.5h4M4 14.5h4M16 9.5h4M16 14.5h4"/>',person:'<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20a7 7 0 0114 0"/>'};
+const I=(n,s=18)=>`<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24" aria-hidden="true">${IC[n]}</svg>`;
+const SEA=(c,o)=>`<path d="M0 54q8-5 15 0t15 0 15 0 15 0v26H0z" fill="${c}" opacity="${o}"/>`;
+const CAT='<path d="M18 36l4-13 8 8 8-8 4 13v12a12 12 0 01-24 0z" fill="#f6eeff"/><circle cx="25" cy="45" r="2" fill="#2d1b4e"/><circle cx="35" cy="45" r="2" fill="#2d1b4e"/><path d="M28 51l2 2 2-2" stroke="#2d1b4e" stroke-width="1.4" fill="none"/>';
+const DOG='<ellipse cx="40" cy="64" rx="8" ry="5" fill="#c98b4a"/><circle cx="47" cy="58" r="4" fill="#c98b4a"/><path d="M45 54l-1-4 4 2z" fill="#9a6532"/>';
+const ART=[
+ ['#3d8bd4','#0b2545','<circle cx="44" cy="20" r="8" fill="#ffd27a"/>'+SEA('#0d3b66','.9')+'<path d="M10 52h20l-4 6H14z" fill="#f4f1de"/><path d="M20 52V34l9 16z" fill="#fff"/>'+DOG],
+ ['#d98a55','#4a2511','<path d="M0 50h8V34h8v16h6V26h10v24h6V38h8v12h14v30H0z" fill="#2a1408" opacity=".7"/><rect x="20" y="54" width="18" height="14" rx="3" fill="#fff8ee"/><path d="M38 57h3a3 3 0 010 7h-3" fill="none" stroke="#fff8ee" stroke-width="2"/><path d="M25 48q2-3 0-6M31 48q2-3 0-6" stroke="#fff8ee" stroke-width="1.5" fill="none"/>'],
+ ['#3a506b','#0b132b','<circle cx="30" cy="34" r="15" fill="none" stroke="#e0fbfc" stroke-width="2.5"/><path d="M30 34V23M30 34l7 5" stroke="#e0fbfc" stroke-width="2.5" stroke-linecap="round"/>'+SEA('#5bc0be','.65')],
+ ['#8a6bc0','#2d1b4e',CAT],
+ ['#8cc474','#31572c','<ellipse cx="28" cy="52" rx="18" ry="12" fill="#b08968"/><rect x="32" y="34" width="17" height="15" rx="6" fill="#b08968"/><circle cx="44" cy="40" r="1.6" fill="#3b2a1a"/><ellipse cx="36" cy="34" rx="2.5" ry="2" fill="#8a6748"/><rect x="16" y="60" width="5" height="8" rx="2" fill="#8a6748"/><rect x="34" y="60" width="5" height="8" rx="2" fill="#8a6748"/>'],
+ ['#ef8354','#4f2a4a',SEA('#2d3142','.85')+'<path d="M24 22v20a5 5 0 11-3-4.6V24l16-4v18a5 5 0 11-3-4.6V17z" fill="#fff"/>'],
+ ['#ff6d9a','#6a0f49','<g transform="translate(0,-10)">'+CAT+'</g><path d="M10 70v-8M17 70V56M24 70v-10M36 70V58M43 70V56M50 70v-6" stroke="#fff" stroke-width="3.2" stroke-linecap="round" opacity=".85"/>'],
+ ['#f4a261','#264653','<circle cx="30" cy="52" r="12" fill="#ffe8a3"/>'+SEA('#1d3540','.95')+DOG],
+ ['#55555c','#151517','<circle cx="30" cy="40" r="17" fill="none" stroke="#e1e1e1" stroke-width="2.5"/><path d="M30 40V27" stroke="#ed2236" stroke-width="3" stroke-linecap="round"/><rect x="27" y="17" width="6" height="5" rx="1.5" fill="#e1e1e1"/>']];
+const art=k=>{const a=ART[k%ART.length];return `<svg class="art" viewBox="0 0 60 80" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><defs><linearGradient id="ag${k}" x1="0" y1="0" x2=".5" y2="1"><stop offset="0" stop-color="${a[0]}"/><stop offset="1" stop-color="${a[1]}"/></linearGradient></defs><rect width="60" height="80" fill="url(#ag${k})"/>${a[2]}</svg>`};
+const thumb=(i,cls='')=>{const it=S.items[i];return `<button class="th ${cls}${S.sel===i?' sel':''}" data-act="peek" data-arg="${i}" aria-label="open ${it.t}">${art(it.a)}<span class="ty">${it.ty}</span></button>`};
+const split=()=>S.vp==='inner';
+const hdr=()=>`<div class="hd"><div class="ttl">capystore</div><div class="sub">${S.count} videos · ${S.mb.toFixed(1)} MB on this iphone</div></div>`;
+const intake=()=>`<div class="ink"><button class="b1" data-act="paste">${I('paste')}paste</button><button class="b2" data-act="import" data-arg="photos" aria-label="add from photos">${I('photos')}photos</button><button class="b2" data-act="import" data-arg="files" aria-label="add from files">${I('files')}files</button></div>`+(S.st==='clip'?`<div class="clipn"><i></i>there's a link on your clipboard. press paste to save it.</div>`:'');
+const stepper=(step,bad)=>`<div class="stp" role="img" aria-label="step ${step+1} of 4">${STEPS.map((s,k)=>`<div class="sd ${bad&&k===step?'x':k<step?'d':k===step?'n':''}"><i>${k<step&&!bad?'<svg class="i" width="9" height="9" viewBox="0 0 24 24" style="stroke-width:4">'+IC.check+'</svg>':''}</i><span>${s}</span></div>`).join('')}</div>`;
+const pbar=fr=>`<div class="pbar${fr==null?' ind':''}"><u data-w style="width:${fr==null?34:fr*100}%"></u></div>`;
+function jobBody(){const j=job();return `<div class="job"><div style="display:flex;gap:10px;align-items:flex-start"><div style="flex:1;min-width:0"><b class="hl" data-l="hl">${j.hl}</b><div class="dt"><span data-l="dt">${j.dt}</span><span><span data-l="stept">${j.stept}</span> · <span data-l="el">${j.el}</span></span></div></div><button class="xbtn" data-act="stop" aria-label="stop">${I('stop',16)}</button></div>${pbar(j.fr)}${stepper(j.step)}</div>`}
+const tried=()=>'tried '+S.tries+(S.tries===1?' time':' times');
+function faultBody(){return `<div class="flt"><div class="fh">${I('warn',20)}<div style="flex:1;min-width:0"><div class="fm">${S.retrying?'trying again…':BAD.msg}</div></div><span class="tag">1 retry</span></div><div class="ft">${BAD.ref} · stopped at fetch · ${tried()}</div>${S.retrying?pbar(null):`<div class="fb"><button class="b1" data-act="retry">${I('retry',16)}try again</button><button class="b2" data-act="dismiss">${I('x',14)}dismiss</button></div>`}</div>`}
+function acts(i){const f=S.items[i].f;const B=(k,ic,lab,done,p)=>`<button class="${p?'b1':'b2'}${f[k]?' dn':''}" data-act="do" data-arg="${k}">${I(f[k]?'check':ic,16)}<span class="ell">${f[k]?done:lab}</span></button>`;
+ return `<div class="acts">${B('share','link','public share','public link')}${B('webp','spark','convert to webp','webp ready')}${B('photos','photodown','save to photos','saved to photos')}${B('copy','copy','copy share link','link copied',1)}</div>`}
+const badges=it=>{const f=it.f;return (f.share||f.webp||f.photos)?`<div class="bdg">${f.share?`<span>${I('link',11)}public</span>`:''}${f.webp?`<span>${I('spark',11)}webp</span>`:''}${f.photos?`<span>${I('photodown',11)}in photos</span>`:''}</div>`:''};
+function peekBody(i,close=true){const it=S.items[i];return `<div class="pk"><div class="th">${art(it.a)}<span class="ty">${it.ty}</span></div><div class="pm"><div class="pt">${it.t}</div><div class="cap" style="font-size:12px">${it.src} · ${it.len} · ${it.mb} MB</div><div class="cap" style="font-size:12px">saved ${it.when}</div>${badges(it)}</div>${close?`<button class="xbtn" data-act="close" aria-label="close">${I('x',16)}</button>`:''}</div>`}
+
+/* ---------- 05 strata ---------- */
+function strata(){
+ let status='';
+ if(S.st==='dl'){if(S.q.length>1)status+=`<div class="surf wt">${I('down',14)}<span class="ell">1 waiting · ${JOBS[S.q[1]].ref}</span></div>`;status+=`<div class="surf g">${jobBody()}</div>`}
+ if(S.st==='err')status+=`<div class="surf flt">${faultBody()}</div>`;
+ const core=S.sel!=null?`<div class="surf g core"><h4><span>sample · from ${LAYERS[S.items[S.sel].day][0]}</span></h4>${peekBody(S.sel)}${acts(S.sel)}</div>`
+  :(split()?`<div class="surf g core"><h4><span>newest</span><span>tap any thumbnail to open it</span></h4>${peekBody(0,false)}</div>`:'');
+ let cum=0;const rows=LAYERS.map((L,d)=>{const n=L[1]+(d===0?S.added:0),mb=L[2]+(d===0?S.addedMb:0),h=Math.round(78+mb*.4);
+  const named=S.items.map((x,i)=>x.day===d?thumb(i):'').join('');
+  const anon=d>=1?Array.from({length:d===1?1:7},(_,k)=>`<span class="th an">${art(d*3+k)}</span>`).join(''):'';
+  const r=`<div class="ly" style="height:${h}px;--d:${d}"><div class="ru">${Math.round(cum)}</div><div class="bd"><div class="lh"><b>${L[0]}</b><span>${n} · ${mb.toFixed(1)} MB</span></div><div class="lt">${named}${anon}</div></div></div>`;cum+=mb;return r}).join('');
+ const foot=`<div class="foot"><span style="width:40px"><b>${S.mb.toFixed(0)}</b></span><span>MB down the side · a layer's height is its size</span></div>`;
+ if(split())return[hdr()+`<div class="scroll" style="gap:6px">${rows}${foot}</div>`,intake()+`<div class="scroll">${status}${core}</div>`];
+ return hdr()+intake()+`<div class="scroll" style="gap:6px">${status}${core}${rows}${foot}</div>`}
+
+/* ---------- 06 line ---------- */
+function line(){
+ const legend=`<div class="lg"><span title="clipboard">${I('paste',14)}</span><div class="lgs">${STEPS.map(s=>`<span>${s}</span>`).join('')}</div><span title="library">${I('film',14)}</span></div>`;
+ let t='';
+ if(S.st==='dl'){const j=job();
+  t+=`<div class="trk g"><div class="rl">${STEPS.map((s,k)=>`<i class="sg ${k<j.step?'d':k===j.step&&j.fr==null?'ind':''}">${k===j.step&&j.fr!=null?`<u data-w style="width:${j.fr*100}%"></u>`:''}</i>`).join('')}<b class="tr" data-x style="left:${(j.step+(j.fr||0))*25}%"></b></div><div class="ti"><div class="tx"><b data-l="hl">${j.hl}</b><span class="cap"><span data-l="stept">${j.stept}</span> · <span data-l="dt">${j.dt}</span> · <span data-l="el">${j.el}</span></span></div><button class="xbtn" data-act="stop" aria-label="stop">${I('stop',16)}</button></div></div>`;
+  if(S.q.length>1)t+=`<div class="trk wa g"><div class="rl">${STEPS.map(()=>'<i class="sg"></i>').join('')}<b class="tr" style="left:0%"></b></div><div class="ti"><div class="tx"><b style="font-weight:500">waiting · next on the line</b><span class="cap ell">${JOBS[S.q[1]].ref}</span></div></div></div>`}
+ if(S.st==='err')t+=`<div class="trk x"><div class="rl"><i class="sg x"></i><i class="sg"></i><i class="sg"></i><i class="sg"></i><b class="tr" style="left:${S.retrying?6:0}%"></b></div>${faultBody()}</div>`;
+ if(!t)t=`<div class="trk q">nothing on the line. ${S.st==='clip'?'paste puts your link at the start.':'paste a link, or drop a file anywhere.'}</div>`;
+ const rowsA=S.items.map((it,i)=>S.sel===i?`<div class="arx g">${peekBody(i)}${acts(i)}</div>`:`<button class="arr" data-act="peek" data-arg="${i}" aria-label="open ${it.t}"><span class="th">${art(it.a)}<span class="ty">${it.ty}</span></span><span class="am"><b class="ell">${it.t}</b><span class="ell">${it.src} · ${it.len} · ${it.mb} MB</span>${badges(it)}</span><span class="aw">${it.when}</span></button>`).join('');
+ const arr=`<div class="arh"><b>recent saves</b><button class="w" style="font-size:12px" data-act="all">see all ${S.count}</button></div><div class="scroll" style="gap:0">${rowsA}</div>`;
+ const top=hdr()+intake()+legend+`<div class="trks">${t}</div>`;
+ return split()?[top,arr]:top+arr}
+
+/* ---------- 07 prose ---------- */
+function prose(){
+ const W=(a,lab,arg,p)=>`<button class="w${p?' p':''}" data-act="${a}"${arg!=null?` data-arg="${arg}"`:''}>${lab}</button>`;
+ const tot=`<p class="k">capystore</p><p>${S.count} videos · ${S.mb.toFixed(1)} MB on this iphone.</p>`;
+ const ask=p=>`${W('paste','paste',null,p)} a link, or add from ${W('import','photos','photos')} or ${W('import','files','files')}.`;
+ let now='';
+ if(S.st==='idle')now=`<p><span class="q">nothing is saving.</span> ${ask(S.sel==null)}</p>`;
+ if(S.st==='clip')now=`<p>there's a link on your clipboard. ${W('paste','paste',null,1)} it and capystore saves what's in the post. <span class="q sm">or add from ${W('import','photos','photos')} or ${W('import','files','files')}.</span></p>`;
+ if(S.st==='dl'){const j=job();
+  now=`<p><span class="pu${j.fr==null?' ind':''}" data-u style="--p:${(j.fr||0)*100}%"><span data-l="hl">${j.hl}</span>, <span data-l="dt">${j.dt}</span>.</span></p><p class="ws">${STEPS.map((s,k)=>`<span class="${k<j.step?'d':k===j.step?'n':''}">${k<j.step?'✓ ':''}${s}</span>`).join(' → ')} · <span data-l="stept">${j.stept}</span> · <span data-l="el">${j.el}</span></p><p class="sm">${S.q.length>1?'1 more is waiting. ':''}${W('stop','stop')} it, or ${W('paste','paste')} another.</p>`}
+ if(S.st==='err')now=S.retrying?`<p><span class="pu ind">trying again…</span></p><p class="sm q">${BAD.ref}</p>`
+  :`<p class="er">${BAD.msg}</p><p>${W('retry','try again',null,1)} or ${W('dismiss','dismiss')}.</p><p class="k" style="margin-bottom:8px">1 retry · ${tried()} · ${BAD.ref}</p><p class="sm q">or ${W('paste','paste')} a different link.</p>`;
+ let pk='';
+ if(S.sel!=null){const it=S.items[S.sel],f=it.f;const A=(k,lab,done)=>f[k]?`<span class="w dn">✓ ${done}</span>`:W('do',lab,k,k==='copy');
+  pk=`<p><span class="pv">${art(it.a)}</span>${it.t}. <span class="q sm">${it.src} · ${it.len} · ${it.mb} MB · ${it.ty}, saved ${it.when}.</span></p><p class="sm" style="clear:both">${A('share','public share','public link')}, ${A('webp','convert to webp','webp ready')}, ${A('photos','save to photos','saved to photos')} or ${A('copy','copy share link','link copied')}. ${W('close','close')}</p>`}
+ const n=split()?S.items.length:5;
+ const lately=split()
+  ?`<p class="k">lately</p>`+S.items.map((it,i)=>`<p class="sm lr"><span class="it">${art(it.a)}</span>${W('peek',it.t,i)}<span class="q ell">${it.src}, ${it.len}</span></p>`).join('')+`<p class="sm">and ${W('all',(S.count-S.items.length)+' more')}.</p>`
+  :`<p class="sm"><span class="q">lately:</span> ${S.items.slice(0,n).map((it,i)=>`<span style="white-space:nowrap"><span class="it">${art(it.a)}</span></span>${W('peek',it.t,i)}`).join(', ')} and ${W('all',(S.count-n)+' more')}.</p>`;
+ if(split())return[`<div class="scroll pr" style="display:block">${tot}${now}${pk}</div><div class="fol"><span>capystore</span><span>1</span></div>`,`<div class="scroll pr" style="display:block">${lately}</div><div class="fol"><span>2</span><span>or drop a file anywhere</span></div>`];
+ return `<div class="scroll pr" style="display:block">${tot}${now}${pk}${lately}</div>`}
+
+/* ---------- 08 sampler ---------- */
+function sampler(){
+ let d,keys,cls='';const K=(act,arg,ic,lab,p,dn)=>({act,arg,ic,lab,p,dn});
+ const base=[K('paste',null,'paste','paste',1),K('import','photos','photos','photos'),K('import','files','files','files')];
+ if(S.sel!=null){const it=S.items[S.sel],f=it.f;
+  d=`<div class="lk"><span>pad ${S.sel+1} · saved ${it.when}</span></div>${peekBody(S.sel,false)}<button class="xbtn" data-act="close" aria-label="close">${I('x',16)}</button>`;
+  keys=[K('do','share',f.share?'check':'link',f.share?'public link':'public share',0,f.share),K('do','webp',f.webp?'check':'spark',f.webp?'webp ready':'convert to webp',0,f.webp),K('do','photos',f.photos?'check':'photodown',f.photos?'saved to photos':'save to photos',0,f.photos),K('do','copy',f.copy?'check':'copy',f.copy?'link copied':'copy share link',1)]}
+ else if(S.st==='err'){cls=' err';
+  d=`<div class="lk"><span>${BAD.ref}</span><span class="tag">1 retry</span></div><div class="flt"><div class="fh">${I('warn',20)}<div class="fm">${S.retrying?'trying again…':BAD.msg}</div></div><div class="ft">stopped at fetch · ${tried()}</div>${S.retrying?pbar(null):''}</div>`;
+  keys=[K('retry',null,'retry','try again',1),K('dismiss',null,'x','dismiss'),K('paste',null,'paste','paste'),K('all',null,'grid','see all')]}
+ else if(S.st==='dl'){const j=job();
+  d=`<div class="lk"><span class="ell">ch 1 · ${j.ref}</span><span data-l="el">${j.el}</span></div><div class="job"><b class="hl" data-l="hl" style="font-size:16px">${j.hl}</b><div class="dt"><span data-l="dt">${j.dt}</span><span data-l="stept">${j.stept}</span></div>${pbar(j.fr)}${stepper(j.step)}</div>`;
+  keys=[...base,K('stop',null,'stop','stop')]}
+ else{
+  d=`<div class="lk"><span>capystore</span><span>${S.st==='clip'?'link on clipboard':'nothing saving'}</span></div><div class="big">${S.count}<small>videos</small></div><div class="ln"><b>${S.mb.toFixed(1)} MB</b> on this iphone</div><div class="ln">${S.st==='clip'?"<b>there's a link on your clipboard.</b> press paste.":'newest: <b>'+S.items[0].t+'</b> · '+S.items[0].when}</div>`;
+  keys=[...base,K('all',null,'grid','see all')]}
+ const sk=`<div class="sks">${keys.map(k=>`<button class="sk${k.p?' p':''}${k.dn?' dn':''}" data-act="${k.act}"${k.arg?` data-arg="${k.arg}"`:''}>${I(k.ic,18)}<span>${k.lab}</span></button>`).join('')}</div>`;
+ let ch='';
+ if(S.st==='dl'){const j=job();ch=S.q.map((q,n)=>`<div class="ch"><span class="ell">ch ${n+1} · ${n?'waiting':JOBS[q].svc}</span><span class="leds">${STEPS.map((s,k)=>`<i class="${n?'':k<j.step?'d':k===j.step?'n':''}"></i>`).join('')}</span></div>`).join('')}
+ else if(S.st==='err')ch=`<div class="ch"><span class="ell" style="color:var(--er)">ch 1 · stopped at fetch</span><span class="leds"><i class="x"></i><i></i><i></i><i></i></span></div>`;
+ else ch=`<div class="ch e">no jobs · the lights show fetch, save, read, webp</div>`;
+ const pads=`<div class="pads">${S.items.slice(0,7).map((it,i)=>`<button class="pad${S.sel===i?' sel':''}${S.fresh===it.t?' new':''}" data-act="peek" data-arg="${i}" aria-label="open ${it.t}">${art(it.a)}<span class="ty">${it.ty}</span><span class="pl">${it.t}</span></button>`).join('')}<button class="pad more" data-act="all">see all<br>${S.count}</button></div>`;
+ const top=`<div class="lcd g${cls}">${d}</div>${sk}<div class="chs">${ch}</div>`;
+ const ph=`<div class="arh"><b>recent saves</b><span>${S.count} videos · ${S.mb.toFixed(1)} MB on this iphone</span></div>`;
+ return split()?[top,ph+pads]:top+ph+pads}
+
+/* ---------- screen ---------- */
+const RENDER=[strata,line,prose,sampler];
+function rail(){return `<div class="rail"><div class="rtop"><div class="cam"></div>${I('person',20)}<div class="rtime">1:24</div><div class="rbat">80</div><div style="margin-top:10px">${I('gear',24)}</div></div><div class="rtabs g"><span class="on">${I('down',22)}</span><span>${I('photos',22)}</span><span>${I('live',22)}</span><span>${I('grid',22)}</span></div></div>`}
+function hig(){
+ if(S.vp==='iphone')return `<div class="hig"><div class="hz red" style="left:0;right:0;top:0;height:54px"><b>status bar</b></div><div class="hz red" style="left:0;right:0;bottom:0;height:92px"><b>tab bar · keep clear</b></div><div class="hz safe" style="left:16px;right:16px;top:54px;bottom:92px"><b>content</b></div></div>`;
+ const seam=S.vp==='inner'?`<div class="hz blue vert" style="left:469px;width:12px;top:0;bottom:0"><b style="margin-left:-6px">fold · ReservedRegion(.division)</b></div><div class="hz safe" style="left:16px;width:437px;top:20px;bottom:14px"><b>primary</b></div><div class="hz safe" style="left:497px;right:88px;top:20px;bottom:14px"><b>secondary</b></div>`:`<div class="hz safe" style="left:16px;right:88px;top:20px;bottom:14px"><b>content · asymmetric safe area</b></div>`;
+ return `<div class="hig"><div class="hz red vert" style="right:0;top:0;bottom:0;width:72px"><b>vertical controls · keep clear</b></div>${seam}</div>`}
+function screenHTML(){
+ const out=RENDER[S.c]();const toast=S.toast?`<div class="toast g" role="status">${I('check',14)}${S.toast}</div>`:'';
+ const drop='<div class="dropz">drop to save</div>';
+ if(S.vp==='inner')return `<div class="cnt"><div class="pane l">${out[0]}${toast}</div><div class="seam"></div><div class="pane r">${out[1]}</div>${drop}</div>${rail()}${hig()}`;
+ if(S.vp==='outer')return `<div class="cnt">${out}${toast}${drop}</div>${rail()}${hig()}`;
+ return `<div class="sbar"><span>1:24</span><span class="isl"></span><span>80%</span></div><div class="cnt" style="padding-top:8px">${out}${toast}${drop}</div><div class="tbar"><div class="g"><span class="on">${I('down',22)}</span><span>${I('photos',22)}</span><span>${I('live',22)}</span><span>${I('grid',22)}</span></div></div>${hig()}`}
+
+/* ---------- page wiring (browser only) ---------- */
+const $=id=>document.getElementById(id);
+function live(){if(typeof document==='undefined')return;const j=job(),dev=$('dev');
+ dev.querySelectorAll('[data-l]').forEach(n=>{const v=j[n.dataset.l];if(n.textContent!==v)n.textContent=v});
+ if(j.fr!=null){dev.querySelectorAll('[data-w]').forEach(n=>n.style.width=j.fr*100+'%');dev.querySelectorAll('[data-x]').forEach(n=>n.style.left=(j.step+j.fr)*25+'%');dev.querySelectorAll('[data-u]').forEach(n=>n.style.setProperty('--p',j.fr*100+'%'))}}
+function fit(){const v=VP[S.vp],st=$('stage');const sc=Math.min(1,(st.clientWidth-2)/(v.w+20),660/(v.h+20));
+ $('fit').style.width=(v.w+20)*sc+'px';$('fit').style.height=(v.h+20)*sc+'px';$('bez').style.transform='scale('+sc+')'}
+function paint(){if(typeof document==='undefined')return;
+ const dev=$('dev');dev.className='dev '+S.vp+' t-'+S.theme+(S.hig?' show-hig':'');$('bez').className='bez '+S.vp;
+ const sc=dev.querySelector('.scroll'),top=sc?sc.scrollTop:0;dev.innerHTML=screenHTML();const sc2=dev.querySelector('.scroll');if(sc2)sc2.scrollTop=top;
+ $('tabs').innerHTML=CONCEPTS.map((c,i)=>`<button class="tab${i===S.c?' on':''}" data-act="c" data-arg="${i}"><span class="n">${c.n} · fable</span><span class="nm">${c.nm}</span><span class="sb">${c.sb}</span></button>`).join('');
+ const pb=(a,arg,lab,on)=>`<button class="pb${on?' on':''}" data-act="${a}"${arg?` data-arg="${arg}"`:''} aria-pressed="${!!on}">${lab}</button>`;
+ $('g-vp').innerHTML='<span>screen</span>'+Object.keys(VP).map(k=>pb('vp',k,VP[k].l,S.vp===k)).join('');
+ const u=ui();$('g-st').innerHTML='<span>state</span>'+[['idle','idle'],['clip','clipboard'],['dl','downloading'],['err','error / retry'],['peek','recent peek']].map(x=>pb('state',x[0],x[1],u===x[0])).join('');
+ $('g-x').innerHTML='<span>view</span>'+pb('theme',null,S.theme==='light'?'light':'dark',false)+pb('hig',null,'hig guides',S.hig)+pb('reset',null,'reset',false);
+ const c=CONCEPTS[S.c];$('claim').innerHTML=CLAIMS[S.c][u];
+ $('notes').innerHTML=`<div class="nt"><h3>${c.n} ${c.nm} · the idea</h3><p>${c.meta}</p></div><div class="nt"><h3>why it could work</h3><ul>${c.good.map(g=>`<li>${g}</li>`).join('')}</ul></div><div class="nt"><h3>how heavy it is (estimate)</h3><p>${c.perf}</p></div><div class="nt"><h3>building it in swiftui (estimate)</h3><p>${c.sw}</p><p style="margin-top:6px">${c.mac}</p></div>`;
+ fit()}
+reset('idle');
+if(typeof document!=='undefined'){
+ document.addEventListener('click',e=>{const t=e.target.closest('[data-act]');if(t&&!t.disabled)act(t.dataset.act,t.dataset.arg)});
+ window.addEventListener('resize',fit);
+ const st=$('stage');let dc=0;
+ st.addEventListener('dragenter',e=>{e.preventDefault();dc++;$('dev').classList.add('dragging')});
+ st.addEventListener('dragover',e=>e.preventDefault());
+ st.addEventListener('dragleave',()=>{if(--dc<=0){dc=0;$('dev').classList.remove('dragging')}});
+ st.addEventListener('drop',e=>{e.preventDefault();dc=0;act('import','files')});
+ const hp=new URLSearchParams(location.hash.slice(1));
+ if(hp.has('c'))S.c=Math.max(0,Math.min(3,+hp.get('c')||0));if(VP[hp.get('vp')])S.vp=hp.get('vp');if(hp.get('theme')==='dark')S.theme='dark';if(hp.has('hig'))S.hig=true;
+ if(['idle','clip','dl','err','peek'].includes(hp.get('st')))preset(hp.get('st'));if(hp.has('t'))S.t=+hp.get('t')||0;
+ paint();if(!hp.has('freeze'))setInterval(()=>tick(.1),100)}
+if(typeof globalThis!=='undefined')globalThis.__capy={S,act,tick,job,screenHTML,reset,preset,ui,CONCEPTS,CLAIMS};
+</script>
+</body>
+</html>

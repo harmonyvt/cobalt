@@ -306,6 +306,8 @@ final class OrbitPlayerPool {
     /// The planet whose detail is open: its player keeps playing under the detail (the detail shows it) and
     /// is still there, playing, when the detail goes away.
     @ObservationIgnored var lent: String?
+    @ObservationIgnored private var syncTask: Task<Void, Never>?
+    @ObservationIgnored private var wantedIDs: Set<String> = []
 
     func lend(_ id: String) -> LentPlayer? {
         guard let player = players[id] else { return nil }
@@ -314,6 +316,8 @@ final class OrbitPlayerPool {
     }
 
     /// `front` is ordered front-most first; `sources` maps an id to its local file and duration.
+    /// Preloads `AVURLAsset` metadata asynchronously and staggers `AVPlayerLooper` creation across frames
+    /// so entering the save tab never stalls the main thread in MediaToolbox.
     func sync(front: [String], sources: [String: (url: URL, duration: Double?)], active: Bool) {
         guard active else {
             stopAll()
@@ -321,21 +325,51 @@ final class OrbitPlayerPool {
         }
         // a player that already runs for a front planet (handed over from the focus layer) stays, even
         // before the disk check has confirmed that planet's file
-        let wanted = front.filter { sources[$0] != nil || players[$0] != nil }.prefix(Self.capacity)
-        for id in players.keys where !wanted.contains(id) { remove(id) }
-        if !wanted.isEmpty { AudioPolicy.ambient() }
-        for id in wanted where players[id] == nil {
-            guard let source = sources[id] else { continue }
-            let item = AVPlayerItem(url: source.url)
-            let player = AVQueuePlayer()
-            player.isMuted = true
-            player.preventsDisplaySleepDuringVideoPlayback = false
-            let length = PlaybackWindow.orbitLoopSeconds(duration: source.duration)
-            let range = CMTimeRange(start: .zero, duration: CMTime(seconds: length, preferredTimescale: 600))
-            loopers[id] = AVPlayerLooper(player: player, templateItem: item, timeRange: range)
-            if PlaybackWindow.orbitLoopsWholeClip(duration: source.duration) { wholeClip.insert(id) }
-            players[id] = player
-            PlayerPool.shared.play(player, as: .orbit, release: idleRelease(id))
+        let wanted = Array(front.filter { sources[$0] != nil || players[$0] != nil }.prefix(Self.capacity))
+        let wantedSet = Set(wanted)
+        for id in Array(players.keys) where !wantedSet.contains(id) { remove(id) }
+        let missing: [(id: String, url: URL, duration: Double?)] = wanted.compactMap { id in
+            guard players[id] == nil, let source = sources[id] else { return nil }
+            return (id: id, url: source.url, duration: source.duration)
+        }
+        guard !missing.isEmpty else {
+            if wantedIDs != wantedSet {
+                syncTask?.cancel()
+                syncTask = nil
+                wantedIDs = wantedSet
+            }
+            return
+        }
+        if wantedIDs == wantedSet, syncTask != nil { return }
+        wantedIDs = wantedSet
+        syncTask?.cancel()
+        AudioPolicy.ambient()
+        syncTask = Task { @MainActor [weak self] in
+            for (index, entry) in missing.enumerated() {
+                if index > 0 {
+                    try? await Task.sleep(for: .milliseconds(60))
+                }
+                guard let self, !Task.isCancelled, self.wantedIDs.contains(entry.id), self.players[entry.id] == nil else {
+                    continue
+                }
+                let asset = AVURLAsset(url: entry.url)
+                let playable = (try? await asset.load(.isPlayable)) ?? false
+                _ = try? await asset.load(.duration)
+                guard playable, !Task.isCancelled, self.wantedIDs.contains(entry.id), self.players[entry.id] == nil else {
+                    continue
+                }
+                let item = AVPlayerItem(asset: asset)
+                let player = AVQueuePlayer()
+                player.isMuted = true
+                player.preventsDisplaySleepDuringVideoPlayback = false
+                let length = PlaybackWindow.orbitLoopSeconds(duration: entry.duration)
+                let range = CMTimeRange(start: .zero, duration: CMTime(seconds: length, preferredTimescale: 600))
+                self.loopers[entry.id] = AVPlayerLooper(player: player, templateItem: item, timeRange: range)
+                if PlaybackWindow.orbitLoopsWholeClip(duration: entry.duration) { self.wholeClip.insert(entry.id) }
+                self.players[entry.id] = player
+                PlayerPool.shared.play(player, as: .orbit, release: self.idleRelease(entry.id))
+            }
+            self?.syncTask = nil
         }
     }
 
@@ -359,6 +393,9 @@ final class OrbitPlayerPool {
     }
 
     func stopAll() {
+        syncTask?.cancel()
+        syncTask = nil
+        wantedIDs = []
         for id in Array(players.keys) where id != lent { remove(id) }
     }
 

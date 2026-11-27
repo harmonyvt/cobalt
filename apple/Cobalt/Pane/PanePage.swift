@@ -34,6 +34,7 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
 
     @Environment(\.paneShape) private var shape
     @Environment(\.paneHinge) private var hinge
+    @Environment(\.paneOffline) private var offline
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(Pane.self) private var pane: Pane?
     @Environment(\.paneItem) private var paneItem
@@ -66,6 +67,15 @@ struct PanePage<Hero: View, Controls: View, Details: View, Shelf: View>: View {
         }
         .preference(key: PaneMoreKey.self, value: more)
         .preference(key: PaneFloatingHeaderKey.self, value: false)
+        #if os(iOS)
+        .toolbar {
+            if shape != .bar, !more.isEmpty {
+                DuoOverflowToolbarMenu(Copy.Pane.more) {
+                    PaneActionMenuItems(actions: more, offline: offline)
+                }
+            }
+        }
+        #endif
         .onChange(of: title, initial: true) { pane?.reportTitle(title, for: paneItem) }
     }
 

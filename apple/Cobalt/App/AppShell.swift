@@ -416,14 +416,10 @@ struct AppShell: View {
             .modifier(PaneBarAccessory(model: model))
         } else {
             // Regular width without a sidebar (iPhone Duo unfolded portrait/landscape, narrow iPad):
-            // strictly 4 top-level tabs so secondary workspaces never overflow into the floating capsule bar.
-            RegularFourTabs(
-                model: model,
-                primary: regularPrimaryTabs,
-                secondary: regularSecondaryTabs,
-                root: { tabRoot($0) },
-                screen: { tabScreen($0) }
-            )
+            // strictly 4 top-level tabs matching PhoneTabs (Save, Library, Live, Tools) on the vertical rail.
+            RegularFourTabs(model: model) { tab in
+                tabScreen(tab)
+            }
         }
     }
 
@@ -628,88 +624,159 @@ private struct QueueTabRedirect: ViewModifier {
 }
 
 /// Regular-width four-tab shell for non-sidebar canvases (iPhone Duo unfolded portrait 669 pt & landscape 951 pt,
-/// narrow iPad). Keeps the floating Liquid Glass bottom bar and Vertical Controls rail strictly at 4 items
-/// (Save, Library, Twitch/Live, Tools) while pushing every secondary workspace cleanly inside the Tools stack
-/// and keeping `model.selectedTab` bidirectionally in sync.
-private struct RegularFourTabs<Root: View, Screen: View>: View {
+/// narrow iPad). Mirrors the compact 4-tab vertical rail (Save, Library, Live, Tools) with consistent
+/// `PhoneRootToolbar` (Activity pill + Settings gear), unified `CobaltSettingsSheet`, and fold-safe 2-column
+/// `RegularToolsHub` so folding/unfolding an iPhone Duo keeps the exact same 4 tabs and navigation rhythm.
+private struct RegularFourTabs<Screen: View>: View {
     let model: AppModel
-    let primary: [AppTab]
-    let secondary: [AppTab]
-    @ViewBuilder let root: (AppTab) -> Root
     @ViewBuilder let screen: (AppTab) -> Screen
 
-    @State private var slot: AppTab
+    @State private var nav: PhoneNavState
     @State private var toolsPath: [AppTab]
+    @Environment(\.shell) private var shell
+    @Environment(Pane.self) private var pane: Pane?
 
     init(
         model: AppModel,
-        primary: [AppTab],
-        secondary: [AppTab],
-        @ViewBuilder root: @escaping (AppTab) -> Root,
         @ViewBuilder screen: @escaping (AppTab) -> Screen
     ) {
         self.model = model
-        self.primary = primary
-        self.secondary = secondary
-        self.root = root
         self.screen = screen
+        let nav = PhoneNavState()
         let initial = model.selectedTab
-        if primary.contains(initial) {
-            _slot = State(initialValue: initial)
+        let liveTabs: Set<AppTab> = [.stage, .twitch, .sevenTv]
+        if initial == .save {
+            nav.slot = .capture
             _toolsPath = State(initialValue: [])
-        } else if !secondary.isEmpty, initial == .tools || secondary.contains(initial) {
-            _slot = State(initialValue: .tools)
-            _toolsPath = State(initialValue: initial == .tools ? [] : [initial])
+        } else if initial == .library {
+            nav.slot = .library
+            _toolsPath = State(initialValue: [])
+        } else if liveTabs.contains(initial) {
+            nav.slot = .live
+            if let segment = LiveSegment(tab: initial) { nav.live = segment }
+            _toolsPath = State(initialValue: [])
+        } else if initial == .settings {
+            nav.slot = .capture
+            nav.settingsShown = true
+            _toolsPath = State(initialValue: [])
+        } else if initial == .tools {
+            nav.slot = .tools
+            _toolsPath = State(initialValue: [])
+        } else if initial != .queue {
+            nav.slot = .tools
+            _toolsPath = State(initialValue: [initial])
         } else {
-            _slot = State(initialValue: primary.first ?? .save)
+            nav.slot = .capture
             _toolsPath = State(initialValue: [])
         }
+        _nav = State(initialValue: nav)
+    }
+
+    private var hasLiveTab: Bool {
+        LiveSegment.allCases.contains { $0.tab.isAvailable(with: model.capabilities) }
+    }
+
+    /// Secondary workspaces tucked into `RegularToolsHub` (Save, Library, Live segments, Queue, and Settings sheet excluded).
+    private var toolsTabs: [AppTab] {
+        let excluded: Set<AppTab> = [.save, .library, .stage, .twitch, .sevenTv, .queue, .tools, .settings]
+        return model.visibleTabs.filter { !excluded.contains($0) }
+    }
+
+    private var slots: [PhoneSlot] {
+        var list: [PhoneSlot] = [.capture]
+        if AppTab.library.isAvailable(with: model.capabilities) { list.append(.library) }
+        if hasLiveTab { list.append(.live) }
+        if !toolsTabs.isEmpty { list.append(.tools) }
+        return list
     }
 
     private var activeTab: AppTab {
-        if slot == .tools { return toolsPath.last ?? .tools }
-        return slot
+        switch nav.slot {
+        case .capture: return .save
+        case .library: return .library
+        case .live: return nav.live.tab
+        case .tools: return toolsPath.last ?? .tools
+        }
     }
 
     var body: some View {
-        TabView(selection: $slot) {
-            ForEach(primary, id: \.self) { tab in
-                Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
-                    root(tab)
+        @Bindable var nav = nav
+        TabView(selection: $nav.slot) {
+            ForEach(slots, id: \.self) { slot in
+                Tab(slot.title, systemImage: slot.symbol, value: slot) {
+                    root(slot)
                 }
-            }
-
-            if !secondary.isEmpty {
-                Tab(Copy.tab(.tools), systemImage: icon(for: .tools), value: AppTab.tools) {
-                    NavigationStack(path: $toolsPath) {
-                        RegularToolsHub(model: model, tabs: secondary) { tab in
-                            toolsPath.append(tab)
-                        }
-                        .navigationDestination(for: AppTab.self) { tab in
-                            screen(tab)
-                        }
-                    }
-                }
-                .badge(model.swarms.waitingCount)
+                .badge(slot == .tools ? model.swarms.waitingCount : 0)
             }
         }
+        .environment(nav)
         .modifier(PaneBarAccessory(model: model))
-        .onChange(of: activeTab) { _, active in
+        .sheet(isPresented: $nav.settingsShown) {
+            CobaltSettingsSheet(model: model, shell: shell, pane: pane) {
+                nav.settingsShown = false
+            }
+        }
+        .onChange(of: activeTab, initial: true) { _, active in
             if model.selectedTab != active { model.selectedTab = active }
         }
         .onChange(of: model.tabSets) { _, _ in
             follow(model.selectedTab)
         }
+        .onChange(of: model.capabilities) { _, _ in
+            if !slots.contains(nav.slot) { nav.slot = .capture }
+            if nav.slot == .tools, let top = toolsPath.last, !toolsTabs.contains(top) { toolsPath = [] }
+        }
+    }
+
+    @ViewBuilder
+    private func root(_ slot: PhoneSlot) -> some View {
+        switch slot {
+        case .capture:
+            NavigationStack {
+                screen(.save)
+                    .environment(\.phoneHeaderOwnsActivity, true)
+                    .toolbar { PhoneRootToolbar(model: model) }
+            }
+        case .library:
+            // LibraryScreen brings its own NavigationStack and pushes MediaDetail inside it so the Duo rail stays visible.
+            screen(.library)
+        case .live:
+            NavigationStack {
+                LiveScreen(model: model) { segment in screen(segment.tab) }
+            }
+        case .tools:
+            NavigationStack(path: $toolsPath) {
+                RegularToolsHub(model: model, tabs: toolsTabs) { tab in
+                    toolsPath.append(tab)
+                }
+                .navigationDestination(for: AppTab.self) { tab in
+                    screen(tab)
+                }
+            }
+        }
     }
 
     private func follow(_ tab: AppTab) {
-        guard tab != .queue, tab != activeTab else { return }
-        if primary.contains(tab) {
-            slot = tab
-        } else if !secondary.isEmpty {
-            slot = .tools
-            let desired: [AppTab] = tab == .tools ? [] : [tab]
-            if toolsPath != desired { toolsPath = desired }
+        guard tab != .queue, tab != activeTab || tab == .settings else { return }
+        switch tab {
+        case .save:
+            nav.slot = .capture
+        case .library:
+            nav.slot = .library
+        case .stage, .twitch, .sevenTv:
+            nav.slot = .live
+            if let segment = LiveSegment(tab: tab) { nav.live = segment }
+        case .settings:
+            nav.settingsShown = true
+            if model.selectedTab != activeTab { model.selectedTab = activeTab }
+        case .tools:
+            nav.slot = .tools
+            if !toolsPath.isEmpty { toolsPath = [] }
+        default:
+            if toolsTabs.contains(tab) {
+                nav.slot = .tools
+                if toolsPath != [tab] { toolsPath = [tab] }
+            }
         }
     }
 }
@@ -720,6 +787,8 @@ private struct RegularToolsHub: View {
     let model: AppModel
     let tabs: [AppTab]
     let onSelect: (AppTab) -> Void
+    @Environment(PhoneNavState.self) private var phoneNav: PhoneNavState?
+    @Environment(\.shell) private var shell
 
     var body: some View {
         ScrollView {
@@ -734,7 +803,22 @@ private struct RegularToolsHub: View {
         .navigationTitle(Copy.PhoneNav.tools)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            QueueToolbarItem(model: model)
+            if phoneNav != nil {
+                PhoneRootToolbar(model: model) {
+                    Menu {
+                        Button(Copy.pasteA11y, systemImage: Symbol.paste) { shell.paste() }
+                        if model.capabilities.showsFileButton {
+                            Button(Copy.sourcePhotos, systemImage: Symbol.sourcePhotos) { shell.choosePhotos() }
+                            Button(Copy.sourceFiles, systemImage: Symbol.sourceFiles) { shell.chooseFile() }
+                        }
+                    } label: {
+                        Label(Copy.pasteA11y, systemImage: "plus").labelStyle(.iconOnly)
+                    }
+                    .accessibilityIdentifier("duo.quickAdd")
+                }
+            } else {
+                QueueToolbarItem(model: model)
+            }
         }
     }
 

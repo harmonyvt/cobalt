@@ -20,6 +20,7 @@ struct QueueToolbarItem: ToolbarContent {
     var body: some ToolbarContent {
         if !headerOwnsActivity {
             ToolbarItem(placement: .topBarTrailing) { ActivityPill(model: model) }
+                .duoVisibilityPriority(.high)
         }
     }
 }

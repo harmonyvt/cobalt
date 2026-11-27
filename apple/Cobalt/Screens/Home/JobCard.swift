@@ -339,11 +339,11 @@ struct JobCard: View {
                 Button(action: onRetry) {
                     Label(TrayCopy.tryAgain, systemImage: Symbol.retry)
                 }
-                .buttonStyle(.cobaltIcon(.small))
+                .buttonStyle(WorkCardActionButtonStyle())
                 .accessibilityLabel(TrayCopy.retryA11y(f.title))
             }
             Button(action: onDismiss) { Label(TrayCopy.dismiss, systemImage: Symbol.close) }
-                .buttonStyle(.cobaltIcon(.small))
+                .buttonStyle(WorkCardActionButtonStyle())
                 .accessibilityLabel(TrayCopy.dismissA11y(f.title))
         }
         .padding(.top, 2)

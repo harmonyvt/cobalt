@@ -22,7 +22,12 @@ extension PaneDestination {
 
     @MainActor @ViewBuilder
     static func dualStream(primary: String, secondary: String, model: AppModel, pane: Pane) -> some View {
-        TwitchStreamPage(login: primary, secondaryLogin: secondary, model: model)
+        TwitchStreamPage(channels: [primary, secondary], model: model)
+    }
+
+    @MainActor @ViewBuilder
+    static func multiStream(channels: [String], model: AppModel, pane: Pane) -> some View {
+        TwitchStreamPage(channels: channels, model: model)
     }
 
     @MainActor @ViewBuilder

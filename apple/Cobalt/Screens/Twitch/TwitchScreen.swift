@@ -27,13 +27,13 @@ struct TwitchScreen: View {
         return logins
     }
 
-    /// The primary channel currently active in the pane or bar, used for 1-tap "watch alongside" promotion.
-    private var currentPrimaryLogin: String? {
-        if let item = pane.item, pane.state != .hidden, let first = item.streamChannels.first {
-            return first
+    /// The stream item currently active in the pane or bar, used for 1-tap "watch alongside" promotion (1->2->3->4).
+    private var currentStreamItem: PaneItem? {
+        if let item = pane.item, pane.state != .hidden, item.isStream {
+            return item
         }
-        if let bar = pane.barItem, let first = bar.streamChannels.first {
-            return first
+        if let bar = pane.barItem, bar.isStream {
+            return bar
         }
         return nil
     }
@@ -42,7 +42,7 @@ struct TwitchScreen: View {
         TwitchChannelList(
             model: model,
             activeLogins: activeLogins,
-            currentPrimaryLogin: currentPrimaryLogin
+            currentStreamItem: currentStreamItem
         )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(CobaltColor.bg)
@@ -66,7 +66,7 @@ struct TwitchScreen: View {
 private struct TwitchChannelList: View {
     let model: AppModel
     var activeLogins: Set<String>
-    var currentPrimaryLogin: String?
+    var currentStreamItem: PaneItem?
 
     @Environment(Pane.self) private var pane
     @State private var query = ""
@@ -140,10 +140,13 @@ private struct TwitchChannelList: View {
                     .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
             }
         }
-        .padding(.leading, 12)
+        .padding(.leading, 13)
         .padding(.trailing, 6)
         .frame(minHeight: Metrics.hit)
         .background(CobaltColor.surface, in: Capsule())
+        .overlay {
+            Capsule().strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
+        }
     }
 
     private func openQuery() {
@@ -158,11 +161,18 @@ private struct TwitchChannelList: View {
         pane.open(.stream(login))
     }
 
-    /// Promotes an active stream into dual-stream with `name`, or asks for a 2nd stream if none is active yet.
+    /// Promotes an active stream session by adding `name` (1->2->3->4), or asks for a 2nd stream if none is active yet.
     private func watchAlongside(_ name: String) {
         guard let login = TwitchStore.login(from: name) else { return }
-        if let existing = currentPrimaryLogin, existing.caseInsensitiveCompare(login) != .orderedSame {
-            pane.open(.dualStream(primary: existing, secondary: login))
+        if let existing = currentStreamItem {
+            let channels = existing.streamChannels
+            if channels.contains(where: { $0.caseInsensitiveCompare(login) == .orderedSame }) {
+                pane.open(existing)
+            } else if channels.count < PaneItem.maxSimultaneousStreams {
+                if let next = existing.addingStream(login) { pane.open(next) }
+            } else if let next = existing.replacingStream(at: PaneItem.maxSimultaneousStreams - 1, with: login) {
+                pane.open(next)
+            }
         } else {
             pickingAlongsideFor = login
         }
@@ -175,10 +185,19 @@ private struct TwitchChannelList: View {
         } label: {
             Label(Copy.Twitch.open, systemImage: Symbol.Twitch.tab)
         }
-        Button {
-            watchAlongside(login)
-        } label: {
-            Label(Copy.Twitch.watchAlongside, systemImage: Symbol.Twitch.watchAlongside)
+        if !isWatching(login) {
+            let labelText: String = {
+                if let existing = currentStreamItem, existing.streamChannels.count >= 2,
+                   existing.streamChannels.count < PaneItem.maxSimultaneousStreams {
+                    return Copy.Twitch.addStreamTitle(current: existing.streamChannels.count, max: PaneItem.maxSimultaneousStreams)
+                }
+                return Copy.Twitch.watchAlongside
+            }()
+            Button {
+                watchAlongside(login)
+            } label: {
+                Label(labelText, systemImage: Symbol.Twitch.watchAlongside)
+            }
         }
     }
 
@@ -202,10 +221,14 @@ private struct TwitchChannelList: View {
                 } else {
                     DuoAdaptiveGrid(minItemWidth: 250, spacing: 14, rowSpacing: 18, alignment: .leading) {
                         ForEach(store.following) { s in
-                            Button { watch(s.login) } label: {
-                                TwitchStreamCard(stream: s, watching: isWatching(s.login))
-                            }
-                            .buttonStyle(.plain)
+                            let watching = isWatching(s.login)
+                            let canAddDual = currentStreamItem != nil && !watching
+                            TwitchStreamCard(
+                                stream: s,
+                                watching: watching,
+                                onWatch: { watch(s.login) },
+                                onAddDual: canAddDual ? { watchAlongside(s.login) } : nil
+                            )
                             .contextMenu { alongsideMenuItems(for: s.login) }
                         }
                     }
@@ -248,8 +271,8 @@ private struct TwitchBanner: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(TwitchChatPalette.twitch.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(TwitchChatPalette.twitch.opacity(0.35)))
+        .background(TwitchChatPalette.twitch.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(TwitchChatPalette.twitch.opacity(0.35)))
     }
 }
 
@@ -267,6 +290,7 @@ private struct TwitchRecentChip: View {
                     Circle()
                         .fill(TwitchChatPalette.twitch)
                         .frame(width: 6, height: 6)
+                        .shadow(color: TwitchChatPalette.twitch.opacity(0.65), radius: 3)
                         .accessibilityHidden(true)
                 }
             }
@@ -275,9 +299,10 @@ private struct TwitchRecentChip: View {
             .frame(minHeight: 34)
             .background(active ? TwitchChatPalette.twitch.opacity(0.14) : CobaltColor.surface, in: Capsule())
             .overlay {
-                if active {
-                    Capsule().strokeBorder(TwitchChatPalette.twitch.opacity(0.55), lineWidth: 1)
-                }
+                Capsule().strokeBorder(
+                    active ? TwitchChatPalette.twitch.opacity(0.55) : CobaltColor.hairline,
+                    lineWidth: active ? 1 : 0.75
+                )
             }
         }
         .buttonStyle(.plain)
@@ -289,56 +314,141 @@ private struct TwitchRecentChip: View {
 private struct TwitchStreamCard: View {
     let stream: TwitchStreamInfo
     var watching = false
+    let onWatch: () -> Void
+    var onAddDual: (() -> Void)? = nil
+
+    private var uptimeText: String? {
+        guard let started = stream.startedAt else { return nil }
+        let elapsed = max(0, Int(Date.now.timeIntervalSince(started)))
+        guard elapsed >= 60 else { return nil }
+        let hours = elapsed / 3600
+        let minutes = (elapsed % 3600) / 60
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            ZStack(alignment: .topLeading) {
-                Rectangle().fill(CobaltColor.frameBase)
-                if let url = stream.thumbnail { StillImage(url: url) }
-                HStack(spacing: 5) {
-                    Text(Copy.Twitch.live.uppercased())
-                        .font(.system(size: 10.5, weight: .bold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.red, in: RoundedRectangle(cornerRadius: 4))
-                    Label(Copy.Twitch.viewers(stream.viewers), systemImage: Symbol.Twitch.viewers)
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(CobaltColor.badgeBack, in: RoundedRectangle(cornerRadius: 4))
-                    if watching {
-                        Text(Copy.Twitch.watchingNow)
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(TwitchChatPalette.twitch, in: RoundedRectangle(cornerRadius: 4))
+            ZStack {
+                Button(action: onWatch) {
+                    ZStack {
+                        Rectangle().fill(CobaltColor.frameBase)
+                        if let url = stream.thumbnail { StillImage(url: url) }
+
+                        VStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            MediaEdgeVignette(edge: .bottom, height: 48, intensity: 0.48)
+                        }
+                        .allowsHitTesting(false)
+
+                        VStack(spacing: 0) {
+                            HStack(spacing: 6) {
+                                HStack(spacing: 5) {
+                                    Circle()
+                                        .fill(Color.red)
+                                        .frame(width: 6, height: 6)
+                                        .shadow(color: .red.opacity(0.75), radius: 2.5)
+                                    Text(Copy.Twitch.live.uppercased())
+                                        .font(.system(size: 10, weight: .bold))
+                                    Text("·")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .opacity(0.65)
+                                    Text(Copy.Twitch.viewers(stream.viewers))
+                                        .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .mediaGlassCapsule(interactive: false)
+
+                                if watching {
+                                    Text(Copy.Twitch.watchingNow)
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .mediaGlassCapsule(interactive: false, tint: TwitchChatPalette.twitch)
+                                }
+                                Spacer(minLength: 0)
+                            }
+
+                            Spacer(minLength: 0)
+
+                            if let uptimeText {
+                                HStack {
+                                    Text(uptimeText)
+                                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                                        .foregroundStyle(.white.opacity(0.92))
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 3)
+                                        .mediaGlassCapsule(interactive: false)
+                                    Spacer(minLength: 0)
+                                }
+                            }
+                        }
+                        .padding(8)
+                    }
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(
+                                watching ? TwitchChatPalette.twitch : Color.white.opacity(0.10),
+                                lineWidth: watching ? 2 : 0.75
+                            )
                     }
                 }
-                .foregroundStyle(.white)
-                .padding(7)
-            }
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay {
-                if watching {
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(TwitchChatPalette.twitch, lineWidth: 2)
+                .buttonStyle(.plain)
+
+                // Sibling button (never nested inside the watch button) for 1-tap dual-stream promotion.
+                if let onAddDual {
+                    VStack {
+                        Spacer(minLength: 0)
+                        HStack {
+                            Spacer(minLength: 0)
+                            Button(action: onAddDual) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: Symbol.Twitch.addStream)
+                                        .font(.system(size: 10.5, weight: .bold))
+                                    Text("Dual")
+                                        .font(Font.cobalt(11, .semibold))
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .mediaGlassCapsule()
+                                .frame(minWidth: Metrics.hit, minHeight: Metrics.hit, alignment: .bottomTrailing)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(Copy.Twitch.watchAlongside) \(stream.displayName)")
+                            .accessibilityIdentifier("twitch.card.addDual.\(stream.login)")
+                            .padding(6)
+                        }
+                    }
                 }
             }
-            Text(stream.displayName)
-                .font(Font.cobalt(14.5, .semibold))
-                .foregroundStyle(CobaltColor.text)
-            Text(stream.title)
-                .font(Font.cobalt(13))
-                .foregroundStyle(CobaltColor.caption)
-                .lineLimit(2)
-            if !stream.game.isEmpty {
-                Text(stream.game)
-                    .font(Font.cobalt(12))
-                    .foregroundStyle(TwitchChatPalette.twitch)
-                    .lineLimit(1)
+
+            Button(action: onWatch) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(stream.displayName)
+                        .font(Font.cobalt(14.5, .semibold))
+                        .foregroundStyle(CobaltColor.text)
+                    Text(stream.title)
+                        .font(Font.cobalt(13))
+                        .foregroundStyle(CobaltColor.caption)
+                        .lineLimit(2)
+                    if !stream.game.isEmpty {
+                        Text(stream.game)
+                            .font(Font.cobalt(12, .medium))
+                            .foregroundStyle(TwitchChatPalette.twitch)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
         }
-        .contentShape(Rectangle())
     }
 }
