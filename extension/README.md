@@ -91,3 +91,11 @@ The container app's window repeats those enable steps. Rebuild `extension/dist` 
 `npm test` in `extension/` checks URL extraction against fixture HTML (including an open shadow root, the way YouTube hides anchors), the save and poll loop, both sign-in paths, and that the manifest does not request cookies.
 
 The API and web Worker tests cover `POST /auth/extension/begin`, `POST /auth/extension/poll`, the approve page, and `origin: "extension"` staying out of `GET /studio/recent`. From `deploy/cloudflare/api` and `deploy/cloudflare/web`: `npm test`.
+
+## End-to-end check in a real Chromium
+
+`npm run build && npm run e2e` loads `dist/` unpacked into Chromium (the engine of Chrome and Helium), serves a
+fake x.com post and a fake Capystore API, and checks the whole path: the button appears, a signed-out click opens
+the approve tab and shows the busy capy, approval stores the session, the click saves, and reloading the extension
+under an open tab does not throw "Extension context invalidated". Nothing leaves the machine. Needs the `playwright`
+package and its Chromium (`npx playwright install chromium`). `EXT_DIST=<path>` tests another build.
