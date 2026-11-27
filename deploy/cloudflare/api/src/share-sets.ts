@@ -7,7 +7,7 @@ import { background } from "./background";
 import { captionOf, captionState, fileOf, setSubject, writeCaption, type Caption, type Captioner, type RoastInput } from "./roast";
 import { ITEM_COLUMNS, effectiveVisibility, type MediaRow } from "./visibility";
 import { escapeHtml, pageHeaders, type ShareAudioToggle } from "./share";
-import { findAudioAltsFor, wantsNormalAudio, withNormalAudioQuery, withoutAudioQuery } from "./audio-loudness";
+import { audioSummariesForFiles, findAudioAltsFor, wantsNormalAudio, withNormalAudioQuery, withoutAudioQuery, type AudioSummary } from "./audio-loudness";
 import { loopUrls } from "./loops";
 import {
     linkInsert,
@@ -118,6 +118,7 @@ export type SetItem = {
     width: number | null;
     height: number | null;
     duration: number | null;
+    audio?: AudioSummary;
 };
 
 export const parseItems = (s: string): string[] => {
@@ -129,10 +130,11 @@ export const parseItems = (s: string): string[] => {
     }
 };
 
-function itemsOf(ids: string[], rows: Map<string, MediaRow>, mediaBaseUrl: string): SetItem[] {
+function itemsOf(ids: string[], rows: Map<string, MediaRow>, mediaBaseUrl: string, audio?: Map<string, AudioSummary>): SetItem[] {
     return ids.map((id) => {
         const r = rows.get(id);
         const url = r ? publicUrlOf(r, mediaBaseUrl) : null;
+        const a = r ? audio?.get(id) : undefined;
         return {
             id,
             url,
@@ -141,16 +143,24 @@ function itemsOf(ids: string[], rows: Map<string, MediaRow>, mediaBaseUrl: strin
             width: r?.width ?? null,
             height: r?.height ?? null,
             duration: r?.duration ?? null,
+            ...(a ? { audio: a } : {}),
         };
     });
 }
 
 // A private gallery link's files (section 36), as its owner sees them: every live file at its address under
 // share.../p/<key>/, whatever its own state (a deleted one is null, as in a public link).
-function privateItemsOf(d: Pick<ShareSetDeps, "mediaBaseUrl" | "shareBaseUrl">, ids: string[], rows: Map<string, MediaRow>, key: string): SetItem[] {
+function privateItemsOf(
+    d: Pick<ShareSetDeps, "mediaBaseUrl" | "shareBaseUrl">,
+    ids: string[],
+    rows: Map<string, MediaRow>,
+    key: string,
+    audio?: Map<string, AudioSummary>,
+): SetItem[] {
     return ids.map((id, i) => {
         const r = rows.get(id);
         const url = r ? privateFileUrl(d.shareBaseUrl, key, i + 1, r) : null;
+        const a = r ? audio?.get(id) : undefined;
         return {
             id,
             url,
@@ -159,6 +169,7 @@ function privateItemsOf(d: Pick<ShareSetDeps, "mediaBaseUrl" | "shareBaseUrl">, 
             width: r?.width ?? null,
             height: r?.height ?? null,
             duration: r?.duration ?? null,
+            ...(a ? { audio: a } : {}),
         };
     });
 }
@@ -181,8 +192,13 @@ const setShape = (d: ShareSetDeps, s: SetRow, items: SetItem[], link: PrivateLin
 };
 
 // The set's items: through its private link while it has one, else its public files.
-const itemsFor = (d: ShareSetDeps, ids: string[], rows: Map<string, MediaRow>, link: PrivateLinkRow | null | undefined): SetItem[] =>
-    link ? privateItemsOf(d, ids, rows, link.key) : itemsOf(ids, rows, d.mediaBaseUrl);
+const itemsFor = (
+    d: ShareSetDeps,
+    ids: string[],
+    rows: Map<string, MediaRow>,
+    link: PrivateLinkRow | null | undefined,
+    audio?: Map<string, AudioSummary>,
+): SetItem[] => (link ? privateItemsOf(d, ids, rows, link.key, audio) : itemsOf(ids, rows, d.mediaBaseUrl, audio));
 
 // Trimmed, no control characters, 1..80 code points; "" / absent = no title; null = invalid.
 function cleanTitle(v: unknown): string | null | undefined {
@@ -220,14 +236,15 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
     const ids = items as string[];
     try {
         // everything asked before the link is written, in one round trip (null: one statement after another, as before)
-        const read = await readForNewSet(d.db, ids, typeof b?.private !== "boolean");
+        const read = await readForNewSet(d.db, ids, typeof b?.private !== "boolean", d.mediaBaseUrl);
         // a hidden post's files are never shared (section 37.2); a held one's wait ends here (the owner decided, 37.3)
         const hidden = read ? read.hidden : await shareGate(d.db, ids);
         if (hidden.length > 0) return err(409, "error.hidden", { ids: hidden });
         // section 36: absent = the owner's `new_links` setting
         const makePrivate = typeof b?.private === "boolean" ? b.private : (read ? read.newLinks : await newLinksSetting(d.db)) === "private";
         const rows = read ? read.rows : await rowsById(d.db, ids);
-        const publicItems = itemsOf(ids, rows, d.mediaBaseUrl);
+        const audio = read ? read.audio : await audioSummariesForFiles(d.db, [...rows.values()], d.mediaBaseUrl);
+        const publicItems = itemsOf(ids, rows, d.mediaBaseUrl, audio);
         // a private link may hold files that are not public: only missing or deleted ones are refused
         const bad = makePrivate ? ids.filter((id) => !rows.has(id)) : publicItems.filter((i) => i.url === null).map((i) => i.id);
         if (bad.length > 0) return err(409, "error.share.not_public", { items: bad });
@@ -250,7 +267,7 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
         } else {
             await insert.run();
         }
-        const shaped = itemsFor(d, ids, rows, link);
+        const shaped = itemsFor(d, ids, rows, link, audio);
         if (d.captioner) {
             const captioner = d.captioner;
             const input: RoastInput = { files: ids.map((id) => rows.get(id)!).map((r, i) => fileOf(r, publicItems[i]!.url)), userTitle: row.title };
@@ -268,7 +285,16 @@ export async function createShareSet(d: ShareSetDeps, request: Request, keyId: s
 
 // The list one statement after another, as it was read before readSetList: what a database without batch() or without
 // a newer migration still gets.
-async function setListInTurn(db: D1Database): Promise<{ sets: SetRow[]; rows: Map<string, MediaRow>; links: Map<string, PrivateLinkRow>; hidden: (ids: string[]) => Promise<string[]> }> {
+async function setListInTurn(
+    db: D1Database,
+    mediaBaseUrl?: string,
+): Promise<{
+    sets: SetRow[];
+    rows: Map<string, MediaRow>;
+    links: Map<string, PrivateLinkRow>;
+    hidden: (ids: string[]) => Promise<string[]>;
+    audio: Map<string, AudioSummary>;
+}> {
     const { results } = await db
         .prepare(
             `SELECT id, items, title, created_at, revoked_at FROM share_sets WHERE revoked_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ${SHARE_LIST_MAX}`,
@@ -280,24 +306,34 @@ async function setListInTurn(db: D1Database): Promise<{ sets: SetRow[]; rows: Ma
         for (const [k, v] of await rowsById(db, all.slice(i, i + 90))) rows.set(k, v);
     }
     const links = await liveLinksFor(db, "set", results.map((s) => s.id));
-    return { sets: results, rows, links, hidden: (ids) => hiddenFileIds(db, ids) };
+    const audio = await audioSummariesForFiles(db, [...rows.values()], mediaBaseUrl);
+    return { sets: results, rows, links, hidden: (ids) => hiddenFileIds(db, ids), audio };
 }
 
 // The list body for a read that already has the rows (GET /share/sets, and GET /share/private which reads the same
 // list in its own batch).
-export async function shapeShareSets(d: ShareSetDeps, list: { sets: SetRow[]; rows: Map<string, MediaRow>; links: Map<string, PrivateLinkRow>; hidden: (ids: string[]) => string[] | Promise<string[]> }): Promise<ReturnType<typeof setShape>[]> {
-    const { sets: results, rows, links } = list;
+export async function shapeShareSets(
+    d: ShareSetDeps,
+    list: {
+        sets: SetRow[];
+        rows: Map<string, MediaRow>;
+        links: Map<string, PrivateLinkRow>;
+        hidden: (ids: string[]) => string[] | Promise<string[]>;
+        audio?: Map<string, AudioSummary>;
+    },
+): Promise<ReturnType<typeof setShape>[]> {
+    const { sets: results, rows, links, audio } = list;
     const all = [...new Set(results.flatMap((s) => parseItems(s.items)))];
     // a hidden file is listed like a deleted one (url null), and says so (section 37.2)
     const hidden = new Set(await list.hidden(all));
     const mark = (items: SetItem[]) => (hidden.size === 0 ? items : items.map((i) => (hidden.has(i.id) ? { ...i, hidden: true } : i)));
-    return results.map((s) => setShape(d, s, mark(itemsFor(d, parseItems(s.items), rows, links.get(s.id))), links.get(s.id) ?? null));
+    return results.map((s) => setShape(d, s, mark(itemsFor(d, parseItems(s.items), rows, links.get(s.id), audio)), links.get(s.id) ?? null));
 }
 
 export async function listShareSets(d: ShareSetDeps): Promise<StudioReply> {
     try {
-        // one round trip for the links, their files, their private links and the hidden files
-        const list = (await readSetList(d.db, SHARE_LIST_MAX)) ?? (await setListInTurn(d.db));
+        // one round trip for the links, their files, their private links, the hidden files, and audio summaries
+        const list = (await readSetList(d.db, SHARE_LIST_MAX, d.mediaBaseUrl)) ?? (await setListInTurn(d.db, d.mediaBaseUrl));
         return { status: 200, body: { status: "success", sets: await shapeShareSets(d, list) } };
     } catch {
         return err(503, "error.api.generic");
@@ -329,15 +365,16 @@ export async function revokeShareSet(d: ShareSetDeps, id: string): Promise<Studi
     }
 }
 
-// One live set as the list shows it (section 24.1, its private link 36, hidden files marked 37.2).
+// One live set as the list shows it (section 24.1, its private link 36, hidden files marked 37.2, audio v10.1).
 export async function shapedSet(d: ShareSetDeps, s: SetRow): Promise<ReturnType<typeof setShape>> {
     const ids = parseItems(s.items);
     // one round trip (null: one statement after another, as before)
-    const read = await readSetParts(d.db, s.id, ids);
+    const read = await readSetParts(d.db, s.id, ids, d.mediaBaseUrl);
     const rows = read ? read.rows : await rowsById(d.db, ids);
     const link = read ? read.link : ((await liveLinksFor(d.db, "set", [s.id])).get(s.id) ?? null);
     const hidden = new Set(read ? read.hidden : await hiddenFileIds(d.db, ids));
-    const items = itemsFor(d, ids, rows, link).map((i) => (hidden.has(i.id) ? { ...i, hidden: true } : i));
+    const audio = read ? read.audio : await audioSummariesForFiles(d.db, [...rows.values()], d.mediaBaseUrl);
+    const items = itemsFor(d, ids, rows, link, audio).map((i) => (hidden.has(i.id) ? { ...i, hidden: true } : i));
     return setShape(d, s, items, link);
 }
 

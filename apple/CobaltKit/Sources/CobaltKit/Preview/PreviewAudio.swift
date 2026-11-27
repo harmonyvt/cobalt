@@ -27,6 +27,10 @@ final class PreviewAudioState: Sendable {
         state.withLock { $0.settings }
     }
 
+    func audio(for id: String) -> AudioLoudnessInfo? {
+        state.withLock { $0.items[id] }
+    }
+
     func update(_ patch: AudioLevelSettingsPatch, now: Date) -> AudioLevelSettings {
         state.withLock { s in
             if let mode = patch.mode { s.settings.mode = mode }

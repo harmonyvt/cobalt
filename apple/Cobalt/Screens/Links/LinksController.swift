@@ -169,14 +169,100 @@ final class LinksController {
 
     /// The usual copy: the link on the pasteboard and `copied` over the shell.
     func copy(_ link: ShareSet, shell: ShellActions) {
-        Pasteboard.copy(link.url.absoluteString)
-        shell.showStatus(Copy.Media.copied)
-        copiedToken += 1
-        copiedID = link.id
-        let token = copiedToken
-        Task {
-            try? await Task.sleep(for: .seconds(2))
-            if copiedToken == token { copiedID = nil }
+        copied(link.url, id: link.id, status: Copy.Media.copied, shell: shell)
+    }
+
+    /// Strictly gated copy: appends `?audio=normal` ONLY when `gate.status == .unlocked && useNormal`.
+    func copy(_ link: ShareSet, gate: AudioShareGate, useNormal: Bool, shell: ShellActions) {
+        let resolved = gate.resolveURL(base: link.url, useNormal: useNormal)
+        let isNormal = AudioShareURL.hasNormalAudio(resolved)
+        copied(resolved, id: link.id, status: isNormal ? Copy.AudioBulk.copiedNormal : Copy.Media.copied, shell: shell)
+    }
+
+    // MARK: bulk audio leveling & ?audio=normal gate
+
+    /// True while a bulk leveling batch for a share link is submitting requests.
+    var levelingBulk = false
+
+    /// Evaluates the strict `?audio=normal` gate for `link` using live library + optimistic rendering state.
+    func audioGate(for link: ShareSet) -> AudioShareGate {
+        let store = model.audioLeveling
+        let inFlight = store.inFlightItems.union(store.activeBulkIDs)
+        return AudioShareGate.forShareSet(
+            link,
+            audioFor: { item in store.optimisticAudio(for: item.id, fallback: item.audio) },
+            inFlight: inFlight
+        )
+    }
+
+    /// Feedback when tapping a locked `?audio=normal` toggle.
+    func blockedAudioTap(gate: AudioShareGate, shell: ShellActions) {
+        failedToken += 1
+        shell.showStatus(gate.blockedReason ?? Copy.AudioBulk.lockedSuffix)
+    }
+
+    /// Bulk-levels every remaining un-leveled audible video in `link`.
+    func levelBulk(link: ShareSet, shell: ShellActions) {
+        guard model.capabilities.audioLeveling, !levelingBulk else { return }
+        let gate = audioGate(for: link)
+        let ids = gate.queueableVideoIDs
+        guard !ids.isEmpty else {
+            if gate.canShareNormalAudio {
+                shell.showStatus(Copy.AudioBulk.alreadyLeveled)
+            }
+            return
+        }
+        levelingBulk = true
+        let linkID = link.id
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.levelingBulk = false }
+            let result = await self.model.audioLeveling.levelItems(
+                ids: ids,
+                onRefresh: { [weak self] in
+                    await self?.store.refresh()
+                },
+                audioLookup: { [weak self] id in
+                    self?.store.set(linkID)?.items.first(where: { $0.id == id })?.audio
+                }
+            )
+            if !result.queued.isEmpty && result.failed.isEmpty {
+                shell.showStatus(Copy.AudioBulk.queuedToast(result.queued.count))
+                self.doneToken += 1
+            } else if !result.queued.isEmpty {
+                shell.showStatus(Copy.AudioBulk.partialToast(queued: result.queued.count, failed: result.failed.count))
+                self.failedToken += 1
+            } else if !result.failed.isEmpty {
+                shell.showStatus(Copy.AudioBulk.failedToast(result.failed.count))
+                self.failedToken += 1
+            } else {
+                shell.showStatus(Copy.AudioBulk.alreadyLeveled)
+            }
+        }
+    }
+
+    /// Levels or retries a single video row inside a share link.
+    func levelSingle(fileID: String, linkID: String, shell: ShellActions) {
+        guard model.capabilities.audioLeveling else { return }
+        guard !model.audioLeveling.inFlightItems.contains(fileID) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.model.audioLeveling.levelItem(
+                    id: fileID,
+                    onRefresh: { [weak self] in
+                        await self?.store.refresh()
+                    },
+                    audioLookup: { [weak self] id in
+                        self?.store.set(linkID)?.items.first(where: { $0.id == id })?.audio
+                    }
+                )
+                shell.showStatus(Copy.AudioBulk.queuedToast(1))
+                self.doneToken += 1
+            } catch {
+                shell.showStatus(Copy.AudioBulk.failedToast(1))
+                self.failedToken += 1
+            }
         }
     }
 

@@ -43,12 +43,14 @@ struct PaneSelectionContent: View {
     @State private var creatingEdit = false
     /// A hold on a pick's thumbnail: its media over this page.
     @State private var peeking: LibraryRow?
+    @State private var autoUnlockPending = false
 
     private var store: ShareSetStore { model.shareSets }
     private var makesLinks: Bool { model.capabilities.shareSets }
     private var files: Bool { makesLinks && model.capabilities.shareCollections }
     private var inAlbum: Bool { model.library.showingHidden }
     private var offersStatus: Bool { model.capabilities.hidden }
+    private var offersAudio: Bool { model.capabilities.audioLeveling }
     private var busy: Bool { controller.changingStatus || model.library.statusInFlight }
     /// The pane is the sheet of one narrow screen: the pill's expanded form.
     private var compact: Bool { pane.placement == .compact }
@@ -58,11 +60,12 @@ struct PaneSelectionContent: View {
         let picks = controller.pickedRows(rows)
         let verdict = controller.shareLinkVerdict(rows)
         let ready = verdict == .ready && !controller.makingShareLink
+        let audioGate: AudioShareGate? = (offersAudio && !inAlbum && !picks.isEmpty) ? controller.audioGate(for: rows) : nil
         Group {
             if shape == .bar {
                 bar(picks)
             } else {
-                page(rows: rows, picks: picks, verdict: verdict, ready: ready)
+                page(rows: rows, picks: picks, verdict: verdict, ready: ready, audioGate: audioGate)
             }
         }
         .overlay {
@@ -72,6 +75,19 @@ struct PaneSelectionContent: View {
             }
         }
         .motion(Motion.card, value: peeking?.id)
+        .onChange(of: picks.map(\.id)) { _, _ in
+            autoUnlockPending = false
+        }
+        .onChange(of: audioGate?.status) { _, newStatus in
+            if newStatus != .unlocked {
+                controller.shareLinkNormalAudio = false
+            } else if autoUnlockPending {
+                autoUnlockPending = false
+                withAnimation(Motion.chip) { controller.shareLinkNormalAudio = true }
+                controller.showStatus(Copy.AudioBulk.unlockedAuto)
+                controller.doneTick += 1
+            }
+        }
         // the album's picks are not in the app switcher's snapshot (the pane is not under the library's own cover)
         .hiddenCover(controller)
         .navigationDestination(isPresented: $pickingCollection) {
@@ -87,10 +103,12 @@ struct PaneSelectionContent: View {
 
     // MARK: the page
 
-    private func page(rows: [LibraryRow], picks: [LibraryRow], verdict: ShareSetVerdict, ready: Bool) -> some View {
+    private func page(
+        rows: [LibraryRow], picks: [LibraryRow], verdict: ShareSetVerdict, ready: Bool, audioGate: AudioShareGate?
+    ) -> some View {
         PanePage(
             title: compact ? Copy.SelectPane.posts(picks.count) : Copy.Library2.pickedCount(picks.count),
-            subtitle: subtitle(picks, verdict: verdict),
+            subtitle: subtitle(picks, verdict: verdict, audioGate: audioGate),
             actions: headerActions(rows, picks: picks),
             more: moreActions(rows, picks: picks)
         ) {
@@ -99,6 +117,23 @@ struct PaneSelectionContent: View {
             VStack(alignment: .leading, spacing: 12) {
                 // (the iPhone's sheet leaves the choice out: make link is in `more` there, and follows settings › sharing)
                 if !inAlbum, !compact, makesLinks, model.capabilities.privateLinks { privacyChoice }
+                if let audioGate, audioGate.audibleVideoCount > 0 {
+                    LibraryAudioStrip(
+                        gate: audioGate,
+                        useNormalAudio: Binding(
+                            get: { controller.shareLinkNormalAudio },
+                            set: { controller.shareLinkNormalAudio = $0 }
+                        ),
+                        isSubmitting: controller.levelingPickedAudio,
+                        onLevel: {
+                            autoUnlockPending = true
+                            controller.levelPickedAudio(rows)
+                        },
+                        onBlockedTap: {
+                            controller.blockedAudioTap(gate: audioGate)
+                        }
+                    )
+                }
                 PaneActionGrid(gridActions(rows, picks: picks, ready: ready))
                 if let editNote, !picks.isEmpty, !inAlbum {
                     Text(editNote)
@@ -110,11 +145,19 @@ struct PaneSelectionContent: View {
         }
     }
 
-    private func subtitle(_ picks: [LibraryRow], verdict: ShareSetVerdict) -> String {
+    private func subtitle(_ picks: [LibraryRow], verdict: ShareSetVerdict, audioGate: AudioShareGate?) -> String {
         if picks.isEmpty { return Copy.SelectPane.nothingPicked }
         if compact { return Copy.SelectPane.kinds(picks) }
         guard !inAlbum, makesLinks else { return "" }
-        return Copy.PrivateLinks.line(for: verdict, count: picks.count, isPrivate: controller.makesPrivateLink)
+        var line = Copy.PrivateLinks.line(for: verdict, count: picks.count, isPrivate: controller.makesPrivateLink)
+        if verdict == .ready, let audioGate, audioGate.audibleVideoCount > 0 {
+            if audioGate.canShareNormalAudio && controller.shareLinkNormalAudio {
+                line += " · \(Copy.AudioBulk.normalActiveSuffix)"
+            } else if !audioGate.canShareNormalAudio {
+                line += " · \(Copy.AudioBulk.lockedSuffix)"
+            }
+        }
+        return line
     }
 
     // MARK: the picks
@@ -358,6 +401,14 @@ private struct SelectionThumb: View {
     /// Nil: as wide as the grid cell.
     var side: CGFloat? = 64
 
+    private var audioDotTint: Color? {
+        guard controller.model.capabilities.audioLeveling,
+              let resolved = controller.resolvedAudioFile(for: row),
+              resolved.isVideo,
+              resolved.audio?.isSilent != true else { return nil }
+        return resolved.audio?.statusTint ?? AudioDockTone.neutral
+    }
+
     var body: some View {
         Button {
             if controller.takeSwallowedTap() { return }
@@ -374,6 +425,16 @@ private struct SelectionThumb: View {
                         .frame(minWidth: 18, minHeight: 18)
                         .background(CobaltColor.text, in: Circle())
                         .offset(x: -5, y: -5)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if let tint = audioDotTint {
+                        Circle()
+                            .fill(tint)
+                            .frame(width: 7, height: 7)
+                            .overlay(Circle().stroke(.black.opacity(0.75), lineWidth: 1))
+                            .shadow(color: tint.opacity(0.65), radius: 2)
+                            .padding(5)
+                    }
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }

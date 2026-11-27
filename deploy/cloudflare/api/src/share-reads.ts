@@ -11,6 +11,7 @@
 // failing statement fails all of them. So every reader here answers null when the database has no batch() (the tests'
 // plain fake) or the batch failed, and its caller then takes the sequential path it always took, which forgives as
 // before. test/share-reads.test.ts holds the two paths to the same answers.
+import { AUDIO_JOIN_COLUMNS, buildAudioSummaries, type AudioJoinedRow, type AudioSummary } from "./audio-loudness";
 import { hiddenReady, NOT_HIDDEN_SQL } from "./hidden-store";
 import { POST_KEY_SQL } from "./post-key";
 import { allLiveLinksStmt, liveLinksInStmt, type NewLinks, type PrivateLinkRow } from "./private-links";
@@ -49,6 +50,12 @@ const ITEM_COLS = ITEM_COLUMNS.split(", ")
     .join(", ");
 // rowsById: the live rows of these files; a hidden post's files are left out while migration 0025 is applied
 const rowsSql = (ids: string, notHidden: string) => `SELECT ${ITEM_COLS} FROM media_items m WHERE m.id IN (${ids}) AND m.deleted_at IS NULL${notHidden}`;
+// v10.1: audio loudness + leveled alt metadata for these files (fails the batch cleanly on pre-0047 databases)
+const audioSql = (ids: string) =>
+    `SELECT ${AUDIO_JOIN_COLUMNS}
+       FROM media_audio a
+       LEFT JOIN media_items alt ON alt.id = a.alt_item_id AND alt.deleted_at IS NULL
+      WHERE a.item_id IN (${ids})`;
 // liveLinksFor: the live private link of one gallery link
 const linkOf = (db: D1Database, setId: string) => liveLinksInStmt(db, "set", BOUND, [JSON.stringify([setId])]);
 // postKeysOfFiles and hiddenRows in one: each live file named by its id or its public copy's id, its post, and that
@@ -89,31 +96,46 @@ const json = (ids: string[]) => JSON.stringify([...new Set(ids)]);
 
 // ---- the readers ----------------------------------------------------------------------------------------------------------
 
-export type SetParts = { rows: Map<string, MediaRow>; link: PrivateLinkRow | null; hidden: string[] };
+export type SetParts = { rows: Map<string, MediaRow>; link: PrivateLinkRow | null; hidden: string[]; audio: Map<string, AudioSummary> };
 
-// One gallery link as the list shows it: its files' live rows, its live private link, which of its files are hidden.
-export async function readSetParts(db: D1Database, setId: string, ids: string[]): Promise<SetParts | null> {
+// One gallery link as the list shows it: its files' live rows, its live private link, which of its files are hidden, and their audio metadata.
+export async function readSetParts(db: D1Database, setId: string, ids: string[], mediaBaseUrl?: string): Promise<SetParts | null> {
     const gated = await hiddenReady(db);
-    const res = await tryBatch(db, [
+    const statements = [
         db.prepare(rowsSql(BOUND, gated ? NOT_HIDDEN_SQL : "")).bind(json(ids)),
         linkOf(db, setId),
         ...(gated ? [db.prepare(gateSql(BOUND)).bind(json(ids))] : []),
-    ]);
+        db.prepare(audioSql(BOUND)).bind(json(ids)),
+    ];
+    const res = await tryBatch(db, statements);
     if (!res) return null;
+    const audioAt = gated ? 3 : 2;
     return {
         rows: byId(rowsOf<MediaRow>(res, 0)),
         link: rowsOf<PrivateLinkRow>(res, 1)[0] ?? null,
         hidden: gated ? hiddenAmong(ids, gateOf(rowsOf<GateRow>(res, 2))) : [],
+        audio: buildAudioSummaries(rowsOf<AudioJoinedRow>(res, audioAt), mediaBaseUrl),
     };
 }
 
-export type SetList = { sets: SetRow[]; rows: Map<string, MediaRow>; links: Map<string, PrivateLinkRow>; hidden: (ids: string[]) => string[] };
+export type SetList = {
+    sets: SetRow[];
+    rows: Map<string, MediaRow>;
+    links: Map<string, PrivateLinkRow>;
+    hidden: (ids: string[]) => string[];
+    audio: Map<string, AudioSummary>;
+};
 
 // GET /share/sets: the newest `limit` live links with everything the list says about them, in one round trip. The
 // other statements name the same links by repeating the list as a subquery, so nothing has to come back first. A link
 // whose `items` is not JSON fails json_each and with it the batch: the sequential path reads such a row as no files.
 // The gallery-list statements and how to read them back, so GET /share/private can put them in its own batch.
-function setListPlan(db: D1Database, limit: number, gated: boolean): { statements: D1PreparedStatement[]; parse(res: D1Result<unknown>[], at: number): SetList } {
+function setListPlan(
+    db: D1Database,
+    limit: number,
+    gated: boolean,
+    mediaBaseUrl?: string,
+): { statements: D1PreparedStatement[]; parse(res: D1Result<unknown>[], at: number): SetList } {
     const live = `SELECT id, items, title, created_at, revoked_at FROM share_sets WHERE revoked_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ${limit}`;
     const files = `SELECT j.value FROM (${live}) l, json_each(l.items) j`;
     return {
@@ -122,24 +144,27 @@ function setListPlan(db: D1Database, limit: number, gated: boolean): { statement
             db.prepare(rowsSql(files, gated ? NOT_HIDDEN_SQL : "")),
             liveLinksInStmt(db, "set", `SELECT l.id FROM (${live}) l`, []),
             ...(gated ? [db.prepare(gateSql(files))] : []),
+            db.prepare(audioSql(files)),
         ],
         parse(res, at) {
             const links = new Map<string, PrivateLinkRow>();
             for (const r of rowsOf<PrivateLinkRow>(res, at + 2)) links.set(r.target_id, r);
             const gate = gated ? gateOf(rowsOf<GateRow>(res, at + 3)) : null;
+            const audioAt = at + (gated ? 4 : 3);
             return {
                 sets: rowsOf<SetRow>(res, at),
                 rows: byId(rowsOf<MediaRow>(res, at + 1)),
                 links,
                 hidden: (ids) => (gate ? hiddenAmong(ids, gate) : []),
+                audio: buildAudioSummaries(rowsOf<AudioJoinedRow>(res, audioAt), mediaBaseUrl),
             };
         },
     };
 }
 
-export async function readSetList(db: D1Database, limit: number): Promise<SetList | null> {
+export async function readSetList(db: D1Database, limit: number, mediaBaseUrl?: string): Promise<SetList | null> {
     const gated = await hiddenReady(db);
-    const plan = setListPlan(db, limit, gated);
+    const plan = setListPlan(db, limit, gated, mediaBaseUrl);
     const res = await tryBatch(db, plan.statements);
     if (!res) return null;
     return plan.parse(res, 0);
@@ -150,9 +175,9 @@ export type PrivateHome = { links: PrivateLinkRow[]; newLinks: NewLinks; sets: S
 // GET /share/private: the live private links, the new-links setting and the gallery list, in the list's one round
 // trip. Null when the database has no batch or a statement failed (a table of a migration that is not applied yet):
 // the caller asks for each as it always did.
-export async function readPrivateHome(db: D1Database, limit: number): Promise<PrivateHome | null> {
+export async function readPrivateHome(db: D1Database, limit: number, mediaBaseUrl?: string): Promise<PrivateHome | null> {
     const gated = await hiddenReady(db);
-    const plan = setListPlan(db, limit, gated);
+    const plan = setListPlan(db, limit, gated, mediaBaseUrl);
     const res = await tryBatch(db, [allLiveLinksStmt(db), db.prepare("SELECT new_links FROM share_settings WHERE id = 1"), ...plan.statements]);
     if (!res) return null;
     return {
@@ -211,15 +236,16 @@ function parseItemsSafe(raw: string): string[] {
     }
 }
 
-export type NewSetChecks = { hidden: string[]; newLinks: NewLinks | null; rows: Map<string, MediaRow> };
+export type NewSetChecks = { hidden: string[]; newLinks: NewLinks | null; rows: Map<string, MediaRow>; audio: Map<string, AudioSummary> };
 
 // POST /share/sets: may these files be shared (shareGate), does a new link start private (asked only when the request
-// does not say), and the files' rows.
-export async function readForNewSet(db: D1Database, ids: string[], askNewLinks: boolean): Promise<NewSetChecks | null> {
+// does not say), the files' rows, and their audio metadata.
+export async function readForNewSet(db: D1Database, ids: string[], askNewLinks: boolean, mediaBaseUrl?: string): Promise<NewSetChecks | null> {
     const gated = await hiddenReady(db);
     const statements = [db.prepare(rowsSql(BOUND, gated ? NOT_HIDDEN_SQL : "")).bind(json(ids))];
     const gateAt = gated ? statements.push(db.prepare(gateSql(BOUND)).bind(json(ids))) - 1 : -1;
     const settingAt = askNewLinks ? statements.push(db.prepare("SELECT new_links FROM share_settings WHERE id = 1")) - 1 : -1;
+    const audioAt = statements.push(db.prepare(audioSql(BOUND)).bind(json(ids))) - 1;
     const res = await tryBatch(db, statements);
     if (!res) return null;
     const gate = gateAt < 0 ? null : gateOf(rowsOf<GateRow>(res, gateAt));
@@ -228,6 +254,7 @@ export async function readForNewSet(db: D1Database, ids: string[], askNewLinks: 
         hidden: gate ? hiddenAmong(ids, gate) : [],
         newLinks: settingAt < 0 ? null : rowsOf<{ new_links: string }>(res, settingAt)[0]?.new_links === "private" ? "private" : "public",
         rows: byId(rowsOf<MediaRow>(res, 0)),
+        audio: buildAudioSummaries(rowsOf<AudioJoinedRow>(res, audioAt), mediaBaseUrl),
     };
 }
 

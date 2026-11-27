@@ -149,6 +149,7 @@ struct LibraryPickedSheet: View {
     @State private var editNote: String?
     @State private var publicPrompt: PublicLinkPrompt?
     @State private var makingPublicTarget: PublicWorkTarget?
+    @State private var autoUnlockPending = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var store: ShareSetStore { model.shareSets }
@@ -157,6 +158,7 @@ struct LibraryPickedSheet: View {
     private var inAlbum: Bool { model.library.showingHidden }
     private var offersStatus: Bool { model.capabilities.hidden }
     private var offersPrivate: Bool { makesLinks && model.capabilities.privateLinks }
+    private var offersAudio: Bool { model.capabilities.audioLeveling }
     private var addsToLinks: Bool { controller.addsToLinks }
     private var offersEdit: Bool { model.editor.isAvailable }
     private var busy: Bool { controller.changingStatus || model.library.statusInFlight }
@@ -194,6 +196,7 @@ struct LibraryPickedSheet: View {
         let verdict = controller.shareLinkVerdict(rows)
         let ready = verdict == .ready && !controller.makingShareLink && !busy
         let canPromptPublic = controller.canMakePicksPublicForLink(rows) && !controller.makingShareLink && !busy
+        let audioGate: AudioShareGate? = (offersAudio && !inAlbum && !picks.isEmpty) ? controller.audioGate(for: rows) : nil
 
         VStack(spacing: 0) {
             // grabber + compact header for the picked items tray (tap or vertical drag expands/collapses)
@@ -281,8 +284,27 @@ struct LibraryPickedSheet: View {
                 .frame(height: 0.5)
                 .allowsHitTesting(false)
 
-            // compact labeled action grid + live status note at thumb height
+            // compact labeled action grid + slim audio strip + live status note at thumb height
             VStack(alignment: .leading, spacing: 7) {
+                if let audioGate, audioGate.audibleVideoCount > 0 {
+                    LibraryAudioStrip(
+                        gate: audioGate,
+                        useNormalAudio: Binding(
+                            get: { controller.shareLinkNormalAudio },
+                            set: { controller.shareLinkNormalAudio = $0 }
+                        ),
+                        isSubmitting: controller.levelingPickedAudio,
+                        onLevel: {
+                            autoUnlockPending = true
+                            controller.levelPickedAudio(rows)
+                        },
+                        onBlockedTap: {
+                            controller.blockedAudioTap(gate: audioGate)
+                        }
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
                 LazyVGrid(columns: columns, spacing: 6) {
                     if inAlbum {
                         unhideTile(picks)
@@ -299,7 +321,9 @@ struct LibraryPickedSheet: View {
                         if canDeleteAnyRow { deleteTile(picks) }
                     }
                 }
-                if let note = footerNote(picks: picks, verdict: verdict, canPromptPublic: canPromptPublic) {
+                if let note = footerNote(
+                    picks: picks, verdict: verdict, canPromptPublic: canPromptPublic, audioGate: audioGate
+                ) {
                     Text(note.text)
                         .font(CobaltType.captionSmall)
                         .foregroundStyle(note.emphasized ? CobaltColor.text : CobaltColor.caption)
@@ -341,7 +365,20 @@ struct LibraryPickedSheet: View {
         .onChange(of: picks.isEmpty) { _, empty in
             if empty, expanded { expanded = false }
         }
-        .onChange(of: picks.map(\.id)) { _, _ in editNote = nil }
+        .onChange(of: picks.map(\.id)) { _, _ in
+            editNote = nil
+            autoUnlockPending = false
+        }
+        .onChange(of: audioGate?.status) { _, newStatus in
+            if newStatus != .unlocked {
+                controller.shareLinkNormalAudio = false
+            } else if autoUnlockPending {
+                autoUnlockPending = false
+                withAnimation(Motion.chip) { controller.shareLinkNormalAudio = true }
+                controller.showStatus(Copy.AudioBulk.unlockedAuto)
+                controller.doneTick += 1
+            }
+        }
         .motion(reduceMotion ? .default : Motion.rows, value: picks.map(\.id))
         .motion(Motion.rows, value: verdict)
         .motion(Motion.card, value: expanded)
@@ -614,15 +651,24 @@ struct LibraryPickedSheet: View {
 
     // MARK: helpers
 
-    private func footerNote(picks: [LibraryRow], verdict: ShareSetVerdict, canPromptPublic: Bool) -> (text: String, emphasized: Bool)? {
+    private func footerNote(
+        picks: [LibraryRow], verdict: ShareSetVerdict, canPromptPublic: Bool, audioGate: AudioShareGate?
+    ) -> (text: String, emphasized: Bool)? {
         guard !inAlbum, !picks.isEmpty else { return nil }
         if let editNote { return (editNote, true) }
         guard makesLinks else { return nil }
         if canPromptPublic, case .notPublic(let count) = verdict {
             return (Copy.Links.notPublicPromptHint(count), true)
         }
-        return (Copy.PrivateLinks.line(for: verdict, count: picks.count, isPrivate: controller.makesPrivateLink),
-                verdict != .ready)
+        var line = Copy.PrivateLinks.line(for: verdict, count: picks.count, isPrivate: controller.makesPrivateLink)
+        if verdict == .ready, let audioGate, audioGate.audibleVideoCount > 0 {
+            if audioGate.canShareNormalAudio && controller.shareLinkNormalAudio {
+                line += " · \(Copy.AudioBulk.normalActiveSuffix)"
+            } else if !audioGate.canShareNormalAudio {
+                line += " · \(Copy.AudioBulk.lockedSuffix)"
+            }
+        }
+        return (line, verdict != .ready)
     }
 
     private func createEdit(_ picks: [LibraryRow]) {
@@ -746,6 +792,14 @@ private struct PickThumb: View {
     /// Nil fills the adaptive grid cell squarely.
     var side: CGFloat? = 46
 
+    private var audioDotTint: Color? {
+        guard controller.model.capabilities.audioLeveling,
+              let resolved = controller.resolvedAudioFile(for: row),
+              resolved.isVideo,
+              resolved.audio?.isSilent != true else { return nil }
+        return resolved.audio?.statusTint ?? AudioDockTone.neutral
+    }
+
     var body: some View {
         Button {
             if controller.takeSwallowedTap() { return }
@@ -774,6 +828,16 @@ private struct PickThumb: View {
                         .frame(width: 15, height: 15)
                         .background(.black.opacity(0.62), in: Circle())
                         .padding(3)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if let tint = audioDotTint {
+                        Circle()
+                            .fill(tint)
+                            .frame(width: 7, height: 7)
+                            .overlay(Circle().stroke(.black.opacity(0.75), lineWidth: 1))
+                            .shadow(color: tint.opacity(0.65), radius: 2)
+                            .padding(4)
+                    }
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }

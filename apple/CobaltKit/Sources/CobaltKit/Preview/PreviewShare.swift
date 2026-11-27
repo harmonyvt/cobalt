@@ -406,7 +406,17 @@ extension PreviewClient {
         guard scenario.hasShareLinks else { throw PipelineFailure.unsupported }
         guard let sets = shareState.list() else { throw ShareSetError.unavailable }
         let now = clock.now()
-        return sets.map { privateState.applying(to: $0, now: now) }
+        return sets.map { set in
+            var copy = privateState.applying(to: set, now: now)
+            copy.items = copy.items.map { item in
+                var updated = item
+                if let live = audioState.audio(for: item.id) {
+                    updated.audio = live
+                }
+                return updated
+            }
+            return copy
+        }
     }
 
     /// `DELETE /share/sets/<id>`: the link goes; an id the server does not hold is `.notFound`.

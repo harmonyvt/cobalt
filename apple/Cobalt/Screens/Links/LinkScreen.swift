@@ -204,16 +204,57 @@ private struct LinkScreenList: View {
     let openPost: (OpenedMedia) -> Void
     let addFiles: () -> Void
 
+    @Environment(\.shell) private var shell
+    @State private var useNormalAudio = false
+    @State private var autoUnlockPending = false
+
     private var maximum: Int { model.capabilities.limits.shareSetMax }
+    private var audioEnabled: Bool { model.capabilities.audioLeveling }
 
     var body: some View {
         let lookup = LinkFileLookup(model: model)
         let ids = draft?.items ?? link.items.map(\.id)
-        let entries = LinkFileEntry.entries(ids, link: link, lookup: lookup)
+        let audioStore = model.audioLeveling
+        let entries = LinkFileEntry.entries(
+            ids,
+            link: link,
+            lookup: lookup,
+            audioFor: { id, fallback in audioStore.optimisticAudio(for: id, fallback: fallback) }
+        )
+        let gate = controller.audioGate(for: link)
+        let activeURL = audioEnabled ? gate.resolveURL(base: link.url, useNormal: useNormalAudio) : link.url
+
         List {
             Section {
-                LinkHeader(link: link, controller: controller, title: titleBinding)
+                LinkHeader(
+                    link: link,
+                    controller: controller,
+                    title: titleBinding,
+                    showsAddressRow: !audioEnabled
+                )
+                .modifier(LinkListRow())
+                if draft == nil, audioEnabled {
+                    LinkAudioDock(
+                        link: link,
+                        gate: gate,
+                        target: model.audioLeveling.settings.target,
+                        useNormalAudio: $useNormalAudio,
+                        activeURL: activeURL,
+                        isSubmitting: controller.levelingBulk,
+                        isCopied: controller.copiedID == link.id,
+                        onCopy: {
+                            controller.copy(link, gate: gate, useNormal: useNormalAudio, shell: shell)
+                        },
+                        onLevelRemaining: {
+                            autoUnlockPending = true
+                            controller.levelBulk(link: link, shell: shell)
+                        },
+                        onBlockedTap: {
+                            controller.blockedAudioTap(gate: gate, shell: shell)
+                        }
+                    )
                     .modifier(LinkListRow())
+                }
             }
             Section {
                 LinkDiscordPreview(heading: heading, entries: entries.filter(\.shows), model: model)
@@ -222,7 +263,17 @@ private struct LinkScreenList: View {
                 SectionLabel(text: Copy.LinkEdit.discordSection)
             }
             Section {
-                LinkFileList(model: model, entries: entries, draft: $draft, openPost: openPost)
+                LinkFileList(
+                    model: model,
+                    linkID: link.id,
+                    entries: entries,
+                    draft: $draft,
+                    openPost: openPost,
+                    onLevelSingle: audioEnabled ? { fileID in
+                        autoUnlockPending = true
+                        controller.levelSingle(fileID: fileID, linkID: link.id, shell: shell)
+                    } : nil
+                )
                 if let draft {
                     LinkAddFilesRow(draft: draft, add: addFiles)
                         .modifier(LinkListRow())
@@ -246,6 +297,16 @@ private struct LinkScreenList: View {
         .environment(\.editMode, .constant(draft == nil ? .inactive : .active))
         #endif
         .motion(Motion.rows, value: ids)
+        .onChange(of: gate.status) { _, status in
+            if status != .unlocked {
+                useNormalAudio = false
+            } else if autoUnlockPending {
+                autoUnlockPending = false
+                withAnimation(Motion.chip) { useNormalAudio = true }
+                shell.showStatus(Copy.AudioBulk.unlockedAuto)
+                controller.doneToken += 1
+            }
+        }
         .refreshable { if draft == nil { await model.shareSets.refresh() } }
     }
 
@@ -278,9 +339,11 @@ private struct LinkListRow: ViewModifier {
 /// while editing.
 private struct LinkFileList: View {
     let model: AppModel
+    let linkID: String
     let entries: [LinkFileEntry]
     @Binding var draft: ShareSetEdit?
     let openPost: (OpenedMedia) -> Void
+    var onLevelSingle: ((String) -> Void)? = nil
 
     var body: some View {
         if let current = draft {
@@ -291,8 +354,13 @@ private struct LinkFileList: View {
             .onMove { from, to in draft?.move(fromOffsets: from, toOffset: to) }
         } else {
             ForEach(entries) { entry in
-                LinkFileReadRow(entry: entry, model: model, openPost: openPost)
-                    .modifier(LinkListRow())
+                LinkFileReadRow(
+                    entry: entry,
+                    model: model,
+                    openPost: openPost,
+                    onLevelAudio: onLevelSingle.map { level in { level(entry.id) } }
+                )
+                .modifier(LinkListRow())
             }
         }
     }
@@ -302,22 +370,40 @@ private struct LinkFileList: View {
     }
 }
 
-/// A file's row while reading: a tap opens its post (when the library has it).
+/// A file's row while reading: a tap opens its post (when the library has it), and the trailing loudness pill can
+/// level or retry an un-leveled video without nesting buttons.
 private struct LinkFileReadRow: View {
     let entry: LinkFileEntry
     let model: AppModel
     let openPost: (OpenedMedia) -> Void
+    var onLevelAudio: (() -> Void)? = nil
+
+    private var canLevelRow: Bool {
+        guard onLevelAudio != nil, entry.shows, entry.kind == .video else { return false }
+        guard let audio = entry.audio else { return true }
+        return !audio.isLeveled && !audio.isRendering && !audio.isSilent
+    }
 
     var body: some View {
-        Button {
-            guard let opened = LinkEditUndo.opened(entry, model: model) else { return }
-            openPost(opened)
-        } label: {
-            LinkFileRow(entry: entry, model: model)
+        LinkFileRow(
+            entry: entry,
+            model: model,
+            onOpen: {
+                guard let opened = LinkEditUndo.opened(entry, model: model) else { return }
+                openPost(opened)
+            },
+            showAudioBadge: model.capabilities.audioLeveling,
+            onLevelAudio: onLevelAudio
+        )
+        .contextMenu {
+            if canLevelRow, let onLevelAudio {
+                Button(
+                    entry.audio?.state == .failed ? Copy.AudioBulk.retryLeveling : Copy.AudioBulk.levelAudio,
+                    systemImage: entry.audio?.state == .failed ? Symbol.AudioBulk.retry : Symbol.AudioBulk.waveform,
+                    action: onLevelAudio
+                )
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(entry.post == nil)
-        .accessibilityHint(entry.post == nil ? "" : Copy.LinkEdit.openPostHint)
     }
 }
 

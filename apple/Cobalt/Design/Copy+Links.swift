@@ -109,4 +109,75 @@ extension Copy {
         }
         static let addressA11y = "link address"
     }
+
+    /// Bulk audio loudness leveling & strictly gated `?audio=normal` share links.
+    enum AudioBulk {
+        static let segmentOriginal = "original audio"
+        static let segmentLeveled = "leveled"
+        static let queryTag = "?audio=normal"
+        static let copyLeveledLink = "copy ?audio=normal"
+        static let copiedNormal = "copied leveled link (?audio=normal)"
+        static let lockedSuffix = "?audio=normal locked"
+        static let normalActiveSuffix = "?audio=normal on"
+        static let noAudibleVideos = "no audible videos · ?audio=normal n/a"
+        static let leveling = "leveling…"
+        static let alreadyLeveled = "all videos already leveled"
+        static let unlockedAuto = "all leveled · ?audio=normal unlocked"
+        static let levelAudio = "level audio"
+        static let retryLeveling = "retry leveling"
+        static let badgeLeveledFallback = "leveled"
+        static let badgeLeveling = "leveling…"
+        static let badgeFailed = "failed"
+        static let badgeSilent = "silent"
+        static let badgeUnmeasured = "unmeasured"
+
+        static func levelRemaining(_ count: Int, target: AudioTargetLufs) -> String {
+            let what = count == 1 ? "1 video" : "\(count) videos"
+            return "level \(what) · \(target.rawValue) lufs"
+        }
+
+        static func retryRemaining(_ count: Int) -> String {
+            count == 1 ? "retry 1 video" : "retry \(count) videos"
+        }
+
+        static func levelShort(_ count: Int) -> String {
+            "level \(count)"
+        }
+
+        static func retryShort(_ count: Int) -> String {
+            "retry \(count)"
+        }
+
+        static func levelingProgress(done: Int, total: Int) -> String {
+            "leveling \(done)/\(total)…"
+        }
+
+        static func allLeveled(_ count: Int) -> String {
+            count == 1
+                ? "video leveled · ?audio=normal ready"
+                : "all \(count) videos leveled · ?audio=normal ready"
+        }
+
+        static func allLeveledCompact(_ count: Int) -> String {
+            count == 1 ? "1 video leveled" : "all \(count) videos leveled"
+        }
+
+        static func needsLevelCompact(audible: Int, remaining: Int) -> String {
+            if audible == 1 { return "1 video · needs leveling" }
+            let verb = remaining == 1 ? "needs" : "need"
+            return "\(audible) videos · \(remaining) \(verb) leveling"
+        }
+
+        static func queuedToast(_ count: Int) -> String {
+            count == 1 ? "leveling 1 video…" : "leveling \(count) videos…"
+        }
+
+        static func partialToast(queued: Int, failed: Int) -> String {
+            "leveling \(queued) · \(failed) couldn't start"
+        }
+
+        static func failedToast(_ count: Int) -> String {
+            count == 1 ? "couldn't start audio leveling" : "couldn't start leveling for \(count) videos"
+        }
+    }
 }

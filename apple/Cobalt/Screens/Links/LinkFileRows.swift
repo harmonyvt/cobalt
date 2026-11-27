@@ -51,17 +51,24 @@ struct LinkFileEntry: Identifiable, Equatable {
     let warning: Warning?
     let kind: Kind
     let duration: Double?
+    /// Live loudness state for video items (merged with optimistic rendering state when provided).
+    let audio: AudioLoudnessInfo?
 
     /// It shows on the link's page (and so in Discord).
     var shows: Bool { warning == nil }
 
     static func == (a: LinkFileEntry, b: LinkFileEntry) -> Bool {
         a.id == b.id && a.number == b.number && a.isNew == b.isNew && a.warning == b.warning && a.item == b.item
-            && a.post?.id == b.post?.id
+            && a.post?.id == b.post?.id && a.audio == b.audio
     }
 
     /// The draft's (or the link's) files, in order.
-    static func entries(_ ids: [String], link: ShareSet, lookup: LinkFileLookup) -> [LinkFileEntry] {
+    static func entries(
+        _ ids: [String],
+        link: ShareSet,
+        lookup: LinkFileLookup,
+        audioFor: (String, AudioLoudnessInfo?) -> AudioLoudnessInfo? = { _, a in a }
+    ) -> [LinkFileEntry] {
         let listed = Dictionary(link.items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         return ids.enumerated().map { index, id in
             let post = lookup.post(for: id)
@@ -70,11 +77,14 @@ struct LinkFileEntry: Identifiable, Equatable {
             let item = known ?? ShareSetItem(
                 id: id, url: file?.url, contentType: file?.contentType,
                 posterURL: file?.posterURL ?? post?.posterURL, width: file?.width, height: file?.height,
-                duration: file?.duration)
+                duration: file?.duration, audio: file?.audio)
+            let entryKind = kind(of: item.contentType)
+            let rawAudio = item.audio ?? file?.audio
             return LinkFileEntry(
                 id: id, number: index + 1, item: item, post: post, isNew: known == nil,
                 warning: known.flatMap { warning(for: $0, isPrivate: link.isPrivate, post: post, lookup: lookup) },
-                kind: kind(of: item.contentType), duration: item.duration ?? file?.duration)
+                kind: entryKind, duration: item.duration ?? file?.duration,
+                audio: entryKind == .video ? audioFor(id, rawAudio) : nil)
         }
     }
 
@@ -149,17 +159,28 @@ struct LinkFileThumb: View {
 
 // MARK: - a row
 
-/// A file's row: its number, its picture, the post's title, kind and length, and "not shown: …" when it no longer
-/// shows. Edit mode adds the minus in front (off at 2 files) and, on the Mac, the drag hint at the end.
+/// A file's row: its number, its picture, the post's title, kind and length, optional per-row loudness telemetry badge,
+/// and "not shown: …" when it no longer shows. Edit mode adds the minus in front (off at 2 files) and, on the Mac, the
+/// drag hint at the end.
 struct LinkFileRow: View {
     let entry: LinkFileEntry
     let model: AppModel
     /// Edit mode: the minus. Nil in read mode.
     var remove: (() -> Void)? = nil
     var canRemove = true
+    /// Read mode: tap on the row's content opens its post (kept separate from the trailing loudness badge so buttons never nest).
+    var onOpen: (() -> Void)? = nil
+    /// Show the per-row loudness badge on visible video rows when `features.audio_leveling` is enabled.
+    var showAudioBadge = false
+    /// Quick-level or retry callback for un-leveled / failed visible video rows.
+    var onLevelAudio: (() -> Void)? = nil
 
     private var name: String {
         entry.post.map { model.mediaItem(for: $0).titleText } ?? entry.kindWord
+    }
+
+    private var showsBadge: Bool {
+        remove == nil && showAudioBadge && entry.shows && entry.kind == .video
     }
 
     var body: some View {
@@ -177,6 +198,37 @@ struct LinkFileRow: View {
                 .disabled(!canRemove)
                 .help(canRemove ? Copy.LinkEdit.remove : Copy.LinkEdit.removeOff)
             }
+            if let onOpen {
+                Button(action: onOpen) {
+                    leadingContent
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(entry.post == nil)
+                .accessibilityLabel(Copy.LinkEdit.fileA11y(number: entry.number, name: name, meta: entry.meta, warning: entry.warningText))
+                .accessibilityHint(entry.post == nil ? "" : Copy.LinkEdit.openPostHint)
+            } else {
+                leadingContent
+                Spacer(minLength: 4)
+            }
+            trailing
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(rowBack, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(newOutline)
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: (remove == nil && onOpen == nil) ? .ignore : .contain)
+        .accessibilityLabel(
+            (remove == nil && onOpen == nil)
+                ? Copy.LinkEdit.fileA11y(number: entry.number, name: name, meta: entry.meta, warning: entry.warningText)
+                : ""
+        )
+    }
+
+    private var leadingContent: some View {
+        HStack(spacing: 10) {
             Text("\(entry.number)")
                 .font(Font.cobalt(12, .semibold, relativeTo: .caption))
                 .monospacedDigit()
@@ -185,16 +237,7 @@ struct LinkFileRow: View {
             LinkFileThumb(entry: entry, side: 48, radius: 10, model: model)
                 .opacity(entry.shows ? 1 : 0.45)
             LinkFileText(name: name, entry: entry)
-            Spacer(minLength: 4)
-            trailing
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
-        .background(rowBack, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(newOutline)
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .accessibilityElement(children: remove == nil ? .ignore : .contain)
-        .accessibilityLabel(Copy.LinkEdit.fileA11y(number: entry.number, name: name, meta: entry.meta, warning: entry.warningText))
     }
 
     private var rowBack: Color { CobaltColor.surface }
@@ -216,11 +259,18 @@ struct LinkFileRow: View {
                 .help(Copy.LinkEdit.moveHint)
                 .accessibilityHidden(true)
             #endif
-        } else if entry.post != nil {
-            Image(systemName: Symbol.LinkEdit.openPost)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(CobaltColor.caption)
-                .accessibilityHidden(true)
+        } else {
+            HStack(spacing: 6) {
+                if showsBadge {
+                    LinkRowAudioBadge(audio: entry.audio, onLevel: onLevelAudio)
+                }
+                if entry.post != nil {
+                    Image(systemName: Symbol.LinkEdit.openPost)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(CobaltColor.caption)
+                        .accessibilityHidden(true)
+                }
+            }
         }
     }
 }
@@ -253,13 +303,16 @@ private struct LinkFileText: View {
 
 // MARK: - the header
 
-/// The top of the link screen. Read: the title, the short link with "copy share" and share, the public/private badge,
-/// the collections it is in. Edit: the title as a field with its hint.
+/// The top of the link screen. Read: the title, the short link with "copy share" and share (or omitted when the Studio
+/// Audio Dock renders the segmented address bar directly beneath), the public/private badge, the collections it is in.
+/// Edit: the title as a field with its hint.
 struct LinkHeader: View {
     let link: ShareSet
     let controller: LinksController
     /// Edit mode's title field; nil reads.
     var title: Binding<String>? = nil
+    /// When false, the plain address row is omitted because `LinkAudioDock` renders the segmented address bar.
+    var showsAddressRow = true
 
     @Environment(\.shell) private var shell
 
@@ -285,7 +338,9 @@ struct LinkHeader: View {
                     .font(Font.cobalt(20, .semibold, relativeTo: .title3))
                     .foregroundStyle(CobaltColor.text)
                     .accessibilityAddTraits(.isHeader)
-                urlRow
+                if showsAddressRow {
+                    urlRow
+                }
                 LinkHeaderTags(link: link, controller: controller)
             }
         }

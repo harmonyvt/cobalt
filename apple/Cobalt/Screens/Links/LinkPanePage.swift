@@ -17,6 +17,10 @@ struct LinkPanePage: View {
     @State private var controller: LinksController
     /// The editor is pushed on the pane's own stack.
     @State private var editing = false
+    /// Whether `?audio=normal` is selected for copying/sharing (strictly gated by `AudioShareGate.status == .unlocked`).
+    @State private var useNormalAudio = false
+    /// Set when the owner starts leveling from this pane so `?audio=normal` switches on automatically once unlocked.
+    @State private var autoUnlockPending = false
 
     init(model: AppModel, id: String) {
         self.model = model
@@ -26,11 +30,13 @@ struct LinkPanePage: View {
 
     private var store: ShareSetStore { model.shareSets }
     private var link: ShareSet? { store.set(id) }
+    private var audioEnabled: Bool { model.capabilities.audioLeveling }
 
     var body: some View {
+        let gate = link.map { controller.audioGate(for: $0) }
         Group {
-            if let link {
-                page(link)
+            if let link, let gate {
+                page(link, gate: gate)
             } else if case .failed = store.state {
                 PaneGonePage(message: Copy.LinksPane.cantLoad)
             } else if store.state == .loaded {
@@ -39,7 +45,26 @@ struct LinkPanePage: View {
                 PaneLoadingPage()
             }
         }
-        .task { if store.sets.isEmpty { await store.refresh() } }
+        .task {
+            if store.sets.isEmpty { await store.refresh() }
+            if audioEnabled, !model.audioLeveling.loaded {
+                await model.audioLeveling.load()
+            }
+        }
+        .onChange(of: id) { _, _ in
+            useNormalAudio = false
+            autoUnlockPending = false
+        }
+        .onChange(of: gate?.status) { _, status in
+            if status != .unlocked {
+                useNormalAudio = false
+            } else if autoUnlockPending {
+                autoUnlockPending = false
+                withAnimation(Motion.chip) { useNormalAudio = true }
+                shell.showStatus(Copy.AudioBulk.unlockedAuto)
+                controller.doneToken += 1
+            }
+        }
         // revoked here or elsewhere: nothing left to show, so the pane hides
         .onChange(of: link == nil) { _, gone in
             if gone, store.state == .loaded { pane.close() }
@@ -52,17 +77,43 @@ struct LinkPanePage: View {
 
     // MARK: the page
 
-    private func page(_ link: ShareSet) -> some View {
-        let entries = LinkFileEntry.entries(link.items.map(\.id), link: link, lookup: LinkFileLookup(model: model))
+    private func page(_ link: ShareSet, gate: AudioShareGate) -> some View {
+        let audioStore = model.audioLeveling
+        let entries = LinkFileEntry.entries(
+            link.items.map(\.id),
+            link: link,
+            lookup: LinkFileLookup(model: model),
+            audioFor: { id, fallback in audioStore.optimisticAudio(for: id, fallback: fallback) }
+        )
+        let activeURL = audioEnabled ? gate.resolveURL(base: link.url, useNormal: useNormalAudio) : link.url
         return PanePage(
             title: link.displayTitle, subtitle: subtitle(link), more: moreActions(link)
         ) {
             LinkPaneHero(entries: entries, model: model)
-                .draggable(link.url)
+                .draggable(activeURL)
         } controls: {
-            LinkPaneControls(actions: gridActions(link))
+            LinkPaneControls(actions: gridActions(link, gate: gate))
         } body: {
-            LinkPaneBody(link: link, entries: entries, model: model, controller: controller)
+            LinkPaneBody(
+                link: link,
+                entries: entries,
+                model: model,
+                controller: controller,
+                gate: gate,
+                useNormalAudio: $useNormalAudio,
+                activeURL: activeURL,
+                onLevelRemaining: {
+                    autoUnlockPending = true
+                    controller.levelBulk(link: link, shell: shell)
+                },
+                onLevelSingle: { fileID in
+                    autoUnlockPending = true
+                    controller.levelSingle(fileID: fileID, linkID: link.id, shell: shell)
+                },
+                onBlockedTap: {
+                    controller.blockedAudioTap(gate: gate, shell: shell)
+                }
+            )
         } shelf: {
             PaneCard(Copy.LinkEdit.discordSection) {
                 LinkDiscordPreview(heading: heading(link), entries: entries.filter(\.shows), model: model)
@@ -86,11 +137,19 @@ struct LinkPanePage: View {
         return Copy.LinkEdit.captionTitle
     }
 
-    private func gridActions(_ link: ShareSet) -> [PaneAction] {
+    private func gridActions(_ link: ShareSet, gate: AudioShareGate) -> [PaneAction] {
         let copied = controller.copiedID == link.id
+        let normalActive = audioEnabled && gate.canShareNormalAudio && useNormalAudio
         var actions = [
-            PaneAction(Copy.Links.copyLink, systemImage: copied ? Symbol.Library.copied : Symbol.copyLink) {
-                controller.copy(link, shell: shell)
+            PaneAction(
+                normalActive ? Copy.AudioBulk.copyLeveledLink : Copy.Links.copyLink,
+                systemImage: copied ? Symbol.Library.copied : Symbol.copyLink
+            ) {
+                if audioEnabled {
+                    controller.copy(link, gate: gate, useNormal: useNormalAudio, shell: shell)
+                } else {
+                    controller.copy(link, shell: shell)
+                }
             },
         ]
         if model.capabilities.shareSetEdit {
@@ -229,33 +288,54 @@ struct LinkTileGrid<Tile: View>: View {
 
 // MARK: - the body
 
-/// The address (short link and the share sheet), the badge and collections, then the numbered files.
+/// The address (Studio Audio Dock when `audio_leveling` is enabled, else the plain short link and share sheet),
+/// the badge and collections, then the numbered files with per-row loudness telemetry.
 private struct LinkPaneBody: View {
     let link: ShareSet
     let entries: [LinkFileEntry]
     let model: AppModel
     let controller: LinksController
+    let gate: AudioShareGate
+    @Binding var useNormalAudio: Bool
+    let activeURL: URL
+    let onLevelRemaining: () -> Void
+    let onLevelSingle: (String) -> Void
+    let onBlockedTap: () -> Void
 
     @Environment(Pane.self) private var pane: Pane?
 
+    private var audioEnabled: Bool { model.capabilities.audioLeveling }
     private var shortLink: String { (link.url.host ?? "") + link.url.path }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Text(shortLink)
-                        .font(CobaltType.captionSmall)
-                        .foregroundStyle(CobaltColor.caption)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .accessibilityLabel(Copy.LinksPane.addressA11y)
-                    Spacer(minLength: 4)
-                    IconRow(spacing: 8, alignment: .trailing) {
-                        ShareLink(item: link.url) { Label(Copy.Links.share, systemImage: Symbol.share) }
-                            .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.linkBlue))
+                if audioEnabled {
+                    LinkAudioDock(
+                        link: link,
+                        gate: gate,
+                        target: model.audioLeveling.settings.target,
+                        useNormalAudio: $useNormalAudio,
+                        activeURL: activeURL,
+                        isSubmitting: controller.levelingBulk,
+                        onLevelRemaining: onLevelRemaining,
+                        onBlockedTap: onBlockedTap
+                    )
+                } else {
+                    HStack(spacing: 8) {
+                        Text(shortLink)
+                            .font(CobaltType.captionSmall)
+                            .foregroundStyle(CobaltColor.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .accessibilityLabel(Copy.LinksPane.addressA11y)
+                        Spacer(minLength: 4)
+                        IconRow(spacing: 8, alignment: .trailing) {
+                            ShareLink(item: link.url) { Label(Copy.Links.share, systemImage: Symbol.share) }
+                                .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.linkBlue))
+                        }
+                        .fixedSize()
                     }
-                    .fixedSize()
                 }
                 LinkHeaderTags(link: link, controller: controller)
             }
@@ -266,18 +346,38 @@ private struct LinkPaneBody: View {
                     SectionLabel(text: Copy.LinkEdit.countOf(entries.count, max: model.capabilities.limits.shareSetMax))
                 }
                 ForEach(entries) { entry in
-                    Button {
-                        if let post = entry.post { pane?.open(.post(post.id)) }
-                    } label: {
-                        LinkFileRow(entry: entry, model: model)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(entry.post == nil)
-                    .accessibilityHint(entry.post == nil ? "" : Copy.LinkEdit.openPostHint)
+                    row(entry)
                 }
             }
         }
         .padding(.horizontal, 16)
+    }
+
+    @ViewBuilder
+    private func row(_ entry: LinkFileEntry) -> some View {
+        let canLevelRow = audioEnabled && entry.shows && entry.kind == .video && {
+            guard let audio = entry.audio else { return true }
+            return !audio.isLeveled && !audio.isRendering && !audio.isSilent
+        }()
+        LinkFileRow(
+            entry: entry,
+            model: model,
+            onOpen: {
+                if let post = entry.post { pane?.open(.post(post.id)) }
+            },
+            showAudioBadge: audioEnabled,
+            onLevelAudio: canLevelRow ? { onLevelSingle(entry.id) } : nil
+        )
+        .contextMenu {
+            if canLevelRow {
+                Button(
+                    entry.audio?.state == .failed ? Copy.AudioBulk.retryLeveling : Copy.AudioBulk.levelAudio,
+                    systemImage: entry.audio?.state == .failed ? Symbol.AudioBulk.retry : Symbol.AudioBulk.waveform
+                ) {
+                    onLevelSingle(entry.id)
+                }
+            }
+        }
     }
 }
 
