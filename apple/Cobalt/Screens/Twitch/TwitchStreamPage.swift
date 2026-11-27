@@ -66,6 +66,9 @@ struct TwitchStreamPage: View {
     private var store: TwitchStore { model.twitch }
     private var host: TwitchPlayerHost { .shared }
     private var login: String { channels.first ?? "" }
+    private var secondaryLogin: String? { channels.count >= 2 ? channels[1] : nil }
+    private var primaryDisplayName: String { store.displayName(for: login) }
+    private var secondaryDisplayName: String { secondaryLogin.map { store.displayName(for: $0) } ?? "" }
     private var isDualStream: Bool { channels.count >= 2 }
     private var isMultiStream: Bool { channels.count >= 3 }
     private var canAddMoreStreams: Bool { channels.count < PaneItem.maxSimultaneousStreams }
@@ -512,7 +515,7 @@ struct TwitchStreamPage: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [Color(dualBarRGB: TwitchChannelAccent.primaryDarkRGB), Color(hex: 0x5b21b6)],
+                            colors: [Color(dualRGB: TwitchChannelAccent.primaryDarkRGB), Color(hex: 0x5b21b6)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -540,14 +543,14 @@ struct TwitchStreamPage: View {
         dualFocusChip(
             slot: .primary,
             name: primaryDisplayName,
-            accent: Color(dualBarRGB: TwitchChannelAccent.primaryDarkRGB),
+            accent: Color(dualRGB: TwitchChannelAccent.primaryDarkRGB),
             accessibilityID: "twitch.dual.statusFocusPrimary"
         )
 
         dualFocusChip(
             slot: .secondary,
             name: secondaryDisplayName,
-            accent: Color(dualBarRGB: TwitchChannelAccent.secondaryDarkRGB),
+            accent: Color(dualRGB: TwitchChannelAccent.secondaryDarkRGB),
             accessibilityID: "twitch.dual.statusFocusSecondary"
         )
 
@@ -893,7 +896,6 @@ struct TwitchStreamPage: View {
             canClip: store.canClip, clipState: store.clipState, offline: offline,
             onTV: onTV,
             onPlayPause: { host.setPaused(host.isPlaying) },
-            onJumpToLive: { host.jumpToLive() },
             onAddSecondStream: { streamPickerMode = .add },
             onClip: makeClip,
             onTVTap: { choosingTV = true },

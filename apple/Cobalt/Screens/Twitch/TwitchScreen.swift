@@ -222,7 +222,7 @@ private struct TwitchChannelList: View {
                     DuoAdaptiveGrid(minItemWidth: 250, spacing: 14, rowSpacing: 18, alignment: .leading) {
                         ForEach(store.following) { s in
                             let watching = isWatching(s.login)
-                            let canAddDual = currentPrimaryLogin != nil && !watching
+                            let canAddDual = currentStreamItem != nil && !watching
                             TwitchStreamCard(
                                 stream: s,
                                 watching: watching,
