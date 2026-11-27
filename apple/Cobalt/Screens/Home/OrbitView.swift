@@ -52,9 +52,17 @@ struct OrbitView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
 
-    private var shown: [StoredMedia] { Array(media.prefix(CurrentOrbitGeometry.maxItems)) }
+    /// Lightweight fingerprint of each shown planet's media/face paths so `.task` and `retained` updates avoid
+    /// deep `Array<StoredMedia> ==` comparisons and per-render string interpolations.
+    private struct OrbitMediaKey: Hashable {
+        let id: String
+        let faceID: String
+        let filePath: String?
+        let itemCount: Int
+        let posterPath: String?
+    }
 
-    private var sources: [String: (url: URL, duration: Double?)] {
+    private func sources(for shown: [StoredMedia]) -> [String: (url: URL, duration: Double?)] {
         var out: [String: (url: URL, duration: Double?)] = [:]
         for m in shown where m.face.kind == .original && files.onDisk.contains(m.id) && !PlanetStills.isStill(m.face) {
             if let url = m.face.fileURL { out[m.id] = (url, m.face.duration) }
@@ -63,10 +71,26 @@ struct OrbitView: View {
     }
 
     var body: some View {
+        let shown = Array(media.prefix(CurrentOrbitGeometry.maxItems))
+        let byID = Dictionary(shown.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let mediaKeys: [OrbitMediaKey] = shown.map { m in
+            let face = m.face
+            return OrbitMediaKey(
+                id: m.id,
+                faceID: face.id,
+                filePath: face.fileURL?.path,
+                itemCount: m.items.count,
+                posterPath: face.posterURL?.path)
+        }
         GeometryReader { proxy in
             let size = proxy.size
             TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !running)) { context in
-                orbit(size: size, now: context.date.timeIntervalSinceReferenceDate, date: context.date)
+                orbit(
+                    size: size,
+                    now: context.date.timeIntervalSinceReferenceDate,
+                    date: context.date,
+                    shown: shown,
+                    byID: byID)
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onFrame($0) }
         }
@@ -83,24 +107,21 @@ struct OrbitView: View {
         .opacity(dim)
         #endif
         .animation(reduceMotion ? Motion.fade : Motion.lights, value: dim)
-        .task(id: shown.map { m in
-            let face = m.face                       // computed: once per planet
-            return "\(m.id)|\(face.id)|\(face.fileURL?.path ?? "")|\(m.items.count)|\(face.posterURL?.path ?? "")"
-        }) {
+        .task(id: mediaKeys) {
             let planets = shown
             files = await Task.detached(priority: .utility) { OrbitFiles.resolve(planets) }.value
         }
-        .onChange(of: shown, initial: true) { _, now in
-            for m in now { retained[m.id] = m }
+        .onChange(of: mediaKeys, initial: true) { _, _ in
+            for m in shown { retained[m.id] = m }
             if retained.count > 80 {
-                let keep = Set(now.map(\.id)).union(scene.dynamics.leaving.map(\.entry))
+                let keep = Set(shown.map(\.id)).union(scene.dynamics.leaving.map(\.entry))
                 retained = retained.filter { keep.contains($0.key) }
             }
         }
         .onDisappear { pool.stopAll() }
     }
 
-    private func orbit(size: CGSize, now: Double, date: Date) -> some View {
+    private func orbit(size: CGSize, now: Double, date: Date, shown: [StoredMedia], byID: [String: StoredMedia]) -> some View {
         let empty = shown.isEmpty && !scene.ids.contains(OrbitScene.focusID)
         let t = date.timeIntervalSince(star.since)
         let push = StarMath.push(star, t: t, reduced: reduceMotion)
@@ -109,28 +130,31 @@ struct OrbitView: View {
         let layout = scene.geometry(at: now, push: push)
         let time = scene.orbitTime(at: now)
         let slots = scene.slots(at: now, geometry: layout, orbitTime: time)
-        let byID = Dictionary(shown.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let front = layout.frontEntries(slots.filter { byID[$0.entry] != nil })
         // born at the visual centre of the orbit area (CONTRACT-ORBIT 1b); the bands part around it
         let starPos = scene.starPoint
         let newest = slots.first { $0.index == 0 }
         let band = scheme == .dark ? 0.17 : 0.16
         let lane = scheme == .dark ? 0.08 : 0.07
+        let guideSpecs = scene.guideSpecs(at: now, geometry: layout)
         let items = placed(slots, empty: empty, byID: byID)
         let alone: (item: Placed, media: StoredMedia, caption: OrbitCaption)? = {
             guard !empty, scene.ids.count == 1, let item = items.first, let m = item.media, let c = caption(m) else { return nil }
             return (item, m, c)
         }()
         return ZStack(alignment: .topLeading) {
-            // the bands, as hairlines, and a fainter lane either side; a new band draws itself from the apex
-            Canvas { ctx, _ in
-                for guide in scene.guides(at: now, geometry: layout) {
-                    ctx.stroke(guide.path, with: .color(Color.primary.opacity(guide.isLane ? lane : band)), lineWidth: 1)
-                }
-            }
-            .frame(width: size.width, height: size.height)
-            .zIndex(-100_000)
-            .allowsHitTesting(false)
+            // the bands, as hairlines, and a fainter lane either side; cached via Equatable when settled at rest
+            OrbitGuidesCanvas(
+                size: size,
+                center: layout.center,
+                edge: layout.edge,
+                bottom: layout.bottom,
+                specs: guideSpecs,
+                bandAlpha: band,
+                laneAlpha: lane)
+                .equatable()
+                .zIndex(-100_000)
+                .allowsHitTesting(false)
             // keyed by the media (not the slot), so a planet's view, its player and its flipbook stay
             // with it when the order changes, and when its face changes
             ForEach(items) { item in
@@ -181,13 +205,13 @@ struct OrbitView: View {
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .onChange(of: front, initial: true) { _, ids in
-            pool.sync(front: ids, sources: sources, active: playersEnabled)
+            pool.sync(front: ids, sources: sources(for: shown), active: playersEnabled)
         }
         .onChange(of: files.onDisk) { _, _ in
-            pool.sync(front: front, sources: sources, active: playersEnabled)
+            pool.sync(front: front, sources: sources(for: shown), active: playersEnabled)
         }
         .onChange(of: playersEnabled) { _, active in
-            if !active { pool.stopAll() } else { pool.sync(front: front, sources: sources, active: true) }
+            if !active { pool.stopAll() } else { pool.sync(front: front, sources: sources(for: shown), active: true) }
         }
     }
 
@@ -204,6 +228,39 @@ struct OrbitView: View {
             guard slot.opacity > 0.04, let media = byID[slot.entry] ?? retained[slot.entry] else { return nil }
             return Placed(id: slot.entry, slot: slot, media: media)
         }
+    }
+}
+
+/// Cached orbit hairlines: skips Canvas evaluation on every 30 fps tick whenever the band radii and draw progress are settled.
+private struct OrbitGuidesCanvas: View, Equatable {
+    let size: CGSize
+    let center: CGPoint
+    let edge: CGFloat
+    let bottom: CGFloat
+    let specs: [OrbitGuideArcSpec]
+    let bandAlpha: Double
+    let laneAlpha: Double
+
+    var body: some View {
+        Canvas { ctx, _ in
+            let bandStyle = GraphicsContext.Shading.color(Color.primary.opacity(bandAlpha))
+            let laneStyle = GraphicsContext.Shading.color(Color.primary.opacity(laneAlpha))
+            for spec in specs {
+                ctx.stroke(
+                    RainbowArcsGeometry.arcPath(center: center, radius: spec.radius, edge: edge, bottom: bottom, draw: spec.draw),
+                    with: bandStyle,
+                    lineWidth: 1)
+                ctx.stroke(
+                    RainbowArcsGeometry.arcPath(center: center, radius: spec.radius - spec.lane, edge: edge, bottom: bottom, draw: spec.draw),
+                    with: laneStyle,
+                    lineWidth: 1)
+                ctx.stroke(
+                    RainbowArcsGeometry.arcPath(center: center, radius: spec.radius + spec.lane, edge: edge, bottom: bottom, draw: spec.draw),
+                    with: laneStyle,
+                    lineWidth: 1)
+            }
+        }
+        .frame(width: size.width, height: size.height)
     }
 }
 
@@ -283,9 +340,9 @@ private struct PlanetPicture: View {
                 }
             } else if playing, flipbooks, ring < 2, !face.previewFrameURLs.isEmpty {
                 // tier (b): the planets on the two inner bands flip through their small preview frames
-                // (6 and 5 fps); no player, nothing bigger than 160 px is decoded. The outer bands show
+                // (5 and 4 fps); no player, nothing bigger than 160 px is decoded. The outer bands show
                 // their posters (a flipbook per planet over 35 planets is a lot of decoding for a sliver).
-                FlipbookView(urls: face.previewFrameURLs, fps: ring == 0 ? 6 : 5)
+                FlipbookView(urls: face.previewFrameURLs, fps: ring == 0 ? 5 : 4)
             }
             // tier (c): the poster above stays under everything until frames exist
             }
@@ -318,11 +375,23 @@ private struct OrbitThumb: View, Equatable {
     @State private var sweep: Double = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Everything the body draws. The pool and the namespace live as long as the orbit and are left out.
+    /// O(1) comparison of only the rendered properties (avoids deep `StoredMedia` / `[StoredVideo]` array equality
+    /// ~1,050 times/sec while the 30 fps orbit ticks). The pool and namespace live as long as the orbit.
     nonisolated static func == (a: OrbitThumb, b: OrbitThumb) -> Bool {
-        a.box == b.box && a.ring == b.ring && a.scale == b.scale && a.isFront == b.isFront && a.playing == b.playing
-            && a.flipbooks == b.flipbooks && a.hasFile == b.hasFile && a.still == b.still && a.turn == b.turn
-            && a.fresh == b.fresh && a.pops == b.pops && a.showsLabel == b.showsLabel && a.media == b.media
+        guard a.box == b.box, a.ring == b.ring, a.scale == b.scale, a.isFront == b.isFront,
+              a.playing == b.playing, a.flipbooks == b.flipbooks, a.hasFile == b.hasFile,
+              a.still == b.still, a.turn == b.turn, a.fresh == b.fresh, a.pops == b.pops,
+              a.showsLabel == b.showsLabel,
+              a.media.id == b.media.id, a.media.isHosted == b.media.isHosted,
+              a.media.isGallery == b.media.isGallery, a.media.items.count == b.media.items.count,
+              a.media.webps.count == b.media.webps.count
+        else { return false }
+        let af = a.media.face
+        let bf = b.media.face
+        return af.id == bf.id && af.kind == bf.kind && af.duration == bf.duration
+            && af.fileURL == bf.fileURL && af.posterURL == bf.posterURL
+            && af.previewFrameURLs.count == bf.previewFrameURLs.count
+            && a.media.original?.posterURL == b.media.original?.posterURL
     }
 
     private var size: CGSize { box }
@@ -391,11 +460,16 @@ private struct OrbitThumb: View, Equatable {
             }
         }
         .background {
-            // the drop shadow as a blurred copy of the planet's shape: a `.shadow` on the whole planet made each
-            // of ~35 moving planets (players included) render offscreen on every frame
-            shape.fill(Color.black.opacity(0.35))
-                .blur(radius: 8)
-                .offset(y: 5)
+            // Zero-blur layered drop shadow: avoids 35 per-frame offscreen Gaussian blur render passes while the orbit turns.
+            ZStack {
+                shape.fill(Color.black.opacity(0.08))
+                    .padding(-4)
+                    .offset(y: 6)
+                shape.fill(Color.black.opacity(0.18))
+                    .padding(-1.5)
+                    .offset(y: 3.5)
+            }
+            .allowsHitTesting(false)
         }
         .scaleEffect(scale * popScale)
         .accessibilityHidden(true)
@@ -432,14 +506,26 @@ struct FlipbookView: View {
     var body: some View { mediaBody.mediaMask() }
 
     @ViewBuilder private var mediaBody: some View {
-        TimelineView(.periodic(from: Date(timeIntervalSinceReferenceDate: 0), by: 1 / fps)) { context in
-            let i = Int(context.date.timeIntervalSinceReferenceDate * fps) % max(1, urls.count)
-            Color.clear
-                .overlay {
-                    if let image { Image(decorative: image.image, scale: 1).resizable().scaledToFill() }
+        if urls.count <= 1 {
+            frameSurface
+                .task(id: urls.first) {
+                    guard let first = urls.first else { return }
+                    if let box = await FlipbookLoader.shared.frame(for: first, maxPixel: 160) { image = box }
                 }
-                .clipped()
-                .task(id: i) { if let box = await FlipbookLoader.shared.frame(for: urls[i], maxPixel: 160) { image = box } }
+        } else {
+            TimelineView(.periodic(from: Date(timeIntervalSinceReferenceDate: 0), by: 1 / fps)) { context in
+                let i = Int(context.date.timeIntervalSinceReferenceDate * fps) % urls.count
+                frameSurface
+                    .task(id: i) { if let box = await FlipbookLoader.shared.frame(for: urls[i], maxPixel: 160) { image = box } }
+            }
         }
+    }
+
+    private var frameSurface: some View {
+        Color.clear
+            .overlay {
+                if let image { Image(decorative: image.image, scale: 1).resizable().scaledToFill() }
+            }
+            .clipped()
     }
 }

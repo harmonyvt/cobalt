@@ -291,7 +291,7 @@ struct HomeScreen: View {
     private var tray: JobTray {
         JobTray(
             model: model, style: trayStyle, cap: trayCap, note: $trayNote, openRequest: trayOpenRequest,
-            onFrame: { trayFrame = $0 })
+            onFrame: { updateRect(&trayFrame, to: $0) })
     }
 
     /// Room the planet leaves at the top for the pill (the planet sits under the title in a single column).
@@ -321,11 +321,33 @@ struct HomeScreen: View {
         return "paste"
     }
 
+    /// O(1) key for detecting new arrivals in `model.store.media` without allocating and diffing all media IDs on every body pass.
+    private struct ArrivalsKey: Equatable {
+        let count: Int
+        let newestID: String?
+    }
+
+    private func updateFloat(_ target: inout CGFloat, to value: CGFloat) {
+        guard abs(target - value) > 0.5 else { return }
+        target = value
+    }
+
+    private func updateRect(_ target: inout CGRect, to value: CGRect) {
+        guard abs(target.minX - value.minX) > 0.5
+            || abs(target.minY - value.minY) > 0.5
+            || abs(target.width - value.width) > 0.5
+            || abs(target.height - value.height) > 0.5
+        else { return }
+        target = value
+    }
+
     // MARK: body
 
     var body: some View {
-        // the planets, worked out once per pass (the orbit, its entries, the caption and VoiceOver all use them)
+        // the planets, worked out once per pass (the orbit, its entries, the caption, recent strip and VoiceOver all use them)
         let media = orbitMedia
+        let currentEntries = entries(for: media)
+        let arrivalsKey = ArrivalsKey(count: model.store.media.count, newestID: model.store.media.first?.id)
         return GeometryReader { proxy in
             ZStack {
                 // The orbit is the page: full-bleed, under the status bar, the tab bar and the
@@ -333,7 +355,7 @@ struct HomeScreen: View {
                 // floats over it as glass.
                 orbitLayer(media)
                 ScrollView {
-                    column(height: proxy.size.height)
+                    column(height: proxy.size.height, recent: Array(media.prefix(10)))
                         .environment(\.homeHeight, proxy.size.height)
                         .frame(minHeight: proxy.size.height)
                         .padding(.horizontal, tier == .compact ? Metrics.gutter : 28)
@@ -342,8 +364,8 @@ struct HomeScreen: View {
                 }
                 .scrollBounceBehavior(.basedOnSize)
                 .scrollIndicators(.hidden)
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { contentFrame = $0 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { updateFloat(&contentWidth, to: $0) }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { updateRect(&contentFrame, to: $0) }
                 if focusActive {
                     FocusLayer(
                         model: model, pipeline: pipeline, contentWidth: contentWidth, phase: focusPhase,
@@ -371,8 +393,8 @@ struct HomeScreen: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: trayStyle == .panel || !trayCentered ? .topTrailing : .top)
                 }
             }
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { homeFrame = $0 }
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { updateRect(&homeFrame, to: $0) }
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { updateFloat(&topInset, to: $0) }
         }
         .modifier(HomeSavePane(pane: pane, wanted: savePaneID, inspectorOpen: $inspectorOpen))
         .navigationTitle(Copy.appName)
@@ -388,9 +410,11 @@ struct HomeScreen: View {
                 VStack(spacing: 1) {
                     Text(Copy.appName)
                         .font(Font.cobalt(17, .semibold, relativeTo: .headline))
+                        .lineLimit(1)
                         .accessibilityAddTraits(.isHeader)
                     Text(subtitle)
                         .font(Font.cobalt(12, .regular, relativeTo: .caption))
+                        .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
@@ -460,7 +484,7 @@ struct HomeScreen: View {
             // over while a finished result was showing): lift the new run's planet.
             if focusActive, stage == .focus { enterFocus(fromWork: false) }
         }
-        .onChange(of: model.store.media.map(\.id), initial: true) { _, ids in noteArrivals(ids) }
+        .onChange(of: arrivalsKey, initial: true) { _, _ in noteArrivals(model.store.media.map(\.id)) }
         .onChange(of: failure, initial: true) { _, new in
             if new != nil { failureToken += 1 }
         }
@@ -470,8 +494,8 @@ struct HomeScreen: View {
         }
         .onChange(of: starCategory) { old, new in advanceStar(from: old, to: new) }
         .onChange(of: starSignal) { _, new in if starCategory == .working { heldSignal = new } }
-        .onChange(of: entries(for: media), initial: true) { _, _ in syncOrbit() }
-        .onChange(of: orbitFrame.size) { _, _ in syncOrbit() }
+        .onChange(of: currentEntries, initial: true) { _, entries in syncOrbit(entries: entries) }
+        .onChange(of: orbitFrame.size) { _, _ in syncOrbit(entries: currentEntries) }
         .onChange(of: orbitSpeed, initial: true) { old, new in
             // a finger stops the orbit quickly; letting go (or coming back to the screen) eases it up gently
             let rate: Double? = holding ? 9 : (old == 0 && new > 0 ? 1.4 : nil)
@@ -515,14 +539,14 @@ struct HomeScreen: View {
         let solo = soloCaption(media)
         return OrbitView(
             media: media, scene: scene, running: orbitRuns, dim: orbitDim, freshID: freshID,
-            // behind a lifted focus the orbit is a dim backdrop: its players and webps stop like its flipbooks, so the
-            // focus video is not one decoder among four (the posters stay)
+            // behind a lifted focus or dimmed work/failure card the orbit is a backdrop: stop its flipbooks (and players
+            // behind focus) so background decoding never competes with the active card or focus video
             popID: popID, pool: pool, playersEnabled: motionAllowed && !(focusActive && focusLifted),
-            flipbooksEnabled: !(focusActive && focusLifted),
+            flipbooksEnabled: stage == .idle && !(focusActive && focusLifted),
             star: star, signal: shownSignal, poster: pipeline.posterFrame,
             lowPower: lowPower, zoom: zoom,
             caption: { media in solo?.id == media.id ? solo?.caption : nil },
-            onFrame: { orbitFrame = $0 })
+            onFrame: { updateRect(&orbitFrame, to: $0) })
             .ignoresSafeArea()
             // one of two screens: the planets stay in this one (they crossed the hinge) and fade out at its sides
             // instead of stopping on a hard line; the extension under the sidebar would smear across the hinge
@@ -557,14 +581,14 @@ struct HomeScreen: View {
             set: { if !$0, let f = failure, isBlocking(f) { pipeline.reset() } })
     }
 
-    private func column(height: CGFloat) -> some View {
+    private func column(height: CGFloat, recent: [StoredMedia]) -> some View {
         let isIdle = stage == .idle
         return VStack(spacing: 12) {
             Spacer(minLength: 0)
             if trayStyle == .above { tray }
-            if tier == .compact, isIdle, !recentMedia.isEmpty {
-                RecentSavesStrip(model: model, media: recentMedia)
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { stripFrame = $0 }
+            if tier == .compact, isIdle, !recent.isEmpty {
+                RecentSavesStrip(model: model, media: recent)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { updateRect(&stripFrame, to: $0) }
                     .onDisappear { stripFrame = .zero }
                     .transition(.opacity)
             }
@@ -576,7 +600,7 @@ struct HomeScreen: View {
                     if isIdle { circles }
                 }
             }
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { stackTop = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { updateFloat(&stackTop, to: $0) }
         }
         .padding(.top, 8)
         .padding(.bottom, 16)
@@ -605,16 +629,13 @@ struct HomeScreen: View {
             ? Copy.emptyOrbit : Copy.offline(count: usage.mediaCount, bytes: usage.bytes)
     }
 
-    /// The newest saves for the phone's strip (hidden posts stay out, like the orbit).
-    private var recentMedia: [StoredMedia] { Array(model.visibleStoredMedia.prefix(10)) }
-
     /// Paste and the file source. On the phone: labelled capsules (paste, photos, files). Elsewhere: the glass circles with their
     /// captions. 7tv search is not here: it lives with the live tools.
     @ViewBuilder
     private var circles: some View {
         if tier == .compact {
             CaptureControls(model: model, glass: glass)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { circlesFrame = $0 }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { updateRect(&circlesFrame, to: $0) }
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 4)
         } else {
@@ -624,7 +645,7 @@ struct HomeScreen: View {
                     CircleLabel(id: "file", glass: glass, title: Copy.file, systemImage: Symbol.file, a11y: Copy.fileA11y, menu: true) {}
                 }
             }
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { circlesFrame = $0 }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { updateRect(&circlesFrame, to: $0) }
             .frame(maxWidth: .infinity)
             .padding(.bottom, 4)
         }
@@ -646,7 +667,8 @@ struct HomeScreen: View {
             }
         case .failed(let f) where !keepsFocus(f) && !isBlocking(f):
             InlineStatus(message: TrayCopy.failure(f, lineMax: model.capabilities.limits.lineMax)) {
-                Button { pipeline.reset() } label: { Label(Copy.ok, systemImage: Symbol.checkmark) }.buttonStyle(.cobaltIcon(.small))
+                Button { pipeline.reset() } label: { Label(Copy.ok, systemImage: Symbol.checkmark) }
+                    .buttonStyle(WorkCardActionButtonStyle())
             }
         case .image(let info):
             ImageCardContent(pipeline: pipeline, info: info) { pipeline.reset() }
@@ -664,11 +686,12 @@ struct HomeScreen: View {
             VStack(alignment: .leading, spacing: 10) {
                 ProgressCard(story: .photoImport(fraction: fraction))
                 Button { photoImport.cancel() } label: { Label(Copy.cancel, systemImage: Symbol.close) }
-                    .buttonStyle(.cobaltIcon(.small))
+                    .buttonStyle(WorkCardActionButtonStyle())
             }
         case .failed(let f):
             InlineStatus(message: Copy.failure(f)) {
-                Button { photoImport.dismissFailure() } label: { Label(Copy.ok, systemImage: Symbol.checkmark) }.buttonStyle(.cobaltIcon(.small))
+                Button { photoImport.dismissFailure() } label: { Label(Copy.ok, systemImage: Symbol.checkmark) }
+                    .buttonStyle(WorkCardActionButtonStyle())
             }
         case .idle:
             EmptyView()
@@ -777,9 +800,9 @@ struct HomeScreen: View {
     /// A new entry list (an arrival, a deletion, a face with another shape): planets whose slot changed hold
     /// their angle, then slide to the new one; the bands' radii and the planets' box ease; a band the count
     /// needs is born and one it does not need undraws (`OrbitScene.sync`, orbit E).
-    private func syncOrbit() {
+    private func syncOrbit(entries: [OrbitEntry]? = nil) {
         var sc = scene
-        sc.sync(entries: orbitEntries, now: now, instant: reduceMotion)
+        sc.sync(entries: entries ?? orbitEntries, now: now, instant: reduceMotion)
         guard sc.dynamics != orbit else { return }
         orbit = sc.dynamics
         kick()

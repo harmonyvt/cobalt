@@ -49,33 +49,34 @@ struct ActivityPill: View {
             ActivitySheetRoute.shared.segment = state.segment
             model.showQueue()
         } label: {
-            label(state)
+            iconBadge(state)
         }
         .accessibilityIdentifier("activity.pill")
         .accessibilityLabel(Copy.Activity.pillA11yLabel)
         .accessibilityValue(Copy.Activity.pillValue(state))
         .accessibilityHint(Copy.Activity.pillHint)
-        .help(Copy.Activity.title)
+        .help(Copy.Activity.pillValue(state))
         // what is waking is read off the activity list while a pill is on screen (never asked of the server)
         .onChange(of: summary.items, initial: true) { _, items in
             model.health.sample(items, now: Date())
         }
     }
 
-    private func label(_ state: ActivityPillState) -> some View {
-        HStack(spacing: 5) {
+    /// Fixed-footprint icon + micro-badge so the toolbar item stays strictly icon-sized on both horizontal bars and
+    /// iPhone Duo's Vertical Controls side rail (variable-width animated text in `.topBarTrailing` stretches UIKit's
+    /// `FloatingBarHostingView` glass platter across the canvas and stalls `SwiftUITextAnimationProviderClass`).
+    private func iconBadge(_ state: ActivityPillState) -> some View {
+        ZStack {
             symbol(state)
-            if let text = Copy.Activity.pill(state) {
-                Text(text)
-                    .font(Font.cobalt(13, .semibold, relativeTo: .footnote))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .contentTransition(reduceMotion ? .identity : .numericText())
-                    .transition(.opacity)
-            }
         }
         .foregroundStyle(ink(state))
-        .animation(reduceMotion ? Motion.fade : Motion.rows, value: state)
+        .frame(width: 28, height: 28)
+        .overlay(alignment: .topTrailing) {
+            if let badge = badge(state) {
+                microBadge(badge.count, color: badge.color, ink: badge.ink)
+            }
+        }
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -83,22 +84,70 @@ struct ActivityPill: View {
         switch state {
         case .attention:
             Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 16, weight: .semibold))
         case .offline:
             Image(systemName: "wifi.slash")
-        case .active:
-            Image(systemName: "circle.fill")
-                .font(.system(size: 8))
-                .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+                .font(.system(size: 15, weight: .semibold))
+        case .active(let count, let fraction):
+            if let fraction {
+                ZStack {
+                    Circle()
+                        .stroke(CobaltColor.text.opacity(0.22), lineWidth: 2.2)
+                    Circle()
+                        .trim(from: 0, to: max(0.08, min(1, fraction)))
+                        .stroke(CobaltColor.text, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    Text(count > 9 ? "9+" : "\(max(1, count))")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                }
+                .frame(width: 20, height: 20)
+            } else {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 16, weight: .semibold))
+                    .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+            }
         case .syncing:
             Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 15, weight: .semibold))
                 .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
         case .waking:
             Image(systemName: "circle.lefthalf.filled")
+                .font(.system(size: 16, weight: .semibold))
                 .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
         case .idle:
             // zero noise: a quiet check, nothing to read
             Image(systemName: "checkmark.circle")
+                .font(.system(size: 16, weight: .medium))
         }
+    }
+
+    private func badge(_ state: ActivityPillState) -> (count: Int, color: Color, ink: Color)? {
+        switch state {
+        case .attention(let retries, _):
+            return retries > 0 ? (retries, ActivityInk.bad, .white) : nil
+        case .offline(let pending):
+            return pending > 0 ? (pending, ActivityInk.bad, .white) : nil
+        case .active(let count, let fraction):
+            return fraction == nil && count > 0 ? (count, CobaltColor.text, CobaltColor.onText) : nil
+        case .syncing(let pending):
+            return pending > 0 ? (pending, ActivityInk.info, .white) : nil
+        case .waking, .idle:
+            return nil
+        }
+    }
+
+    private func microBadge(_ count: Int, color: Color, ink: Color) -> some View {
+        Text(count > 9 ? "9+" : "\(count)")
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(ink)
+            .padding(.horizontal, 3.5)
+            .frame(minWidth: 14, minHeight: 14)
+            .background(color, in: Capsule())
+            .offset(x: 4, y: -3)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     private func ink(_ state: ActivityPillState) -> Color {
