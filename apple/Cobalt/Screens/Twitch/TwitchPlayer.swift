@@ -180,6 +180,7 @@ struct TwitchSlotState: Equatable, Sendable {
     var isLoading: Bool = false
     var isBuffering: Bool = false
     var isOffline: Bool = false
+    var hasPlaybackError: Bool = false
     var variants: [TwitchVariant] = []
     var selectedVariantID: String? = nil
 
@@ -262,6 +263,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     private(set) var isLoading = false
     private(set) var isBuffering = false
     private(set) var isOffline = false
+    private(set) var hasPlaybackError = false
     private(set) var isMuted = false
     private(set) var isLowLatencyStream = false
     /// True from a jump to live until the delay settles.
@@ -277,6 +279,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     private(set) var secondaryIsLoading = false
     private(set) var secondaryIsBuffering = false
     private(set) var secondaryIsOffline = false
+    private(set) var secondaryHasPlaybackError = false
     private(set) var secondaryVariants: [TwitchVariant] = []
     private(set) var secondarySelectedVariantID: String?
     /// True while non-spotlight streams have been stepped down under `AppLifecycle.snapshot.shouldThrottle`.
@@ -330,7 +333,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             #if os(macOS)
             return true
             #else
-            return !slotState(for: multiMixer.spotlightSlot).isOffline && (isPiPPossible || isPiPActive)
+            let st = slotState(for: multiMixer.spotlightSlot)
+            return !st.isOffline && !st.hasPlaybackError && (isPiPPossible || isPiPActive)
             #endif
         }
         if isDualStream {
@@ -342,7 +346,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             #endif
         }
         return activeMode == .lowLatency && !isAirPlayingVideo && !isAudioOnly
-            && channel != nil && !isOffline && (isPiPPossible || isPiPActive)
+            && channel != nil && !isOffline && !hasPlaybackError && (isPiPPossible || isPiPActive)
     }
 
     /// Seconds behind live more than this stream's best, nil until known.
@@ -863,8 +867,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             if !isPiPOwningViews {
                 pipController.attach(to: nativeView(for: spotlightSlot).displayLayer)
             }
+            let spotState = slotState(for: spotlightSlot)
             allowSingleAutoPiP = activeMode == .lowLatency && !userPaused
-                && !slotState(for: spotlightSlot).isOffline && !TwitchTV.shared.onTV
+                && !spotState.isOffline && !spotState.hasPlaybackError && !TwitchTV.shared.onTV
             allowDualAutoPiP = false
         } else if isDualStream {
             allowSingleAutoPiP = false
@@ -872,7 +877,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 && !userPaused && !TwitchTV.shared.onTV
         } else {
             allowSingleAutoPiP = activeMode == .lowLatency && !isAirPlayingVideo && !isAudioOnly
-                && channel != nil && !userPaused && !isOffline && !TwitchTV.shared.onTV
+                && channel != nil && !userPaused && !isOffline && !hasPlaybackError && !TwitchTV.shared.onTV
             allowDualAutoPiP = false
         }
         dualPiPController.setAutoStartFromInline(allowDualAutoPiP)
@@ -1086,6 +1091,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 isLoading: isLoading,
                 isBuffering: isBuffering,
                 isOffline: isOffline,
+                hasPlaybackError: hasPlaybackError,
                 variants: variants,
                 selectedVariantID: selectedVariantID
             )
@@ -1097,6 +1103,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 isLoading: secondaryIsLoading,
                 isBuffering: secondaryIsBuffering,
                 isOffline: secondaryIsOffline,
+                hasPlaybackError: secondaryHasPlaybackError,
                 variants: secondaryVariants,
                 selectedVariantID: secondarySelectedVariantID
             )
@@ -1435,7 +1442,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
 
         var liveByChannel: [String: LiveSlotSnapshot] = [:]
-        if let ch = channel, let eng = nativeEngine, !isOffline {
+        if let ch = channel, let eng = nativeEngine, !isOffline, !hasPlaybackError {
             liveByChannel[ch] = LiveSlotSnapshot(
                 channel: ch,
                 view: madeNative,
@@ -1444,7 +1451,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 manualQuality: manualQualityOverrides.contains(.a)
             )
         }
-        if let ch = secondaryChannel, let eng = secondaryNativeEngine, !secondaryIsOffline {
+        if let ch = secondaryChannel, let eng = secondaryNativeEngine, !secondaryIsOffline, !secondaryHasPlaybackError {
             liveByChannel[ch] = LiveSlotSnapshot(
                 channel: ch,
                 view: madeSecondaryNative,
@@ -1455,7 +1462,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
         for slot in [TwitchStreamSlot.c, .d] {
             if let runtime = extraSlots[slot], let ch = runtime.channel, let eng = runtime.engine,
-               !(extraSlotStates[slot]?.isOffline ?? false) {
+               !(extraSlotStates[slot]?.isOffline ?? false),
+               !(extraSlotStates[slot]?.hasPlaybackError ?? false) {
                 liveByChannel[ch] = LiveSlotSnapshot(
                     channel: ch,
                     view: runtime.madeView,
@@ -1553,6 +1561,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             isLoading = state.isLoading
             isBuffering = state.isBuffering
             isOffline = state.isOffline
+            hasPlaybackError = state.hasPlaybackError
             variants = state.variants
             selectedVariantID = state.selectedVariantID
             rebindPrimaryEventStream(for: engine)
@@ -1565,6 +1574,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             secondaryIsLoading = state.isLoading
             secondaryIsBuffering = state.isBuffering
             secondaryIsOffline = state.isOffline
+            secondaryHasPlaybackError = state.hasPlaybackError
             secondaryVariants = state.variants
             secondarySelectedVariantID = state.selectedVariantID
             rebindSecondaryEventStream(for: engine)
@@ -1603,6 +1613,27 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         case .b:
             startSecondaryNative(ch)
         case .c, .d:
+            startExtraNative(ch, slot: slot)
+        }
+    }
+
+    /// Restarts native playback for a single slot after a playback error without disturbing other slots.
+    func retrySlot(_ slot: TwitchStreamSlot) {
+        guard activeMode == .lowLatency, let ch = channel(for: slot) else { return }
+        switch slot {
+        case .a:
+            hasPlaybackError = false
+            isOffline = false
+            startNative(ch)
+        case .b:
+            secondaryHasPlaybackError = false
+            secondaryIsOffline = false
+            startSecondaryNative(ch)
+        case .c, .d:
+            var st = extraSlotStates[slot] ?? TwitchSlotState(channel: ch)
+            st.hasPlaybackError = false
+            st.isOffline = false
+            extraSlotStates[slot] = st
             startExtraNative(ch, slot: slot)
         }
     }
@@ -1663,8 +1694,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             swapPrimaryAndSecondarySlots()
         }
 
-        let primaryAlreadyLive = (self.channel == p && nativeEngine != nil && !isOffline)
-        let secondaryAlreadyLive = (self.secondaryChannel == s && secondaryNativeEngine != nil && !secondaryIsOffline)
+        let primaryAlreadyLive = (self.channel == p && nativeEngine != nil && !isOffline && !hasPlaybackError)
+        let secondaryAlreadyLive = (self.secondaryChannel == s && secondaryNativeEngine != nil && !secondaryIsOffline && !secondaryHasPlaybackError)
 
         self.channel = p
         self.secondaryChannel = s
@@ -2025,6 +2056,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         swap(&isLoading, &secondaryIsLoading)
         swap(&isBuffering, &secondaryIsBuffering)
         swap(&isOffline, &secondaryIsOffline)
+        swap(&hasPlaybackError, &secondaryHasPlaybackError)
         swap(&variants, &secondaryVariants)
         swap(&selectedVariantID, &secondarySelectedVariantID)
         bestDelay = delay
@@ -2117,7 +2149,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         for slot in TwitchStreamSlot.slots(forCount: count) {
             guard !manualQualityOverrides.contains(slot) else { continue }
             let state = slotState(for: slot)
-            guard !state.variants.isEmpty else { continue }
+            guard !state.isOffline, !state.hasPlaybackError, !state.variants.isEmpty else { continue }
             let isSpot = (slot == spotlight)
             guard let target = TwitchQualityBudgetPolicy.preferredVariant(
                 from: state.variants,
@@ -2168,6 +2200,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         let targetSlot = dualMixer.focusedSlot.other
         let streamSlot: TwitchStreamSlot = targetSlot == .primary ? .a : .b
         if manualQualityOverrides.contains(streamSlot) { return }
+        let targetState = slotState(for: streamSlot)
+        guard !targetState.isOffline, !targetState.hasPlaybackError else { return }
 
         // If focus moved to the previously throttled slot, restore it before stepping down the newly unfocused slot.
         if let existingSlot = thermalThrottledSlot, existingSlot != targetSlot {
@@ -2206,6 +2240,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         thermalThrottledSlot = nil
         preThrottleVariantID = nil
         guard restoreVariant, let slot, let previousID else { return }
+        let streamSlot: TwitchStreamSlot = slot == .primary ? .a : .b
+        let state = slotState(for: streamSlot)
+        guard !state.isOffline, !state.hasPlaybackError else { return }
         if slot == .primary {
             selectedVariantID = previousID
             let engine = nativeEngine
@@ -2279,6 +2316,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
 
         userPaused = false
         isLoading = true
+        hasPlaybackError = false
         nativeStartInstant = .now
         lastLoggedBuffering = false
         hasLoggedVariants = false
@@ -2336,6 +2374,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
 
         secondaryIsLoading = true
+        secondaryHasPlaybackError = false
         secondaryStartInstant = .now
         syncPiPAndNowPlaying()
         Breadcrumbs.add("twitch.native.secondary.start")
@@ -2388,6 +2427,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         st.channel = channel
         st.isLoading = true
         st.isOffline = false
+        st.hasPlaybackError = false
         extraSlotStates[slot] = st
         runtime.startInstant = .now
         syncPiPAndNowPlaying()
@@ -2517,6 +2557,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         secondaryIsLoading = false
         secondaryIsBuffering = false
         secondaryIsOffline = false
+        secondaryHasPlaybackError = false
         secondaryVariants = []
         secondarySelectedVariantID = nil
     }
@@ -3058,7 +3099,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         #endif
         if hasPiPClaim || isPiPActive { return true }
         let anyOnline = TwitchStreamSlot.slots(forCount: max(1, activeChannels.count)).contains { slot in
-            channel(for: slot) != nil && !slotState(for: slot).isOffline
+            let st = slotState(for: slot)
+            return channel(for: slot) != nil && !st.isOffline && !st.hasPlaybackError
         }
         return activeMode == .lowLatency && channel != nil && !userPaused && anyOnline
     }
@@ -3294,6 +3336,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         isLoading = false
         isBuffering = false
         isOffline = false
+        hasPlaybackError = false
         isLowLatencyStream = false
         isCatchingUp = false
         variants = []
@@ -3349,6 +3392,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         case .loading:
             isLoading = true
             isOffline = false
+            hasPlaybackError = false
         case .streamURL(let url):
             resolvedMasterURL = url
             #if os(iOS)
@@ -3372,6 +3416,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             isLoading = false
             isBuffering = false
             isOffline = false
+            hasPlaybackError = false
             if let started = nativeStartInstant {
                 let elapsed = ContinuousClock.now - started
                 let ms = Int(elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
@@ -3390,6 +3435,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             syncPiPAndNowPlaying()
         case .offline:
             isOffline = true
+            hasPlaybackError = false
             isPlaying = false
             isLoading = false
             isBuffering = false
@@ -3421,12 +3467,15 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             }
         case .failed(let reason):
             Breadcrumbs.add("twitch.native.fallback", ["reason": .string(Self.shortFallbackReason(reason))])
-            // Dual/multi-stream runs native display layers; never drop into a single WebView embed while multi is active.
+            // Dual/multi-stream runs native display layers; never drop into a single WebView embed while multi is active,
+            // and record a playback error rather than falsely marking a live stream offline.
             if isDualStream {
-                isOffline = true
+                hasPlaybackError = true
+                isOffline = false
                 isPlaying = false
                 isLoading = false
                 isBuffering = false
+                nativeStartInstant = nil
                 syncPiPAndNowPlaying()
                 return
             }
@@ -3449,6 +3498,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         case .loading:
             secondaryIsLoading = true
             secondaryIsOffline = false
+            secondaryHasPlaybackError = false
         case .streamURL:
             break
         case .variants(let list, let selectedID):
@@ -3465,6 +3515,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             secondaryIsLoading = false
             secondaryIsBuffering = false
             secondaryIsOffline = false
+            secondaryHasPlaybackError = false
             if let started = secondaryStartInstant {
                 let elapsed = ContinuousClock.now - started
                 let ms = Int(elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
@@ -3482,6 +3533,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             syncPiPAndNowPlaying()
         case .offline:
             secondaryIsOffline = true
+            secondaryHasPlaybackError = false
             secondaryIsPlaying = false
             secondaryIsLoading = false
             secondaryIsBuffering = false
@@ -3506,7 +3558,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 }
             }
         case .failed(let reason):
-            secondaryIsOffline = true
+            secondaryHasPlaybackError = true
+            secondaryIsOffline = false
             secondaryIsPlaying = false
             secondaryIsLoading = false
             secondaryIsBuffering = false
@@ -3524,6 +3577,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         case .loading:
             state.isLoading = true
             state.isOffline = false
+            state.hasPlaybackError = false
             extraSlotStates[slot] = state
         case .streamURL:
             break
@@ -3540,6 +3594,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             state.isLoading = false
             state.isBuffering = false
             state.isOffline = false
+            state.hasPlaybackError = false
             extraSlotStates[slot] = state
             if let started = runtime.startInstant {
                 let elapsed = ContinuousClock.now - started
@@ -3560,6 +3615,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             syncPiPAndNowPlaying()
         case .offline:
             state.isOffline = true
+            state.hasPlaybackError = false
             state.isPlaying = false
             state.isLoading = false
             state.isBuffering = false
@@ -3581,7 +3637,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             }
             extraSlotStates[slot] = state
         case .failed(let reason):
-            state.isOffline = true
+            state.hasPlaybackError = true
+            state.isOffline = false
             state.isPlaying = false
             state.isLoading = false
             state.isBuffering = false

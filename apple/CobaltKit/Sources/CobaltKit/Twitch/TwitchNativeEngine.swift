@@ -278,10 +278,14 @@ private final class ChunkedStreamSession: NSObject, URLSessionDataDelegate, @unc
     }()
 
     func stream(url: URL) -> AsyncThrowingStream<Data, Error> {
+        var req = URLRequest(url: url, timeoutInterval: 8)
+        req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        return stream(request: req)
+    }
+
+    func stream(request: URLRequest) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream(bufferingPolicy: .unbounded) { continuation in
-            var req = URLRequest(url: url, timeoutInterval: 8)
-            req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-            let task = session.dataTask(with: req)
+            let task = session.dataTask(with: request)
             let id = task.taskIdentifier
 
             lock.lock()
@@ -297,6 +301,20 @@ private final class ChunkedStreamSession: NSObject, URLSessionDataDelegate, @unc
             }
             task.resume()
         }
+    }
+
+    func fetchData(url: URL, byteRange: TwitchByteRange? = nil) async throws -> Data {
+        var req = URLRequest(url: url, timeoutInterval: 8)
+        req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        if let byteRange {
+            req.setValue(byteRange.httpRangeHeader, forHTTPHeaderField: "Range")
+        }
+        var out = Data()
+        for try await chunk in stream(request: req) {
+            try Task.checkCancellation()
+            out.append(chunk)
+        }
+        return out
     }
 
     func invalidate() {
@@ -995,6 +1013,23 @@ public actor TwitchNativeEngine {
     public typealias EventHandler = @Sendable (TwitchNativeEvent) -> Void
     public typealias SegmentStreamer = @Sendable (URL) -> AsyncThrowingStream<Data, Error>
 
+    private enum SegmentContainer: String {
+        case unknown
+        case mpegts
+        case fmp4
+    }
+
+    private struct InitMapCacheKey: Hashable {
+        let urlKey: String
+        let byteRange: TwitchByteRange?
+
+        init(url: URL, byteRange: TwitchByteRange?) {
+            // Strip rotating query params (e.g. `?dna=...`) so the same init map across refreshes hits cache.
+            self.urlKey = "\(url.host() ?? "")\(url.path())"
+            self.byteRange = byteRange
+        }
+    }
+
     private struct SegmentConsumeResult {
         let succeeded: Bool
         let sampleCount: Int
@@ -1010,7 +1045,18 @@ public actor TwitchNativeEngine {
     private let audioClaimID = "twitch.native.\(UUID().uuidString)"
     private let pipeline = SampleBufferPipeline()
     private var streamer = ChunkedStreamSession()
-    private var demuxer = MPEGTSDemuxer()
+    private var tsDemuxer = MPEGTSDemuxer()
+    private var fmp4Demuxer = FMP4Demuxer()
+    private var activeContainer: SegmentContainer = .unknown
+    private var initSegmentCache: [InitMapCacheKey: Data] = [:]
+    private var initSegmentCacheOrder: [InitMapCacheKey] = []
+    private var loadedInitMapKey: InitMapCacheKey?
+
+    // Non-PII startup/failure diagnostics for PostHog telemetry.
+    private var diagHasMap = false
+    private var diagSamples = 0
+    private var diagKeyframes = 0
+    private var diagSegments = 0
 
     private var onEvent: EventHandler?
     private var audioObserverRegistered = false
@@ -1206,12 +1252,16 @@ public actor TwitchNativeEngine {
     public func selectVariant(id: String) {
         preferredVariantID = id
         guard channel != nil, let match = variants.first(where: { $0.id == id && $0.isNativeCompatible }) else { return }
+        if selectedVariant?.id == match.id && runTask != nil {
+            return
+        }
         selectedVariant = match
         // Restart playback loop on the new variant without re-resolving GQL/Usher unless needed.
         runTask?.cancel()
         telemetryTask?.cancel()
         cancelOverlap()
-        demuxer.reset()
+        resetDemuxers(clearInitCache: false)
+        resetDiagnostics()
         generation &+= 1
         let gen = generation
         pipeline.flush(clearImage: false, generation: gen)
@@ -1237,7 +1287,8 @@ public actor TwitchNativeEngine {
             runTask?.cancel()
             telemetryTask?.cancel()
             cancelOverlap()
-            demuxer.reset()
+            resetDemuxers(clearInitCache: false)
+            resetDiagnostics()
             generation &+= 1
             let gen = generation
             pipeline.flush(clearImage: false, generation: gen)
@@ -1251,7 +1302,8 @@ public actor TwitchNativeEngine {
         runTask?.cancel()
         telemetryTask?.cancel()
         cancelOverlap()
-        demuxer.reset()
+        resetDemuxers(clearInitCache: false)
+        resetDiagnostics()
         generation &+= 1
         let gen = generation
         pipeline.flush(clearImage: false, generation: gen)
@@ -1362,7 +1414,7 @@ public actor TwitchNativeEngine {
 
     private func failSession(gen: UInt64, reason: String) {
         guard gen == generation else { return }
-        Telemetry.log(.warn, .live, "twitch.native.failed", data: ["reason": .string(reason)])
+        Telemetry.log(.warn, .live, "twitch.native.failed", data: diagnosticData(reason: reason))
         generation &+= 1
         runTask?.cancel()
         runTask = nil
@@ -1386,7 +1438,8 @@ public actor TwitchNativeEngine {
         cancelOverlap()
         streamer.invalidate()
         streamer = ChunkedStreamSession()
-        demuxer.reset()
+        resetDemuxers(clearInitCache: true)
+        resetDiagnostics()
         pipeline.flush(clearImage: clearImage, generation: gen)
         loadingSince = nil
         stallRecoveries = 0
@@ -1398,6 +1451,141 @@ public actor TwitchNativeEngine {
             userPaused = false
             audioSession.release(audioClaimID)
         }
+    }
+
+    private var activeUnsupportedVideoCodec: String? {
+        fmp4Demuxer.unsupportedVideoCodec ?? tsDemuxer.unsupportedVideoCodec
+    }
+
+    private func resetDemuxers(clearInitCache: Bool) {
+        tsDemuxer.reset()
+        fmp4Demuxer.reset()
+        activeContainer = .unknown
+        loadedInitMapKey = nil
+        if clearInitCache {
+            initSegmentCache.removeAll()
+            initSegmentCacheOrder.removeAll()
+        }
+    }
+
+    private func resetDiagnostics() {
+        diagHasMap = false
+        diagSamples = 0
+        diagKeyframes = 0
+        diagSegments = 0
+    }
+
+    func diagnosticData(reason: String? = nil) -> [String: TelemetryValue] {
+        var data: [String: TelemetryValue] = [
+            "container": .string(activeContainer.rawValue),
+            "hasMap": .bool(diagHasMap),
+            "samples": .int(diagSamples),
+            "keyframes": .int(diagKeyframes),
+            "segments": .int(diagSegments),
+        ]
+        if let variantID = selectedVariant?.id {
+            data["variant"] = .string(variantID)
+        }
+        if let reason {
+            data["reason"] = .string(reason)
+        }
+        return data
+    }
+
+    private func beginActiveDiscontinuity() -> [DemuxedSample] {
+        let flushed: [DemuxedSample]
+        switch activeContainer {
+        case .fmp4:
+            flushed = fmp4Demuxer.beginDiscontinuity()
+        case .mpegts:
+            flushed = tsDemuxer.beginDiscontinuity()
+        case .unknown:
+            flushed = []
+        }
+        let highest = max(tsDemuxer.highestContinuousPTS, fmp4Demuxer.highestContinuousPTS)
+        if highest > 0 {
+            tsDemuxer.rebaseTimeline(after: highest)
+            fmp4Demuxer.rebaseTimeline(after: highest)
+        }
+        return flushed
+    }
+
+    private func switchContainerIfNeeded(to target: SegmentContainer) -> [DemuxedSample] {
+        guard target != .unknown else { return [] }
+        guard activeContainer != target else { return [] }
+        let previous = activeContainer
+        activeContainer = target
+        guard previous != .unknown else { return [] }
+
+        let flushed: [DemuxedSample]
+        let highest: Int64
+        switch previous {
+        case .mpegts:
+            flushed = tsDemuxer.beginDiscontinuity()
+            highest = max(tsDemuxer.highestContinuousPTS, fmp4Demuxer.highestContinuousPTS)
+            if highest > 0 {
+                fmp4Demuxer.rebaseTimeline(after: highest)
+            }
+        case .fmp4:
+            flushed = fmp4Demuxer.beginDiscontinuity()
+            highest = max(fmp4Demuxer.highestContinuousPTS, tsDemuxer.highestContinuousPTS)
+            if highest > 0 {
+                tsDemuxer.rebaseTimeline(after: highest)
+            }
+        case .unknown:
+            flushed = []
+        }
+        return flushed
+    }
+
+    private func fetchInitSegmentData(url: URL, byteRange: TwitchByteRange?) async throws -> Data {
+        if let customSegmentStreamer {
+            var collected = Data()
+            for try await chunk in customSegmentStreamer(url) {
+                collected.append(chunk)
+            }
+            if let range = byteRange {
+                let start = max(0, range.offset)
+                let end = min(collected.count, start + range.length)
+                if start <= end && start < collected.count {
+                    return collected.subdata(in: start..<end)
+                }
+            }
+            return collected
+        }
+        return try await streamer.fetchData(url: url, byteRange: byteRange)
+    }
+
+    private func ensureInitSegmentLoaded(url: URL, byteRange: TwitchByteRange?, gen: UInt64) async -> Bool {
+        let key = InitMapCacheKey(url: url, byteRange: byteRange)
+        if loadedInitMapKey == key && fmp4Demuxer.hasInitConfig {
+            return true
+        }
+
+        let data: Data
+        if let cached = initSegmentCache[key] {
+            data = cached
+        } else {
+            do {
+                let fetched = try await fetchInitSegmentData(url: url, byteRange: byteRange)
+                guard gen == generation, !Task.isCancelled, !fetched.isEmpty else { return false }
+                data = fetched
+                initSegmentCache[key] = fetched
+                initSegmentCacheOrder.append(key)
+                if initSegmentCacheOrder.count > 16 {
+                    let evicted = initSegmentCacheOrder.removeFirst()
+                    initSegmentCache.removeValue(forKey: evicted)
+                }
+            } catch {
+                return false
+            }
+        }
+
+        let configured = fmp4Demuxer.loadInitSegment(data)
+        if configured || fmp4Demuxer.unsupportedVideoCodec != nil {
+            loadedInitMapKey = key
+        }
+        return configured
     }
 
     private func cancelOverlap() {
@@ -1465,7 +1653,7 @@ public actor TwitchNativeEngine {
     private func streamVariantLoop(variant: TwitchVariant, gen: UInt64) async {
         pipeline.setMuted(isMuted)
         pipeline.setVolume(currentVolume)
-        demuxer.reset()
+        resetDemuxers(clearInitCache: false)
 
         var lastConsumedSeq: Int?
         var seenKeys: [String] = []
@@ -1504,7 +1692,7 @@ public actor TwitchNativeEngine {
             seenKeySet.removeAll()
             emptyCandidatePolls = 0
             cancelOverlap()
-            let flushed = demuxer.beginDiscontinuity()
+            let flushed = beginActiveDiscontinuity()
             pipeline.enqueue(flushed)
         }
 
@@ -1515,6 +1703,9 @@ public actor TwitchNativeEngine {
                 let receivedAt = Date.now
                 playlist = try await resolver.fetchMediaPlaylist(url: activeVariant.url)
                 playlistFailures = 0
+                if playlist.hasInitMap {
+                    diagHasMap = true
+                }
                 if let serverTime = playlist.serverTime {
                     pipeline.updateServerClock(serverTime: serverTime, receivedAt: receivedAt)
                 }
@@ -1604,7 +1795,7 @@ public actor TwitchNativeEngine {
                 lastConsumedSeq = nil
                 seenKeys.removeAll()
                 seenKeySet.removeAll()
-                let flushed = demuxer.beginDiscontinuity()
+                let flushed = beginActiveDiscontinuity()
                 pipeline.enqueue(flushed)
             }
 
@@ -1625,7 +1816,7 @@ public actor TwitchNativeEngine {
                 // If we fell far behind the live edge (> 3 segments), skip straight to the live edge.
                 if unseen.count > 3 {
                     unseen = Array(unseen.suffix(2))
-                    let flushed = demuxer.beginDiscontinuity()
+                    let flushed = beginActiveDiscontinuity()
                     pipeline.enqueue(flushed)
                 }
                 candidates = unseen
@@ -1678,7 +1869,7 @@ public actor TwitchNativeEngine {
             )
             guard gen == generation, !Task.isCancelled else { return }
 
-            if let bad = demuxer.unsupportedVideoCodec {
+            if let bad = activeUnsupportedVideoCodec {
                 failSession(gen: gen, reason: "unsupported codec: \(bad)")
                 return
             }
@@ -1697,7 +1888,7 @@ public actor TwitchNativeEngine {
                 if let fallbackSeg = playlist.segments.last {
                     let fb = await consumeSegment(fallbackSeg, gen: gen, firstKeyframeTimeout: nil, audioOnly: activeVariant.isAudioOnly)
                     guard gen == generation, !Task.isCancelled else { return }
-                    if let bad = demuxer.unsupportedVideoCodec {
+                    if let bad = activeUnsupportedVideoCodec {
                         failSession(gen: gen, reason: "unsupported codec: \(bad)")
                         return
                     }
@@ -1715,7 +1906,7 @@ public actor TwitchNativeEngine {
                 consecutiveEmptySegments += 1
                 markSeen(current)
                 // 3 consecutive HTTP-200 segments with 0 decodable samples means the stream/edge is unreadable
-                // (e.g. corrupt TS, DRM/encrypted slate, or broken mux): escalate instead of spinning until timeout.
+                // (e.g. corrupt TS/fMP4, DRM/encrypted slate, or broken mux): escalate instead of spinning until timeout.
                 effectiveSuccess = consecutiveEmptySegments < 3
             } else if result.succeeded {
                 consecutiveEmptySegments = 0
@@ -1770,15 +1961,16 @@ public actor TwitchNativeEngine {
         }
     }
 
-    /// Streams one segment chunk-by-chunk into `MPEGTSDemuxer` and `SampleBufferPipeline`.
+    /// Streams one segment chunk-by-chunk into `MPEGTSDemuxer` or `FMP4Demuxer` and `SampleBufferPipeline`.
     private func consumeSegment(
         _ segment: TwitchSegment,
         gen: UInt64,
         firstKeyframeTimeout: Duration?,
         audioOnly: Bool
     ) async -> SegmentConsumeResult {
+        diagSegments += 1
         if segment.isDiscontinuity {
-            let flushed = demuxer.beginDiscontinuity()
+            let flushed = beginActiveDiscontinuity()
             pipeline.enqueue(flushed)
         }
         pipeline.beginSegment(programDateTime: segment.programDateTime)
@@ -1787,30 +1979,89 @@ public actor TwitchNativeEngine {
         var hadKeyframe = false
 
         func record(_ samples: [DemuxedSample]) {
+            guard !samples.isEmpty else { return }
             totalSamples += samples.count
-            if !hadKeyframe {
-                for s in samples {
-                    if case .video(let v) = s, v.isKeyframe {
-                        hadKeyframe = true
-                        break
-                    }
+            diagSamples += samples.count
+            for s in samples {
+                if case .video(let v) = s, v.isKeyframe {
+                    hadKeyframe = true
+                    diagKeyframes += 1
                 }
             }
             pipeline.enqueue(samples)
         }
 
-        // Reuse the overlapped prefetch stream if it matches this segment, OR wrap in an OverlappedSegmentFetch
-        // when `firstKeyframeTimeout` is active so a stalled first-join prefetch aborts cleanly on deadline.
-        let activeFetch: OverlappedSegmentFetch?
+        // Claim any matching overlapped fetch early so we always cancel it on init-segment failure.
+        var activeFetch: OverlappedSegmentFetch?
         if let overlap = overlappedFetch, overlap.segment.sequence == segment.sequence {
             overlappedFetch = nil
             activeFetch = overlap
-        } else if firstKeyframeTimeout != nil {
+        }
+
+        var resolvedContainer: SegmentContainer = .unknown
+        var sniffBuffer = Data()
+
+        if let mapURL = segment.initMapURL {
+            diagHasMap = true
+            let loaded = await ensureInitSegmentLoaded(url: mapURL, byteRange: segment.initMapByteRange, gen: gen)
+            if gen != generation || Task.isCancelled || fmp4Demuxer.unsupportedVideoCodec != nil || !loaded {
+                if let activeFetch { await activeFetch.cancel() }
+                return SegmentConsumeResult(succeeded: false, sampleCount: 0, hadKeyframe: false)
+            }
+            let switched = switchContainerIfNeeded(to: .fmp4)
+            record(switched)
+            resolvedContainer = .fmp4
+        }
+
+        func pushChunk(_ chunk: Data) -> [DemuxedSample] {
+            guard !chunk.isEmpty else { return [] }
+            if resolvedContainer == .unknown {
+                sniffBuffer.append(chunk)
+                if sniffBuffer.first == 0x47 {
+                    resolvedContainer = .mpegts
+                } else if sniffBuffer.count >= 8 {
+                    resolvedContainer = FMP4Demuxer.isLikelyFMP4(sniffBuffer) ? .fmp4 : .mpegts
+                } else {
+                    return []
+                }
+                let switched = switchContainerIfNeeded(to: resolvedContainer)
+                let buffered = sniffBuffer
+                sniffBuffer.removeAll(keepingCapacity: false)
+                let pushed: [DemuxedSample] = (resolvedContainer == .fmp4)
+                    ? fmp4Demuxer.push(buffered)
+                    : tsDemuxer.push(buffered)
+                return switched.isEmpty ? pushed : (switched + pushed)
+            }
+            return (resolvedContainer == .fmp4)
+                ? fmp4Demuxer.push(chunk)
+                : tsDemuxer.push(chunk)
+        }
+
+        func flushActiveSegment() -> [DemuxedSample] {
+            var out: [DemuxedSample] = []
+            if resolvedContainer == .unknown, !sniffBuffer.isEmpty {
+                resolvedContainer = (activeContainer == .fmp4) ? .fmp4 : .mpegts
+                out.append(contentsOf: switchContainerIfNeeded(to: resolvedContainer))
+                let buffered = sniffBuffer
+                sniffBuffer.removeAll(keepingCapacity: false)
+                out.append(contentsOf: resolvedContainer == .fmp4 ? fmp4Demuxer.push(buffered) : tsDemuxer.push(buffered))
+            }
+            switch resolvedContainer {
+            case .fmp4:
+                out.append(contentsOf: fmp4Demuxer.flushSegment())
+            case .mpegts:
+                out.append(contentsOf: tsDemuxer.flushSegment())
+            case .unknown:
+                break
+            }
+            return out
+        }
+
+        // Wrap in an OverlappedSegmentFetch when `firstKeyframeTimeout` is active so a stalled first-join prefetch aborts cleanly on deadline.
+        if activeFetch == nil, firstKeyframeTimeout != nil {
             let fetch = OverlappedSegmentFetch(segment: segment)
             await fetch.start(stream: activeSegmentStream())
             activeFetch = fetch
-        } else {
-            activeFetch = nil
         }
 
         if let fetch = activeFetch {
@@ -1827,8 +2078,8 @@ public actor TwitchNativeEngine {
             do {
                 while gen == generation, !Task.isCancelled {
                     guard let chunk = try await fetch.nextChunk() else { break }
-                    let samples = demuxer.push(chunk)
-                    if demuxer.unsupportedVideoCodec != nil {
+                    let samples = pushChunk(chunk)
+                    if activeUnsupportedVideoCodec != nil {
                         await fetch.cancel()
                         return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
                     }
@@ -1842,11 +2093,12 @@ public actor TwitchNativeEngine {
                     await fetch.cancel()
                     return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
                 }
-                let tail = demuxer.flushSegment()
+                let tail = flushActiveSegment()
                 record(tail)
                 return SegmentConsumeResult(succeeded: true, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
             } catch {
                 await fetch.cancel()
+                _ = beginActiveDiscontinuity()
                 return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
             }
         }
@@ -1858,16 +2110,17 @@ public actor TwitchNativeEngine {
                 guard gen == generation, !Task.isCancelled else {
                     return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
                 }
-                let samples = demuxer.push(chunk)
-                if demuxer.unsupportedVideoCodec != nil {
+                let samples = pushChunk(chunk)
+                if activeUnsupportedVideoCodec != nil {
                     return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
                 }
                 record(samples)
             }
-            let tail = demuxer.flushSegment()
+            let tail = flushActiveSegment()
             record(tail)
             return SegmentConsumeResult(succeeded: true, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
         } catch {
+            _ = beginActiveDiscontinuity()
             return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
         }
     }
@@ -1880,7 +2133,7 @@ public actor TwitchNativeEngine {
         if stats.isClockStarted {
             loadingSince = nil
         } else if !userPaused, !isInterrupted, let since = loadingSince, ContinuousClock.now - since >= startupTimeout {
-            Telemetry.log(.warn, .live, "twitch.native.startup_timeout")
+            Telemetry.log(.warn, .live, "twitch.native.startup_timeout", data: diagnosticData(reason: "startup timeout"))
             failSession(gen: gen, reason: "startup timeout")
             return
         }
