@@ -143,6 +143,9 @@ extension Copy {
 
         static let watchAlongside = "watch alongside"
         static let addSecondStream = "add 2nd stream"
+        static let addSecondShort = "2nd"
+        static let clipShort = "clip"
+        static let swapShort = "swap"
         static let swapSecondStream = "switch 2nd stream"
         static let pickSecondStreamTitle = "add 2nd stream"
         static let pickSecondStreamPrompt = "channel name or twitch link"

@@ -41,6 +41,8 @@ extension EnvironmentValues {
     /// Full keyboard-ignoring size of `PaneHost`, allowing single-focus pages (e.g. Twitch Watch) to detect software
     /// keyboard height reliably in pure SwiftUI.
     @Entry var paneHostSize: CGSize = .zero
+    /// Live window container safe-area insets measured by `PaneHost` (outside any child `.ignoresSafeArea(.top)`).
+    @Entry var paneSafeAreaInsets: EdgeInsets = EdgeInsets()
 }
 
 /// One thing a pane page can do: a header icon button (`PanePage(actions:)`, up to 2), a big button in `PaneActionGrid`
