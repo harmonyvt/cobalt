@@ -1,8 +1,112 @@
 import CobaltKit
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
-// The pieces the mosaic, the table and the list share: the row's words, the face's picture and its
-// thumbnail, the title in two inks.
+// The pieces the mosaic, the table and the list share: seamless surface tokens, the row's words, the face's picture
+// and its thumbnail, the title in two inks.
+
+/// Seamless gallery-grade surface palette for the Library screen: deep obsidian in dark mode (eliminating flat medium
+/// gray chrome) and luminous porcelain in light mode, using dynamic system colors so views never branch on colorScheme.
+enum LibrarySurface {
+    /// Adaptive RGBA color resolved per appearance.
+    static func adaptive(light: UInt32, lightOpacity: Double = 1, dark: UInt32, darkOpacity: Double = 1) -> Color {
+        #if canImport(UIKit)
+        Color(uiColor: UIColor { trait in
+            let isDark = trait.userInterfaceStyle == .dark
+            let hex = isDark ? dark : light
+            let alpha = isDark ? darkOpacity : lightOpacity
+            return UIColor(
+                red: CGFloat((hex >> 16) & 0xff) / 255,
+                green: CGFloat((hex >> 8) & 0xff) / 255,
+                blue: CGFloat(hex & 0xff) / 255,
+                alpha: alpha)
+        })
+        #else
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let hex = isDark ? dark : light
+            let alpha = isDark ? darkOpacity : lightOpacity
+            return NSColor(
+                srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
+                green: CGFloat((hex >> 8) & 0xff) / 255,
+                blue: CGFloat(hex & 0xff) / 255,
+                alpha: alpha)
+        })
+        #endif
+    }
+
+    /// Deep obsidian dark canvas (#050507) that melts into media and luminous porcelain light canvas (#fbfbfd).
+    static let canvas = Color(light: 0xfbfbfd, dark: 0x050507)
+
+    /// Smoked translucent shelf card fill — airy white sheen in light mode, delicate obsidian tint in dark mode.
+    static let cardFill = adaptive(light: 0xffffff, lightOpacity: 0.88, dark: 0xffffff, darkOpacity: 0.052)
+
+    /// Subtle directional rim highlight for shelf cards.
+    static let cardBorder = LinearGradient(
+        colors: [
+            adaptive(light: 0x000000, lightOpacity: 0.08, dark: 0xffffff, darkOpacity: 0.12),
+            adaptive(light: 0x000000, lightOpacity: 0.03, dark: 0xffffff, darkOpacity: 0.03),
+        ],
+        startPoint: .top,
+        endPoint: .bottom)
+
+    /// Whisper-thin tile edge definition: virtually seamless on dark obsidian, delicate separation on bright porcelain.
+    static let tileBorder = adaptive(light: 0x000000, lightOpacity: 0.055, dark: 0xffffff, darkOpacity: 0.035)
+
+    /// Subtle skeleton / ghost fill that never reads as a bright flat gray box.
+    static let ghostFill = adaptive(light: 0x000000, lightOpacity: 0.05, dark: 0xffffff, darkOpacity: 0.055)
+
+    /// Quiet backing behind square thumbnails in list and table rows.
+    static let thumbBacking = adaptive(light: 0x000000, lightOpacity: 0.045, dark: 0xffffff, darkOpacity: 0.06)
+
+    /// Subtle translucent pill/circle fill for secondary quiet controls inside shelves and sheets.
+    static let quietFill = adaptive(light: 0x000000, lightOpacity: 0.055, dark: 0xffffff, darkOpacity: 0.085)
+
+    /// Deep obsidian / soft porcelain placeholder gradients while a thumbnail decodes, replacing bright gray `FrameGradient`.
+    static func placeholderGradient(_ variant: Int) -> LinearGradient {
+        let pair: (Color, Color)
+        switch abs(variant) % 3 {
+        case 1:
+            pair = (Color(light: 0xeeeff3, dark: 0x14141a), Color(light: 0xe4e6ec, dark: 0x0a0a0e))
+        case 2:
+            pair = (Color(light: 0xeaebf0, dark: 0x0f0f14), Color(light: 0xe0e2e9, dark: 0x07070a))
+        default:
+            pair = (Color(light: 0xecedf2, dark: 0x111116), Color(light: 0xe2e4eb, dark: 0x08080c))
+        }
+        return LinearGradient(colors: [pair.0, pair.1], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    /// Silky vertical edge fade behind floating Liquid Glass top filter chrome so scrolling tiles dissolve smoothly
+    /// underneath instead of clipping against an opaque gray `.bar` band.
+    static var topEdgeVeil: some View {
+        LinearGradient(
+            stops: [
+                .init(color: canvas.opacity(0.94), location: 0.0),
+                .init(color: canvas.opacity(0.76), location: 0.52),
+                .init(color: canvas.opacity(0.28), location: 0.84),
+                .init(color: canvas.opacity(0.0), location: 1.0),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// Floating Liquid Glass capsule for the library's top filter and selection chrome.
+    func libraryGlassPill(selected: Bool = false, tint: Color? = nil) -> some View {
+        let resolvedTint = selected ? (tint ?? CobaltColor.text) : tint
+        let glass: Glass = resolvedTint.map { .regular.tint($0).interactive() } ?? .regular.interactive()
+        return self.glassEffect(glass, in: .capsule)
+    }
+}
 
 /// Words the library says about a row. Kept here so the screen never edits the shared `Copy.swift`;
 /// lowercase, like everything else.
@@ -220,7 +324,7 @@ struct FacePicture: View {
     @ViewBuilder private var mediaBody: some View {
         let key = LoadKey(chain: chain, maxPixel: maxPixel, reload: reload)
         Rectangle()
-            .fill(FrameGradient.fill(gradient))
+            .fill(LibrarySurface.placeholderGradient(gradient))
             .overlay {
                 if let image {
                     Image(decorative: image.image, scale: 1)
@@ -296,7 +400,7 @@ struct LibraryThumb: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: side > 30 ? 8 : 5, style: .continuous).fill(CobaltColor.elevated)
+            RoundedRectangle(cornerRadius: side > 30 ? 8 : 5, style: .continuous).fill(LibrarySurface.thumbBacking)
             FacePicture(item: row.item, maxPixel: maxPixel, reload: reload, showsGlyph: false, gradient: 1)
                 .frame(width: box.width, height: box.height)
                 .clipShape(RoundedRectangle(cornerRadius: side > 30 ? 5 : 3, style: .continuous))
@@ -331,10 +435,10 @@ struct LibraryTitleText: View {
     }
 }
 
-/// Shared translucent dark pill fill for tile badges: clean over both bright and dark media without harsh white rings.
+/// Shared translucent dark pill fill for tile badges: clean over both bright and dark media without heavy black slabs.
 enum TileBadgeSurface {
-    static let fill = Color.black.opacity(0.56)
-    static let stroke = Color.white.opacity(0.12)
+    static let fill = Color.black.opacity(0.42)
+    static let stroke = Color.white.opacity(0.08)
 }
 
 /// A gallery's count: the stack glyph and the number of items (the board `Library-Mixed`). On a tile it is the dark
@@ -349,15 +453,15 @@ struct GalleryCountBadge: View {
         switch style {
         case .tile:
             HStack(spacing: 3) {
-                Image(systemName: Symbol.Gallery.gallery).font(.system(size: 9, weight: .semibold))
+                Image(systemName: Symbol.Gallery.gallery).font(.system(size: 8.5, weight: .semibold))
                 Text("\(count)").monospacedDigit()
             }
-            .font(Font.cobalt(10, .medium, relativeTo: .caption2))
-            .foregroundStyle(.white.opacity(0.95))
+            .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
+            .foregroundStyle(.white.opacity(0.92))
             .lineLimit(1)
             .fixedSize()
-            .padding(.horizontal, 6.5)
-            .frame(height: 20)
+            .padding(.horizontal, 6)
+            .frame(height: 18)
             .background(TileBadgeSurface.fill, in: Capsule())
             .overlay(Capsule().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
             .accessibilityHidden(true)
@@ -617,10 +721,9 @@ struct OfflineBadge: View {
     }
 
     private func tile(_ mark: OfflineMark) -> some View {
-        glyph(mark, size: 13, ink: mark == .failed ? Self.failedInk : .white.opacity(0.95))
-            .frame(width: 20, height: 20)
+        glyph(mark, size: 10.5, ink: mark == .failed ? Self.failedInk : .white.opacity(0.84))
+            .frame(width: 18, height: 18)
             .background(TileBadgeSurface.fill, in: Circle())
-            .overlay(Circle().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
     }
 
     private func row(_ mark: OfflineMark) -> some View {

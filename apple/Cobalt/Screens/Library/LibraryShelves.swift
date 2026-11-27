@@ -112,29 +112,31 @@ struct LibraryShelves: View {
                 folded.toggle()
             } label: {
                 Image(systemName: folded ? Symbol.Library.shelfUnfold : Symbol.Library.shelfFold)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(CobaltColor.caption)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 24, height: 24)
+                    .background(LibrarySurface.quietFill, in: Circle())
+                    .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(folded ? Copy.Library2.shelfUnfold : Copy.Library2.shelfFold)
             .accessibilityLabel(folded ? Copy.Library2.shelfUnfold : Copy.Library2.shelfFold)
         }
-        .padding(.leading, 16)
+        .padding(.leading, 14)
         .padding(.trailing, 8)
-        .frame(minHeight: 32)
+        .frame(minHeight: 30)
     }
 
     private func tabLabel(_ tab: Tab, selected: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 3) {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
             Text(word(tab))
                 .font(selected ? CobaltType.bodySemibold : CobaltType.body)
-                .foregroundStyle(selected ? CobaltColor.text : CobaltColor.caption)
+                .foregroundStyle(selected ? CobaltColor.text : CobaltColor.caption.opacity(0.85))
             if !placeholder {
                 Text("\(count(tab))")
                     .font(CobaltType.captionSmall)
-                    .foregroundStyle(CobaltColor.caption)
+                    .foregroundStyle(CobaltColor.caption.opacity(selected ? 0.85 : 0.6))
                     .monospacedDigit()
             }
         }
@@ -142,7 +144,7 @@ struct LibraryShelves: View {
         .lineLimit(1)
         .fixedSize(horizontal: true, vertical: false)
         .contentShape(Rectangle())
-        .frame(minHeight: 32)
+        .frame(minHeight: 30)
         .accessibilityElement(children: .combine)
     }
 
@@ -200,23 +202,25 @@ struct LibraryShelves: View {
         }
     }
 
-    /// Grey cards the shape of a link card, under one band of light.
+    /// Quiet translucent skeleton cards the shape of a link card, under one band of light.
     private var ghostCards: some View {
-        HStack(spacing: 10) {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        return HStack(spacing: 10) {
             ForEach(0..<3, id: \.self) { _ in
                 HStack(spacing: 10) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Skeleton.fill)
-                        .frame(width: 56, height: 56)
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(LibrarySurface.ghostFill)
+                        .frame(width: 58, height: 58)
                     VStack(alignment: .leading, spacing: 7) {
-                        Capsule().fill(Skeleton.fill).frame(width: 96, height: 9)
-                        Capsule().fill(Skeleton.fill).frame(width: 64, height: 7)
-                        Capsule().fill(Skeleton.fill).frame(width: 44, height: 7)
+                        Capsule().fill(LibrarySurface.ghostFill).frame(width: 96, height: 9)
+                        Capsule().fill(LibrarySurface.ghostFill).frame(width: 64, height: 7)
+                        Capsule().fill(LibrarySurface.ghostFill).frame(width: 44, height: 7)
                     }
                     .frame(width: 112, alignment: .leading)
                 }
-                .padding(8)
-                .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(7)
+                .background(LibrarySurface.cardFill, in: shape)
+                .overlay(shape.strokeBorder(LibrarySurface.cardBorder, lineWidth: 0.5))
             }
         }
         .skeletonShimmer()
@@ -243,7 +247,7 @@ private struct RecentLinkCard: View {
         // an untitled link is already called "10 files": its second line then says only when
         let detail = link.displayTitle == files ? when : "\(files) · \(when)"
         ShelfCard {
-            LinkCover(items: link.items, side: 56)
+            LinkCover(items: link.items, side: 58)
         } lines: {
             Text(link.displayTitle)
                 .font(CobaltType.bodyMedium)
@@ -271,7 +275,7 @@ private struct CollectionCard: View {
     var body: some View {
         ShelfCard {
             ZStack {
-                LinkCover(items: Array(links.flatMap(\.items).prefix(4)), side: 56)
+                LinkCover(items: Array(links.flatMap(\.items).prefix(4)), side: 58)
                 if links.isEmpty {
                     Image(systemName: Symbol.collection)
                         .symbolVariant(.fill)
@@ -303,24 +307,25 @@ private struct CollectionCard: View {
     }
 }
 
-/// The shelf's one card shape: a 56 pt cover, three short lines, 72 pt tall in all.
+/// The shelf's one card shape: a 58 pt cover, three short lines, 72 pt tall in all, on a translucent smoked surface
+/// with a subtle rim highlight instead of an opaque gray box.
 struct ShelfCard<Cover: View, Lines: View>: View {
     @ViewBuilder let cover: Cover
     @ViewBuilder let lines: Lines
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
         HStack(spacing: 10) {
             cover
-                .frame(height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .frame(height: 58)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
             VStack(alignment: .leading, spacing: 2) { lines }
-                .frame(width: 118, alignment: .leading)
+                .frame(width: 120, alignment: .leading)
         }
-        .padding(8)
+        .padding(7)
         .frame(height: LibraryShelves.cardHeight)
-        .background(CobaltColor.surface, in: shape)
-        .overlay(shape.strokeBorder(CobaltColor.hairline, lineWidth: 0.5))
+        .background(LibrarySurface.cardFill, in: shape)
+        .overlay(shape.strokeBorder(LibrarySurface.cardBorder, lineWidth: 0.5))
         .contentShape(shape)
     }
 }

@@ -184,6 +184,10 @@ struct LibraryTable: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             LibraryFooterView(state: footer) { controller.loadMoreAgain() }
         }
+        #if os(iOS)
+        .scrollContentBackground(.hidden)
+        .background(LibrarySurface.canvas.ignoresSafeArea())
+        #endif
         .offlineRemoveConfirm($removing, model: controller.model)
         .refreshable { controller.pullToRefresh() }
         .accessibilityLabel(Copy.postsA11y)
@@ -304,7 +308,8 @@ struct LibraryList: View {
                         .zoomSource(id: row.id, in: zoom)
                         .modifier(LibraryRowMenu(row: row, controller: controller, enabled: !selecting && !holdOpens, removing: $removing))
                         .modifier(LibraryTileActions(row: row, controller: controller, enabled: holdOpens, selecting: selecting, removing: $removing))
-                        .listRowBackground(controller.lit == row.id ? CobaltColor.focus.opacity(0.14) : nil)
+                        .listRowBackground(controller.lit == row.id ? CobaltColor.focus.opacity(0.14) : Color.clear)
+                        .listRowSeparatorTint(LibrarySurface.tileBorder)
                         .id(row.id)
                         .onAppear { if lastIDs.contains(row.id) { controller.loadMoreIfNeeded() } }
                     }
@@ -313,7 +318,9 @@ struct LibraryList: View {
                 }
             }
             #if os(iOS)
-            .listStyle(.insetGrouped)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(LibrarySurface.canvas.ignoresSafeArea())
             #endif
             .offlineRemoveConfirm($removing, model: controller.model)
             .refreshable { controller.pullToRefresh() }

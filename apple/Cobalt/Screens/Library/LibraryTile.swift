@@ -123,6 +123,7 @@ struct LibraryTile: View, Equatable {
 
     private var tile: some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let showsBottomBar = showsCustomCaption || (isPlayableVideo && size.height >= 68)
         return ZStack {
             FacePicture(
                 item: row.item, maxPixel: maxPixel, reload: reload, gradient: FrameGradient.variant(forIndex: index),
@@ -130,11 +131,15 @@ struct LibraryTile: View, Equatable {
             if let url = animationURL {
                 TileAnimationSlot(id: row.id, url: url, budget: budget)
             }
-            if showsCustomCaption {
+            if showsBottomBar {
                 LinearGradient(
-                    colors: [.clear, .black.opacity(0.26), .black.opacity(0.68)],
+                    stops: [
+                        .init(color: .clear, location: 0.0),
+                        .init(color: .black.opacity(0.16), location: 0.45),
+                        .init(color: .black.opacity(showsCustomCaption ? 0.64 : 0.46), location: 1.0),
+                    ],
                     startPoint: .top, endPoint: .bottom)
-                    .frame(height: min(size.height * 0.45, 48))
+                    .frame(height: min(size.height * 0.42, showsCustomCaption ? 52 : 36))
                     .frame(maxHeight: .infinity, alignment: .bottom)
                     .allowsHitTesting(false)
             }
@@ -143,7 +148,7 @@ struct LibraryTile: View, Equatable {
             if selected || (selecting && ticked) {
                 shape.strokeBorder(CobaltColor.focus, lineWidth: 2)
             } else {
-                shape.strokeBorder(CobaltColor.hairline, lineWidth: 0.5)
+                shape.strokeBorder(LibrarySurface.tileBorder, lineWidth: 0.5)
             }
         }
         .frame(width: size.width, height: size.height)
@@ -159,9 +164,9 @@ struct LibraryTile: View, Equatable {
                     HiddenByBadge(by: by)
                 } else if !row.isPublic {
                     Image(systemName: Symbol.Library.isPrivate)
-                        .font(.system(size: 9.5, weight: .bold))
-                        .foregroundStyle(CobaltColor.badgeInk)
-                        .frame(width: 20, height: 20)
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.88))
+                        .frame(width: 18, height: 18)
                         .background(TileBadgeSurface.fill, in: Circle())
                         .overlay(Circle().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
                 }
@@ -186,22 +191,23 @@ struct LibraryTile: View, Equatable {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
 
-            // bottom bar: custom title on the left (only when user-named), crisp duration pill on the right for videos
+            // bottom bar: custom title on the left (only when user-named), borderless crisp duration on the right for videos
             if showsCustomCaption || (isPlayableVideo && size.height >= 68) {
                 HStack(alignment: .bottom, spacing: 6) {
                     if let title = customTitle, showsCaption {
                         Text(title)
                             .font(Font.cobalt(11, .medium, relativeTo: .caption2))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.white.opacity(0.95))
+                            .shadow(color: .black.opacity(0.42), radius: 2, y: 1)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
                     Spacer(minLength: 0)
                     if isPlayableVideo, size.height >= 68 {
-                        durationPill
+                        durationLabel
                     }
                 }
-                .padding(.horizontal, 7)
+                .padding(.horizontal, 8)
                 .padding(.bottom, 6)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
@@ -216,43 +222,40 @@ struct LibraryTile: View, Equatable {
         } else if face.playsAsWebp {
             if narrow || (share.isShared && size.width < 150) {
                 Image(systemName: Symbol.Library.typeWebp)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(CobaltColor.badgeInk)
-                    .frame(width: 20, height: 20)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: 18, height: 18)
                     .background(TileBadgeSurface.fill, in: Circle())
                     .overlay(Circle().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
             } else {
                 Text(LibraryRowCopy.type(row))
                     .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
-                    .foregroundStyle(CobaltColor.badgeInk)
+                    .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(1)
                     .fixedSize()
-                    .padding(.horizontal, 6.5)
-                    .frame(height: 20)
+                    .padding(.horizontal, 6)
+                    .frame(height: 18)
                     .background(TileBadgeSurface.fill, in: Capsule())
                     .overlay(Capsule().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
             }
         }
     }
 
-    /// Quiet dark duration pill (bottom-trailing) for videos; shows a small play mark when duration is unknown.
-    private var durationPill: some View {
+    /// Crisp borderless video duration (bottom-trailing) floating directly over the subtle bottom edge scrim.
+    private var durationLabel: some View {
         Group {
             if row.length > 0 {
                 Text(Format.seconds(row.length))
-                    .font(Font.cobalt(9.5, .medium, relativeTo: .caption2))
+                    .font(Font.cobalt(10, .semibold, relativeTo: .caption2))
                     .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.94))
-                    .padding(.horizontal, 5.5)
-                    .padding(.vertical, 2)
+                    .foregroundStyle(.white.opacity(0.95))
             } else {
                 Image(systemName: "play.fill")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.92))
-                    .frame(width: 18, height: 18)
             }
         }
-        .background(TileBadgeSurface.fill, in: Capsule())
+        .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
         .fixedSize()
     }
 }
@@ -275,14 +278,14 @@ private struct LitRing: View {
     }
 }
 
-/// A grey tile of the skeleton (the first load). The mosaic draws one shimmer over all of them (`skeletonShimmer`).
+/// A subtle skeleton tile while the first page loads. The mosaic draws one shimmer over all of them (`skeletonShimmer`).
 struct LibraryGhostTile: View {
     let size: CGSize
     let index: Int
 
     var body: some View {
         RoundedRectangle(cornerRadius: Metrics.thumbRadius, style: .continuous)
-            .fill(CobaltColor.elevated)
+            .fill(LibrarySurface.ghostFill)
             .frame(width: size.width, height: size.height)
             .accessibilityHidden(true)
     }
@@ -300,13 +303,13 @@ extension View {
     }
 }
 
-/// A tile's "already shared" badge: one unified dark pill holding the blue link count and (when in a collection) the
-/// amber folder glyph, avoiding stacked multi-badge clutter.
+/// A tile's "already shared" badge: one unified translucent pill holding the blue link count and (when in a collection)
+/// the amber folder glyph, avoiding stacked multi-badge clutter.
 struct SharedTileBadges: View {
     let share: ShareStatus
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3.5) {
             HStack(spacing: 2) {
                 Image(systemName: Symbol.link)
                     .font(.system(size: 8.5, weight: .bold))
@@ -318,12 +321,12 @@ struct SharedTileBadges: View {
             if share.collections > 0 {
                 Image(systemName: Symbol.collection)
                     .symbolVariant(.fill)
-                    .font(.system(size: 8.5, weight: .bold))
+                    .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(CobaltColor.collectionOnTile)
             }
         }
-        .padding(.horizontal, 6.5)
-        .frame(height: 20)
+        .padding(.horizontal, 6)
+        .frame(height: 18)
         .background(TileBadgeSurface.fill, in: Capsule())
         .overlay(Capsule().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
         .fixedSize()

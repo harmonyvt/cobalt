@@ -367,51 +367,64 @@ struct AppShell: View {
     }
 
     #if os(iOS)
+    /// Wide regular canvases (iPad landscape >= 1000 pt) have a real sidebar for `.sidebarOnly` sections;
+    /// narrower regular widths (iPhone Duo portrait 669 pt / landscape 951 pt, iPad portrait) use the
+    /// floating tab bar / vertical controls rail, where `.sidebarOnly` tabs would flatten into an 8-item bar.
+    private var showsSidebarSection: Bool { width >= 1000 }
+
     /// The iPhone's and the iPad's tab views (inside `PaneHost`). The bar of a running pane item is the tab view's bottom
     /// accessory (`PaneBarAccessory`).
     @ViewBuilder
     private var iosTabs: some View {
-        Group {
-            if sizeClass == .compact {
-                // Compact width (iPhone, Duo Outer, narrow Split View): four tabs, no "more" (see `PhoneTabs`)
-                PhoneTabs(model: model) { tab in
-                    tabScreen(tab)
-                }
-            } else {
-                let primary = regularPrimaryTabs
-                let secondary = regularSecondaryTabs
-                TabView(selection: $model.selectedTab) {
-                    // Streamlined top-level navigation (max 4 items) so iPhone Duo's Vertical Controls rail
-                    // and floating tab bar stay spacious and never collide with `PaneBarAccessory`.
-                    ForEach(primary, id: \.self) { tab in
-                        Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
-                            tabRoot(tab)
-                        }
-                    }
-
-                    if !secondary.isEmpty {
-                        Tab(Copy.tab(.tools), systemImage: icon(for: .tools), value: AppTab.tools) {
-                            NavigationStack {
-                                RegularToolsHub(model: model, tabs: secondary)
-                            }
-                        }
-                        .badge(model.swarms.waitingCount)
-
-                        TabSection(Copy.PhoneNav.tools) {
-                            ForEach(secondary, id: \.self) { tab in
-                                Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
-                                    tabRoot(tab)
-                                }
-                                .badge(tab == .swarms ? model.swarms.waitingCount : 0)
-                            }
-                        }
-                        .tabPlacement(.sidebarOnly)
-                    }
-                }
-                .modifier(PaneBarAccessory(model: model))
+        if sizeClass == .compact {
+            // Compact width (iPhone, Duo Outer, narrow Split View): four tabs, no "more" (see `PhoneTabs`)
+            PhoneTabs(model: model) { tab in
+                tabScreen(tab)
             }
+        } else if showsSidebarSection {
+            let primary = regularPrimaryTabs
+            let secondary = regularSecondaryTabs
+            TabView(selection: $model.selectedTab) {
+                ForEach(primary, id: \.self) { tab in
+                    Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
+                        tabRoot(tab)
+                    }
+                }
+
+                if !secondary.isEmpty {
+                    Tab(Copy.tab(.tools), systemImage: icon(for: .tools), value: AppTab.tools) {
+                        NavigationStack {
+                            RegularToolsHub(model: model, tabs: secondary) { tab in
+                                model.selectedTab = tab
+                            }
+                        }
+                    }
+                    .badge(model.swarms.waitingCount)
+
+                    TabSection(Copy.PhoneNav.tools) {
+                        ForEach(secondary, id: \.self) { tab in
+                            Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
+                                tabRoot(tab)
+                            }
+                            .badge(tab == .swarms ? model.swarms.waitingCount : 0)
+                        }
+                    }
+                    .tabPlacement(.sidebarOnly)
+                }
+            }
+            .tabViewStyle(.sidebarAdaptable)
+            .modifier(PaneBarAccessory(model: model))
+        } else {
+            // Regular width without a sidebar (iPhone Duo unfolded portrait/landscape, narrow iPad):
+            // strictly 4 top-level tabs so secondary workspaces never overflow into the floating capsule bar.
+            RegularFourTabs(
+                model: model,
+                primary: regularPrimaryTabs,
+                secondary: regularSecondaryTabs,
+                root: { tabRoot($0) },
+                screen: { tabScreen($0) }
+            )
         }
-        .tabViewStyle(.sidebarAdaptable)
     }
 
     /// The primary top-level tabs shown directly in the bar / Duo Vertical Controls rail (at most 3 + Tools = 4).
@@ -614,11 +627,99 @@ private struct QueueTabRedirect: ViewModifier {
     }
 }
 
+/// Regular-width four-tab shell for non-sidebar canvases (iPhone Duo unfolded portrait 669 pt & landscape 951 pt,
+/// narrow iPad). Keeps the floating Liquid Glass bottom bar and Vertical Controls rail strictly at 4 items
+/// (Save, Library, Twitch/Live, Tools) while pushing every secondary workspace cleanly inside the Tools stack
+/// and keeping `model.selectedTab` bidirectionally in sync.
+private struct RegularFourTabs<Root: View, Screen: View>: View {
+    let model: AppModel
+    let primary: [AppTab]
+    let secondary: [AppTab]
+    @ViewBuilder let root: (AppTab) -> Root
+    @ViewBuilder let screen: (AppTab) -> Screen
+
+    @State private var slot: AppTab
+    @State private var toolsPath: [AppTab]
+
+    init(
+        model: AppModel,
+        primary: [AppTab],
+        secondary: [AppTab],
+        @ViewBuilder root: @escaping (AppTab) -> Root,
+        @ViewBuilder screen: @escaping (AppTab) -> Screen
+    ) {
+        self.model = model
+        self.primary = primary
+        self.secondary = secondary
+        self.root = root
+        self.screen = screen
+        let initial = model.selectedTab
+        if primary.contains(initial) {
+            _slot = State(initialValue: initial)
+            _toolsPath = State(initialValue: [])
+        } else if !secondary.isEmpty, initial == .tools || secondary.contains(initial) {
+            _slot = State(initialValue: .tools)
+            _toolsPath = State(initialValue: initial == .tools ? [] : [initial])
+        } else {
+            _slot = State(initialValue: primary.first ?? .save)
+            _toolsPath = State(initialValue: [])
+        }
+    }
+
+    private var activeTab: AppTab {
+        if slot == .tools { return toolsPath.last ?? .tools }
+        return slot
+    }
+
+    var body: some View {
+        TabView(selection: $slot) {
+            ForEach(primary, id: \.self) { tab in
+                Tab(Copy.tab(tab), systemImage: icon(for: tab), value: tab) {
+                    root(tab)
+                }
+            }
+
+            if !secondary.isEmpty {
+                Tab(Copy.tab(.tools), systemImage: icon(for: .tools), value: AppTab.tools) {
+                    NavigationStack(path: $toolsPath) {
+                        RegularToolsHub(model: model, tabs: secondary) { tab in
+                            toolsPath.append(tab)
+                        }
+                        .navigationDestination(for: AppTab.self) { tab in
+                            screen(tab)
+                        }
+                    }
+                }
+                .badge(model.swarms.waitingCount)
+            }
+        }
+        .modifier(PaneBarAccessory(model: model))
+        .onChange(of: activeTab) { _, active in
+            if model.selectedTab != active { model.selectedTab = active }
+        }
+        .onChange(of: model.tabSets) { _, _ in
+            follow(model.selectedTab)
+        }
+    }
+
+    private func follow(_ tab: AppTab) {
+        guard tab != .queue, tab != activeTab else { return }
+        if primary.contains(tab) {
+            slot = tab
+        } else if !secondary.isEmpty {
+            slot = .tools
+            let desired: [AppTab] = tab == .tools ? [] : [tab]
+            if toolsPath != desired { toolsPath = desired }
+        }
+    }
+}
+
 /// Clean fold-safe hub for secondary workspaces on iOS `.regular` (iPhone Duo unfolded & iPad),
 /// keeping the top-level tab bar / Duo Vertical Controls rail crisp at 4 items.
 private struct RegularToolsHub: View {
     let model: AppModel
     let tabs: [AppTab]
+    let onSelect: (AppTab) -> Void
 
     var body: some View {
         ScrollView {
@@ -629,7 +730,7 @@ private struct RegularToolsHub: View {
             }
             .padding(16)
         }
-        .background(CobaltColor.bg)
+        .background(CobaltColor.bg.ignoresSafeArea())
         .navigationTitle(Copy.PhoneNav.tools)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -640,15 +741,19 @@ private struct RegularToolsHub: View {
     private func hubCard(for tab: AppTab) -> some View {
         let waiting = tab == .swarms ? model.swarms.waitingCount : 0
         let detail = detailText(for: tab)
+        let cardShape = RoundedRectangle(cornerRadius: 16, style: .continuous)
         return Button {
-            model.selectedTab = tab
+            onSelect(tab)
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: icon(for: tab))
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(CobaltColor.text)
                     .frame(width: 36, height: 36)
-                    .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(
+                        Color(light: 0x000000, dark: 0xffffff).opacity(0.06),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -678,16 +783,26 @@ private struct RegularToolsHub: View {
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(CobaltColor.caption)
+                    .foregroundStyle(CobaltColor.caption.opacity(0.75))
                     .accessibilityHidden(true)
             }
             .padding(14)
             .frame(maxWidth: .infinity, minHeight: max(62, Metrics.hit), alignment: .leading)
-            .background(CobaltColor.row, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(Color(light: 0x000000, dark: 0xffffff).opacity(0.045), in: cardShape)
             .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
+                cardShape.strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color(light: 0x000000, dark: 0xffffff).opacity(0.09),
+                            Color(light: 0x000000, dark: 0xffffff).opacity(0.02),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 0.5
+                )
             )
+            .contentShape(cardShape)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("tools.hub.\(tab.rawValue)")
