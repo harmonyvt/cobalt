@@ -153,16 +153,89 @@ enum SevenTvChatWire {
         }
     }
 
+    /// Decodes either a 7TV v3 signed 32-bit RGBA integer or a v4 hex color (`"#RRGGBB"`, `"#RRGGBBAA"`, or `{"hex": "..."}`).
+    struct WireColor: Decodable {
+        let rgba: UInt32?
+
+        private struct HexBox: Decodable { var hex: String? }
+
+        init(from decoder: Decoder) throws {
+            let single = try decoder.singleValueContainer()
+            if let intVal = try? single.decode(Int64.self) {
+                self.rgba = UInt32(truncatingIfNeeded: intVal)
+            } else if let hex = try? single.decode(String.self) {
+                self.rgba = Self.parseHex(hex)
+            } else if let box = try? single.decode(HexBox.self), let hex = box.hex {
+                self.rgba = Self.parseHex(hex)
+            } else {
+                self.rgba = nil
+            }
+        }
+
+        static func parseHex(_ raw: String) -> UInt32? {
+            let clean = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "")
+            if clean.count == 6, let rgb = UInt32(clean, radix: 16) {
+                return (rgb << 8) | 0xFF
+            }
+            if clean.count == 8, let rgba = UInt32(clean, radix: 16) {
+                return rgba
+            }
+            return nil
+        }
+    }
+
     struct Stop: Decodable {
         var at: Double?
-        var color: Int64?
+        var color: WireColor?
     }
 
     struct Shadow: Decodable {
         var xOffset: Double?
         var yOffset: Double?
+        var offsetX: Double?
+        var offsetY: Double?
         var radius: Double?
-        var color: Int64?
+        var blur: Double?
+        var color: WireColor?
+    }
+
+    struct LayerImage: Decodable {
+        var url: String?
+        var mime: String?
+        var frameCount: Int?
+        var scale: Int?
+    }
+
+    struct PaintLayerTypeWire: Decodable {
+        var __typename: String?
+        var angle: Double?
+        var repeating: Bool?
+        var `repeat`: Bool?
+        var shape: String?
+        var color: WireColor?
+        var stops: [Stop]?
+        var images: [LayerImage]?
+        var imageUrl: String?
+    }
+
+    struct PaintLayerWire: Decodable {
+        var id: String?
+        var opacity: Double?
+        var function: String?
+        var color: WireColor?
+        var angle: Double?
+        var `repeat`: Bool?
+        var repeating: Bool?
+        var shape: String?
+        var imageUrl: String?
+        var stops: [Stop]?
+        var ty: PaintLayerTypeWire?
+    }
+
+    struct AnimationWire: Decodable {
+        var mode: String?
+        var speed: Double?
+        var intensity: Double?
     }
 
     struct CosmeticData: Decodable {
@@ -170,13 +243,15 @@ enum SevenTvChatWire {
         var name: String?
         var tooltip: String?
         var function: String?
-        var color: Int64?
+        var color: WireColor?
         var angle: Double?
         var `repeat`: Bool?
         var shape: String?
         var imageUrl: String?
         var stops: [Stop]?
         var shadows: [Shadow]?
+        var layers: [PaintLayerWire]?
+        var animation: AnimationWire?
         var host: Host?
     }
 
@@ -221,40 +296,186 @@ enum SevenTvChatWire {
         return UInt32(truncatingIfNeeded: v)
     }
 
-    static func paint(_ data: CosmeticData, id: String) -> SevenTvPaint? {
-        let fn = (data.function ?? "").uppercased()
-        let stops = (data.stops ?? []).compactMap { s -> SevenTvPaint.Stop? in
-            guard let c = rgba(s.color) else { return nil }
+    private static func nonZeroRGBA(_ c: WireColor?) -> UInt32? {
+        guard let v = c?.rgba, v != 0 else { return nil }
+        return v
+    }
+
+    private static func normalizeURL(_ raw: String?) -> URL? {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return URL(string: trimmed.hasPrefix("//") ? "https:" + trimmed : trimmed)
+    }
+
+    private static func decodeStops(_ wire: [Stop]?) -> [SevenTvPaint.Stop] {
+        (wire ?? []).compactMap { s -> SevenTvPaint.Stop? in
+            guard let c = s.color?.rgba else { return nil }
             return SevenTvPaint.Stop(at: max(0, min(1, s.at ?? 0)), rgba: c)
         }
-        let shadows = (data.shadows ?? []).compactMap { s -> SevenTvPaint.Shadow? in
-            guard let c = rgba(s.color), (c & 0xFF) > 0 else { return nil }
-            return SevenTvPaint.Shadow(
-                xOffset: s.xOffset ?? 0, yOffset: s.yOffset ?? 0, radius: max(0, s.radius ?? 0), rgba: c)
+    }
+
+    private static func decodeLayer(_ wire: PaintLayerWire) -> SevenTvPaint.Layer? {
+        let opacity = max(0, min(1, wire.opacity ?? 1))
+        if let ty = wire.ty {
+            let kindName = (ty.__typename ?? "").uppercased()
+            let stops = decodeStops(ty.stops)
+            let repeats = ty.repeating ?? ty.repeat ?? false
+            let shape = SevenTvPaint.RadialShape(wireValue: ty.shape)
+            if kindName.contains("IMAGE") {
+                let images = ty.images ?? []
+                let picked = images.first { ($0.frameCount ?? 1) > 1 && ($0.scale ?? 1) == 2 && ($0.mime ?? "").contains("webp") }
+                    ?? images.first { ($0.frameCount ?? 1) > 1 && ($0.mime ?? "").contains("webp") }
+                    ?? images.first { ($0.frameCount ?? 1) > 1 }
+                    ?? images.first { ($0.scale ?? 1) == 2 }
+                    ?? images.first
+                let url = normalizeURL(picked?.url ?? ty.imageUrl)
+                guard let url else { return nil }
+                let animated = picked.map { ($0.frameCount ?? 1) > 1 } ?? SevenTvPaint.Layer.inferAnimatedImage(url: url)
+                return SevenTvPaint.Layer(
+                    kind: .image,
+                    color: nonZeroRGBA(ty.color),
+                    imageURL: url,
+                    opacity: opacity,
+                    animatedImage: animated
+                )
+            }
+            if kindName.contains("RADIAL"), stops.count >= 2 {
+                return SevenTvPaint.Layer(
+                    kind: .radial,
+                    angle: ty.angle ?? 0,
+                    shape: shape,
+                    repeats: repeats,
+                    stops: stops,
+                    color: nonZeroRGBA(ty.color) ?? stops.first?.rgba,
+                    opacity: opacity
+                )
+            }
+            if kindName.contains("LINEAR"), stops.count >= 2 {
+                return SevenTvPaint.Layer(
+                    kind: .linear,
+                    angle: ty.angle ?? 90,
+                    shape: shape,
+                    repeats: repeats,
+                    stops: stops,
+                    color: nonZeroRGBA(ty.color) ?? stops.first?.rgba,
+                    opacity: opacity
+                )
+            }
+            guard let color = nonZeroRGBA(ty.color) ?? stops.first?.rgba else { return nil }
+            return SevenTvPaint.Layer(kind: .plain, color: color, opacity: opacity)
         }
-        let baseColor = data.color.flatMap { $0 == 0 ? nil : rgba($0) }
-        let rawImage = (data.imageUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let imageURL: URL? = rawImage.isEmpty ? nil : URL(string: rawImage.hasPrefix("//") ? "https:" + rawImage : rawImage)
+
+        let fn = (wire.function ?? "").uppercased()
+        let stops = decodeStops(wire.stops)
+        let repeats = wire.repeat ?? wire.repeating ?? false
+        let shape = SevenTvPaint.RadialShape(wireValue: wire.shape)
+        if fn == "URL" || fn == "IMAGE", let url = normalizeURL(wire.imageUrl) {
+            return SevenTvPaint.Layer(
+                kind: .image,
+                color: nonZeroRGBA(wire.color),
+                imageURL: url,
+                opacity: opacity,
+                animatedImage: SevenTvPaint.Layer.inferAnimatedImage(url: url)
+            )
+        }
+        if fn.contains("RADIAL"), stops.count >= 2 {
+            return SevenTvPaint.Layer(
+                kind: .radial,
+                angle: wire.angle ?? 0,
+                shape: shape,
+                repeats: repeats,
+                stops: stops,
+                color: nonZeroRGBA(wire.color) ?? stops.first?.rgba,
+                opacity: opacity
+            )
+        }
+        if fn.contains("LINEAR"), stops.count >= 2 {
+            return SevenTvPaint.Layer(
+                kind: .linear,
+                angle: wire.angle ?? 90,
+                shape: shape,
+                repeats: repeats,
+                stops: stops,
+                color: nonZeroRGBA(wire.color) ?? stops.first?.rgba,
+                opacity: opacity
+            )
+        }
+        guard let color = nonZeroRGBA(wire.color) ?? stops.first?.rgba else { return nil }
+        return SevenTvPaint.Layer(kind: .plain, color: color, opacity: opacity)
+    }
+
+    private static func decodeAnimation(_ wire: AnimationWire?) -> SevenTvPaint.Animation? {
+        guard let wire, let rawMode = wire.mode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              let mode = SevenTvPaint.Animation.Mode(rawValue: rawMode)
+        else { return nil }
+        return SevenTvPaint.Animation(
+            mode: mode,
+            speed: wire.speed ?? 0.18,
+            intensity: wire.intensity ?? 0.5
+        )
+    }
+
+    static func paint(_ data: CosmeticData, id: String) -> SevenTvPaint? {
+        let shadows = (data.shadows ?? []).compactMap { s -> SevenTvPaint.Shadow? in
+            guard let c = s.color?.rgba, (c & 0xFF) > 0 else { return nil }
+            return SevenTvPaint.Shadow(
+                xOffset: s.xOffset ?? s.offsetX ?? 0,
+                yOffset: s.yOffset ?? s.offsetY ?? 0,
+                radius: max(0, s.radius ?? s.blur ?? 0),
+                rgba: c
+            )
+        }
+        let baseColor = nonZeroRGBA(data.color)
+        let explicitAnimation = decodeAnimation(data.animation)
+
+        // Multi-layer paint (v4 or extended EventAPI/GQL payload)
+        if let rawLayers = data.layers, !rawLayers.isEmpty {
+            let layers = rawLayers.compactMap(decodeLayer)
+            if let primary = layers.last ?? layers.first {
+                return SevenTvPaint(
+                    id: id,
+                    name: data.name ?? "",
+                    kind: primary.kind,
+                    angle: primary.angle,
+                    shape: primary.shape,
+                    repeats: primary.repeats,
+                    stops: primary.stops,
+                    color: baseColor ?? primary.color ?? shadows.first?.rgba,
+                    imageURL: primary.imageURL,
+                    shadows: shadows,
+                    layers: layers,
+                    animation: explicitAnimation
+                )
+            }
+        }
+
+        let fn = (data.function ?? "").uppercased()
+        let stops = decodeStops(data.stops)
+        let shape = SevenTvPaint.RadialShape(wireValue: data.shape)
+        let imageURL = normalizeURL(data.imageUrl)
 
         if fn == "URL", let imageURL {
             return SevenTvPaint(
-                id: id, name: data.name ?? "", kind: .image, angle: 0, repeats: false, stops: [],
-                color: baseColor ?? shadows.first?.rgba, imageURL: imageURL, shadows: shadows)
+                id: id, name: data.name ?? "", kind: .image, angle: 0, shape: shape, repeats: false, stops: [],
+                color: baseColor ?? shadows.first?.rgba, imageURL: imageURL, shadows: shadows,
+                animation: explicitAnimation)
         }
         if fn.contains("RADIAL"), stops.count >= 2 {
             return SevenTvPaint(
-                id: id, name: data.name ?? "", kind: .radial, angle: data.angle ?? 90, repeats: data.repeat ?? false,
-                stops: stops, color: baseColor ?? stops.first?.rgba, imageURL: nil, shadows: shadows)
+                id: id, name: data.name ?? "", kind: .radial, angle: data.angle ?? 90, shape: shape,
+                repeats: data.repeat ?? false, stops: stops, color: baseColor ?? stops.first?.rgba,
+                imageURL: nil, shadows: shadows, animation: explicitAnimation)
         }
         if fn.contains("LINEAR"), stops.count >= 2 {
             return SevenTvPaint(
-                id: id, name: data.name ?? "", kind: .linear, angle: data.angle ?? 90, repeats: data.repeat ?? false,
-                stops: stops, color: baseColor ?? stops.first?.rgba, imageURL: nil, shadows: shadows)
+                id: id, name: data.name ?? "", kind: .linear, angle: data.angle ?? 90, shape: shape,
+                repeats: data.repeat ?? false, stops: stops, color: baseColor ?? stops.first?.rgba,
+                imageURL: nil, shadows: shadows, animation: explicitAnimation)
         }
         guard let color = baseColor ?? stops.first?.rgba else { return nil }
         return SevenTvPaint(
-            id: id, name: data.name ?? "", kind: .plain, angle: data.angle ?? 90, repeats: false,
-            stops: stops, color: color, imageURL: nil, shadows: shadows)
+            id: id, name: data.name ?? "", kind: .plain, angle: data.angle ?? 90, shape: shape, repeats: false,
+            stops: stops, color: color, imageURL: nil, shadows: shadows, animation: explicitAnimation)
     }
 
     static func badge(_ data: CosmeticData, id: String) -> ChatBadge? {

@@ -52,9 +52,23 @@ public struct ChatBadge: Sendable, Hashable {
     }
 }
 
-/// A 7TV paint: the gradient, image texture, or plain colour (plus drop shadows) a supporter's name is drawn in.
+/// A 7TV paint: the gradient, image texture, multi-layer composite, or plain colour (plus drop shadows) a supporter's
+/// name is drawn in.
 public struct SevenTvPaint: Sendable, Hashable {
     public enum Kind: String, Sendable, Hashable { case linear, radial, plain, image }
+
+    /// Radial gradient geometry (`circle` vs `ellipse`), matching CSS `radial-gradient(<shape>, ...)`.
+    public enum RadialShape: String, Sendable, Hashable {
+        case circle
+        case ellipse
+
+        public init(wireValue: String?) {
+            switch (wireValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "circle": self = .circle
+            default: self = .ellipse
+            }
+        }
+    }
 
     public struct Stop: Sendable, Hashable {
         /// 0...1 along the gradient.
@@ -83,11 +97,93 @@ public struct SevenTvPaint: Sendable, Hashable {
         }
     }
 
+    /// One composited layer inside a 7TV paint (ordered bottom-to-top).
+    public struct Layer: Sendable, Hashable {
+        public var kind: Kind
+        /// Degrees, CSS style (0 points up, 90 right).
+        public var angle: Double
+        public var shape: RadialShape
+        public var repeats: Bool
+        public var stops: [Stop]
+        /// Solid colour or fallback colour (0xRRGGBBAA).
+        public var color: UInt32?
+        /// Texture URL when `kind == .image`.
+        public var imageURL: URL?
+        /// Layer opacity in `0...1`.
+        public var opacity: Double
+        /// True when an `.image` layer is expected to animate (WebP/AVIF/GIF).
+        public var animatedImage: Bool
+
+        public init(
+            kind: Kind,
+            angle: Double = 90,
+            shape: RadialShape = .ellipse,
+            repeats: Bool = false,
+            stops: [Stop] = [],
+            color: UInt32? = nil,
+            imageURL: URL? = nil,
+            opacity: Double = 1,
+            animatedImage: Bool = true
+        ) {
+            self.kind = kind
+            self.angle = angle
+            self.shape = shape
+            self.repeats = repeats
+            self.stops = stops
+            self.color = color
+            self.imageURL = imageURL
+            self.opacity = max(0, min(1, opacity))
+            self.animatedImage = animatedImage
+        }
+
+        /// True when this image URL looks like a static asset (e.g. `1x_static.webp`, `.png`, `.jpg`).
+        public static func inferAnimatedImage(url: URL?) -> Bool {
+            guard let url else { return false }
+            let path = url.path.lowercased()
+            if path.contains("_static.") || path.hasSuffix(".png") || path.hasSuffix(".jpg") || path.hasSuffix(".jpeg") {
+                return false
+            }
+            return true
+        }
+    }
+
+    /// GPU shader animation parameters for gradient / sheen / iridescent effects.
+    public struct Animation: Sendable, Hashable {
+        public enum Mode: String, Sendable, Hashable {
+            /// Static paint (no shader clock).
+            case none
+            /// Smooth continuous drift along the gradient axis or radial rings.
+            case drift
+            /// Periodic diagonal specular sheen sweep across the text.
+            case shimmer
+            /// Smooth iridescent hue-wave prism sheen.
+            case iridescent
+        }
+
+        public var mode: Mode
+        /// Cycles per second.
+        public var speed: Double
+        /// Effect strength in `0...1`.
+        public var intensity: Double
+
+        public static let none = Animation(mode: .none, speed: 0, intensity: 0)
+
+        public var isAnimated: Bool { mode != .none && speed > 0 && intensity > 0 }
+
+        public init(mode: Mode, speed: Double = 0.18, intensity: Double = 0.5) {
+            self.mode = mode
+            self.speed = max(0, speed)
+            self.intensity = max(0, min(1, intensity))
+        }
+    }
+
     public var id: String
     public var name: String
     public var kind: Kind
     /// Degrees, CSS style (0 points up, 90 right).
     public var angle: Double
+    /// Radial gradient geometry (`circle` vs `ellipse`).
+    public var shape: RadialShape
     public var repeats: Bool
     public var stops: [Stop]
     /// A plain paint's colour (0xRRGGBBAA), or a fallback colour while an image paint loads.
@@ -95,38 +191,121 @@ public struct SevenTvPaint: Sendable, Hashable {
     /// An image (`URL`) paint's texture URL.
     public var imageURL: URL?
     public var shadows: [Shadow]
+    /// Explicit multi-layer stack (bottom-to-top). Empty for single-layer v3 paints (`resolvedLayers` synthesises one).
+    public var layers: [Layer]
+    /// GPU shader animation specification.
+    public var animation: Animation
 
     public init(
-        id: String, name: String, kind: Kind, angle: Double = 90, repeats: Bool = false, stops: [Stop] = [],
-        color: UInt32? = nil, imageURL: URL? = nil, shadows: [Shadow] = []
+        id: String,
+        name: String,
+        kind: Kind,
+        angle: Double = 90,
+        shape: RadialShape = .ellipse,
+        repeats: Bool = false,
+        stops: [Stop] = [],
+        color: UInt32? = nil,
+        imageURL: URL? = nil,
+        shadows: [Shadow] = [],
+        layers: [Layer] = [],
+        animation: Animation? = nil
     ) {
         self.id = id
         self.name = name
         self.kind = kind
         self.angle = angle
+        self.shape = shape
         self.repeats = repeats
         self.stops = stops
         self.color = color
         self.imageURL = imageURL
         self.shadows = shadows
+        self.layers = layers
+        self.animation = animation ?? Self.defaultAnimation(kind: kind, repeats: repeats, stops: stops, layers: layers)
     }
 
-    /// Gradient stops sorted by position; repeating gradients are tiled across `0...1` so SwiftUI draws CSS repeating gradients.
+    /// Layers in bottom-to-top compositing order. Single-layer v3 paints yield one synthesised layer.
+    public var resolvedLayers: [Layer] {
+        if !layers.isEmpty { return layers }
+        return [Layer(
+            kind: kind,
+            angle: angle,
+            shape: shape,
+            repeats: repeats,
+            stops: stops,
+            color: color,
+            imageURL: imageURL,
+            opacity: 1,
+            animatedImage: Layer.inferAnimatedImage(url: imageURL)
+        )]
+    }
+
+    /// True when any layer renders a remote image/texture URL.
+    public var hasImageLayer: Bool {
+        resolvedLayers.contains { $0.kind == .image && $0.imageURL != nil }
+    }
+
+    /// True when this paint needs the lightweight GPU shader clock (`TimelineView`).
+    public var hasAnimatedShader: Bool {
+        animation.isAnimated
+    }
+
+    /// Default subtle GPU animation inferred from a paint's geometry when none is specified explicitly:
+    /// repeating gradients smoothly drift along their cycle; rich 3+ stop gradients get a refined metallic shimmer;
+    /// plain colours and simple 2-stop gradients stay static (zero clock overhead).
+    public static func defaultAnimation(
+        kind: Kind,
+        repeats: Bool,
+        stops: [Stop],
+        layers: [Layer] = []
+    ) -> Animation {
+        let active: [Layer] = layers.isEmpty
+            ? [Layer(kind: kind, repeats: repeats, stops: stops)]
+            : layers
+        if active.contains(where: { ($0.kind == .linear || $0.kind == .radial) && $0.repeats && $0.stops.count >= 2 }) {
+            return Animation(mode: .drift, speed: 0.16, intensity: 0.85)
+        }
+        if active.contains(where: { ($0.kind == .linear || $0.kind == .radial) && $0.stops.count >= 3 }) {
+            return Animation(mode: .shimmer, speed: 0.22, intensity: 0.30)
+        }
+        return .none
+    }
+
+    /// Gradient stops sorted by position; repeating gradients are tiled across `0...1` (both backward below the first
+    /// stop and forward past the last stop) so non-shader fallback paths also honour CSS repeating gradients.
     public var resolvedStops: [Stop] {
+        Self.resolveStops(stops, repeats: repeats)
+    }
+
+    public static func resolveStops(_ stops: [Stop], repeats: Bool) -> [Stop] {
         let sorted = stops.sorted { $0.at < $1.at }
         guard repeats, sorted.count >= 2, let first = sorted.first?.at, let last = sorted.last?.at else {
             return sorted
         }
         let period = last - first
-        guard period > 0.005, last < 0.999 else { return sorted }
-        var out: [Stop] = []
+        guard period > 0.005, (first > 0.001 || last < 0.999) else { return sorted }
+
+        let startCycle = first > 0.001 ? -Int(ceil(first / period)) : 0
         let maxCycles = 24
-        for cycle in 0..<maxCycles {
+        var out: [Stop] = []
+        var prevSample: (pos: Double, rgba: UInt32)?
+
+        for cycleOffset in 0..<maxCycles {
+            let cycle = startCycle + cycleOffset
             let offset = Double(cycle) * period
             if first + offset >= 1.0 { break }
             var hitEnd = false
             for s in sorted {
                 let pos = s.at + offset
+                if pos < 0.0 {
+                    prevSample = (pos, s.rgba)
+                    continue
+                }
+                if out.isEmpty, pos > 0.0, let prev = prevSample {
+                    let span = pos - prev.pos
+                    let t = span > 0 ? (0.0 - prev.pos) / span : 1.0
+                    out.append(Stop(at: 0.0, rgba: Self.lerpRGBA(prev.rgba, s.rgba, t: t)))
+                }
                 if pos > 1.0 {
                     if let prev = out.last, prev.at < 1.0 {
                         let span = pos - prev.at
@@ -137,10 +316,11 @@ public struct SevenTvPaint: Sendable, Hashable {
                     break
                 }
                 out.append(Stop(at: pos, rgba: s.rgba))
+                prevSample = (pos, s.rgba)
             }
             if hitEnd { break }
         }
-        return out
+        return out.isEmpty ? sorted : out
     }
 
     private static func lerpRGBA(_ a: UInt32, _ b: UInt32, t: Double) -> UInt32 {
