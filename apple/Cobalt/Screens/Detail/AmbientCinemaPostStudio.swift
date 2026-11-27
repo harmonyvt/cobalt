@@ -23,6 +23,9 @@ struct AmbientCinemaPostStudio: View {
     @Environment(\.subtitles) private var subtitles
     @Environment(\.shell) private var shell
     @Environment(\.paneReservedRegions) private var reservedRegions
+    @Environment(\.paneHostSize) private var hostSize
+    @Environment(\.paneSafeAreaInsets) private var paneSafeAreaInsets
+    @Environment(\.duoStatusAdjacentBarForcePreview) private var forceStatusBarPreview
     @Environment(\.paneOffline) private var offline
     @Environment(\.hapticsEnabled) private var haptics
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -155,11 +158,28 @@ struct AmbientCinemaPostStudio: View {
         hasTranscript ? [.access, .tools, .transcript] : [.access, .tools]
     }
 
+    private func resolvedStatusBarMetrics(containerSize: CGSize) -> DuoStatusAdjacentBarMetrics {
+        guard showsCloseButton else { return .inactive }
+        let resolvedSize = hostSize.width > 0 ? hostSize : containerSize
+        return DuoStatusAdjacentBarMetrics.resolve(
+            hostSize: resolvedSize,
+            safeArea: paneSafeAreaInsets,
+            reserved: reservedRegions,
+            typeSize: typeSize,
+            forcePreview: forceStatusBarPreview
+        )
+    }
+
     var body: some View {
+        let hostStatusBar = resolvedStatusBarMetrics(containerSize: hostSize)
+
         GeometryReader { geo in
             let isWide = geo.size.width >= DetailWidth.wide && !typeSize.isAccessibilitySize
             let deckWidth = min(max(geo.size.width * 0.34, 300), 344)
             let creaseHint = reservedRegions.activeDivision != nil
+            let showDockedDeck = isWide && wideDeckOpen && !creaseHint
+            let statusBar = resolvedStatusBarMetrics(containerSize: geo.size)
+            let cinemaWidth = showDockedDeck ? max(0, geo.size.width - deckWidth) : geo.size.width
 
             DuoMediaOverlay(edge: .bottom, axes: [.horizontal, .vertical]) { isSeparated in
                 if isSeparated {
@@ -168,7 +188,9 @@ struct AmbientCinemaPostStudio: View {
                     flatOverlayHUD(
                         isWide: isWide,
                         deckWidth: deckWidth,
-                        showDockedDeck: isWide && wideDeckOpen && !creaseHint
+                        showDockedDeck: showDockedDeck,
+                        cinemaWidth: cinemaWidth,
+                        statusBar: statusBar
                     )
                 }
             } media: {
@@ -178,7 +200,7 @@ struct AmbientCinemaPostStudio: View {
                     activeRendition: activeRendition,
                     livePalette: activeRenditionIsVideo ? videoSampler.livePalette : nil,
                     ambientEnabled: ambientEnabled,
-                    reserveRight: isWide && wideDeckOpen && !creaseHint ? deckWidth : 0
+                    reserveRight: showDockedDeck ? deckWidth : 0
                 )
             }
             .environment(\.ambientVideoSampler, videoSampler)
@@ -188,9 +210,11 @@ struct AmbientCinemaPostStudio: View {
         .preferredColorScheme(.dark)
         .preference(key: PaneHidesChromeHeaderKey.self, value: showsCloseButton)
         #if os(iOS)
-        .preference(key: PaneShowsSystemToolbarKey.self, value: showsCloseButton)
+        .preference(key: PaneShowsSystemToolbarKey.self, value: showsCloseButton && !hostStatusBar.isActive)
         .toolbar {
-            studioToolbar
+            if !hostStatusBar.isActive {
+                studioToolbar
+            }
         }
         .duoToolbarCompression(.prefersToolbarItems)
         #endif
@@ -208,7 +232,7 @@ struct AmbientCinemaPostStudio: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .mediaGlassCapsule(interactive: false)
-                    .padding(.top, 64)
+                    .padding(.top, hostStatusBar.isActive ? hostStatusBar.bandHeight + 8 : 64)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .allowsHitTesting(false)
             }
@@ -248,7 +272,13 @@ struct AmbientCinemaPostStudio: View {
 
     // MARK: - Flat Overlay HUD (Outer Folded, Unfolded Wide, iPad, Mac)
 
-    private func flatOverlayHUD(isWide: Bool, deckWidth: CGFloat, showDockedDeck: Bool) -> some View {
+    private func flatOverlayHUD(
+        isWide: Bool,
+        deckWidth: CGFloat,
+        showDockedDeck: Bool,
+        cinemaWidth: CGFloat,
+        statusBar: DuoStatusAdjacentBarMetrics
+    ) -> some View {
         HStack(spacing: 0) {
             ZStack {
                 // Edge vignettes keep Clear Liquid Glass controls crisp over any bright or dark frame.
@@ -261,7 +291,16 @@ struct AmbientCinemaPostStudio: View {
                 .allowsHitTesting(false)
 
                 VStack(spacing: 0) {
-                    topGlassHUD(isWide: isWide)
+                    if statusBar.isActive {
+                        topStatusAdjacentGlassHUD(
+                            isWide: isWide,
+                            showDockedDeck: showDockedDeck,
+                            cinemaWidth: cinemaWidth,
+                            metrics: statusBar
+                        )
+                    } else {
+                        topGlassHUD(isWide: isWide)
+                    }
 
                     Spacer(minLength: 0)
 
@@ -274,6 +313,7 @@ struct AmbientCinemaPostStudio: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, 12)
                 }
+                .ignoresSafeArea(.container, edges: statusBar.isActive ? .top : [])
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -336,10 +376,167 @@ struct AmbientCinemaPostStudio: View {
         }
 
         DuoOverflowToolbarMenu(Copy.Media.more) {
-            moreMenuItems
+            moreMenuItems(includeQuickToggles: false)
         }
     }
     #endif
+
+    // MARK: - Top Clear Liquid Glass HUD (iPhone Duo Status-Adjacent Strip)
+
+    /// Compact Clear Liquid Glass HUD parked inside the leading top status-adjacent band beside `9:41` + status orb
+    /// on iPhone Duo portrait postures, keeping the full-bleed cinema canvas unobstructed.
+    private func topStatusAdjacentGlassHUD(
+        isWide: Bool,
+        showDockedDeck: Bool,
+        cinemaWidth: CGFloat,
+        metrics: DuoStatusAdjacentBarMetrics
+    ) -> some View {
+        let trailingReserve = showDockedDeck ? CGFloat(12) : metrics.trailingReserve
+        let leadingSlotWidth = max(0, cinemaWidth - metrics.leadingInset - trailingReserve)
+        let showsWideControls = leadingSlotWidth >= DuoStatusAdjacentBarLayout.wideLeadingSlotMinWidth
+        let deckActive = isWide ? wideDeckOpen : compactSheetOpen
+        let justCopied = controller.copiedID == rendition.id
+        let copiedShare = (justCopied && controller.copiedForm != .direct) || copiedPrivate
+
+        return DuoStatusAdjacentBar(
+            surface: .clearLiquidGlass,
+            metrics: metrics,
+            trailingReserveOverride: showDockedDeck ? 12 : nil
+        ) {
+            if showsCloseButton {
+                DuoStatusBarBackButton(surface: .clearLiquidGlass) {
+                    context.leave()
+                }
+            }
+
+            // Compact visibility dot + filename pill with live 4-state visibility / rename popover.
+            Button {
+                renameDraft = displayTitle
+                showIdentityPopover = true
+            } label: {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(visibilityState.tint)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: visibilityState.tint.opacity(0.65), radius: 2.5)
+                    Text(displayTitle)
+                        .font(Font.cobalt(12.5, .medium, relativeTo: .caption))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.68))
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .mediaGlassCapsule()
+                .frame(minHeight: Metrics.hit)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(minWidth: 68, alignment: .leading)
+            .layoutPriority(0.8)
+            .accessibilityLabel("\(displayTitle), \(visibilityState.shortLabel)")
+            .accessibilityIdentifier("ambient.identity")
+            .popover(isPresented: $showIdentityPopover, arrowEdge: .top) {
+                identityPopoverContent
+                    .frame(width: 300)
+                    .presentationCompactAdaptation(.popover)
+            }
+
+            Spacer(minLength: 2)
+
+            if let url = liveShareURL {
+                Button {
+                    copyLink(url, form: .share)
+                } label: {
+                    if showsWideControls {
+                        DuoStatusBarPillVisual(
+                            title: copiedShare
+                                ? Copy.Media.copied
+                                : (currentFileLink == .private ? "Private" : "Share"),
+                            systemImage: copiedShare ? Symbol.Media.copied : Symbol.Media.copyLink,
+                            surface: .clearLiquidGlass,
+                            tint: copiedShare ? CobaltColor.success : nil
+                        )
+                    } else {
+                        DuoStatusBarIconVisual(
+                            systemImage: copiedShare ? Symbol.Media.copied : Symbol.Media.copyLink,
+                            surface: .clearLiquidGlass,
+                            tint: copiedShare ? CobaltColor.success : nil
+                        )
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(currentFileLink == .private ? "Copy Private Share Link" : "Copy Share Link")
+                .accessibilityIdentifier("ambient.statusCopyShare")
+            }
+
+            if showsWideControls {
+                if hasTranscript, let subtitles {
+                    Button {
+                        subtitles.toggle()
+                    } label: {
+                        DuoStatusBarIconVisual(
+                            systemImage: captionsActive ? Symbol.Subtitles.on : Symbol.Subtitles.off,
+                            surface: .clearLiquidGlass,
+                            highlighted: captionsActive
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(captionsActive ? Copy.Subtitles.turnOff : Copy.Subtitles.turnOn)
+                }
+
+                Button {
+                    ambientEnabled.toggle()
+                } label: {
+                    DuoStatusBarIconVisual(
+                        systemImage: ambientEnabled ? "sun.max.fill" : "sun.max",
+                        surface: .clearLiquidGlass,
+                        foreground: ambientEnabled ? Color(hex: 0xfde68a) : .white.opacity(0.75)
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(ambientEnabled ? "Turn off ambient cinema glow" : "Turn on ambient cinema glow")
+                .accessibilityIdentifier("ambient.glowToggle")
+            }
+
+            Button {
+                if isWide {
+                    wideDeckOpen.toggle()
+                } else {
+                    compactSheetOpen.toggle()
+                }
+            } label: {
+                if showsWideControls {
+                    DuoStatusBarPillVisual(
+                        title: "Deck",
+                        systemImage: "sidebar.right",
+                        surface: .clearLiquidGlass,
+                        emphasized: deckActive
+                    )
+                } else {
+                    DuoStatusBarIconVisual(
+                        systemImage: "sidebar.right",
+                        surface: .clearLiquidGlass,
+                        highlighted: deckActive
+                    )
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(deckActive ? "Hide Studio Deck" : "Show Studio Deck")
+            .accessibilityIdentifier("ambient.studioDeckToggle")
+
+            Menu {
+                moreMenuItems(includeQuickToggles: !showsWideControls)
+            } label: {
+                DuoStatusBarIconVisual(systemImage: "ellipsis", surface: .clearLiquidGlass)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Copy.Media.more)
+        }
+    }
 
     // MARK: - Top Clear Liquid Glass HUD
 
@@ -477,7 +674,25 @@ struct AmbientCinemaPostStudio: View {
     }
 
     @ViewBuilder
-    private var moreMenuItems: some View {
+    private func moreMenuItems(includeQuickToggles: Bool = false) -> some View {
+        if includeQuickToggles {
+            Button(
+                ambientEnabled ? "Turn off ambient glow" : "Turn on ambient glow",
+                systemImage: ambientEnabled ? "sun.max.fill" : "sun.max"
+            ) {
+                ambientEnabled.toggle()
+            }
+            if hasTranscript, let subtitles {
+                Button(
+                    captionsActive ? Copy.Subtitles.turnOff : Copy.Subtitles.turnOn,
+                    systemImage: captionsActive ? Symbol.Subtitles.on : Symbol.Subtitles.off
+                ) {
+                    subtitles.toggle()
+                }
+            }
+            Divider()
+        }
+
         if let url = liveShareURL {
             Button(
                 model.capabilities.hasLinkPair(url) ? Copy.LinkPair.copyShareLink : Copy.copyLink,
@@ -534,7 +749,7 @@ struct AmbientCinemaPostStudio: View {
 
     private var moreMenuButton: some View {
         Menu {
-            moreMenuItems
+            moreMenuItems(includeQuickToggles: false)
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 14, weight: .semibold))
@@ -545,6 +760,84 @@ struct AmbientCinemaPostStudio: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Copy.Media.more)
+    }
+
+    @ViewBuilder
+    private func moreMenuItems(includeQuickToggles: Bool) -> some View {
+        if includeQuickToggles {
+            Button(
+                ambientEnabled ? "Turn off ambient glow" : "Turn on ambient glow",
+                systemImage: ambientEnabled ? "sun.max.fill" : "sun.max"
+            ) {
+                ambientEnabled.toggle()
+            }
+            if hasTranscript, let subtitles {
+                Button(
+                    captionsActive ? Copy.Subtitles.turnOff : Copy.Subtitles.turnOn,
+                    systemImage: captionsActive ? Symbol.Subtitles.on : Symbol.Subtitles.off
+                ) {
+                    subtitles.toggle()
+                }
+            }
+            Divider()
+        }
+
+        if let url = liveShareURL {
+            Button(
+                model.capabilities.hasLinkPair(url) ? Copy.LinkPair.copyShareLink : Copy.copyLink,
+                systemImage: Symbol.Media.copyLink
+            ) {
+                copyLink(url, form: .share)
+            }
+            if model.capabilities.hasLinkPair(url) && currentFileLink != .private {
+                Button(Copy.LinkPair.copyDirectLink, systemImage: Symbol.LinkPair.direct) {
+                    copyLink(url, form: .direct)
+                }
+            }
+            Divider()
+        }
+
+        Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) {
+            renameDraft = displayTitle
+            showIdentityPopover = true
+        }
+
+        if let add = kit.addToLinkAction(item) {
+            Button(add.title, systemImage: add.systemImage, action: add.perform)
+                .disabled(add.isDisabled || (add.needsServer && offline && !add.queuesOffline))
+        }
+
+        if let edit = kit.editAction(item) {
+            Button(edit.title, systemImage: edit.systemImage, action: edit.perform)
+                .disabled(edit.isDisabled || (edit.needsServer && offline && !edit.queuesOffline))
+        }
+
+        if model.capabilities.chat, item.post != nil, !isHidden {
+            Button(Copy.Chat.askAbout, systemImage: Symbol.chatAsk) {
+                kit.askAbout(item)
+            }
+            .disabled(offline)
+        }
+
+        if let openLib = kit.openInLibraryAction(item) {
+            Button(openLib.title, systemImage: openLib.systemImage, action: openLib.perform)
+        }
+
+        if let onManageLinks {
+            Button(Copy.PostPane.manage, systemImage: Symbol.PrivateLinks.privateLink, action: onManageLinks)
+        }
+
+        if let hide = kit.hideAction(item) {
+            Divider()
+            Button(hide.title, systemImage: hide.systemImage, action: hide.perform)
+                .disabled(hide.isDisabled || (hide.needsServer && offline && !hide.queuesOffline))
+        }
+
+        if let delete = kit.deleteAction(item) {
+            Divider()
+            Button(delete.title, systemImage: delete.systemImage, role: .destructive, action: delete.perform)
+                .disabled(delete.isDisabled)
+        }
     }
 
     // MARK: - Compact Rendition Switcher Strip

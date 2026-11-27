@@ -37,6 +37,7 @@ struct PaneHost<Content: View>: View {
     @SceneStorage("pane") private var saved: Data?
     @State private var size: CGSize = .zero
     @State private var reservedRegions: DuoReservedRegions = .empty
+    @State private var safeAreaInsets: EdgeInsets = EdgeInsets()
     @State private var edgeTargeted = false
     /// Work waiting for the compact sheet to finish going down (`PaneAfterDismiss`).
     @State private var afterDismiss = PaneAfterDismiss()
@@ -141,9 +142,13 @@ struct PaneHost<Content: View>: View {
         .background {
             Color.clear
                 .onGeometryChange(for: PaneHostGeometry.self) { proxy in
-                    PaneHostGeometry(size: proxy.size, regions: DuoReservedRegions.readCompat(from: proxy))
+                    PaneHostGeometry(
+                        size: proxy.size,
+                        safeArea: proxy.safeAreaInsets,
+                        regions: DuoReservedRegions.readCompat(from: proxy))
                 } action: { measuredGeometry in
                     size = measuredGeometry.size
+                    safeAreaInsets = measuredGeometry.safeArea
                     reservedRegions = measuredGeometry.regions
                     pane.measure(measuredGeometry.size)
                 }
@@ -195,6 +200,7 @@ struct PaneHost<Content: View>: View {
         .environment(\.mediaDetailModel, model)
         .environment(\.paneReservedRegions, reservedRegions)
         .environment(\.paneHostSize, size)
+        .environment(\.paneSafeAreaInsets, safeAreaInsets)
     }
 
     /// The server can't be reached. DEBUG: `-previewPaneOffline YES` says so over the preview data (simulator evidence of the
@@ -344,6 +350,7 @@ struct PaneHost<Content: View>: View {
             .environment(\.mediaDetailModel, model)
             .environment(\.paneReservedRegions, reservedRegions)
             .environment(\.paneHostSize, size)
+            .environment(\.paneSafeAreaInsets, safeAreaInsets)
             .cobaltRoot(model: model)
     }
 
@@ -372,9 +379,10 @@ struct PaneHost<Content: View>: View {
     }
 }
 
-/// Measured window geometry + active hardware reserved regions (`ReservedRegion(.division)`).
+/// Measured window geometry, safe area, and active hardware reserved regions (`ReservedRegion(.division)`).
 private struct PaneHostGeometry: Equatable {
     var size: CGSize
+    var safeArea: EdgeInsets
     var regions: DuoReservedRegions
 }
 
