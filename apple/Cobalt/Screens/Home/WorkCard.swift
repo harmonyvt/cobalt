@@ -76,3 +76,33 @@ struct WorkCard<Content: View>: View {
             .transition(reduceMotion ? .opacity : .identity)
     }
 }
+
+/// Non-glass compact icon button for actions inside `WorkCard` (dismissing a failure, cancelling an import).
+/// Avoids nesting `.cobaltIcon()`'s `.glassEffect` inside `WorkCard`'s own `.glassEffect` within `GlassEffectContainer`.
+struct WorkCardActionButtonStyle: ButtonStyle {
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var wordsBack: Bool { typeSize.isAccessibilitySize }
+
+    func makeBody(configuration: Configuration) -> some View {
+        styledLabel(configuration.label)
+            .font(wordsBack ? CobaltType.buttonSmall : .system(size: 15, weight: .semibold))
+            .foregroundStyle(CobaltColor.text)
+            .lineLimit(1)
+            .frame(minWidth: 34, minHeight: 34)
+            .padding(.horizontal, wordsBack ? 12 : 0)
+            .background(Color.primary.opacity(configuration.isPressed ? 0.18 : 0.10), in: Capsule())
+            .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
+            .contentShape(Rectangle())
+            .haptic(.impact(weight: .light, intensity: 0.7), trigger: configuration.isPressed) { $0 }
+    }
+
+    @ViewBuilder
+    private func styledLabel(_ label: Configuration.Label) -> some View {
+        if wordsBack {
+            label.labelStyle(.titleAndIcon)
+        } else {
+            label.labelStyle(.iconOnly)
+        }
+    }
+}

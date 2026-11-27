@@ -128,6 +128,9 @@ struct PhoneRootToolbar: ToolbarContent {
         }
         ToolbarItem(placement: .topBarTrailing) { ActivityPill(model: model) }
             .duoVisibilityPriority(.high)
+        if #available(iOS 26.0, *) {
+            ToolbarSpacer(.fixed, placement: .topBarTrailing)
+        }
         PhoneGearItem()
     }
 }

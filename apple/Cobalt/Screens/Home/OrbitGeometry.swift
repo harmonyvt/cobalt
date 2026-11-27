@@ -44,6 +44,19 @@ struct OrbitGuide {
     let isLane: Bool
 }
 
+/// Quantised guide parameters for one band, so `OrbitGuidesCanvas` can skip redrawing when settled.
+struct OrbitGuideArcSpec: Equatable {
+    let radius: CGFloat
+    let lane: CGFloat
+    let draw: Double
+
+    init(radius: CGFloat, lane: CGFloat, draw: Double) {
+        self.radius = (radius * 4).rounded() / 4
+        self.lane = (lane * 4).rounded() / 4
+        self.draw = draw >= 0.999 ? 1 : (draw * 200).rounded() / 200
+    }
+}
+
 /// What the orbit knows about one entry: its id and the shape of its picture (a planet's box follows
 /// the face's real aspect, and springs to the new one when the face changes).
 struct OrbitEntry: Equatable {
@@ -490,28 +503,35 @@ struct RainbowArcsGeometry: OrbitGeometry {
     // MARK: guides
 
     /// A hairline that draws itself from the apex outward (`draw` 0...1), or the whole arc once drawn
-    /// (`eArc`).
+    /// (`eArc`). Uses a native Bezier arc instead of a 96-segment trig polyline.
     private func arc(_ r: CGFloat, draw: Double) -> Path {
-        let ae = cEnd(r)
+        Self.arcPath(center: center, radius: r, edge: edge, bottom: bottom, draw: draw)
+    }
+
+    static func arcPath(center: CGPoint, radius r: CGFloat, edge: CGFloat, bottom: CGFloat, draw: Double) -> Path {
+        guard r > 0, draw > 0.001 else { return Path() }
+        let ae = cEnd(r, edge: edge, bottom: bottom)
+        guard ae < CGFloat.pi / 2 else { return Path() }
         var path = Path()
         if draw >= 0.999 {
-            let steps = 96
-            for s in 0...steps {
-                let a = ae + (CGFloat.pi - 2 * ae) * CGFloat(s) / CGFloat(steps)
-                let p = point(radius: r, angle: a)
-                if s == 0 { path.move(to: p) } else { path.addLine(to: p) }
-            }
+            // SwiftUI's Path.addArc inherits CGPath's y-up clockwise flag, so decreasing angles from -ae through
+            // -pi/2 (top apex) to -(pi - ae) sweep over the upper rainbow arc when `clockwise: true`.
+            path.addArc(
+                center: center,
+                radius: r,
+                startAngle: .radians(-Double(ae)),
+                endAngle: .radians(-Double(CGFloat.pi - ae)),
+                clockwise: true)
             return path
         }
-        guard draw > 0.001 else { return path }
-        let steps = 48
-        for end in [ae, CGFloat.pi - ae] {
-            for s in 0...steps {
-                let a = CGFloat.pi / 2 + (end - CGFloat.pi / 2) * CGFloat(draw) * CGFloat(s) / CGFloat(steps)
-                let p = point(radius: r, angle: a)
-                if s == 0 { path.move(to: p) } else { path.addLine(to: p) }
-            }
-        }
+        let halfSpan = (CGFloat.pi / 2 - ae) * CGFloat(draw)
+        guard halfSpan > 0 else { return path }
+        path.addArc(
+            center: center,
+            radius: r,
+            startAngle: .radians(-Double(CGFloat.pi / 2 - halfSpan)),
+            endAngle: .radians(-Double(CGFloat.pi / 2 + halfSpan)),
+            clockwise: true)
         return path
     }
 
@@ -867,6 +887,27 @@ struct OrbitScene: Equatable {
         for q in dynamics.dying {
             let p = 1 - OrbitMath.smooth((now - q.since - 0.2) / RingMotion.drawFor)
             out += g.guides(radius: q.radius, lane: q.lane, draw: p)
+        }
+        return out
+    }
+
+    /// Quantised band/lane specs for `OrbitGuidesCanvas` so stationary hairlines skip Canvas redraws at 30 fps.
+    func guideSpecs(at now: Double, geometry g: CurrentOrbitGeometry) -> [OrbitGuideArcSpec] {
+        guard !ids.isEmpty else { return [] }
+        let radii = g.bandRadii()
+        var out: [OrbitGuideArcSpec] = []
+        out.reserveCapacity(radii.count + dynamics.dying.count)
+        for i in 0..<radii.count {
+            let draw = dynamics.draw(ring: i, at: now)
+            if draw > 0.001 {
+                out.append(OrbitGuideArcSpec(radius: radii[i], lane: g.fit * g.scale(ring: i) * 0.36, draw: draw))
+            }
+        }
+        for q in dynamics.dying {
+            let p = 1 - OrbitMath.smooth((now - q.since - 0.2) / RingMotion.drawFor)
+            if p > 0.001 {
+                out.append(OrbitGuideArcSpec(radius: q.radius, lane: q.lane, draw: p))
+            }
         }
         return out
     }
