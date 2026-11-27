@@ -91,6 +91,51 @@ private func sides(_ size: (Int, Int)) -> [Int] { [size.0, size.1] }
         gate.release()
         #expect(gate.claim())
     }
+
+    @Test func mediaAnimationFrameDelayClampsFastAndZeroDelays() {
+        let zeroGIF: [CFString: Any] = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFUnclampedDelayTime: 0.0]]
+        #expect(MediaAnimation.frameDelay(zeroGIF, minimum: 0.05) == 0.1)
+
+        let fastWebP: [CFString: Any] = [kCGImagePropertyWebPDictionary: [kCGImagePropertyWebPUnclampedDelayTime: 0.025]]
+        #expect(MediaAnimation.frameDelay(fastWebP, minimum: 0.05) == 0.05)
+        #expect(MediaAnimation.frameDelay(fastWebP, minimum: 1.0 / 30.0) == 1.0 / 30.0)
+
+        let slowWebP: [CFString: Any] = [kCGImagePropertyWebPDictionary: [kCGImagePropertyWebPDelayTime: 0.2]]
+        #expect(MediaAnimation.frameDelay(slowWebP, minimum: 0.05) == 0.2)
+    }
+
+    @Test func mediaAnimationDecodesDownsampledFramesOffMainAndStops() async throws {
+        let out = NSMutableData()
+        let dest = try #require(CGImageDestinationCreateWithData(out, "com.compuserve.gif" as CFString, 2, nil))
+        let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        let ctx = try #require(CGContext(
+            data: nil, width: 120, height: 60, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.setFillColor(CGColor(red: 0.2, green: 0.7, blue: 0.4, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 120, height: 60))
+        let frameImage = try #require(ctx.makeImage())
+        let props: [CFString: Any] = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.05]]
+        CGImageDestinationAddImage(dest, frameImage, props as CFDictionary)
+        CGImageDestinationAddImage(dest, frameImage, props as CFDictionary)
+        #expect(CGImageDestinationFinalize(dest))
+
+        let received = await withCheckedContinuation { (cont: CheckedContinuation<ImageBox?, Never>) in
+            final class Once: @unchecked Sendable {
+                var done = false
+                var animation: MediaAnimation?
+            }
+            let once = Once()
+            once.animation = MediaAnimation.play(data: out as Data, maxPixel: 40) { box in
+                guard !once.done else { return }
+                once.done = true
+                once.animation?.stop()
+                cont.resume(returning: box)
+            }
+            if once.animation == nil { cont.resume(returning: nil) }
+        }
+        let box = try #require(received)
+        #expect(box.image.width == 40 && box.image.height == 20)
+    }
 }
 
 @MainActor @Suite struct MotionBudgetTests {
@@ -152,5 +197,19 @@ private func sides(_ size: (Int, Int)) -> [Int] { [size.0, size.1] }
         let a = MotionTicket()
         budget.want(a, true)
         #expect(!a.granted)
+    }
+
+    @Test func ungrantedTicketsLeavingDoNotDisturbActiveSlots() {
+        let budget = MotionBudget(limit: 2, watchPower: false)
+        let a = MotionTicket(), b = MotionTicket(), c = MotionTicket(), d = MotionTicket()
+        budget.want(a, true)
+        budget.want(b, true)
+        budget.want(c, true)
+        budget.want(d, true)
+        #expect(a.granted && b.granted && !c.granted && !d.granted)
+        budget.want(c, false)
+        #expect(a.granted && b.granted && !c.granted && !d.granted)
+        budget.want(a, false)
+        #expect(!a.granted && b.granted && d.granted)
     }
 }

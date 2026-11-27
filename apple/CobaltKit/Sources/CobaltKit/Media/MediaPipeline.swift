@@ -192,58 +192,185 @@ final class FrameGate: Sendable {
     func release() { pending.withLock { $0 = false } }
 }
 
-/// One playing webp or gif. ImageIO keeps time and calls back once a frame; that callback only claims the gate and hands
-/// the frame to a background task, which shrinks it to `maxPixel`, so the main actor gets one small display-ready frame
-/// at a time whatever queue ImageIO calls back on. `stop()` ends it at the next frame; the owner must call it, or hold it
-/// in a `MediaAnimationSlot`, which stops it when the slot is freed. (A deinit here could never run while it plays:
-/// ImageIO's frame block holds the animation until it halts.)
+/// One playing webp or gif. Decodes every frame completely off the main thread via `CGImageSource` thumbnails at
+/// `maxPixel` (never calling `CGAnimateImageDataWithBlock`, which decodes on `DispatchQueue.main`), clamps rapid emote
+/// frame rates, and caches small looping emotes in memory only while playing. `stop()` cancels the decode task
+/// immediately; the owner must call it, or hold it in a `MediaAnimationSlot`, which stops it when freed.
 public final class MediaAnimation: Sendable {
-    private let stopped = Mutex(false)
-    private let gate = FrameGate()
+    private struct State {
+        var stopped = false
+        var task: Task<Void, Never>?
+    }
+
+    private let state = Mutex(State())
 
     private init() {}
 
-    public var isStopped: Bool { stopped.withLock { $0 } }
+    public var isStopped: Bool { state.withLock { $0.stopped } }
 
-    public func stop() { stopped.withLock { $0 = true } }
-
-    /// Plays `data`; nil when ImageIO cannot animate it (nothing will be shown).
-    public static func play(
-        data: Data, maxPixel: Int, onFrame: @escaping @MainActor @Sendable (ImageBox) -> Void
-    ) -> MediaAnimation? {
-        let animation = MediaAnimation()
-        let status = CGAnimateImageDataWithBlock(data as CFData, nil) { @Sendable _, image, halt in
-            animation.arrived(image, halt, maxPixel: maxPixel, onFrame: onFrame)
+    public func stop() {
+        let task = state.withLock { s -> Task<Void, Never>? in
+            s.stopped = true
+            let existing = s.task
+            s.task = nil
+            return existing
         }
-        return status == noErr ? animation : nil
+        task?.cancel()
     }
 
-    /// Plays a file on disk; nil when ImageIO cannot animate it.
+    /// Plays `data`; nil when `data` is empty.
     public static func play(
-        file url: URL, maxPixel: Int, onFrame: @escaping @MainActor @Sendable (ImageBox) -> Void
-    ) -> MediaAnimation? {
-        let animation = MediaAnimation()
-        let status = CGAnimateImageAtURLWithBlock(url as CFURL, nil) { @Sendable _, image, halt in
-            animation.arrived(image, halt, maxPixel: maxPixel, onFrame: onFrame)
-        }
-        return status == noErr ? animation : nil
-    }
-
-    private func arrived(
-        _ image: CGImage, _ halt: UnsafeMutablePointer<Bool>, maxPixel: Int,
+        data: Data,
+        maxPixel: Int,
+        onFail: (@MainActor @Sendable () -> Void)? = nil,
         onFrame: @escaping @MainActor @Sendable (ImageBox) -> Void
-    ) {
-        if isStopped { halt.pointee = true; return }
-        guard gate.claim() else { return }
-        let raw = ImageBox(image)
-        let gate = self.gate
-        Task.detached(priority: .userInitiated) { [self] in
-            let frame = ImageBox(MediaPipeline.shrink(raw.image, maxPixel: maxPixel))
-            await MainActor.run {
-                if !self.isStopped { onFrame(frame) }
-                gate.release()
+    ) -> MediaAnimation? {
+        guard !data.isEmpty else { return nil }
+        let animation = MediaAnimation()
+        animation.start {
+            let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)
+            await animation.run(source: source, maxPixel: maxPixel, onFail: onFail, onFrame: onFrame)
+        }
+        return animation
+    }
+
+    /// Plays a file on disk; nil when `url` is not a file URL.
+    public static func play(
+        file url: URL,
+        maxPixel: Int,
+        onFail: (@MainActor @Sendable () -> Void)? = nil,
+        onFrame: @escaping @MainActor @Sendable (ImageBox) -> Void
+    ) -> MediaAnimation? {
+        guard url.isFileURL else { return nil }
+        let animation = MediaAnimation()
+        animation.start {
+            let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+            await animation.run(source: source, maxPixel: maxPixel, onFail: onFail, onFrame: onFrame)
+        }
+        return animation
+    }
+
+    private func start(_ work: @escaping @Sendable () async -> Void) {
+        let task = Task.detached(priority: .utility) {
+            await work()
+        }
+        let alreadyStopped = state.withLock { s -> Bool in
+            if s.stopped { return true }
+            s.task = task
+            return false
+        }
+        if alreadyStopped { task.cancel() }
+    }
+
+    private func run(
+        source: CGImageSource?,
+        maxPixel: Int,
+        onFail: (@MainActor @Sendable () -> Void)?,
+        onFrame: @escaping @MainActor @Sendable (ImageBox) -> Void
+    ) async {
+        MainThreadGuard.assertOffMain()
+        guard let source else {
+            if let onFail, !isStopped, !Task.isCancelled {
+                await MainActor.run { if !self.isStopped { onFail() } }
+            }
+            return
+        }
+        let count = CGImageSourceGetCount(source)
+        guard count > 0 else {
+            if let onFail, !isStopped, !Task.isCancelled {
+                await MainActor.run { if !self.isStopped { onFail() } }
+            }
+            return
+        }
+
+        let clampedPixel = max(1, maxPixel)
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: clampedPixel,
+        ]
+
+        if count == 1 {
+            guard !isStopped, !Task.isCancelled else { return }
+            let box: ImageBox? = EngineClock.measure("media.frame") {
+                CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary).map(ImageBox.init)
+            }
+            if let box, !isStopped, !Task.isCancelled {
+                await MainActor.run { if !self.isStopped { onFrame(box) } }
+            } else if box == nil, let onFail, !isStopped, !Task.isCancelled {
+                await MainActor.run { if !self.isStopped { onFail() } }
+            }
+            return
+        }
+
+        let minDelay: Double = clampedPixel <= 160 ? 0.05 : (1.0 / 30.0)
+        var delays: [Double] = []
+        delays.reserveCapacity(count)
+        for i in 0..<count {
+            let props = CGImageSourceCopyPropertiesAtIndex(source, i, nil) as? [CFString: Any]
+            delays.append(Self.frameDelay(props, minimum: minDelay))
+        }
+
+        // Small chat emotes (<= 160 px, <= 64 frames, ~0.2–1.5 MB) cache decoded thumbnails for the lifetime of this
+        // playback so subsequent loops spend zero CPU re-decoding WebP/GIF bitstreams. Freed immediately on stop().
+        let canCacheFrames = clampedPixel <= 160 && count <= 64
+        var cached: [ImageBox?] = canCacheFrames ? Array(repeating: nil, count: count) : []
+        var emittedAny = false
+
+        while !isStopped && !Task.isCancelled {
+            for i in 0..<count {
+                if isStopped || Task.isCancelled { return }
+                let startedAt = ContinuousClock.now
+                let box: ImageBox?
+                if canCacheFrames, let hit = cached[i] {
+                    box = hit
+                } else {
+                    let decoded: ImageBox? = EngineClock.measure("media.frame") {
+                        CGImageSourceCreateThumbnailAtIndex(source, i, options as CFDictionary).map(ImageBox.init)
+                    }
+                    if canCacheFrames { cached[i] = decoded }
+                    box = decoded
+                }
+
+                if let box {
+                    emittedAny = true
+                    await MainActor.run {
+                        if !self.isStopped { onFrame(box) }
+                    }
+                } else if !emittedAny, i == 0 {
+                    if let onFail, !isStopped, !Task.isCancelled {
+                        await MainActor.run { if !self.isStopped { onFail() } }
+                    }
+                    return
+                }
+
+                let wait = Duration.seconds(delays[i]) - startedAt.duration(to: .now)
+                if wait > .zero {
+                    try? await Task.sleep(for: wait)
+                }
             }
         }
+    }
+
+    /// Reads per-frame delay from WebP, GIF, or APNG metadata, matching browser/ffmpeg convention (< 20 ms -> 100 ms)
+    /// and clamping to `minimum` so tiny emotes never spam 60–100 fps main-actor updates.
+    static func frameDelay(_ props: [CFString: Any]?, minimum: Double) -> Double {
+        let raw: Double?
+        if let webp = props?[kCGImagePropertyWebPDictionary] as? [CFString: Any] {
+            raw = (webp[kCGImagePropertyWebPUnclampedDelayTime] as? NSNumber)?.doubleValue
+                ?? (webp[kCGImagePropertyWebPDelayTime] as? NSNumber)?.doubleValue
+        } else if let gif = props?[kCGImagePropertyGIFDictionary] as? [CFString: Any] {
+            raw = (gif[kCGImagePropertyGIFUnclampedDelayTime] as? NSNumber)?.doubleValue
+                ?? (gif[kCGImagePropertyGIFDelayTime] as? NSNumber)?.doubleValue
+        } else if let png = props?[kCGImagePropertyPNGDictionary] as? [CFString: Any] {
+            raw = (png[kCGImagePropertyAPNGUnclampedDelayTime] as? NSNumber)?.doubleValue
+                ?? (png[kCGImagePropertyAPNGDelayTime] as? NSNumber)?.doubleValue
+        } else {
+            raw = nil
+        }
+        let seconds = (raw ?? 0) < 0.02 ? 0.1 : (raw ?? 0.1)
+        return max(minimum, seconds)
     }
 }
 

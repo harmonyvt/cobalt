@@ -360,6 +360,10 @@ struct TwitchCombinedChatMergeAndFilterTests {
         model.ingest(snapshot(channel: "slow", status: .joined(canSend: false), lines: [slowOld, slowNew]))
         #expect(!model.allLines.contains(where: { $0.id == "slow-1" }))
         #expect(model.allLines.last?.id == "slow-2")
+
+        // Switching the filter to the quieter channel still shows its full snapshot history
+        model.setFilter(.channel("slow"))
+        #expect(model.visibleLines.map(\.id) == ["slow-1", "slow-2"])
     }
 }
 
@@ -444,6 +448,41 @@ struct TwitchDualComposerTargetAndLimiterTests {
         #expect(model.composerTarget == .both)
         #expect(model.replyTo == nil)
         #expect(!model.isTargetOutOfFocus)
+    }
+
+    @Test func explicitMenuTargetSurvivesFocusDropAndFilterBarSwitchesCleanlyWhenIdle() {
+        let model = TwitchCombinedChatModel(
+            assetCache: TwitchChatAssetCache(),
+            sendLimiter: TwitchChatSendLimiter(minimumGap: .zero))
+        model.configureChannelsWithoutEngines(["alpha", "beta"], focusedChannel: "alpha")
+
+        // Opening the target menu on iOS resigns TextField focus (`composerDidClose(hasDraft: false)`).
+        // The explicit menu pick MUST survive focus loss AND reopening the keyboard.
+        model.composerDidOpen()
+        model.selectSendTarget(.channel("beta"))
+        model.composerDidClose(hasDraft: false)
+        #expect(model.composerTarget == .channel("beta"))
+        #expect(model.filter == .all)
+
+        model.composerDidOpen()
+        #expect(model.composerTarget == .channel("beta"))
+        model.composerDidClose(hasDraft: false)
+        #expect(model.composerTarget == .channel("beta"))
+
+        // While idle (keyboard closed, no draft, no reply), tapping a filter chip switches BOTH filter & target.
+        model.setFilter(.channel("alpha"))
+        #expect(model.filter == .channel("alpha"))
+        #expect(model.composerTarget == .channel("alpha"))
+
+        // Picking the other channel from the target menu while filtered to a single channel switches the filter too.
+        model.selectSendTarget(.channel("beta"))
+        #expect(model.composerTarget == .channel("beta"))
+        #expect(model.filter == .channel("beta"))
+
+        // Switching back to All while idle follows focusedChannel again.
+        model.setFilter(.all)
+        #expect(model.filter == .all)
+        #expect(model.composerTarget == .channel("alpha"))
     }
 
     @Test func sendingToBothStaggersViaSharedLimiterAndRespectsWindowLimits() async {

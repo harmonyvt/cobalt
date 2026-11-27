@@ -12,6 +12,7 @@ extension Symbol {
         static let emotes = "face.smiling"
         static let locked = "lock.fill"
         static let keyboard = "keyboard"
+        static let hideKeyboard = "keyboard.chevron.compact.down"
         static let reply = "arrowshape.turn.up.left"
         static let copy = "doc.on.doc"
         static let close = "xmark"

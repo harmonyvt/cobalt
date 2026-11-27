@@ -1,5 +1,8 @@
 import CobaltKit
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // The live chat beside or under the player (APP-API-CONTRACT 70): the room's modes, the lines (kept at the newest unless
 // the owner scrolls up, then "paused · N new"), and the composer with emote completion and replies.
@@ -259,6 +262,20 @@ private struct TwitchComposer: View {
                     .padding(.horizontal, 12)
                     .frame(minHeight: 38)
                     .background(CobaltColor.surface, in: Capsule())
+                #if os(iOS)
+                if focused || picking {
+                    Button(Copy.Twitch.hideKeyboard, systemImage: Symbol.Twitch.hideKeyboard) {
+                        dismissKeyboard()
+                    }
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(CobaltColor.caption)
+                    .frame(width: 36, height: Metrics.hit)
+                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("twitch.hideKeyboard")
+                }
+                #endif
                 Button(Copy.Twitch.send, systemImage: Symbol.Twitch.send, action: send)
                     .labelStyle(.iconOnly)
                     .font(.system(size: 15, weight: .bold))
@@ -283,6 +300,14 @@ private struct TwitchComposer: View {
         .animation(.snappy(duration: 0.25), value: picking)
         // the keyboard and the picker take turns under the field
         .onChange(of: focused) { _, now in if now { picking = false } }
+    }
+
+    private func dismissKeyboard() {
+        focused = false
+        picking = false
+        #if os(iOS)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
     }
 
     private func togglePicker() {
@@ -442,7 +467,8 @@ private struct TwitchDualChatFilterBar: View {
             }
             .padding(.horizontal, 10)
         }
-        .frame(minHeight: Metrics.hit)
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: Metrics.hit)
         .overlay(alignment: .bottom) { Divider() }
     }
 
@@ -563,7 +589,9 @@ private struct TwitchCombinedChatLines: View {
                 if following { proxy.scrollTo(Self.bottom, anchor: .bottom) }
             }
             .onChange(of: combined.filter) {
-                if following { proxy.scrollTo(Self.bottom, anchor: .bottom) }
+                following = true
+                pausedAt = nil
+                proxy.scrollTo(Self.bottom, anchor: .bottom)
             }
             .overlay(alignment: .bottom) {
                 if !following {
@@ -684,6 +712,21 @@ private struct TwitchDualComposer: View {
                     .background(CobaltColor.surface, in: Capsule())
                     .overlay { fieldBorderOverlay }
 
+                #if os(iOS)
+                if focused || picking {
+                    Button(Copy.Twitch.hideKeyboard, systemImage: Symbol.Twitch.hideKeyboard) {
+                        dismissKeyboard()
+                    }
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(CobaltColor.caption)
+                    .frame(width: 36, height: Metrics.hit)
+                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("twitch.hideKeyboard")
+                }
+                #endif
+
                 sendButton
             }
             .padding(.leading, 4)
@@ -713,7 +756,14 @@ private struct TwitchDualComposer: View {
             if now {
                 picking = false
                 combined.composerDidOpen()
-            } else {
+            } else if !picking {
+                combined.composerDidClose(hasDraft: !trimmed.isEmpty)
+            }
+        }
+        .onChange(of: picking) { _, now in
+            if now {
+                combined.composerDidOpen()
+            } else if !focused {
                 combined.composerDidClose(hasDraft: !trimmed.isEmpty)
             }
         }
@@ -917,6 +967,14 @@ private struct TwitchDualComposer: View {
             .padding(.horizontal, 10)
             .padding(.top, 6)
         }
+    }
+
+    private func dismissKeyboard() {
+        focused = false
+        picking = false
+        #if os(iOS)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
     }
 
     private func togglePicker() {

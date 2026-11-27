@@ -254,11 +254,16 @@ public final class TwitchCombinedChatModel {
     }
 
     /// Lines visible under the active channel filter, preserving strict monotonic arrival order.
+    /// When filtered to a single channel, reads that channel's own snapshot history so a busy companion
+    /// stream can never evict the quieter stream's messages from the filtered view.
     public var visibleLines: [TwitchChatLine] {
         switch filter {
         case .all:
             return allLines
         case .channel(let ch):
+            if let snapLines = channelSnapshots[ch]?.lines, !snapLines.isEmpty {
+                return snapLines
+            }
             return allLines.filter { $0.channel == ch }
         }
     }
@@ -354,6 +359,10 @@ public final class TwitchCombinedChatModel {
     @ObservationIgnored private var knownIDsByChannel: [String: Set<String>] = [:]
     /// Monotonic arrival sequence counter for deterministic arrival ordering.
     @ObservationIgnored private var arrivalSequence: UInt64 = 0
+    /// True while the composer keyboard or emote picker is actively open.
+    @ObservationIgnored private var isComposerOpen = false
+    /// True after an explicit channel/both pick from the composer target menu until overridden by a filter pick or reply.
+    @ObservationIgnored private var hasExplicitTargetSelection = false
 
     public init(
         assetCache: TwitchChatAssetCache = .shared,
@@ -452,6 +461,8 @@ public final class TwitchCombinedChatModel {
         replyTo = nil
         composerTarget = .channel("")
         composerTargetLocked = false
+        isComposerOpen = false
+        hasExplicitTargetSelection = false
         allLines = []
         channelSnapshots = [:]
         channelEmotes = [:]
@@ -525,13 +536,15 @@ public final class TwitchCombinedChatModel {
         case .both:
             if !isDualChannel {
                 composerTargetLocked = false
+                hasExplicitTargetSelection = false
                 composerTarget = resolvedInitialTarget()
             }
         case .channel(let ch):
             if !normalizedSet.contains(ch) {
                 composerTargetLocked = false
+                hasExplicitTargetSelection = false
                 composerTarget = resolvedInitialTarget()
-            } else if !composerTargetLocked {
+            } else if !composerTargetLocked && !hasExplicitTargetSelection {
                 composerTarget = resolvedInitialTarget()
             }
         }
@@ -558,8 +571,17 @@ public final class TwitchCombinedChatModel {
         if !channels.contains(ch), channels.count < 2 {
             configureChannelsWithoutEngines(channels + [ch], focusedChannel: focusedChannel)
         }
-        if channelSnapshots[ch] != snapshot {
-            channelSnapshots[ch] = snapshot
+        var normalizedSnapshot = snapshot
+        if normalizedSnapshot.lines.contains(where: { $0.channel.isEmpty }) {
+            normalizedSnapshot.lines = normalizedSnapshot.lines.map { raw in
+                guard raw.channel.isEmpty else { return raw }
+                var copy = raw
+                copy.channel = ch
+                return copy
+            }
+        }
+        if channelSnapshots[ch] != normalizedSnapshot {
+            channelSnapshots[ch] = normalizedSnapshot
         }
 
         var known = knownIDsByChannel[ch] ?? []
@@ -572,9 +594,7 @@ public final class TwitchCombinedChatModel {
         var updated = allLines
         var linesChanged = false
 
-        for rawLine in snapshot.lines {
-            var line = rawLine
-            if line.channel.isEmpty { line.channel = ch }
+        for line in normalizedSnapshot.lines {
             if let existingIdx = indexByID[line.id] {
                 if updated[existingIdx] != line {
                     updated[existingIdx] = line
@@ -654,19 +674,21 @@ public final class TwitchCombinedChatModel {
     // MARK: - focus, filter & Opus's Foolproof Composer Target Locking
 
     /// Updates which stream currently holds audio/visual focus.
-    /// Does NOT disturb a locked composer target or an active reply.
+    /// Does NOT disturb a locked composer target, an explicit menu selection, or an active reply.
     public func setFocusedChannel(_ channel: String?) {
         let lower = channel?.lowercased()
         guard lower != focusedChannel else { return }
         if let lower, !channels.contains(lower) { return }
         focusedChannel = lower
-        if !composerTargetLocked, replyTo == nil {
+        if !composerTargetLocked, !hasExplicitTargetSelection, replyTo == nil {
             composerTarget = resolvedInitialTarget()
         }
     }
 
     /// Changes the visible channel filter (`All` / `@StreamA` / `@StreamB`).
-    /// Peeking a filter NEVER silently corrupts an already-open reply or locked mid-type composer target.
+    /// Peeking a filter NEVER silently corrupts an already-open reply or locked mid-type composer target;
+    /// when idle (no open composer/draft and no active reply), switching the filter also switches the
+    /// composer target and clears any earlier menu override.
     public func setFilter(_ next: TwitchChatChannelFilter) {
         let validated: TwitchChatChannelFilter
         switch next {
@@ -679,6 +701,7 @@ public final class TwitchCombinedChatModel {
         guard validated != filter else { return }
         filter = validated
         if !composerTargetLocked, replyTo == nil {
+            hasExplicitTargetSelection = false
             composerTarget = resolvedInitialTarget()
         }
     }
@@ -700,19 +723,27 @@ public final class TwitchCombinedChatModel {
     }
 
     /// Called when the composer keyboard opens. Initializes `composerTarget` ONCE using
-    /// `reply > filter > focus` and locks it so filter peeks or focus swaps never corrupt the target.
+    /// `reply > filter > focus` (preserving an explicit menu pick) and locks it so filter peeks or
+    /// focus swaps never corrupt the target while typing.
     public func composerDidOpen() {
+        isComposerOpen = true
         guard !composerTargetLocked else { return }
-        composerTarget = resolvedInitialTarget()
+        if !hasExplicitTargetSelection {
+            composerTarget = resolvedInitialTarget()
+        }
         composerTargetLocked = true
     }
 
     /// Called when the composer keyboard closes. Unlocks target initialization ONLY when there is no
-    /// in-progress draft and no active reply.
+    /// in-progress draft and no active reply, and preserves any explicit target picked from the menu
+    /// (so a SwiftUI `Menu` focus drop never snaps the target back).
     public func composerDidClose(hasDraft: Bool) {
+        isComposerOpen = false
         guard !hasDraft, replyTo == nil else { return }
         composerTargetLocked = false
-        composerTarget = resolvedInitialTarget()
+        if !hasExplicitTargetSelection {
+            composerTarget = resolvedInitialTarget()
+        }
     }
 
     /// Tapping a chat line to reply: stores `replyTo` and locks composer target to that line's channel.
@@ -722,6 +753,7 @@ public final class TwitchCombinedChatModel {
         if !line.channel.isEmpty, channels.contains(line.channel) {
             composerTarget = .channel(line.channel)
             composerTargetLocked = true
+            hasExplicitTargetSelection = false
         }
     }
 
@@ -730,24 +762,32 @@ public final class TwitchCombinedChatModel {
         replyTo = nil
         if !composerOpen && !hasDraft {
             composerTargetLocked = false
+            hasExplicitTargetSelection = false
             composerTarget = resolvedInitialTarget()
         }
     }
 
     /// Explicit target change from the composer's SwiftUI `Menu` (the ONLY way to select `.both` or switch mid-type).
+    /// When currently filtered to a different single channel, switches the filter along with the target so the user
+    /// immediately sees the chat they switched to; keeps `.all` combined view intact.
     public func selectSendTarget(_ target: TwitchChatSendTarget) {
         switch target {
         case .both:
             guard isDualChannel else { return }
             composerTarget = .both
-            composerTargetLocked = true
+            hasExplicitTargetSelection = true
+            composerTargetLocked = isComposerOpen
             // Never attach a single-channel reply-parent-msg-id when broadcasting to Both.
             replyTo = nil
         case .channel(let raw):
             let lower = raw.lowercased()
             guard channels.contains(lower) else { return }
             composerTarget = .channel(lower)
-            composerTargetLocked = true
+            hasExplicitTargetSelection = true
+            composerTargetLocked = isComposerOpen
+            if case .channel(let filtered) = filter, filtered != lower {
+                filter = .channel(lower)
+            }
             if let reply = replyTo, reply.channel != lower {
                 replyTo = nil
             }

@@ -16,12 +16,12 @@ import UIKit
 public final class MotionBudget {
     public static let shared = MotionBudget(limit: MotionBudget.deviceLimit)
 
-    /// 16 on iPhone, 32 on iPad and Mac.
+    /// 10 on iPhone, 16 on iPad and Mac so busy dual-stream chats stay smooth during scrolls and rotations.
     public static var deviceLimit: Int {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone ? 16 : 32
+        return UIDevice.current.userInterfaceIdiom == .phone ? 10 : 16
         #else
-        return 32
+        return 16
         #endif
     }
 
@@ -49,16 +49,45 @@ public final class MotionBudget {
 
     /// The ticket wants to move (on screen and animated) or not any more. Granting is the ticket's `granted`.
     public func want(_ ticket: MotionTicket, _ wants: Bool) {
-        let queued = line.contains { $0.ticket === ticket }
-        if wants, !queued {
+        let slots = lowPower ? 0 : limit
+        if wants {
+            var write = 0
+            var compactedUnderSlots = false
+            var found = false
+            for i in line.indices {
+                guard let current = line[i].ticket else {
+                    if i < slots { compactedUnderSlots = true }
+                    continue
+                }
+                if current === ticket { found = true }
+                if write != i { line[write] = line[i] }
+                write += 1
+            }
+            if write != line.count { line.removeLast(line.count - write) }
+            guard !found else {
+                if compactedUnderSlots { syncGrants(slots: slots) }
+                return
+            }
+            let newIndex = line.count
             line.append(WeakTicket(ticket: ticket))
-        } else if !wants, queued {
-            line.removeAll { $0.ticket === ticket }
-            if ticket.granted { ticket.granted = false }
+            if compactedUnderSlots {
+                syncGrants(slots: slots)
+            } else {
+                let shouldGrant = newIndex < slots
+                if ticket.granted != shouldGrant { ticket.granted = shouldGrant }
+            }
         } else {
-            return
+            guard let idx = line.firstIndex(where: { $0.ticket === ticket }) else {
+                if ticket.granted { ticket.granted = false }
+                return
+            }
+            line.remove(at: idx)
+            if ticket.granted { ticket.granted = false }
+            // Leaving a slot past `slots` never promotes any waiting ticket.
+            if idx < slots {
+                recompute()
+            }
         }
-        recompute()
     }
 
     /// How many tickets move now (tests and diagnostics).
@@ -73,7 +102,10 @@ public final class MotionBudget {
     private func recompute() {
         // a ticket whose view went away without saying so leaves the line here
         line.removeAll { $0.ticket == nil }
-        let slots = lowPower ? 0 : limit
+        syncGrants(slots: lowPower ? 0 : limit)
+    }
+
+    private func syncGrants(slots: Int) {
         for (i, entry) in line.enumerated() {
             guard let ticket = entry.ticket else { continue }
             let granted = i < slots
