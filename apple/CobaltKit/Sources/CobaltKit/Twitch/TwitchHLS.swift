@@ -54,12 +54,12 @@ public struct TwitchVariant: Sendable, Equatable, Identifiable {
         return width == nil && height == nil && codecs.lowercased().hasPrefix("mp4a")
     }
 
-    /// True when the native MPEG-TS H.264/AAC demuxer can decode this variant.
+    /// True when the native H.264/AAC demuxer (MPEG-TS or CMAF/fMP4) can decode this variant.
     public var isNativeCompatible: Bool {
         if isAudioOnly { return true }
         let lower = codecs.lowercased()
         if lower.isEmpty { return true }
-        return lower.contains("avc1")
+        return lower.contains("avc1") || lower.contains("avc3")
     }
 
     /// Compact label for menus and badges (`1080p60`, `720p60`, `audio`).
@@ -86,6 +86,22 @@ public struct TwitchResolvedStream: Sendable, Equatable {
     }
 }
 
+/// Optional HLS `BYTERANGE="<length>[@<offset>]"` slice for `#EXT-X-MAP` initialization sections.
+public struct TwitchByteRange: Sendable, Equatable, Hashable {
+    public let length: Int
+    public let offset: Int
+
+    public init(length: Int, offset: Int) {
+        self.length = length
+        self.offset = offset
+    }
+
+    /// HTTP `Range` header value (`bytes=<start>-<end>`).
+    public var httpRangeHeader: String {
+        "bytes=\(offset)-\(offset + max(1, length) - 1)"
+    }
+}
+
 public struct TwitchSegment: Sendable, Equatable {
     public let sequence: Int
     public let url: URL
@@ -94,10 +110,15 @@ public struct TwitchSegment: Sendable, Equatable {
     public let isPrefetch: Bool
     public let isDiscontinuity: Bool
     public let isAd: Bool
+    /// Active `#EXT-X-MAP` initialization segment URL for CMAF/fMP4 segments (`nil` for MPEG-TS).
+    public let initMapURL: URL?
+    /// Optional `#EXT-X-MAP` `BYTERANGE` slice for `initMapURL`.
+    public let initMapByteRange: TwitchByteRange?
 
     public init(
         sequence: Int, url: URL, duration: Double, programDateTime: Date?,
-        isPrefetch: Bool, isDiscontinuity: Bool, isAd: Bool
+        isPrefetch: Bool, isDiscontinuity: Bool, isAd: Bool,
+        initMapURL: URL? = nil, initMapByteRange: TwitchByteRange? = nil
     ) {
         self.sequence = sequence
         self.url = url
@@ -106,6 +127,8 @@ public struct TwitchSegment: Sendable, Equatable {
         self.isPrefetch = isPrefetch
         self.isDiscontinuity = isDiscontinuity
         self.isAd = isAd
+        self.initMapURL = initMapURL
+        self.initMapByteRange = initMapByteRange
     }
 
     /// Query-stripped path key so a segment re-signed with a different `?dna=...` still deduplicates cleanly.
@@ -139,6 +162,11 @@ public struct TwitchMediaPlaylist: Sendable, Equatable {
     }
 
     public var allSegments: [TwitchSegment] { segments + prefetchSegments }
+
+    /// True when at least one segment in this playlist declares an `#EXT-X-MAP` initialization section (CMAF/fMP4).
+    public var hasInitMap: Bool {
+        allSegments.contains { $0.initMapURL != nil }
+    }
 
     /// Average completed segment duration (seconds), falling back to 2.0 s.
     public var averageDuration: Double {
@@ -200,7 +228,7 @@ public enum TwitchHLSParser {
         return out
     }
 
-    /// Parses a Twitch media playlist, including `#EXT-X-TWITCH-PREFETCH`, `X-SERVER-TIME`, ads and discontinuities.
+    /// Parses a Twitch media playlist, including `#EXT-X-MAP`, `#EXT-X-TWITCH-PREFETCH`, `X-SERVER-TIME`, ads and discontinuities.
     public static func parseMedia(_ text: String, baseURL: URL? = nil) -> TwitchMediaPlaylist {
         let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
         var targetDuration: Double = 2.0
@@ -211,13 +239,15 @@ public enum TwitchHLSParser {
         var isEndList = false
 
         var segments: [TwitchSegment] = []
-        var prefetchURLs: [URL] = []
+        var prefetchEntries: [(url: URL, initMapURL: URL?, initMapByteRange: TwitchByteRange?)] = []
 
         var pendingDuration: Double?
         var pendingTitle: String?
         var pendingPDT: Date?
         var pendingDiscontinuity = false
         var insideAdDateRange = false
+        var activeInitMapURL: URL?
+        var activeInitMapByteRange: TwitchByteRange?
 
         for line in lines where !line.isEmpty {
             if line.hasPrefix("#EXT-X-TARGETDURATION:") {
@@ -231,6 +261,16 @@ public enum TwitchHLSParser {
             } else if line.hasPrefix("#EXT-X-DISCONTINUITY") && !line.hasPrefix("#EXT-X-DISCONTINUITY-SEQUENCE") {
                 pendingDiscontinuity = true
                 insideAdDateRange = false
+                // Clear the active CMAF init map across discontinuities so MPEG-TS ad splices
+                // never inherit an fMP4 map; CMAF sections after a discontinuity re-declare `#EXT-X-MAP`.
+                activeInitMapURL = nil
+                activeInitMapByteRange = nil
+            } else if line.hasPrefix("#EXT-X-MAP:") {
+                let attrs = parseAttributes(String(line.dropFirst("#EXT-X-MAP:".count)))
+                if let rawURI = attrs["URI"], let url = resolveURL(rawURI, relativeTo: baseURL) {
+                    activeInitMapURL = url
+                    activeInitMapByteRange = attrs["BYTERANGE"].flatMap(parseByteRange)
+                }
             } else if line.hasPrefix("#EXT-X-TWITCH-INFO:") {
                 let attrs = parseAttributes(String(line.dropFirst("#EXT-X-TWITCH-INFO:".count)))
                 if let raw = attrs["SERVER-TIME"], let st = parseServerTime(raw) {
@@ -267,7 +307,7 @@ public enum TwitchHLSParser {
             } else if line.hasPrefix("#EXT-X-TWITCH-PREFETCH:") {
                 let raw = String(line.dropFirst("#EXT-X-TWITCH-PREFETCH:".count)).trimmingCharacters(in: .whitespaces)
                 if let url = resolveURL(raw, relativeTo: baseURL) {
-                    prefetchURLs.append(url)
+                    prefetchEntries.append((url: url, initMapURL: activeInitMapURL, initMapByteRange: activeInitMapByteRange))
                 }
             } else if line.hasPrefix("#") {
                 continue
@@ -283,7 +323,9 @@ public enum TwitchHLSParser {
                         programDateTime: pendingPDT,
                         isPrefetch: false,
                         isDiscontinuity: pendingDiscontinuity,
-                        isAd: isAd
+                        isAd: isAd,
+                        initMapURL: activeInitMapURL,
+                        initMapByteRange: activeInitMapByteRange
                     ))
                 }
                 pendingDuration = nil
@@ -301,15 +343,17 @@ public enum TwitchHLSParser {
         }
         var prefetchSegments: [TwitchSegment] = []
         let prefetchBaseSeq = mediaSequence + segments.count
-        for (i, url) in prefetchURLs.enumerated() {
+        for (i, entry) in prefetchEntries.enumerated() {
             prefetchSegments.append(TwitchSegment(
                 sequence: prefetchBaseSeq + i,
-                url: url,
+                url: entry.url,
                 duration: estDuration,
                 programDateTime: nextPDT,
                 isPrefetch: true,
                 isDiscontinuity: false,
-                isAd: false
+                isAd: false,
+                initMapURL: entry.initMapURL,
+                initMapByteRange: entry.initMapByteRange
             ))
             nextPDT = nextPDT?.addingTimeInterval(estDuration)
         }
@@ -361,6 +405,18 @@ public enum TwitchHLSParser {
         if let d = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(s) { return d }
         if let d = try? Date.ISO8601FormatStyle(includingFractionalSeconds: false).parse(s) { return d }
         return nil
+    }
+
+    private static func parseByteRange(_ raw: String) -> TwitchByteRange? {
+        let s = raw.trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty else { return nil }
+        if let at = s.firstIndex(of: "@") {
+            guard let length = Int(s[..<at]), let offset = Int(s[s.index(after: at)...]),
+                  length > 0, offset >= 0 else { return nil }
+            return TwitchByteRange(length: length, offset: offset)
+        }
+        guard let length = Int(s), length > 0 else { return nil }
+        return TwitchByteRange(length: length, offset: 0)
     }
 
     private static func parseServerTime(_ raw: String) -> Date? {

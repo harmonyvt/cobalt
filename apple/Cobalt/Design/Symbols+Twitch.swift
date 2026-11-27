@@ -20,6 +20,7 @@ extension Symbol {
         static let down = "arrow.down"
         static let slow = "timer"
         static let warn = "exclamationmark.triangle"
+        static let retry = "arrow.clockwise"
         static let open = "arrow.up.forward.square"
         static let pin = "pin"
         static let recent = "clock"

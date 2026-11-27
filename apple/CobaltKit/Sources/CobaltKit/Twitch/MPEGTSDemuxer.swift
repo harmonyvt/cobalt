@@ -144,6 +144,16 @@ public struct MPEGTSDemuxer: Sendable {
         return flushed
     }
 
+    /// Seeds the continuous 90 kHz timeline from another demuxer (e.g. CMAF/fMP4 -> MPEG-TS across `#EXT-X-DISCONTINUITY`)
+    /// so the next incoming MPEG-TS timestamps rebase smoothly ahead of `previousHighestPTS`.
+    public mutating func rebaseTimeline(after previousHighestPTS: Int64) {
+        hasTimeline = true
+        highestContinuousPTS = max(highestContinuousPTS, previousHighestPTS)
+        lastUnwrappedPTS = nil
+        wrapOffset = 0
+        needsRebase = true
+    }
+
     /// Feeds raw MPEG-TS bytes (may be any chunk size) and returns any completed video/audio samples.
     public mutating func push(_ chunk: Data) -> [DemuxedSample] {
         guard !chunk.isEmpty else { return [] }

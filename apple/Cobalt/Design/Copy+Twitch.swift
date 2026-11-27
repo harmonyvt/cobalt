@@ -29,6 +29,8 @@ extension Copy {
         }
         static let live = "live"
         static let offline = "offline"
+        static let streamError = "couldn't play"
+        static let retry = "retry"
 
         // MARK: watching
 

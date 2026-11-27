@@ -423,6 +423,30 @@ struct TwitchDualStage: View {
                         .lineLimit(1)
                 }
                 .padding(6)
+            } else if st.hasPlaybackError {
+                VStack(spacing: compact ? 4 : 8) {
+                    Image(systemName: Symbol.Twitch.warn)
+                        .font(.system(size: compact ? 13 : 18, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.8))
+                    Text("\(displayName(for: slot)) · \(Copy.Twitch.streamError)")
+                        .font(Font.cobalt(compact ? 10 : 12, .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                    if !compact {
+                        Button {
+                            host.retrySlot(slot)
+                        } label: {
+                            Label(Copy.Twitch.retry, systemImage: Symbol.Twitch.retry)
+                                .font(Font.cobalt(11.5, .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .mediaGlassCapsule(interactive: true)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(6)
             } else if isSuspended {
                 Label(Copy.Twitch.suspendedOnLock, systemImage: Symbol.Twitch.locked)
                     .font(Font.cobalt(compact ? 9.5 : 11.5, .medium))
@@ -594,6 +618,7 @@ struct TwitchDualStage: View {
         let isLoading = slot == .primary ? host.isLoading : host.secondaryIsLoading
         let isBuffering = slot == .primary ? host.isBuffering : host.secondaryIsBuffering
         let isOffline = slot == .primary ? host.isOffline : host.secondaryIsOffline
+        let hasPlaybackError = slot == .primary ? host.hasPlaybackError : host.secondaryHasPlaybackError
         let isLouder = mixer.louderSlot == slot && !host.isMuted
         let isSuspended = mixer.suspendedSlot == slot
         let isFocused = mixer.focusedSlot == slot
@@ -615,6 +640,30 @@ struct TwitchDualStage: View {
                         .font(Font.cobalt(isInset ? 10 : 12.5, .semibold))
                         .foregroundStyle(.white.opacity(0.85))
                         .lineLimit(1)
+                }
+                .padding(6)
+            } else if hasPlaybackError {
+                VStack(spacing: isInset ? 4 : 8) {
+                    Image(systemName: Symbol.Twitch.warn)
+                        .font(.system(size: isInset ? 14 : 20, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.8))
+                    Text("\(displayName(for: slot)) · \(Copy.Twitch.streamError)")
+                        .font(Font.cobalt(isInset ? 10 : 12.5, .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                    if !isInset {
+                        Button {
+                            host.retrySlot(slot == .primary ? .a : .b)
+                        } label: {
+                            Label(Copy.Twitch.retry, systemImage: Symbol.Twitch.retry)
+                                .font(Font.cobalt(12, .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .mediaGlassCapsule(interactive: true)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .padding(6)
             } else if isSuspended {
