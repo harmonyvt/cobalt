@@ -159,7 +159,7 @@ struct LibraryShelves: View {
     private func count(_ tab: Tab) -> Int {
         switch tab {
         case .links: return store.sets.count
-        case .edits: return model.editor.projects.count
+        case .edits: return model.editor.projects.count + model.twitchClips.drafts.count
         case .collections: return store.collections.count
         }
     }

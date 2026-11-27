@@ -79,18 +79,33 @@ struct LibraryEditsShelf: View {
     @State private var renaming: EditProject?
     @State private var newName = ""
     @State private var deleting: EditProject?
+    @State private var editingDraftID: String?
+    @State private var renamingDraft: TwitchClipDraft?
+    @State private var draftNewName = ""
 
     private var store: EditorStore { model.editor }
+    private var clipStore: TwitchClipDraftStore { model.twitchClips }
 
     /// Whether the shelf has anything to show (also `LibraryShelves.hasContent`'s test).
     static func shows(_ model: AppModel) -> Bool {
-        model.editor.isAvailable && !model.editor.projects.isEmpty
+        (model.editor.isAvailable && !model.editor.projects.isEmpty) || !model.twitchClips.drafts.isEmpty
     }
 
     var body: some View {
         // the shelf's `edits` tab supplies the header (`LibraryShelves`); this is the row of cards
         ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(spacing: 10) {
+                ForEach(clipStore.drafts) { draft in
+                    Button {
+                        clipStore.markSeen(draftID: draft.id)
+                        editingDraftID = draft.id
+                    } label: {
+                        TwitchDraftShelfCard(model: model, draft: draft)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu { draftMenu(draft) }
+                }
+
                 ForEach(store.projects) { project in
                     Button { open(project) } label: {
                         EditCard(project: project, render: store.render(project.render?.id ?? "") ?? project.render)
@@ -102,9 +117,38 @@ struct LibraryEditsShelf: View {
             .padding(.horizontal, 12)
         }
         .scrollClipDisabled()
+        #if os(iOS)
+        .fullScreenCover(isPresented: Binding(
+            get: { editingDraftID != nil },
+            set: { if !$0 { editingDraftID = nil } }
+        )) {
+            if let draftID = editingDraftID {
+                TwitchClipEditorView(model: model, draftID: draftID)
+            }
+        }
+        #else
+        .sheet(isPresented: Binding(
+            get: { editingDraftID != nil },
+            set: { if !$0 { editingDraftID = nil } }
+        )) {
+            if let draftID = editingDraftID {
+                TwitchClipEditorView(model: model, draftID: draftID)
+            }
+        }
+        #endif
         .alert(Copy.Editor.renameTitle, isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField(Copy.Editor.renamePlaceholder, text: $newName)
             Button(Copy.Editor.rename.replacingOccurrences(of: "…", with: "")) { commitRename() }
+            Button(Copy.Editor.cancel, role: .cancel) {}
+        }
+        .alert(Copy.Twitch.renameDraftTitle, isPresented: Binding(get: { renamingDraft != nil }, set: { if !$0 { renamingDraft = nil } })) {
+            TextField(Copy.Editor.renamePlaceholder, text: $draftNewName)
+            Button(Copy.Editor.rename.replacingOccurrences(of: "…", with: "")) {
+                if let draft = renamingDraft {
+                    clipStore.rename(draftID: draft.id, to: draftNewName)
+                }
+                renamingDraft = nil
+            }
             Button(Copy.Editor.cancel, role: .cancel) {}
         }
         .confirmationDialog(
@@ -116,7 +160,32 @@ struct LibraryEditsShelf: View {
         } message: {
             Text(Copy.Editor.deleteBody)
         }
-        .task { await model.editor.refresh() }
+        .task {
+            await model.editor.refresh()
+            await model.twitchClips.boot()
+        }
+    }
+
+    @ViewBuilder
+    private func draftMenu(_ draft: TwitchClipDraft) -> some View {
+        Button(Copy.Twitch.openInEditor, systemImage: Symbol.Twitch.splitFrame) {
+            clipStore.markSeen(draftID: draft.id)
+            editingDraftID = draft.id
+        }
+        if model.editor.isAvailable {
+            Button(Copy.Twitch.sendToStudio, systemImage: Symbol.Twitch.sendToStudio) {
+                Task {
+                    _ = try? await clipStore.sendToStudio(draft: draft, editor: model.editor, openImmediately: true)
+                }
+            }
+        }
+        Button(Copy.Twitch.renameDraft, systemImage: "pencil") {
+            draftNewName = draft.title
+            renamingDraft = draft
+        }
+        Button(Copy.Twitch.deleteDraft, systemImage: Symbol.delete, role: .destructive) {
+            clipStore.delete(draftID: draft.id)
+        }
     }
 
     @ViewBuilder
@@ -144,6 +213,63 @@ struct LibraryEditsShelf: View {
         guard let project = deleting else { return }
         deleting = nil
         Task { try? await model.editor.delete(project.id) }
+    }
+}
+
+/// One saved Twitch stream draft card on the Library's `edits` shelf.
+private struct TwitchDraftShelfCard: View {
+    let model: AppModel
+    let draft: TwitchClipDraft
+
+    private static let height: CGFloat = 56
+
+    var body: some View {
+        ShelfCard {
+            ZStack(alignment: .bottomLeading) {
+                TwitchClipDraftThumbnail(model: model, draft: draft, maxPixel: 200)
+                    .frame(width: 96, height: Self.height)
+                TwitchClipHeatStrip(
+                    density: draft.density,
+                    gaps: draft.chatGaps,
+                    duration: draft.duration,
+                    height: 8
+                )
+                .padding(.horizontal, 3)
+                .padding(.bottom, 3)
+            }
+            .frame(width: 96, height: Self.height)
+        } lines: {
+            HStack(spacing: 4) {
+                Text(draft.title)
+                    .font(CobaltType.bodyMedium)
+                    .foregroundStyle(CobaltColor.text)
+                    .lineLimit(1)
+                if draft.isFresh {
+                    Circle()
+                        .fill(TwitchClipPalette.chatPurple)
+                        .frame(width: 6, height: 6)
+                }
+            }
+            Text("\(TwitchClipDraftsSheet.clock(draft.duration)) · \(draft.channel)\(draft.chatLineCount > 0 ? " · \(Copy.Twitch.chatIncluded)" : "")")
+                .font(CobaltType.badge)
+                .foregroundStyle(CobaltColor.caption)
+                .monospacedDigit()
+                .lineLimit(1)
+            if draft.totalChatGapSeconds >= 1 {
+                Text(Copy.Twitch.chatDroppedWarning(Int(draft.totalChatGapSeconds.rounded())))
+                    .font(CobaltType.badge)
+                    .foregroundStyle(TwitchClipPalette.recRed)
+                    .lineLimit(1)
+            } else {
+                Text(Copy.Twitch.studioTag)
+                    .font(CobaltType.badge)
+                    .foregroundStyle(TwitchClipPalette.chatPurple)
+                    .lineLimit(1)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(draft.title), \(TwitchClipDraftsSheet.clock(draft.duration)), \(Copy.Twitch.studioTag)")
+        .accessibilityAddTraits(.isButton)
     }
 }
 

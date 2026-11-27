@@ -424,6 +424,16 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     @ObservationIgnored var restoreMultiHandler: (([String]) -> Void)?
     @ObservationIgnored private weak var attachedModel: AppModel?
     @ObservationIgnored private var observingModel = false
+    @ObservationIgnored private var observingChat = false
+
+    // MARK: on-device clip & chat recording
+    private(set) var clipCapture: TwitchClipCaptureState = .idle
+    private(set) var clipCaptureError: String?
+    var canCaptureLocally: Bool {
+        activeMode == .lowLatency && channel != nil && !isOffline && !isAudioOnly
+    }
+    @ObservationIgnored private let clipRecorder = TwitchClipRecorder()
+    @ObservationIgnored private var clipStateTask: Task<Void, Never>?
 
     #if os(iOS)
     @ObservationIgnored private var madeAirPlay: TwitchAirPlayVideoView?
@@ -693,6 +703,15 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             guard let self else { return }
             self.setPaused(!self.userPaused)
         }
+
+        let recorder = clipRecorder
+        clipStateTask = Task { @MainActor [weak self] in
+            for await state in recorder.states {
+                guard let self, !Task.isCancelled else { break }
+                self.clipCapture = state
+                self.attachedModel?.twitchClips.capture = state
+            }
+        }
     }
 
     private func invokeRestoreUI() {
@@ -709,15 +728,102 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
     }
 
-    /// Attaches the shared `AppModel` so Lock Screen / Control Center Now Playing reflects live stream metadata.
+    /// Attaches the shared `AppModel` so Lock Screen / Control Center Now Playing and clip/chat capture reflect live stream metadata.
     func attachModel(_ model: AppModel) {
         let changed = attachedModel !== model
         attachedModel = model
+        model.twitchClips.capture = clipCapture
         syncNowPlaying()
         if changed || !observingModel {
             observingModel = true
             observeAttachedModel()
         }
+        if changed || !observingChat {
+            observingChat = true
+            observeChatForClipRecorder()
+        }
+    }
+
+    private func observeChatForClipRecorder() {
+        guard let model = attachedModel else {
+            observingChat = false
+            return
+        }
+        let snapshot = model.twitch.chat
+        let currentDelay = delay
+        let recorder = clipRecorder
+        Task {
+            await recorder.updateStreamDelay(currentDelay)
+            if let snapshot {
+                await recorder.ingestChatSnapshot(snapshot)
+            }
+        }
+        withObservationTracking {
+            _ = model.twitch.chat
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.observeChatForClipRecorder()
+            }
+        }
+    }
+
+    /// Flushes the last `seconds` (30 or 60) from the rolling H.264/AAC buffer + synced chat into a local draft.
+    func saveInstantClip(seconds: Int, model: AppModel) async {
+        guard let ch = channel else { return }
+        clipCaptureError = nil
+        let displayName = model.twitch.displayName(for: ch)
+        let streamTitle = model.twitch.stream?.title
+        let title = Self.defaultClipTitle(channel: displayName, streamTitle: streamTitle)
+        do {
+            let result = try await clipRecorder.saveInstantClip(
+                requestedSeconds: Double(seconds),
+                channel: ch,
+                title: title,
+                destinationDir: model.twitchClips.directory
+            )
+            model.twitchClips.recordSaved(result)
+        } catch {
+            clipCaptureError = error.localizedDescription
+        }
+    }
+
+    /// Toggles continuous video + synced chat recording on the active stream.
+    func toggleClipRecording(model: AppModel) async {
+        guard let ch = channel else { return }
+        clipCaptureError = nil
+        if clipCapture.isRecording {
+            let displayName = model.twitch.displayName(for: ch)
+            let streamTitle = model.twitch.stream?.title
+            let title = Self.defaultClipTitle(channel: displayName, streamTitle: streamTitle)
+            do {
+                let result = try await clipRecorder.stopRecording(title: title)
+                model.twitchClips.recordSaved(result)
+            } catch {
+                clipCaptureError = error.localizedDescription
+            }
+        } else {
+            do {
+                try await clipRecorder.startRecording(
+                    channel: ch,
+                    destinationDir: model.twitchClips.directory
+                )
+            } catch {
+                clipCaptureError = error.localizedDescription
+            }
+        }
+    }
+
+    private static func defaultClipTitle(channel: String, streamTitle: String?) -> String {
+        let base = channel.lowercased()
+        if let streamTitle {
+            let clean = streamTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !clean.isEmpty {
+                let short = String(clean.prefix(34)).trimmingCharacters(in: .whitespacesAndNewlines)
+                return "\(base) · \(short)"
+            }
+        }
+        return "\(base) clip"
     }
 
     /// Registers how single-stream PiP's restore button re-opens the stream pane when the user returns to the app.
@@ -2334,6 +2440,11 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             guard !Task.isCancelled, self.nativeSessionID == sessionID,
                   self.activeMode == .lowLatency, self.channel == channel else { return }
             let videoEnabled = !self.isInBackground || self.isPiPActive || self.hasPiPClaim
+            let recorder = self.clipRecorder
+            await recorder.reset(for: channel)
+            await engine.setSampleTap { samples in
+                Task { await recorder.ingestSamples(samples) }
+            }
             await engine.setEventHandler { event in
                 continuation.yield(event)
             }
@@ -2671,6 +2782,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         stopSecondaryNative()
         stopExtraNative(slot: .c)
         stopExtraNative(slot: .d)
+        let recorder = clipRecorder
+        Task { await recorder.reset(for: nil) }
         reset()
         resetSecondary()
         syncSystemResourceBudgets(streamCount: 0)

@@ -61,5 +61,14 @@ extension Symbol {
         static let cycleFocus = "arrow.trianglehead.2.clockwise"
         static let addSlot = "plus"
         static let streamCount = "square.stack.fill"
+        // clip, record & split-frame studio
+        static let record = "record.circle"
+        static let recordStop = "stop.circle.fill"
+        static let drafts = "tray.full"
+        static let splitFrame = "rectangle.split.1x2"
+        static let swapVertical = "arrow.up.arrow.down"
+        static let sendToStudio = "square.stack.3d.up"
+        static let renderExport = "arrow.up.circle.fill"
+        static let syncNudge = "clock.arrow.2.circlepath"
     }
 }

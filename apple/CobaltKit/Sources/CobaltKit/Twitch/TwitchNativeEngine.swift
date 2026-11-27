@@ -1012,6 +1012,7 @@ public struct TwitchVideoRendererBox: @unchecked Sendable {
 public actor TwitchNativeEngine {
     public typealias EventHandler = @Sendable (TwitchNativeEvent) -> Void
     public typealias SegmentStreamer = @Sendable (URL) -> AsyncThrowingStream<Data, Error>
+    public typealias SampleTap = @Sendable ([DemuxedSample]) -> Void
 
     private enum SegmentContainer: String {
         case unknown
@@ -1059,6 +1060,7 @@ public actor TwitchNativeEngine {
     private var diagSegments = 0
 
     private var onEvent: EventHandler?
+    private var onSamples: SampleTap?
     private var audioObserverRegistered = false
     private var channel: String?
     private var authToken: String?
@@ -1114,6 +1116,11 @@ public actor TwitchNativeEngine {
             }
         )
         registerAudioObserverIfNeeded()
+    }
+
+    /// Registers a non-blocking tap that receives every demuxed H.264/AAC sample batch for rolling clip capture.
+    public func setSampleTap(_ tap: SampleTap?) {
+        self.onSamples = tap
     }
 
     public func attach(videoRenderer box: TwitchVideoRendererBox) {
@@ -1971,6 +1978,7 @@ public actor TwitchNativeEngine {
         diagSegments += 1
         if segment.isDiscontinuity {
             let flushed = beginActiveDiscontinuity()
+            if !flushed.isEmpty { onSamples?(flushed) }
             pipeline.enqueue(flushed)
         }
         pipeline.beginSegment(programDateTime: segment.programDateTime)
@@ -1988,6 +1996,7 @@ public actor TwitchNativeEngine {
                     diagKeyframes += 1
                 }
             }
+            if !samples.isEmpty { onSamples?(samples) }
             pipeline.enqueue(samples)
         }
 

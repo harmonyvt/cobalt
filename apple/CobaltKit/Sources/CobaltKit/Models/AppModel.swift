@@ -138,6 +138,8 @@ public final class AppModel {
     public let sevenTv: SevenTvStore
     /// The twitch tab (APP-API-CONTRACT 70): live streams and their chat. Idle until `load()`.
     public let twitch: TwitchStore
+    /// On-device Twitch stream clips, recordings, synced chat sidecars, and split-frame Studio drafts.
+    public let twitchClips: TwitchClipDraftStore
     /// The booru tab (APP-API-CONTRACT 72): Danbooru under this device's level and filters. Idle until `load()`.
     public let booru: BooruStore
     /// The video editor (APP-API-CONTRACT 31): the projects, this key's renders and the open project. Idle until `refresh()`.
@@ -279,6 +281,7 @@ public final class AppModel {
         self.account = AccountStore(context: context)
         self.sevenTv = SevenTvStore(context: context)
         self.twitch = TwitchStore(context: context)
+        self.twitchClips = TwitchClipDraftStore(context: context)
         self.booru = BooruStore(context: context)
         self.capabilities = context.capabilities
         // Jobs that have no server session yet (CONTRACT-PARALLEL.md 3.5); previews and tests keep theirs beside the store.
@@ -371,6 +374,7 @@ public final class AppModel {
         let model = AppModel(
             context: ctx, library: LibraryModel(context: ctx), photosSync: sync, macFolder: folder,
             savePull: pull, offlineDownloads: offline, ledger: JobLedger.shared(), makeClient: factory)
+        Task { await model.twitchClips.boot() }
         model.telemetry = TelemetryService.live(settings: settings, capabilities: { [unowned model] in model.capabilities })
         // leaving and coming back, through the app's one listener (the app delegate starts it): the line's summary
         // opt-in, the queue tab's polling, the polling stores, then the server check and pickup on every activation
