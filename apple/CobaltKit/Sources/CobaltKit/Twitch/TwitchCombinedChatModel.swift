@@ -35,13 +35,28 @@ public enum TwitchChatSendTarget: Sendable, Hashable {
     }
 }
 
-/// Slot index for deterministic channel accent assignment in dual-stream mode.
-public enum TwitchChannelSlot: Int, Sendable, Hashable, CaseIterable {
+/// Slot index for deterministic channel accent assignment in multi-stream mode (1...4 channels).
+public enum TwitchChannelSlot: Int, Sendable, Hashable, CaseIterable, Comparable {
     case primary = 0
     case secondary = 1
+    case tertiary = 2
+    case quaternary = 3
+
+    public static func < (lhs: TwitchChannelSlot, rhs: TwitchChannelSlot) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+
+    public var fallbackMark: String {
+        switch self {
+        case .primary: "A"
+        case .secondary: "B"
+        case .tertiary: "C"
+        case .quaternary: "D"
+        }
+    }
 }
 
-/// Deterministic channel visual identity for combined chat (left stripe, compact 1-letter mark, filter chip).
+/// Deterministic channel visual identity for combined chat (left stripe, compact 1–2 letter mark, filter chip).
 public struct TwitchChannelAccent: Sendable, Hashable {
     /// Stream A: Sky Blue (~199°).
     public static let primaryDarkRGB: UInt32 = 0x38BDF8
@@ -49,26 +64,35 @@ public struct TwitchChannelAccent: Sendable, Hashable {
     /// Stream B: Rose (~351°).
     public static let secondaryDarkRGB: UInt32 = 0xFB7185
     public static let secondaryLightRGB: UInt32 = 0xE11D48
+    /// Stream C: Amber (~43°).
+    public static let tertiaryDarkRGB: UInt32 = 0xFBBF24
+    public static let tertiaryLightRGB: UInt32 = 0xD97706
+    /// Stream D: Mint (~142°).
+    public static let quaternaryDarkRGB: UInt32 = 0x4ADE80
+    public static let quaternaryLightRGB: UInt32 = 0x16A34A
 
     public var slot: TwitchChannelSlot
     public var channel: String
     public var displayName: String
-    /// Compact 1-letter channel mark badge drawn inline on combined chat rows.
+    /// Compact 1-letter (or 2-letter when initials collide) channel mark badge drawn inline on combined chat rows.
     public var mark: String
     public var darkRGB: UInt32
     public var lightRGB: UInt32
     /// HSL hue in `0..<360` used for username color collision avoidance.
     public var hueDegrees: Double
 
-    public init(slot: TwitchChannelSlot, channel: String, displayName: String? = nil) {
+    public init(slot: TwitchChannelSlot, channel: String, displayName: String? = nil, markOverride: String? = nil) {
         let lower = channel.lowercased()
         let shown = (displayName?.isEmpty == false ? displayName! : lower)
         self.slot = slot
         self.channel = lower
         self.displayName = shown
-        let firstAlnum = shown.first(where: { $0.isLetter || $0.isNumber })
-        let fallback = slot == .primary ? "A" : "B"
-        self.mark = firstAlnum.map { String($0).uppercased() } ?? fallback
+        if let markOverride, !markOverride.isEmpty {
+            self.mark = markOverride
+        } else {
+            let firstAlnum = shown.first(where: { $0.isLetter || $0.isNumber })
+            self.mark = firstAlnum.map { String($0).uppercased() } ?? slot.fallbackMark
+        }
         switch slot {
         case .primary:
             self.darkRGB = Self.primaryDarkRGB
@@ -76,8 +100,53 @@ public struct TwitchChannelAccent: Sendable, Hashable {
         case .secondary:
             self.darkRGB = Self.secondaryDarkRGB
             self.lightRGB = Self.secondaryLightRGB
+        case .tertiary:
+            self.darkRGB = Self.tertiaryDarkRGB
+            self.lightRGB = Self.tertiaryLightRGB
+        case .quaternary:
+            self.darkRGB = Self.quaternaryDarkRGB
+            self.lightRGB = Self.quaternaryLightRGB
         }
         self.hueDegrees = TwitchUsernameColorShifter.rgbToHSL(self.darkRGB).h
+    }
+
+    /// Resolves accents for 1...4 active channels, keeping crisp 1-letter marks unless two active channels share
+    /// the same leading initial (e.g. `shroud` & `summit1g` -> `SH` & `SU`).
+    public static func resolvedAccents(
+        for channels: [String],
+        displayNames: [String: String] = [:]
+    ) -> [String: TwitchChannelAccent] {
+        var initialCounts: [String: Int] = [:]
+        var shownByChannel: [String: String] = [:]
+        var baseMarkByChannel: [String: String] = [:]
+
+        for (idx, ch) in channels.prefix(TwitchChannelSlot.allCases.count).enumerated() {
+            let slot = TwitchChannelSlot(rawValue: idx) ?? .quaternary
+            let rawDisplay = displayNames[ch] ?? displayNames[ch.lowercased()]
+            let shown = (rawDisplay?.isEmpty == false ? rawDisplay! : ch)
+            shownByChannel[ch] = shown
+            let alnums = shown.filter { $0.isLetter || $0.isNumber }
+            let single = alnums.first.map { String($0).uppercased() } ?? slot.fallbackMark
+            baseMarkByChannel[ch] = single
+            initialCounts[single, default: 0] += 1
+        }
+
+        var result: [String: TwitchChannelAccent] = [:]
+        for (idx, ch) in channels.prefix(TwitchChannelSlot.allCases.count).enumerated() {
+            let slot = TwitchChannelSlot(rawValue: idx) ?? .quaternary
+            let shown = shownByChannel[ch] ?? ch
+            let single = baseMarkByChannel[ch] ?? slot.fallbackMark
+            let mark: String
+            if (initialCounts[single] ?? 0) > 1 {
+                let alnums = shown.filter { $0.isLetter || $0.isNumber }
+                let two = String(alnums.prefix(2)).uppercased()
+                mark = two.isEmpty ? slot.fallbackMark : two
+            } else {
+                mark = single
+            }
+            result[ch] = TwitchChannelAccent(slot: slot, channel: ch, displayName: shown, markOverride: mark)
+        }
+        return result
     }
 }
 
@@ -207,21 +276,23 @@ public enum TwitchUsernameColorShifter {
     }
 }
 
-/// Coordinates 1 or 2 `TwitchChatEngine` actors on `@MainActor` with monotonic live arrival merging,
-/// channel filtering, deterministic channel accents, and Opus's foolproof dual-target composer locking.
+/// Coordinates 1...4 `TwitchChatEngine` actors on `@MainActor` with monotonic live arrival merging,
+/// channel filtering, deterministic channel accents, and Opus's foolproof multi-target composer locking.
 @MainActor @Observable
 public final class TwitchCombinedChatModel {
+    /// Maximum simultaneous channels supported in combined chat.
+    public static let maxChannels = 4
     /// Maximum merged lines kept across active channels to bound memory.
     public static let combinedLineLimit = 400
     public static let recentEmotesMax = 24
 
-    /// Active channels in slot order (1 in single-stream mode, 2 in dual-stream mode; lowercased logins).
+    /// Active channels in slot order (1 in single-stream mode, 2...4 in dual/multi-stream mode; lowercased logins).
     public private(set) var channels: [String] = []
     /// Deterministic channel accent metadata keyed by lowercased login.
     public private(set) var accentsByChannel: [String: TwitchChannelAccent] = [:]
     /// The currently audio/visually focused stream login.
     public private(set) var focusedChannel: String?
-    /// Active view filter (`All`, `@StreamA`, or `@StreamB`).
+    /// Active view filter (`All`, or a specific active `@channel`).
     public private(set) var filter: TwitchChatChannelFilter = .all
     /// Replied-to line (locks composer target to `replyTo.channel`).
     public private(set) var replyTo: TwitchChatLine?
@@ -240,10 +311,12 @@ public final class TwitchCombinedChatModel {
     /// Recently picked emotes across this session, newest first.
     public private(set) var recentEmotes: [ChatEmote] = []
 
-    /// True when 2 distinct streams are active. When false, the UI shows zero dual-stream clutter.
+    /// True when 2 or more distinct streams are active. When false, the UI shows zero multi-stream clutter.
     public var isDualChannel: Bool { channels.count >= 2 }
+    /// Semantic alias for `isDualChannel` when 2...4 channels are active.
+    public var isMultiChannel: Bool { channels.count >= 2 }
 
-    /// Ordered accents for the active channels (`[primary]` or `[primary, secondary]`).
+    /// Ordered accents for the active channels (`1...4` slots).
     public var orderedAccents: [TwitchChannelAccent] {
         channels.compactMap { accentsByChannel[$0] }
     }
@@ -268,7 +341,7 @@ public final class TwitchCombinedChatModel {
         }
     }
 
-    /// True when dual-stream mode is active, targeting a single channel, and that channel is NOT the focused stream.
+    /// True when multi-stream mode is active, targeting a single channel, and that channel is NOT the focused stream.
     public var isTargetOutOfFocus: Bool {
         guard isDualChannel,
               case .channel(let target) = composerTarget,
@@ -324,7 +397,7 @@ public final class TwitchCombinedChatModel {
         return TwitchRoomState()
     }
 
-    /// Emote list tailored to the current composer target (channel-specific when targeting 1 channel; merged for Both).
+    /// Emote list tailored to the current composer target (channel-specific when targeting 1 channel; merged for All).
     public var activeEmotes: TwitchEmoteList {
         switch composerTarget {
         case .channel(let ch):
@@ -374,7 +447,7 @@ public final class TwitchCombinedChatModel {
 
     // MARK: - channel & engine lifecycle
 
-    /// Configures 1 or 2 active channels, reusing any already-running engine for channels that remain open.
+    /// Configures 1...4 active channels, reusing any already-running engine for channels that remain open.
     public func configure(
         channels rawChannels: [String],
         displayNames: [String: String] = [:],
@@ -423,7 +496,7 @@ public final class TwitchCombinedChatModel {
     ) {
         stop()
         var ordered: [String] = []
-        for engine in newEngines.prefix(2) {
+        for engine in newEngines.prefix(Self.maxChannels) {
             let ch = engine.channelName.lowercased()
             guard !ch.isEmpty, !ordered.contains(ch) else { continue }
             ordered.append(ch)
@@ -495,13 +568,16 @@ public final class TwitchCombinedChatModel {
         let normalizedSet = Set(normalized)
         channels = normalized
 
-        var accents: [String: TwitchChannelAccent] = [:]
-        for (idx, ch) in normalized.enumerated() {
-            let slot: TwitchChannelSlot = idx == 0 ? .primary : .secondary
-            let display = displayNames[ch] ?? displayNames[ch.lowercased()]
-            accents[ch] = TwitchChannelAccent(slot: slot, channel: ch, displayName: display)
+        var mergedNames: [String: String] = [:]
+        for ch in normalized {
+            if let existing = accentsByChannel[ch]?.displayName, !existing.isEmpty {
+                mergedNames[ch] = existing
+            }
+            if let incoming = displayNames[ch] ?? displayNames[ch.lowercased()], !incoming.isEmpty {
+                mergedNames[ch] = incoming
+            }
         }
-        accentsByChannel = accents
+        accentsByChannel = TwitchChannelAccent.resolvedAccents(for: normalized, displayNames: mergedNames)
 
         // Drop lines from removed channels
         if allLines.contains(where: { !normalizedSet.contains($0.channel) }) {
@@ -531,7 +607,7 @@ public final class TwitchCombinedChatModel {
             replyTo = nil
         }
 
-        // Revalidate composerTarget if its channel was removed or dropped from dual to single
+        // Revalidate composerTarget if its channel was removed or dropped from dual/multi to single
         switch composerTarget {
         case .both:
             if !isDualChannel {
@@ -556,7 +632,7 @@ public final class TwitchCombinedChatModel {
             let lower = ch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard !lower.isEmpty, !out.contains(lower) else { continue }
             out.append(lower)
-            if out.count == 2 { break }
+            if out.count == Self.maxChannels { break }
         }
         return out
     }
@@ -568,7 +644,7 @@ public final class TwitchCombinedChatModel {
     public func ingest(_ snapshot: TwitchChatSnapshot) {
         let ch = snapshot.channel.lowercased()
         guard !ch.isEmpty else { return }
-        if !channels.contains(ch), channels.count < 2 {
+        if !channels.contains(ch), channels.count < Self.maxChannels {
             configureChannelsWithoutEngines(channels + [ch], focusedChannel: focusedChannel)
         }
         var normalizedSnapshot = snapshot
@@ -655,19 +731,18 @@ public final class TwitchCombinedChatModel {
     /// Updates cached display names for active channels without disturbing running sockets, messages, or composer state.
     public func updateDisplayNames(_ displayNames: [String: String]) {
         guard !channels.isEmpty, !displayNames.isEmpty else { return }
-        var updated = accentsByChannel
-        var changed = false
-        for (idx, ch) in channels.enumerated() {
-            guard let raw = displayNames[ch] ?? displayNames[ch.lowercased()], !raw.isEmpty else { continue }
-            let slot: TwitchChannelSlot = idx == 0 ? .primary : .secondary
-            let next = TwitchChannelAccent(slot: slot, channel: ch, displayName: raw)
-            if updated[ch] != next {
-                updated[ch] = next
-                changed = true
+        var merged: [String: String] = [:]
+        for ch in channels {
+            if let existing = accentsByChannel[ch]?.displayName, !existing.isEmpty {
+                merged[ch] = existing
+            }
+            if let raw = displayNames[ch] ?? displayNames[ch.lowercased()], !raw.isEmpty {
+                merged[ch] = raw
             }
         }
-        if changed {
-            accentsByChannel = updated
+        let next = TwitchChannelAccent.resolvedAccents(for: channels, displayNames: merged)
+        if next != accentsByChannel {
+            accentsByChannel = next
         }
     }
 

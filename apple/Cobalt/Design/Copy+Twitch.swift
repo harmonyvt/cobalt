@@ -167,5 +167,29 @@ extension Copy {
         static let closeFloatingWindow = "return to window"
         static let suspendedOnLock = "paused while locked"
         static let thermalSteppedDown = "reduced quality (thermal)"
+
+        // MARK: multi stream (3-4 streams)
+
+        static let addStream = "add stream"
+        static func addStreamTitle(current: Int, max: Int) -> String { "add stream (\(current)/\(max))" }
+        static func streamsCount(_ count: Int, max: Int) -> String { "\(count)/\(max)" }
+        static let maxStreamsReached = "4 streams max"
+        static let spotlightLayout = "spotlight"
+        static let gridLayout = "grid"
+        static let quadGrid = "2×2 grid"
+        static let mosaicLayout = "2+1 mosaic"
+        static let foldSafeLayout = "1 + 2 split"
+        static let multiAudio = "audio"
+        static let audioMixerTitle = "stream audio"
+        static let mixAll = "mix all"
+        static func mixActiveCount(_ count: Int) -> String { "mix \(count)" }
+        static let solo = "solo"
+        static let streamsMenu = "streams"
+        static let qualityAutoBudget = "auto quality budget"
+        static let qualityResetAuto = "reset auto quality"
+        static let spotlightPiP = "spotlight pip"
+        static let multiAirPlayUnavailable = "airplay pauses in multi-stream"
+        static func replaceStream(_ name: String) -> String { "replace \(name)" }
+        static func plusMore(_ count: Int) -> String { "+\(count)" }
     }
 }
