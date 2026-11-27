@@ -18,7 +18,7 @@ struct AmbientCinemaPostStudio: View {
     /// True in single-focus `PanePostPage` (owns its floating close button & suppresses `PaneChrome`'s opaque header).
     /// False when pushed inside a `NavigationStack` (`MediaDetail`) that keeps the system back button.
     var showsCloseButton: Bool = true
-    var onManageLinks: (() -> Void)? = nil
+    var onOpenPost: ((LibraryPost) -> Void)? = nil
 
     @Environment(\.subtitles) private var subtitles
     @Environment(\.shell) private var shell
@@ -28,6 +28,9 @@ struct AmbientCinemaPostStudio: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.lifecycle) private var lifecycle
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
 
     @State private var ambientEnabled = true
     @State private var videoSampler = AmbientVideoSampler()
@@ -42,6 +45,8 @@ struct AmbientCinemaPostStudio: View {
     @State private var copiedPrivate = false
     @State private var toast: String?
     @State private var toastToken = 0
+    @State private var insightStore = StudioDeckInsightStore()
+    @State private var openedNeighbour: OpenedMedia?
     @FocusState private var editingTitle: Bool
 
     private var item: MediaItem { context.item }
@@ -95,6 +100,11 @@ struct AmbientCinemaPostStudio: View {
         canHide && (fromAlbum || livePost?.hidden == true || model.isHiddenPost(item))
     }
 
+    private var usesPostVisibilitySwitch: Bool {
+        let many = item.detailShape == .gallery || item.made.count > 0
+        return context.isGalleryLike && many && controller.canSwitchPost(item)
+    }
+
     private var currentFileLink: FileLink {
         if model.canChoosePrivateLink(rendition) {
             return model.fileLink(of: rendition)
@@ -104,6 +114,9 @@ struct AmbientCinemaPostStudio: View {
 
     private var visibilityState: AmbientVisibilityState {
         if isHidden { return .hidden }
+        if usesPostVisibilitySwitch {
+            return controller.isPostPublic(item) ? .public : .off
+        }
         switch currentFileLink {
         case .public: return .public
         case .private: return .private
@@ -112,12 +125,15 @@ struct AmbientCinemaPostStudio: View {
     }
 
     private var visibilityChanging: Bool {
-        model.isChangingVisibility(rendition) || model.library.statusInFlight
+        if usesPostVisibilitySwitch {
+            return controller.postVisibility == .working || model.library.statusInFlight
+        }
+        return model.isChangingVisibility(rendition) || model.library.statusInFlight
     }
 
     private var liveShareURL: URL? {
         guard !isHidden, context.missingIndex == nil else { return nil }
-        if currentFileLink == .private {
+        if !usesPostVisibilitySwitch, currentFileLink == .private {
             return model.privateURL(of: rendition) ?? rendition.privateURL
         }
         return rendition.privateURL ?? rendition.hosted?.url ?? rendition.publicURL
@@ -167,6 +183,9 @@ struct AmbientCinemaPostStudio: View {
         .preference(key: PaneHidesChromeHeaderKey.self, value: showsCloseButton)
         .sheet(isPresented: $compactSheetOpen) {
             compactDeckSheet
+        }
+        .navigationDestination(item: $openedNeighbour) { target in
+            MediaDetail(model: model, item: target.item, initial: target.initial)
         }
         .overlay(alignment: .top) {
             if let toast {
@@ -427,10 +446,6 @@ struct AmbientCinemaPostStudio: View {
                 Button(openLib.title, systemImage: openLib.systemImage, action: openLib.perform)
             }
 
-            if let onManageLinks {
-                Button(Copy.PostPane.manage, systemImage: Symbol.PrivateLinks.privateLink, action: onManageLinks)
-            }
-
             if let hide = kit.hideAction(item) {
                 Divider()
                 Button(hide.title, systemImage: hide.systemImage, action: hide.perform)
@@ -589,7 +604,7 @@ struct AmbientCinemaPostStudio: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(visibilityChanging)
-                } else if model.canChoosePrivateLink(rendition) || controller.canSwitchVisibility(rendition) {
+                } else if usesPostVisibilitySwitch || model.canChoosePrivateLink(rendition) || controller.canSwitchVisibility(rendition) {
                     Button {
                         chooseVisibility(.public)
                     } label: {
@@ -606,7 +621,7 @@ struct AmbientCinemaPostStudio: View {
                     .buttonStyle(.plain)
                     .disabled(visibilityChanging)
 
-                    if model.canChoosePrivateLink(rendition) {
+                    if !usesPostVisibilitySwitch && model.canChoosePrivateLink(rendition) {
                         Button {
                             chooseVisibility(.private)
                         } label: {
@@ -955,31 +970,49 @@ struct AmbientCinemaPostStudio: View {
     // MARK: Access Tab
 
     private var accessTabContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             visibilityGridSection
 
-            // Private link details + rotate key
-            if !isHidden, currentFileLink == .private, let pURL = model.privateURL(of: rendition) {
+            // Private link details + copy + rotate key
+            if !isHidden, !usesPostVisibilitySwitch, currentFileLink == .private, let pURL = model.privateURL(of: rendition) {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack {
+                    HStack(spacing: 8) {
                         Label(Copy.PrivateLinks.link, systemImage: Symbol.PrivateLinks.lock)
                             .font(Font.cobalt(11.5, .semibold, relativeTo: .caption))
                             .foregroundStyle(AmbientVisibilityState.private.tint)
-                        Spacer()
+                        Spacer(minLength: 4)
+                        Button {
+                            copyLink(pURL, form: .share)
+                        } label: {
+                            Label(
+                                copiedPrivate ? Copy.Media.copied : Copy.PrivateLinks.copy,
+                                systemImage: copiedPrivate ? Symbol.PrivateLinks.copied : Symbol.PrivateLinks.copy
+                            )
+                            .font(Font.cobalt(11, .semibold, relativeTo: .caption2))
+                            .foregroundStyle(copiedPrivate ? CobaltColor.success : .white.opacity(0.86))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.08), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+
                         Button(role: .destructive) {
                             askingVisibility = .rotate
                         } label: {
                             Label(Copy.PrivateLinks.rotate, systemImage: Symbol.PrivateLinks.rotate)
-                                .font(Font.cobalt(11.5, .medium, relativeTo: .caption))
+                                .font(Font.cobalt(11, .medium, relativeTo: .caption2))
+                                .foregroundStyle(CobaltColor.errorText)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(CobaltColor.errorText.opacity(0.12), in: Capsule())
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(CobaltColor.errorText)
                         .disabled(visibilityChanging)
                     }
 
                     Text(FileLinkSection.display(pURL))
                         .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
-                        .foregroundStyle(CobaltColor.linkBlue)
+                        .foregroundStyle(CobaltColor.sharedInk)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
@@ -995,21 +1028,13 @@ struct AmbientCinemaPostStudio: View {
                         .monospacedDigit()
                     }
                 }
-                .padding(12)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(AmbientVisibilityState.private.tint.opacity(0.24), lineWidth: 0.75)
-                )
+                .studioDeckCard(border: AmbientVisibilityState.private.tint.opacity(0.28))
             }
 
             // Inline filename rename card
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("FILENAME")
-                        .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
-                        .foregroundStyle(.secondary)
-                        .tracking(0.6)
+                    StudioDeckSectionLabel(text: "FILENAME")
                     Spacer()
                     Text("\(renameDraft.unicodeScalars.count)/\(MediaTitle.maxLength)")
                         .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
@@ -1050,34 +1075,33 @@ struct AmbientCinemaPostStudio: View {
                     }
                 }
             }
-            .padding(12)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .studioDeckCard()
 
-            if let onManageLinks {
-                Button {
-                    compactSheetOpen = false
-                    onManageLinks()
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: Symbol.PrivateLinks.privateLink)
-                            .font(.system(size: 13.5, weight: .semibold))
-                        Text(Copy.PostPane.manage)
-                            .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: Metrics.hit)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 0.75)
-                    )
-                }
-                .buttonStyle(.plain)
+            // Inline "on this device" offline card
+            if model.store.canKeep, context.missingIndex == nil {
+                StudioDeckOfflineCard(model: model, item: item, rendition: rendition)
+            }
+
+            // Inline "from the post" metadata & framed copies (video saved from a social post)
+            if !context.isGalleryLike, rendition.kind == .video, model.canPostFrame(item) {
+                StudioDeckPostFrameCard(model: model, item: item)
+            }
+
+            // Inline "what it's about" / search index / closest videos / names card
+            if model.capabilities.search, let post = item.post {
+                StudioDeckAboutCard(
+                    model: model,
+                    postKey: post.id,
+                    refreshKey: item.titleText,
+                    store: insightStore,
+                    onOpenPost: openNeighbourPost,
+                    onBeforeOpenName: { compactSheetOpen = false }
+                )
+            }
+
+            // Inline booru find & linked source card
+            if BooruFindSection.applies(model: model, item: item, rendition: rendition) {
+                StudioDeckBooruCard(model: model, item: item, rendition: rendition)
             }
         }
     }
@@ -1085,19 +1109,18 @@ struct AmbientCinemaPostStudio: View {
     /// Even 2-column visibility grid (fold-safe per Apple HIG).
     @ViewBuilder
     private var visibilityGridSection: some View {
-        let supportsPrivate = model.canChoosePrivateLink(rendition)
-        let supportsBasic = controller.canSwitchVisibility(rendition)
-        if supportsPrivate || supportsBasic {
+        let postSwitch = usesPostVisibilitySwitch
+        let supportsPrivate = !postSwitch && model.canChoosePrivateLink(rendition)
+        let supportsBasic = !postSwitch && controller.canSwitchVisibility(rendition)
+        if postSwitch || supportsPrivate || supportsBasic {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("VISIBILITY & ACCESS")
-                        .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
-                        .foregroundStyle(.secondary)
-                        .tracking(0.6)
+                    StudioDeckSectionLabel(text: "VISIBILITY & ACCESS")
                     Spacer()
-                    Text(visibilityState.shortLabel)
+                    Text(visibilityStatusHeader)
                         .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
                         .foregroundStyle(visibilityState.tint)
+                        .monospacedDigit()
                 }
 
                 let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
@@ -1107,13 +1130,33 @@ struct AmbientCinemaPostStudio: View {
                         visibilityTile(.private)
                     }
                     visibilityTile(.off)
-                    if supportsPrivate && canHide {
+                    if (supportsPrivate || postSwitch) && canHide {
                         visibilityTile(.hidden)
                     }
                 }
                 .disabled(visibilityChanging || controller.isDeleting)
 
-                if let failure = controller.visibilityFailed[rendition.id] {
+                if isHidden, let post = livePost {
+                    StudioDeckHairline()
+                    HStack(spacing: 8) {
+                        HiddenByRow(model: model, post: post)
+                            .font(Font.cobalt(11.5, .medium, relativeTo: .caption))
+                        Button {
+                            askingVisibility = .unhide
+                        } label: {
+                            Label(Copy.Hidden.unhide, systemImage: Symbol.HiddenRules.unhide)
+                                .font(Font.cobalt(11, .semibold, relativeTo: .caption2))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 5)
+                                .background(Color.white.opacity(0.1), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(visibilityChanging || controller.isDeleting)
+                    }
+                }
+
+                if let failure = visibilityFailureMessage {
                     Text(failure)
                         .font(CobaltType.captionSmall)
                         .foregroundStyle(CobaltColor.errorText)
@@ -1127,9 +1170,23 @@ struct AmbientCinemaPostStudio: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(12)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .studioDeckCard()
         }
+    }
+
+    private var visibilityStatusHeader: String {
+        if usesPostVisibilitySwitch, !isHidden {
+            let links = controller.publicLinks(of: item)
+            return controller.isPostPublic(item) ? Copy.Gallery.publicLinks(links) : Copy.Gallery.privateNoLinks
+        }
+        return visibilityState.shortLabel
+    }
+
+    private var visibilityFailureMessage: String? {
+        if usesPostVisibilitySwitch {
+            return controller.visibilityFailed[DetailController.postKey] ?? controller.visibilityFailed[rendition.id]
+        }
+        return controller.visibilityFailed[rendition.id]
     }
 
     private func visibilityTile(_ choice: AmbientVisibilityState) -> some View {
@@ -1170,7 +1227,11 @@ struct AmbientCinemaPostStudio: View {
         switch visibilityState {
         case .public: return Copy.Media.publicOn
         case .private: return Copy.PrivateLinks.footnote
-        case .off: return Copy.Media.publicOff
+        case .off:
+            if usesPostVisibilitySwitch, controller.visibilityCacheNote.contains(DetailController.postKey) {
+                return "\(Copy.Media.publicOff) \(Copy.Media.cacheNote)"
+            }
+            return Copy.Media.publicOff
         case .hidden: return Copy.Hidden.note
         }
     }
@@ -1181,10 +1242,7 @@ struct AmbientCinemaPostStudio: View {
         let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
         return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("STUDIO ACTIONS")
-                    .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
-                    .foregroundStyle(.secondary)
-                    .tracking(0.6)
+                StudioDeckSectionLabel(text: "STUDIO ACTIONS")
 
                 LazyVGrid(columns: columns, spacing: 8) {
                     if controller.canMakeWebp(item) {
@@ -1196,6 +1254,18 @@ struct AmbientCinemaPostStudio: View {
                             context.leave()
                             shell.makeWebp(item)
                         }
+                    }
+
+                    if item.detailShape == .gallery {
+                        let availability = controller.makeAvailability(item)
+                        toolTile(
+                            title: DetailWords.makeFromPost,
+                            symbol: Symbol.Gallery.make
+                        ) {
+                            compactSheetOpen = false
+                            controller.showsMakeSheet = true
+                        }
+                        .disabled(availability != .ready || controller.isDeleting)
                     }
 
                     if RenditionPhotos.canSave(rendition) {
@@ -1466,11 +1536,40 @@ struct AmbientCinemaPostStudio: View {
         }
     }
 
+    private func openNeighbourPost(_ post: LibraryPost) {
+        compactSheetOpen = false
+        if let onOpenPost {
+            onOpenPost(post)
+            return
+        }
+        #if os(iOS)
+        if sizeClass == .compact {
+            let media = model.mediaItem(for: post)
+            openedNeighbour = OpenedMedia(item: media, initial: media.face.id)
+            return
+        }
+        #endif
+        model.revealInLibrary(postID: post.id)
+    }
+
     private func chooseVisibility(_ choice: AmbientVisibilityState) {
         guard !visibilityChanging, choice != visibilityState else { return }
 
         if isHidden {
             askingVisibility = .unhide
+            return
+        }
+
+        if usesPostVisibilitySwitch {
+            switch choice {
+            case .public:
+                Task { await controller.setPostPublic(true, for: item) }
+            case .off, .private:
+                askingVisibility = .postMakePrivate
+            case .hidden:
+                let links = model.publicSets(containing: rendition).count
+                askingVisibility = .hide(links: links)
+            }
             return
         }
 
@@ -1509,7 +1608,7 @@ struct AmbientCinemaPostStudio: View {
         case .toPublic: return Copy.PrivateLinks.toPublicTitle
         case .hide: return Copy.Hidden.hideTitle
         case .unhide: return Copy.Hidden.unhideTitle
-        case .basicMakePrivate: return Copy.Media.makePrivateTitle
+        case .basicMakePrivate, .postMakePrivate: return Copy.Media.makePrivateTitle
         case nil: return ""
         }
     }
@@ -1523,7 +1622,7 @@ struct AmbientCinemaPostStudio: View {
         case .toPublic: return Copy.PrivateLinks.toPublicMessage
         case .hide(let links): return links > 0 ? Copy.Hidden.hideMessage(inLinks: links) : Copy.Hidden.hideMessage
         case .unhide: return Copy.Hidden.unhideMessage
-        case .basicMakePrivate: return Copy.Media.makePrivateMessage
+        case .basicMakePrivate, .postMakePrivate: return Copy.Media.makePrivateMessage
         }
     }
 
@@ -1572,6 +1671,11 @@ struct AmbientCinemaPostStudio: View {
         case .basicMakePrivate:
             Button(Copy.Media.makePrivate, role: .destructive) {
                 Task { await controller.setVisibility(rendition, public: false) }
+            }
+            Button(Copy.Media.keepPublic, role: .cancel) {}
+        case .postMakePrivate:
+            Button(Copy.Media.makePrivate, role: .destructive) {
+                Task { await controller.setPostPublic(false, for: item) }
             }
             Button(Copy.Media.keepPublic, role: .cancel) {}
         }
@@ -1703,6 +1807,7 @@ private enum AmbientVisibilityAsk: Identifiable, Equatable {
     case hide(links: Int)
     case unhide
     case basicMakePrivate
+    case postMakePrivate
 
     var id: String {
         switch self {
@@ -1713,6 +1818,7 @@ private enum AmbientVisibilityAsk: Identifiable, Equatable {
         case .hide: return "hide"
         case .unhide: return "unhide"
         case .basicMakePrivate: return "basicMakePrivate"
+        case .postMakePrivate: return "postMakePrivate"
         }
     }
 }
