@@ -96,7 +96,7 @@ struct TwitchClipEditorView: View {
                             chatInspector(draft)
                                 .padding(14)
                         }
-                        .frame(width: min(300, max(240, geo.size.width * 0.27)))
+                        .frame(width: min(320, max(260, geo.size.width * 0.28)))
                     }
                     .frame(maxHeight: .infinity)
                 } else {
@@ -330,12 +330,13 @@ struct TwitchClipEditorView: View {
         let showsA = draft.edit.layout != .single
 
         return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                if showsA {
-                    regionLegendChip(.a, label: Copy.Twitch.regionALabel, color: TwitchClipPalette.regionA)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    if showsA {
+                        regionLegendChip(.a, label: Copy.Twitch.regionALabel, color: TwitchClipPalette.regionA)
+                    }
+                    regionLegendChip(.b, label: Copy.Twitch.regionBLabel, color: TwitchClipPalette.regionB)
                 }
-                regionLegendChip(.b, label: Copy.Twitch.regionBLabel, color: TwitchClipPalette.regionB)
-                Spacer(minLength: 0)
             }
 
             GeometryReader { geo in
@@ -394,7 +395,9 @@ struct TwitchClipEditorView: View {
                     .font(CobaltType.captionSmall)
                     .fontWeight(active ? .semibold : .regular)
                     .foregroundStyle(active ? CobaltColor.text : CobaltColor.caption)
+                    .lineLimit(1)
             }
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
             .background(active ? color.opacity(0.18) : CobaltColor.elevated.opacity(0.65), in: Capsule())
@@ -543,6 +546,8 @@ struct TwitchClipEditorView: View {
                             Label(Copy.Twitch.swapRegions, systemImage: Symbol.Twitch.swapVertical)
                                 .font(CobaltType.captionSmall)
                                 .fontWeight(.semibold)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
                                 .background(CobaltColor.elevated, in: Capsule())
@@ -560,6 +565,8 @@ struct TwitchClipEditorView: View {
             Text(title)
                 .font(CobaltType.captionSmall)
                 .fontWeight(active ? .semibold : .regular)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(active ? CobaltColor.linkBlue.opacity(0.22) : CobaltColor.elevated, in: Capsule())
@@ -775,33 +782,84 @@ struct TwitchClipEditorView: View {
     }
 
     private func chatOverlayLine(entry: RecordedChatEntry, config: TwitchClipChatConfig, fontSize: CGFloat) -> some View {
-        let nameColor = Color(rgb24: entry.resolvedColorRGB)
-        return HStack(alignment: .firstTextBaseline, spacing: 3) {
+        let rgb = entry.resolvedColorRGB
+        let nameColor = Color(rgb24: rgb)
+        let fallbackRGBA = SevenTvRGBA(
+            r: Float((rgb >> 16) & 0xFF) / 255.0,
+            g: Float((rgb >> 8) & 0xFF) / 255.0,
+            b: Float(rgb & 0xFF) / 255.0,
+            a: 1.0
+        )
+        let badgeSide = max(11, fontSize * 1.15)
+        let emoteHeight = max(16, fontSize * 1.65)
+        let pieces = entry.renderPieces(showEmotes: config.showEmotes)
+
+        return TwitchFlow(spacing: 3, lineSpacing: 2) {
             if config.showBadges {
-                ForEach(entry.badges.prefix(2), id: \.id) { badge in
-                    AsyncImage(url: badge.url) { img in
-                        img.resizable().scaledToFit()
-                    } placeholder: {
-                        Color.clear
-                    }
-                    .frame(width: fontSize, height: fontSize)
+                ForEach(Array(entry.badges.prefix(3).enumerated()), id: \.offset) { _, badge in
+                    EmotePicture(url: badge.url, animated: badge.animated, side: badgeSide)
+                        .frame(width: badgeSide, height: badgeSide)
                 }
             }
-            Text("\(entry.displayName):")
-                .font(.system(size: fontSize, weight: .bold))
-                .foregroundStyle(nameColor)
-                .lineLimit(1)
-            Text(entry.plainText)
-                .font(.system(size: fontSize, weight: .medium))
-                .foregroundStyle(.white)
-                .lineLimit(2)
+
+            if config.showPaints, let paint = entry.paint?.asSevenTvPaint {
+                SevenTvPaintedLabel(
+                    text: entry.displayName,
+                    font: .system(size: fontSize, weight: .bold),
+                    paint: paint,
+                    fallback: fallbackRGBA
+                )
+            } else {
+                Text(entry.displayName)
+                    .font(.system(size: fontSize, weight: .bold))
+                    .foregroundStyle(nameColor)
+            }
+
+            if !entry.isAction {
+                Text(":")
+                    .font(.system(size: fontSize, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .padding(.leading, -3)
+            }
+
+            ForEach(Array(pieces.enumerated()), id: \.offset) { _, piece in
+                chatOverlayPiece(piece, isAction: entry.isAction, nameColor: nameColor, fontSize: fontSize, emoteHeight: emoteHeight)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .shadow(
             color: config.look == .clearText ? .black.opacity(0.95) : .black.opacity(0.35),
             radius: config.look == .clearText ? 2 : 1,
             x: 0,
             y: 1
         )
+    }
+
+    @ViewBuilder
+    private func chatOverlayPiece(
+        _ piece: ChatRenderPiece,
+        isAction: Bool,
+        nameColor: Color,
+        fontSize: CGFloat,
+        emoteHeight: CGFloat
+    ) -> some View {
+        switch piece {
+        case .word(let word):
+            Text(word)
+                .font(.system(size: fontSize, weight: .medium))
+                .foregroundStyle(isAction ? nameColor : .white)
+        case .mention(let name):
+            Text("@\(name)")
+                .font(.system(size: fontSize, weight: .semibold))
+                .foregroundStyle(.white)
+        case .link(let url):
+            Text(url.host() ?? url.absoluteString)
+                .font(.system(size: fontSize, weight: .medium))
+                .foregroundStyle(CobaltColor.linkBlue)
+                .lineLimit(1)
+        case .emote(let base, let overlays):
+            TwitchEmoteView(emote: base, over: overlays, height: emoteHeight)
+        }
     }
 
     // MARK: - Chat Inspector
@@ -842,7 +900,7 @@ struct TwitchClipEditorView: View {
                     Text("placement")
                         .font(CobaltType.captionSmall)
                         .foregroundStyle(CobaltColor.caption)
-                    HStack(spacing: 6) {
+                    HStack(spacing: 5) {
                         placementChip(draft, .bottom, Copy.Twitch.chatPlacementBottom)
                         placementChip(draft, .seam, Copy.Twitch.chatPlacementSeam)
                         placementChip(draft, .top, Copy.Twitch.chatPlacementTop)
@@ -883,8 +941,8 @@ struct TwitchClipEditorView: View {
                     .tint(TwitchClipPalette.chatPurple)
                 }
 
-                // 7TV emotes / badges / paints chips
-                HStack(spacing: 6) {
+                // 7TV emotes / badges / paints chips (flow layout prevents "7tv emo..." truncation)
+                TwitchFlow(spacing: 6, lineSpacing: 6) {
                     featureChip(Copy.Twitch.chatEmotes, active: chat.showEmotes) {
                         store.updateEdit(draftID: draft.id) { $0.chat.showEmotes.toggle() }
                     }
@@ -959,6 +1017,9 @@ struct TwitchClipEditorView: View {
             Text(label)
                 .font(CobaltType.captionSmall)
                 .fontWeight(active ? .semibold : .regular)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.horizontal, 4)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 5)
                 .background(active ? TwitchClipPalette.chatPurple.opacity(0.22) : CobaltColor.elevated, in: .rect(cornerRadius: 8))
@@ -976,6 +1037,9 @@ struct TwitchClipEditorView: View {
             Text(label)
                 .font(CobaltType.captionSmall)
                 .fontWeight(active ? .semibold : .regular)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .padding(.horizontal, 6)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 5)
                 .background(active ? TwitchClipPalette.chatPurple.opacity(0.22) : CobaltColor.elevated, in: .rect(cornerRadius: 8))
@@ -990,7 +1054,8 @@ struct TwitchClipEditorView: View {
             Text(title)
                 .font(.system(size: 11, weight: active ? .semibold : .regular))
                 .lineLimit(1)
-                .padding(.horizontal, 8)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 9)
                 .padding(.vertical, 5)
                 .background(active ? TwitchClipPalette.chatPurple.opacity(0.20) : CobaltColor.elevated, in: Capsule())
                 .foregroundStyle(active ? TwitchClipPalette.chatPurple : CobaltColor.caption)
@@ -1187,11 +1252,28 @@ struct TwitchClipEditorView: View {
         localNotice = nil
         player?.pause()
         isPlaying = false
+        let edit = draft.edit
+        let chatCount = chatLog?.entries.count ?? 0
         Task {
             do {
                 _ = try await store.sendToStudio(draft: draft, editor: model.editor, openImmediately: true)
+                Analytics.event("twitch_clip_studio_handoff", values: [
+                    "ok": .bool(true),
+                    "layout": .string(edit.layout.rawValue),
+                    "chat_enabled": .bool(edit.chat.enabled),
+                    "chat_entries": .int(chatCount),
+                    "show_emotes": .bool(edit.chat.showEmotes),
+                    "show_badges": .bool(edit.chat.showBadges),
+                    "show_paints": .bool(edit.chat.showPaints),
+                ])
                 dismiss()
             } catch {
+                Analytics.event("twitch_clip_studio_handoff", values: [
+                    "ok": .bool(false),
+                    "layout": .string(edit.layout.rawValue),
+                    "chat_enabled": .bool(edit.chat.enabled),
+                    "chat_entries": .int(chatCount),
+                ])
                 localError = error.localizedDescription
             }
         }
@@ -1202,12 +1284,38 @@ struct TwitchClipEditorView: View {
         localNotice = nil
         player?.pause()
         isPlaying = false
+        let edit = draft.edit
         Task {
             do {
                 _ = try await store.renderAndUpload(draft: draft)
+                var values: [String: TelemetryValue] = [
+                    "ok": .bool(true),
+                    "layout": .string(edit.layout.rawValue),
+                    "chat_enabled": .bool(edit.chat.enabled),
+                    "chat_placement": .string(edit.chat.placement.rawValue),
+                    "chat_look": .string(edit.chat.look.rawValue),
+                    "show_emotes": .bool(edit.chat.showEmotes),
+                    "show_badges": .bool(edit.chat.showBadges),
+                    "show_paints": .bool(edit.chat.showPaints),
+                ]
+                if let stats = store.lastRenderStats {
+                    values["render_ms"] = .int(stats.renderMs)
+                    values["chat_entries"] = .int(stats.chatEntries)
+                    values["emotes_prefetched"] = .int(stats.emotesPrefetched)
+                    values["animated_emotes"] = .int(stats.animatedEmotes)
+                    values["badges_prefetched"] = .int(stats.badgesPrefetched)
+                    values["overlay_rasterizations"] = .int(stats.overlayRasterizations)
+                }
+                Analytics.event("twitch_clip_render", values: values)
                 await model.library.refresh()
                 localNotice = Copy.Twitch.savedPrivate
             } catch {
+                Analytics.event("twitch_clip_render", values: [
+                    "ok": .bool(false),
+                    "layout": .string(edit.layout.rawValue),
+                    "chat_enabled": .bool(edit.chat.enabled),
+                    "show_emotes": .bool(edit.chat.showEmotes),
+                ])
                 localError = error.localizedDescription
             }
         }

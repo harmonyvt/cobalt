@@ -386,4 +386,431 @@ public enum TwitchQualityBudgetPolicy {
             return a.bandwidth < b.bandwidth
         }
     }
+
+    public static func preferredVariant(
+        from variants: [TwitchVariant],
+        hint: TwitchQualityBudgetHint
+    ) -> TwitchVariant? {
+        preferredVariant(
+            from: variants,
+            streamCount: hint.streamCount,
+            isSpotlight: hint.isSpotlight,
+            isThermalThrottled: hint.isThermalThrottled
+        )
+    }
 }
+
+/// Startup quality budget hint passed into `TwitchNativeEngine.start` so companion streams select their
+/// budgeted variant directly on first join instead of starting source quality and immediately restarting.
+public struct TwitchQualityBudgetHint: Sendable, Equatable {
+    public let streamCount: Int
+    public let isSpotlight: Bool
+    public let isThermalThrottled: Bool
+
+    public init(streamCount: Int, isSpotlight: Bool, isThermalThrottled: Bool) {
+        self.streamCount = streamCount
+        self.isSpotlight = isSpotlight
+        self.isThermalThrottled = isThermalThrottled
+    }
+}
+
+/// Visual role of a single persistent stream tile inside `TwitchDualStage`.
+public enum TwitchStageTileRole: String, Sendable, Equatable {
+    /// Full-bleed hero tile (Focus-Inset hero or Spotlight hero).
+    case hero
+    /// Floating 16:9 inset tile in 2-stream Focus-Inset mode (1-tap swaps focus).
+    case inset
+    /// Companion tile inside the Spotlight dock strip (1-tap promotes to spotlight).
+    case dock
+    /// Tile in 3–4 stream Grid / Mosaic / Duo fold-safe mode.
+    case grid
+    /// Tile in 2-stream 50/50 Split mode.
+    case split
+}
+
+/// Computed frame and interaction metadata for one persistent stream slot inside `TwitchDualStage`.
+/// Keeping every active slot in a single flat `ForEach` and animating these rects avoids destroying or
+/// reparenting `AVSampleBufferDisplayLayer` surfaces across layout transitions.
+public struct TwitchStageTileGeometry: Sendable, Equatable {
+    public let slot: TwitchStreamSlot
+    public let rect: CGRect
+    public let zIndex: Double
+    public let role: TwitchStageTileRole
+    public let cornerRadius: CGFloat
+    public let compact: Bool
+    public let tappableTile: Bool
+    public let tappableBadge: Bool
+
+    public init(
+        slot: TwitchStreamSlot,
+        rect: CGRect,
+        zIndex: Double = 0,
+        role: TwitchStageTileRole,
+        cornerRadius: CGFloat = 0,
+        compact: Bool = false,
+        tappableTile: Bool = false,
+        tappableBadge: Bool = false
+    ) {
+        self.slot = slot
+        self.rect = rect
+        self.zIndex = zIndex
+        self.role = role
+        self.cornerRadius = cornerRadius
+        self.compact = compact
+        self.tappableTile = tappableTile
+        self.tappableBadge = tappableBadge
+    }
+}
+
+public extension TwitchMultiLayout {
+    /// Computes deterministic tile rects and roles for all active streams (`count` in `2...4`) inside `stageSize`.
+    /// Every returned rect is clamped to non-negative dimensions within `(0, 0, stageSize.width, stageSize.height)`.
+    static func stageGeometries(
+        count rawCount: Int,
+        stageSize: CGSize,
+        dualMode: TwitchDualStageMode,
+        multiMode: TwitchMultiStageMode,
+        dualFocused: TwitchDualSlot,
+        spotlight: TwitchStreamSlot,
+        hasVerticalCrease: Bool = false,
+        hudVisible: Bool = true,
+        compactChrome: Bool = false,
+        spacing: CGFloat = 2
+    ) -> [TwitchStreamSlot: TwitchStageTileGeometry] {
+        let count = max(2, min(4, rawCount))
+        let slots = TwitchStreamSlot.slots(forCount: count)
+        let w = max(1, stageSize.width)
+        let h = max(1, stageSize.height)
+        let full = CGRect(x: 0, y: 0, width: w, height: h)
+
+        var out: [TwitchStreamSlot: TwitchStageTileGeometry] = [:]
+
+        if count == 2 {
+            switch dualMode {
+            case .focusInset:
+                let pair = TwitchDualLayout.heroAndInset(focused: dualFocused)
+                let heroSlot = pair.hero.streamSlot
+                let insetSlot = pair.inset.streamSlot
+                let insetSize = TwitchDualLayout.insetSize(for: CGSize(width: w, height: h))
+                let bottomPad: CGFloat = hudVisible ? (compactChrome ? 62 : 76) : 14
+                let trailingPad: CGFloat = 12
+                let insetW = min(insetSize.width, max(44, w - trailingPad * 2))
+                let insetH = min(insetSize.height, max(44, h - bottomPad - 12))
+                let insetX = max(8, w - trailingPad - insetW)
+                let insetY = max(8, h - bottomPad - insetH)
+                out[heroSlot] = TwitchStageTileGeometry(
+                    slot: heroSlot,
+                    rect: full,
+                    zIndex: 0,
+                    role: .hero,
+                    cornerRadius: 0,
+                    compact: false,
+                    tappableTile: false,
+                    tappableBadge: false
+                )
+                out[insetSlot] = TwitchStageTileGeometry(
+                    slot: insetSlot,
+                    rect: CGRect(x: insetX, y: insetY, width: insetW, height: insetH),
+                    zIndex: 10,
+                    role: .inset,
+                    cornerRadius: 12,
+                    compact: true,
+                    tappableTile: true,
+                    tappableBadge: false
+                )
+                return out
+
+            case .split5050:
+                let axis = TwitchDualLayout.splitAxis(for: CGSize(width: w, height: h))
+                if axis == .horizontal {
+                    let halfW = max(1, (w - spacing) / 2)
+                    out[.a] = TwitchStageTileGeometry(
+                        slot: .a,
+                        rect: CGRect(x: 0, y: 0, width: halfW, height: h),
+                        zIndex: 0,
+                        role: .split,
+                        cornerRadius: 0,
+                        compact: false,
+                        tappableTile: false,
+                        tappableBadge: true
+                    )
+                    out[.b] = TwitchStageTileGeometry(
+                        slot: .b,
+                        rect: CGRect(x: halfW + spacing, y: 0, width: max(1, w - halfW - spacing), height: h),
+                        zIndex: 0,
+                        role: .split,
+                        cornerRadius: 0,
+                        compact: false,
+                        tappableTile: false,
+                        tappableBadge: true
+                    )
+                } else {
+                    let halfH = max(1, (h - spacing) / 2)
+                    out[.a] = TwitchStageTileGeometry(
+                        slot: .a,
+                        rect: CGRect(x: 0, y: 0, width: w, height: halfH),
+                        zIndex: 0,
+                        role: .split,
+                        cornerRadius: 0,
+                        compact: false,
+                        tappableTile: false,
+                        tappableBadge: true
+                    )
+                    out[.b] = TwitchStageTileGeometry(
+                        slot: .b,
+                        rect: CGRect(x: 0, y: halfH + spacing, width: w, height: max(1, h - halfH - spacing)),
+                        zIndex: 0,
+                        role: .split,
+                        cornerRadius: 0,
+                        compact: false,
+                        tappableTile: false,
+                        tappableBadge: true
+                    )
+                }
+                return out
+            }
+        }
+
+        // N = 3 or N = 4
+        let activeSpotlight = slots.contains(spotlight) ? spotlight : .a
+        let others = slots.filter { $0 != activeSpotlight }
+
+        switch multiMode {
+        case .spotlight:
+            let dock = spotlightDock(count: count, stageSize: CGSize(width: w, height: h), hasVerticalCrease: hasVerticalCrease)
+            let heroFraction = spotlightHeroFraction(count: count, dock: dock, hasVerticalCrease: hasVerticalCrease)
+            let bottomReserve: CGFloat = (dock == .bottomRow && hudVisible) ? (compactChrome ? 58 : 68) : 0
+
+            if dock == .trailingColumn {
+                let heroW = min(max(120, w * heroFraction), max(120, w - 80))
+                let dockX = heroW + spacing
+                let dockW = max(1, w - dockX)
+                let dockCount = CGFloat(max(1, others.count))
+                let tileH = max(1, (h - spacing * max(0, dockCount - 1)) / dockCount)
+
+                out[activeSpotlight] = TwitchStageTileGeometry(
+                    slot: activeSpotlight,
+                    rect: CGRect(x: 0, y: 0, width: heroW, height: h),
+                    zIndex: 0,
+                    role: .hero,
+                    cornerRadius: 0,
+                    compact: false,
+                    tappableTile: false,
+                    tappableBadge: false
+                )
+                for (i, slot) in others.enumerated() {
+                    let y = CGFloat(i) * (tileH + spacing)
+                    let resolvedH = (i == others.count - 1) ? max(1, h - y) : tileH
+                    out[slot] = TwitchStageTileGeometry(
+                        slot: slot,
+                        rect: CGRect(x: dockX, y: y, width: dockW, height: resolvedH),
+                        zIndex: 1,
+                        role: .dock,
+                        cornerRadius: 6,
+                        compact: true,
+                        tappableTile: true,
+                        tappableBadge: false
+                    )
+                }
+            } else {
+                let usableH = max(80, h - bottomReserve)
+                let heroH = min(max(80, usableH * heroFraction), max(80, usableH - 60))
+                let dockY = heroH + spacing
+                let dockH = max(1, usableH - dockY)
+                let dockCount = CGFloat(max(1, others.count))
+                let tileW = max(1, (w - spacing * max(0, dockCount - 1)) / dockCount)
+
+                out[activeSpotlight] = TwitchStageTileGeometry(
+                    slot: activeSpotlight,
+                    rect: CGRect(x: 0, y: 0, width: w, height: heroH),
+                    zIndex: 0,
+                    role: .hero,
+                    cornerRadius: 0,
+                    compact: false,
+                    tappableTile: false,
+                    tappableBadge: false
+                )
+                for (i, slot) in others.enumerated() {
+                    let x = CGFloat(i) * (tileW + spacing)
+                    let resolvedW = (i == others.count - 1) ? max(1, w - x) : tileW
+                    out[slot] = TwitchStageTileGeometry(
+                        slot: slot,
+                        rect: CGRect(x: x, y: dockY, width: resolvedW, height: dockH),
+                        zIndex: 1,
+                        role: .dock,
+                        cornerRadius: 6,
+                        compact: true,
+                        tappableTile: true,
+                        tappableBadge: false
+                    )
+                }
+            }
+            return out
+
+        case .grid:
+            let kind = gridKind(count: count, stageSize: CGSize(width: w, height: h), hasVerticalCrease: hasVerticalCrease)
+            let isCompactQuad = (count == 4 && w < 600)
+
+            switch kind {
+            case .quadGrid:
+                let colW = max(1, (w - spacing) / 2)
+                let rowH = max(1, (h - spacing) / 2)
+                let rightW = max(1, w - colW - spacing)
+                let bottomH = max(1, h - rowH - spacing)
+                let rects: [(TwitchStreamSlot, CGRect)] = [
+                    (.a, CGRect(x: 0, y: 0, width: colW, height: rowH)),
+                    (.b, CGRect(x: colW + spacing, y: 0, width: rightW, height: rowH)),
+                    (.c, CGRect(x: 0, y: rowH + spacing, width: colW, height: bottomH)),
+                    (.d, CGRect(x: colW + spacing, y: rowH + spacing, width: rightW, height: bottomH)),
+                ]
+                for (slot, rect) in rects where slots.contains(slot) {
+                    out[slot] = TwitchStageTileGeometry(
+                        slot: slot,
+                        rect: rect,
+                        zIndex: 0,
+                        role: .grid,
+                        cornerRadius: 0,
+                        compact: isCompactQuad,
+                        tappableTile: false,
+                        tappableBadge: true
+                    )
+                }
+
+            case .duoFoldSafeThree:
+                let leftW = max(1, (w - spacing) / 2)
+                let rightX = leftW + spacing
+                let rightW = max(1, w - rightX)
+                let rightCount = CGFloat(max(1, others.count))
+                let rightTileH = max(1, (h - spacing * max(0, rightCount - 1)) / rightCount)
+
+                out[activeSpotlight] = TwitchStageTileGeometry(
+                    slot: activeSpotlight,
+                    rect: CGRect(x: 0, y: 0, width: leftW, height: h),
+                    zIndex: 0,
+                    role: .grid,
+                    cornerRadius: 0,
+                    compact: false,
+                    tappableTile: false,
+                    tappableBadge: true
+                )
+                for (i, slot) in others.enumerated() {
+                    let y = CGFloat(i) * (rightTileH + spacing)
+                    let resolvedH = (i == others.count - 1) ? max(1, h - y) : rightTileH
+                    out[slot] = TwitchStageTileGeometry(
+                        slot: slot,
+                        rect: CGRect(x: rightX, y: y, width: rightW, height: resolvedH),
+                        zIndex: 0,
+                        role: .grid,
+                        cornerRadius: 0,
+                        compact: w < 520,
+                        tappableTile: false,
+                        tappableBadge: true
+                    )
+                }
+
+            case .mosaicThree:
+                if w >= h {
+                    let leftW = max(1, w * 0.62)
+                    let rightX = leftW + spacing
+                    let rightW = max(1, w - rightX)
+                    let rightCount = CGFloat(max(1, others.count))
+                    let rightTileH = max(1, (h - spacing * max(0, rightCount - 1)) / rightCount)
+
+                    out[activeSpotlight] = TwitchStageTileGeometry(
+                        slot: activeSpotlight,
+                        rect: CGRect(x: 0, y: 0, width: leftW, height: h),
+                        zIndex: 0,
+                        role: .grid,
+                        cornerRadius: 0,
+                        compact: false,
+                        tappableTile: false,
+                        tappableBadge: true
+                    )
+                    for (i, slot) in others.enumerated() {
+                        let y = CGFloat(i) * (rightTileH + spacing)
+                        let resolvedH = (i == others.count - 1) ? max(1, h - y) : rightTileH
+                        out[slot] = TwitchStageTileGeometry(
+                            slot: slot,
+                            rect: CGRect(x: rightX, y: y, width: rightW, height: resolvedH),
+                            zIndex: 0,
+                            role: .grid,
+                            cornerRadius: 0,
+                            compact: w < 520,
+                            tappableTile: false,
+                            tappableBadge: true
+                        )
+                    }
+                } else {
+                    let topH = max(1, h * 0.56)
+                    let bottomY = topH + spacing
+                    let bottomH = max(1, h - bottomY)
+                    let bottomCount = CGFloat(max(1, others.count))
+                    let bottomTileW = max(1, (w - spacing * max(0, bottomCount - 1)) / bottomCount)
+
+                    out[activeSpotlight] = TwitchStageTileGeometry(
+                        slot: activeSpotlight,
+                        rect: CGRect(x: 0, y: 0, width: w, height: topH),
+                        zIndex: 0,
+                        role: .grid,
+                        cornerRadius: 0,
+                        compact: false,
+                        tappableTile: false,
+                        tappableBadge: true
+                    )
+                    for (i, slot) in others.enumerated() {
+                        let x = CGFloat(i) * (bottomTileW + spacing)
+                        let resolvedW = (i == others.count - 1) ? max(1, w - x) : bottomTileW
+                        out[slot] = TwitchStageTileGeometry(
+                            slot: slot,
+                            rect: CGRect(x: x, y: bottomY, width: resolvedW, height: bottomH),
+                            zIndex: 0,
+                            role: .grid,
+                            cornerRadius: 0,
+                            compact: w < 520,
+                            tappableTile: false,
+                            tappableBadge: true
+                        )
+                    }
+                }
+
+            case .splitHorizontal:
+                let n = CGFloat(max(1, slots.count))
+                let tileW = max(1, (w - spacing * max(0, n - 1)) / n)
+                for (i, slot) in slots.enumerated() {
+                    let x = CGFloat(i) * (tileW + spacing)
+                    let resolvedW = (i == slots.count - 1) ? max(1, w - x) : tileW
+                    out[slot] = TwitchStageTileGeometry(
+                        slot: slot,
+                        rect: CGRect(x: x, y: 0, width: resolvedW, height: h),
+                        zIndex: 0,
+                        role: .grid,
+                        cornerRadius: 0,
+                        compact: false,
+                        tappableTile: false,
+                        tappableBadge: true
+                    )
+                }
+
+            case .splitVertical:
+                let n = CGFloat(max(1, slots.count))
+                let tileH = max(1, (h - spacing * max(0, n - 1)) / n)
+                for (i, slot) in slots.enumerated() {
+                    let y = CGFloat(i) * (tileH + spacing)
+                    let resolvedH = (i == slots.count - 1) ? max(1, h - y) : tileH
+                    out[slot] = TwitchStageTileGeometry(
+                        slot: slot,
+                        rect: CGRect(x: 0, y: y, width: w, height: resolvedH),
+                        zIndex: 0,
+                        role: .grid,
+                        cornerRadius: 0,
+                        compact: false,
+                        tappableTile: false,
+                        tappableBadge: true
+                    )
+                }
+            }
+            return out
+        }
+    }
+}
+

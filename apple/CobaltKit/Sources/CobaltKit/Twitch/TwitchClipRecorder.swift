@@ -38,8 +38,9 @@ public actor TwitchClipRecorder {
     }
 
     private struct BufferedChat {
-        let line: TwitchChatLine
-        let paint: SevenTvPaint?
+        var line: TwitchChatLine
+        var paint: SevenTvPaint?
+        var sevenTvBadge: ChatBadge?
         /// Approximate stream wall time (adjusted by live stream delay so chat aligns with video frames).
         let anchoredTime: Date
     }
@@ -177,7 +178,8 @@ public actor TwitchClipRecorder {
         publishState(force: false, now: now)
     }
 
-    /// Feeds live `TwitchChatSnapshot` updates (tracking new messages + chat reconnect gaps).
+    /// Feeds live `TwitchChatSnapshot` updates (tracking new messages, late-loaded 7TV emote/paint/badge backfills,
+    /// moderator deletions, and chat reconnect gaps).
     public func ingestChatSnapshot(_ snapshot: TwitchChatSnapshot, now: Date = Date()) {
         guard let ch = channel, snapshot.channel.lowercased() == ch else { return }
 
@@ -198,20 +200,61 @@ public actor TwitchClipRecorder {
             break
         }
 
-        // Capture unseen messages (skip system notices and historical messages older than the session buffer).
+        // Capture unseen messages and update already-seen lines in place when 7TV emotes/paints/badges backfill
+        // or a moderator deletes a line.
         let cutoff = now.addingTimeInterval(-(Self.maxRecordingSeconds + 120))
+        var ringIndexByID: [String: Int] = [:]
+        ringIndexByID.reserveCapacity(chatRing.count)
+        for (idx, item) in chatRing.enumerated() {
+            ringIndexByID[item.line.id] = idx
+        }
+
+        var deletedIDs: Set<String> = []
         for line in snapshot.lines {
-            guard !seenChatIDs.contains(line.id) else { continue }
+            let loginKey = line.login.lowercased()
+            let paint = snapshot.paints[loginKey]
+            let sevenTvBadge = snapshot.sevenTvBadges[loginKey]
+
+            if seenChatIDs.contains(line.id) {
+                if let idx = ringIndexByID[line.id] {
+                    if line.deleted {
+                        deletedIDs.insert(line.id)
+                    } else {
+                        chatRing[idx].line = line
+                        if let paint { chatRing[idx].paint = paint }
+                        if let sevenTvBadge { chatRing[idx].sevenTvBadge = sevenTvBadge }
+                    }
+                }
+                continue
+            }
+
             seenChatIDs.insert(line.id)
             if case .system = line.kind { continue }
             guard !line.deleted else { continue }
             // Ignore old Robotty recent-messages history fetched before watching started.
             if line.timestamp < now.addingTimeInterval(-90) { continue }
-            let paint = snapshot.paints[line.login.lowercased()]
             // Chat messages arrive live over IRC while video lags by `lastDelaySeconds`.
             // Anchor chat to the moment it arrived on stream clock (`now`) so playback syncs cleanly.
             let anchor = max(cutoff, line.timestamp)
-            chatRing.append(BufferedChat(line: line, paint: paint, anchoredTime: anchor))
+            ringIndexByID[line.id] = chatRing.count
+            chatRing.append(BufferedChat(line: line, paint: paint, sevenTvBadge: sevenTvBadge, anchoredTime: anchor))
+        }
+
+        if !deletedIDs.isEmpty {
+            chatRing.removeAll { deletedIDs.contains($0.line.id) }
+        }
+
+        // Backfill late-arriving 7TV paints/badges for buffered entries whose cosmetics arrived after the line.
+        if !snapshot.paints.isEmpty || !snapshot.sevenTvBadges.isEmpty {
+            for idx in chatRing.indices {
+                let loginKey = chatRing[idx].line.login.lowercased()
+                if chatRing[idx].paint == nil, let paint = snapshot.paints[loginKey] {
+                    chatRing[idx].paint = paint
+                }
+                if chatRing[idx].sevenTvBadge == nil, let badge = snapshot.sevenTvBadges[loginKey] {
+                    chatRing[idx].sevenTvBadge = badge
+                }
+            }
         }
 
         // Keep chat ring bounded (at least 120 s when idle, or full recording span when recording).
@@ -503,7 +546,12 @@ public actor TwitchClipRecorder {
         var entries: [RecordedChatEntry] = []
         for item in chatRing where item.anchoredTime >= startWall && item.anchoredTime <= endWall.addingTimeInterval(0.5) {
             let rel = max(0, min(duration, item.anchoredTime.timeIntervalSince(startWall) * scaleToMedia))
-            if let entry = RecordedChatEntry(line: item.line, clipRelativeSeconds: rel, paint: item.paint) {
+            if let entry = RecordedChatEntry(
+                line: item.line,
+                clipRelativeSeconds: rel,
+                paint: item.paint,
+                sevenTvBadge: item.sevenTvBadge
+            ) {
                 entries.append(entry)
             }
         }

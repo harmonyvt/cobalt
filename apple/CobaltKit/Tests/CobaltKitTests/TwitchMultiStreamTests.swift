@@ -373,4 +373,116 @@ private final class SpyMultiAudioTarget: TwitchMultiAudioTarget {
         macBudget.setActiveStreamCount(1)
         #expect(macBudget.effectiveLimit == 16)
     }
+
+    // MARK: - Persistent Stage Canvas Geometries & Startup Budget Hint
+
+    @Test func stageGeometriesCoverAllActiveSlotsWithinBoundsAcrossModes() {
+        let stages: [(String, CGSize, Bool)] = [
+            ("portrait", CGSize(width: 390, height: 700), false),
+            ("landscape", CGSize(width: 1200, height: 700), false),
+            ("duo", CGSize(width: 820, height: 800), true),
+        ]
+
+        // N = 2: focusInset and split5050
+        for (_, size, crease) in stages {
+            let focus = TwitchMultiLayout.stageGeometries(
+                count: 2,
+                stageSize: size,
+                dualMode: .focusInset,
+                multiMode: .spotlight,
+                dualFocused: .secondary,
+                spotlight: .b,
+                hasVerticalCrease: crease,
+                hudVisible: true
+            )
+            #expect(focus.count == 2)
+            let hero = focus[.b]!
+            let inset = focus[.a]!
+            #expect(hero.role == .hero)
+            #expect(inset.role == .inset)
+            #expect(inset.zIndex > hero.zIndex)
+            #expect(inset.compact == true)
+            #expect(inset.tappableTile == true)
+            #expect(hero.rect.width == size.width && hero.rect.height == size.height)
+            #expect(inset.rect.minX >= 0 && inset.rect.minY >= 0)
+            #expect(inset.rect.maxX <= size.width + 0.5 && inset.rect.maxY <= size.height + 0.5)
+
+            let split = TwitchMultiLayout.stageGeometries(
+                count: 2,
+                stageSize: size,
+                dualMode: .split5050,
+                multiMode: .grid,
+                dualFocused: .primary,
+                spotlight: .a,
+                hasVerticalCrease: crease
+            )
+            #expect(split.count == 2)
+            for slot in [TwitchStreamSlot.a, .b] {
+                let geom = split[slot]!
+                #expect(geom.role == .split)
+                #expect(geom.tappableBadge == true)
+                #expect(geom.rect.width > 10 && geom.rect.height > 10)
+                #expect(geom.rect.maxX <= size.width + 0.5 && geom.rect.maxY <= size.height + 0.5)
+            }
+        }
+
+        // N = 3 and N = 4 across spotlight & grid
+        for count in [3, 4] {
+            let expectedSlots = TwitchStreamSlot.slots(forCount: count)
+            for (_, size, crease) in stages {
+                for mode in [TwitchMultiStageMode.spotlight, .grid] {
+                    let geoms = TwitchMultiLayout.stageGeometries(
+                        count: count,
+                        stageSize: size,
+                        dualMode: .focusInset,
+                        multiMode: mode,
+                        dualFocused: .primary,
+                        spotlight: .c,
+                        hasVerticalCrease: crease,
+                        hudVisible: true
+                    )
+                    #expect(Set(geoms.keys) == Set(expectedSlots))
+                    for slot in expectedSlots {
+                        let g = geoms[slot]!
+                        #expect(g.rect.width > 10 && g.rect.height > 10)
+                        #expect(g.rect.minX >= -0.5 && g.rect.minY >= -0.5)
+                        #expect(g.rect.maxX <= size.width + 0.5 && g.rect.maxY <= size.height + 0.5)
+                    }
+                    if mode == .spotlight {
+                        #expect(geoms[.c]?.role == .hero)
+                        #expect(geoms[.c]?.compact == false)
+                        for other in expectedSlots where other != .c {
+                            #expect(geoms[other]?.role == .dock)
+                            #expect(geoms[other]?.compact == true)
+                            #expect(geoms[other]?.tappableTile == true)
+                        }
+                    } else {
+                        for slot in expectedSlots {
+                            #expect(geoms[slot]?.role == .grid)
+                            #expect(geoms[slot]?.tappableBadge == true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test func qualityBudgetHintSelectsCappedVariantOnInitialJoin() {
+        let baseURL = URL(string: "https://example.invalid/live.m3u8")!
+        let variants: [TwitchVariant] = [
+            TwitchVariant(id: "chunked", name: "1080p60 (source)", bandwidth: 6_500_000, width: 1920, height: 1080, frameRate: 60, codecs: "avc1.64002a,mp4a.40.2", url: baseURL),
+            TwitchVariant(id: "720p60", name: "720p60", bandwidth: 3_500_000, width: 1280, height: 720, frameRate: 60, codecs: "avc1.4d4020,mp4a.40.2", url: baseURL),
+            TwitchVariant(id: "480p30", name: "480p", bandwidth: 1_200_000, width: 852, height: 480, frameRate: 30, codecs: "avc1.4d401f,mp4a.40.2", url: baseURL),
+            TwitchVariant(id: "360p30", name: "360p", bandwidth: 650_000, width: 640, height: 360, frameRate: 30, codecs: "avc1.4d401e,mp4a.40.2", url: baseURL),
+        ]
+
+        let slotDHint = TwitchQualityBudgetHint(streamCount: 4, isSpotlight: false, isThermalThrottled: false)
+        #expect(TwitchQualityBudgetPolicy.preferredVariant(from: variants, hint: slotDHint)?.id == "480p30")
+
+        let slotAHint = TwitchQualityBudgetHint(streamCount: 4, isSpotlight: true, isThermalThrottled: false)
+        #expect(TwitchQualityBudgetPolicy.preferredVariant(from: variants, hint: slotAHint)?.id == "chunked")
+
+        let hotHint = TwitchQualityBudgetHint(streamCount: 4, isSpotlight: false, isThermalThrottled: true)
+        #expect(TwitchQualityBudgetPolicy.preferredVariant(from: variants, hint: hotHint)?.id == "360p30")
+    }
 }

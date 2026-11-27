@@ -191,227 +191,127 @@ struct TwitchDualStage: View {
                     action: { host.togglePiP() }
                 )
                 #endif
-            } else if isMulti {
-                switch host.multiStageMode {
-                case .spotlight:
-                    multiSpotlightCanvas
-                case .grid:
-                    multiGridCanvas
-                }
             } else {
-                switch host.dualStageMode {
-                case .focusInset:
-                    focusInsetCanvas
-                case .split5050:
-                    split5050Canvas
-                }
+                persistentStageCanvas
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - N = 3 & N = 4 Canvases
+    private struct StageLayoutAnimationKey: Equatable {
+        let count: Int
+        let dualMode: TwitchDualStageMode
+        let multiMode: TwitchMultiStageMode
+        let dualFocused: TwitchDualSlot
+        let spotlight: TwitchStreamSlot
+        let hasVerticalCrease: Bool
+        let hudVisible: Bool
+    }
 
-    /// Spotlight mode for 3–4 streams: spotlight hero fills the primary zone; the remaining 2–3 streams sit in
-    /// a live dock (trailing strip on wide/landscape screens, bottom strip on tall/portrait screens).
-    private var multiSpotlightCanvas: some View {
-        let dock = TwitchMultiLayout.spotlightDock(
+    private var stageLayoutAnimationKey: StageLayoutAnimationKey {
+        StageLayoutAnimationKey(
             count: streamCount,
-            stageSize: stageSize,
-            hasVerticalCrease: hasVerticalCrease
+            dualMode: host.dualStageMode,
+            multiMode: host.multiStageMode,
+            dualFocused: mixer.focusedSlot,
+            spotlight: multiMixer.spotlightSlot,
+            hasVerticalCrease: hasVerticalCrease,
+            hudVisible: hudVisible
         )
-        let heroFraction = TwitchMultiLayout.spotlightHeroFraction(
+    }
+
+    /// Single persistent positioned stage canvas for 2, 3, and 4 simultaneous streams.
+    /// Keeping every active slot inside ONE flat `ForEach(activeSlots)` ensures toggling
+    /// Spotlight <-> Grid, Focus+Inset <-> 50/50, promoting dock tiles, rotating, or adding/removing
+    /// streams animates tile frames smoothly without ever destroying or reparenting
+    /// `TwitchNativeSlotSurface` / `AVSampleBufferDisplayLayer` views.
+    private var persistentStageCanvas: some View {
+        let effectiveSize = (stageSize.width > 1 && stageSize.height > 1)
+            ? stageSize
+            : CGSize(width: 390, height: 390)
+        let geometries = TwitchMultiLayout.stageGeometries(
             count: streamCount,
-            dock: dock,
-            hasVerticalCrease: hasVerticalCrease
+            stageSize: effectiveSize,
+            dualMode: host.dualStageMode,
+            multiMode: host.multiStageMode,
+            dualFocused: mixer.focusedSlot,
+            spotlight: multiMixer.spotlightSlot,
+            hasVerticalCrease: hasVerticalCrease,
+            hudVisible: hudVisible,
+            compactChrome: compactChrome
         )
-        let spotlight = multiMixer.spotlightSlot
-        let dockSlots = activeSlots.filter { $0 != spotlight }
-        let bottomReserve: CGFloat = (dock == .bottomRow && hudVisible) ? (compactChrome ? 58 : 68) : 0
 
-        return GeometryReader { geo in
-            if dock == .trailingColumn {
-                let heroW = max(160, geo.size.width * heroFraction)
-                HStack(spacing: 2) {
-                    multiHeroTile(slot: spotlight)
-                        .frame(width: heroW, height: geo.size.height)
-
-                    VStack(spacing: 2) {
-                        ForEach(dockSlots) { slot in
-                            multiDockTile(slot: slot)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else {
-                let usableH = max(120, geo.size.height - bottomReserve)
-                let heroH = max(100, usableH * heroFraction)
-                VStack(spacing: 2) {
-                    multiHeroTile(slot: spotlight)
-                        .frame(width: geo.size.width, height: heroH)
-
-                    HStack(spacing: 2) {
-                        ForEach(dockSlots) { slot in
-                            multiDockTile(slot: slot)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.bottom, bottomReserve)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    /// Grid mode for 3–4 streams:
-    /// - 3 streams + vertical Duo crease -> 50/50 fold-safe split (1 left + 2 stacked right).
-    /// - 3 streams flat -> 1 + 2 mosaic (hero left/top + 2 secondary right/bottom).
-    /// - 4 streams -> clean 2×2 quad grid (naturally fold-safe on both vertical and horizontal creases).
-    @ViewBuilder
-    private var multiGridCanvas: some View {
-        let kind = TwitchMultiLayout.gridKind(
+        return TwitchStageCanvasLayout(
+            slots: activeSlots,
             count: streamCount,
-            stageSize: stageSize,
-            hasVerticalCrease: hasVerticalCrease
-        )
-        let spotlight = multiMixer.spotlightSlot
-        let others = activeSlots.filter { $0 != spotlight }
-
-        switch kind {
-        case .duoFoldSafeThree:
-            HStack(spacing: 2) {
-                multiGridTile(slot: spotlight)
-                VStack(spacing: 2) {
-                    ForEach(others) { slot in
-                        multiGridTile(slot: slot)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        case .mosaicThree:
-            GeometryReader { geo in
-                if geo.size.width >= geo.size.height {
-                    let leftW = geo.size.width * 0.62
-                    HStack(spacing: 2) {
-                        multiGridTile(slot: spotlight)
-                            .frame(width: leftW, height: geo.size.height)
-                        VStack(spacing: 2) {
-                            ForEach(others) { slot in
-                                multiGridTile(slot: slot)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                } else {
-                    let topH = geo.size.height * 0.56
-                    VStack(spacing: 2) {
-                        multiGridTile(slot: spotlight)
-                            .frame(width: geo.size.width, height: topH)
-                        HStack(spacing: 2) {
-                            ForEach(others) { slot in
-                                multiGridTile(slot: slot)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        case .quadGrid:
-            VStack(spacing: 2) {
-                HStack(spacing: 2) {
-                    multiGridTile(slot: .a)
-                    multiGridTile(slot: .b)
-                }
-                HStack(spacing: 2) {
-                    multiGridTile(slot: .c)
-                    multiGridTile(slot: .d)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        case .splitHorizontal:
-            HStack(spacing: 2) {
-                ForEach(activeSlots) { slot in
-                    multiGridTile(slot: slot)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        case .splitVertical:
-            VStack(spacing: 2) {
-                ForEach(activeSlots) { slot in
-                    multiGridTile(slot: slot)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private func multiHeroTile(slot: TwitchStreamSlot) -> some View {
-        multiSlotTile(slot: slot, compact: false, tappableBadge: false)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                toggleHUD()
-            }
-            .clipped()
-    }
-
-    private func multiDockTile(slot: TwitchStreamSlot) -> some View {
-        Button {
-            withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
-                host.setSpotlight(slot)
-            }
-            bumpHUD()
-        } label: {
-            multiSlotTile(slot: slot, compact: true, tappableBadge: false)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(accent(for: slot).opacity(0.6), lineWidth: 1.5)
-                        .allowsHitTesting(false)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityLabel("\(displayName(for: slot)), \(Copy.Twitch.tapToFocus)")
-        .accessibilityIdentifier("twitch.multi.dock.\(slot.label)")
-    }
-
-    private func multiGridTile(slot: TwitchStreamSlot) -> some View {
-        let isSpotlight = multiMixer.spotlightSlot == slot
-        return ZStack {
-            multiSlotTile(slot: slot, compact: streamCount == 4 && stageSize.width < 600, tappableBadge: true)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    toggleHUD()
-                }
-            if isSpotlight {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(accent(for: slot).opacity(0.9), lineWidth: 2)
-                    .allowsHitTesting(false)
+            dualMode: host.dualStageMode,
+            multiMode: host.multiStageMode,
+            dualFocused: mixer.focusedSlot,
+            spotlight: multiMixer.spotlightSlot,
+            hasVerticalCrease: hasVerticalCrease,
+            hudVisible: hudVisible,
+            compactChrome: compactChrome
+        ) {
+            ForEach(activeSlots) { slot in
+                let geom = geometries[slot] ?? TwitchStageTileGeometry(
+                    slot: slot,
+                    rect: CGRect(origin: .zero, size: effectiveSize),
+                    role: .hero
+                )
+                persistentSlotTile(slot: slot, geometry: geom)
+                    .zIndex(geom.zIndex)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
+        .animation(reduceMotion ? nil : .snappy(duration: 0.24), value: stageLayoutAnimationKey)
     }
 
-    private func multiSlotTile(slot: TwitchStreamSlot, compact: Bool, tappableBadge: Bool) -> some View {
+    /// Renders a single persistent native stream tile with its live video surface, status/error/retry overlay,
+    /// corner identity badge, focus border, and role-appropriate tap target.
+    private func persistentSlotTile(slot: TwitchStreamSlot, geometry: TwitchStageTileGeometry) -> some View {
         let st = host.slotState(for: slot)
-        let isAudible = !host.isMuted && multiMixer.gains.gain(for: slot) > 0.05
-        let isSuspended = multiMixer.suspendedSlots.contains(slot)
-        let isSpotlight = multiMixer.spotlightSlot == slot
+        let compact = geometry.compact
+        let isInset = geometry.role == .inset
+        let isDock = geometry.role == .dock
+        let isSplit = geometry.role == .split
+        let isGrid = geometry.role == .grid
+        let dualSlot: TwitchDualSlot = slot == .a ? .primary : .secondary
+
+        let isAudible: Bool = isMulti
+            ? (!host.isMuted && multiMixer.gains.gain(for: slot) > 0.05)
+            : (mixer.louderSlot == dualSlot && !host.isMuted)
+        let isSuspended: Bool = isMulti
+            ? multiMixer.suspendedSlots.contains(slot)
+            : (mixer.suspendedSlot == dualSlot)
+        let isFocused: Bool = isMulti
+            ? (multiMixer.spotlightSlot == slot)
+            : (mixer.focusedSlot == dualSlot)
+
+        let heroAtBottomLeading = !isMulti && host.dualStageMode == .focusInset && geometry.role == .hero
+        let cornerRadius = geometry.cornerRadius
+        let tileShape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        let borderColor: Color? = {
+            if isInset { return accent(for: slot).opacity(0.85) }
+            if isDock { return accent(for: slot).opacity(0.6) }
+            if (isGrid || isSplit) && isFocused { return accent(for: slot).opacity(0.9) }
+            return nil
+        }()
+        let borderWidth: CGFloat = (isGrid || isSplit) ? 2 : 1.5
 
         return ZStack {
             Color.black
+
+            // Persistent native hardware-decoded video layer (never torn down across mode transitions).
             TwitchNativeSlotSurface(slot: slot, holds: holds, pipActive: host.isPiPOwningViews)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .mediaMask()
                 .allowsHitTesting(false)
 
+            // Role-appropriate full-tile tap catcher placed behind the Retry button and focus badge.
+            tileTapSurface(slot: slot, role: geometry.role)
+
+            // Offline / Playback Error (always shows Retry, even on compact/inset/dock tiles) / Suspended / Loading
             if st.isOffline {
                 VStack(spacing: 4) {
                     Image(systemName: Symbol.Twitch.warn)
@@ -423,6 +323,7 @@ struct TwitchDualStage: View {
                         .lineLimit(1)
                 }
                 .padding(6)
+                .allowsHitTesting(false)
             } else if st.hasPlaybackError {
                 VStack(spacing: compact ? 4 : 8) {
                     Image(systemName: Symbol.Twitch.warn)
@@ -432,19 +333,20 @@ struct TwitchDualStage: View {
                         .font(Font.cobalt(compact ? 10 : 12, .semibold))
                         .foregroundStyle(.white.opacity(0.85))
                         .lineLimit(1)
-                    if !compact {
-                        Button {
-                            host.retrySlot(slot)
-                        } label: {
-                            Label(Copy.Twitch.retry, systemImage: Symbol.Twitch.retry)
-                                .font(Font.cobalt(11.5, .semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .mediaGlassCapsule(interactive: true)
-                        }
-                        .buttonStyle(.plain)
+                    Button {
+                        host.retrySlot(slot)
+                        bumpHUD()
+                    } label: {
+                        Label(Copy.Twitch.retry, systemImage: Symbol.Twitch.retry)
+                            .font(Font.cobalt(compact ? 10.5 : 11.5, .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, compact ? 10 : 12)
+                            .padding(.vertical, compact ? 5 : 6)
+                            .mediaGlassCapsule(interactive: true)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(Copy.Twitch.retry) \(displayName(for: slot))")
+                    .accessibilityIdentifier("twitch.slot.retry.\(slot.label)")
                 }
                 .padding(6)
             } else if isSuspended {
@@ -454,42 +356,127 @@ struct TwitchDualStage: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .mediaGlassCapsule(interactive: false)
+                    .allowsHitTesting(false)
             } else if st.isLoading || st.isBuffering {
                 ProgressView()
                     .tint(.white)
                     .scaleEffect(compact ? 0.72 : 0.95)
+                    .allowsHitTesting(false)
             }
 
+            // Corner identity badge: speaker glyph ONLY on audible stream(s); tappable in Split & Grid modes.
             VStack {
+                if heroAtBottomLeading { Spacer(minLength: 0) }
                 HStack(spacing: 4) {
-                    multiSlotIdentityBadge(
+                    persistentIdentityBadge(
                         slot: slot,
                         compact: compact,
                         isAudible: isAudible,
-                        isSpotlight: isSpotlight,
-                        tappable: tappableBadge
+                        isFocused: isFocused,
+                        tappable: geometry.tappableBadge
                     )
                     Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                if !heroAtBottomLeading { Spacer(minLength: 0) }
             }
-            .padding(compact ? 6 : (showsTopChrome && !compact && host.multiStageMode == .spotlight ? 56 : 8))
-            .allowsHitTesting(tappableBadge)
+            .padding(.horizontal, compact ? 6 : 10)
+            .padding(
+                .top,
+                heroAtBottomLeading
+                    ? 0
+                    : (compact ? 6 : (showsTopChrome && (geometry.role == .hero || isSplit) ? 56 : 8))
+            )
+            .padding(.bottom, heroAtBottomLeading ? (hudVisible ? (compactChrome ? 62 : 74) : 14) : 0)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: hudVisible)
+            .allowsHitTesting(geometry.tappableBadge)
+
+            // Inset top-trailing swap glyph when HUD is visible
+            if isInset && hudVisible {
+                VStack {
+                    HStack {
+                        Spacer(minLength: 0)
+                        Image(systemName: Symbol.Twitch.swapFocus)
+                            .font(.system(size: 9.5, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 22, height: 22)
+                            .mediaGlassCircle(interactive: false)
+                            .padding(6)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+
+            if let borderColor {
+                let strokeRadius: CGFloat = (isGrid || isSplit) ? 4 : cornerRadius
+                RoundedRectangle(cornerRadius: strokeRadius, style: .continuous)
+                    .strokeBorder(borderColor, lineWidth: borderWidth)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipShape(tileShape)
+        .shadow(color: isInset ? .black.opacity(0.45) : .clear, radius: isInset ? 10 : 0, y: isInset ? 4 : 0)
+    }
+
+    @ViewBuilder
+    private func tileTapSurface(slot: TwitchStreamSlot, role: TwitchStageTileRole) -> some View {
+        switch role {
+        case .inset:
+            Button {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
+                    host.swapDualFocus()
+                }
+                bumpHUD()
+            } label: {
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(displayName(for: slot)), \(Copy.Twitch.tapToFocus)")
+            .accessibilityIdentifier("twitch.dual.inset")
+
+        case .dock:
+            Button {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
+                    host.setSpotlight(slot)
+                }
+                bumpHUD()
+            } label: {
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(displayName(for: slot)), \(Copy.Twitch.tapToFocus)")
+            .accessibilityIdentifier("twitch.multi.dock.\(slot.label)")
+
+        case .hero, .grid, .split:
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    toggleHUD()
+                }
         }
     }
 
     @ViewBuilder
-    private func multiSlotIdentityBadge(
+    private func persistentIdentityBadge(
         slot: TwitchStreamSlot,
         compact: Bool,
         isAudible: Bool,
-        isSpotlight: Bool,
+        isFocused: Bool,
         tappable: Bool
     ) -> some View {
+        let dualSlot: TwitchDualSlot = slot == .a ? .primary : .secondary
         let badgeBody = HStack(spacing: 5) {
             Circle()
                 .fill(accent(for: slot))
                 .frame(width: compact ? 6 : 7, height: compact ? 6 : 7)
+                .shadow(color: accent(for: slot).opacity(isFocused ? 0.7 : 0), radius: 3)
             Text(displayName(for: slot))
                 .font(Font.cobalt(compact ? 10 : 11.5, .semibold))
                 .foregroundStyle(.white)
@@ -508,221 +495,12 @@ struct TwitchDualStage: View {
         if tappable {
             Button {
                 withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) {
-                    host.setSpotlight(slot)
-                }
-                bumpHUD()
-            } label: {
-                badgeBody
-                    .frame(minWidth: Metrics.hit, minHeight: Metrics.hit, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(displayName(for: slot)), \(isSpotlight ? Copy.Twitch.watchingNow : Copy.Twitch.tapToFocus)")
-            .accessibilityIdentifier("twitch.multi.focus.\(slot.label)")
-        } else {
-            badgeBody
-                .opacity(hudVisible || compact || isAudible ? 1 : 0)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: hudVisible)
-        }
-    }
-
-    // MARK: - N = 2 Canvases (Focus+Inset & 50/50)
-
-    /// Focus-First default: focused stream fills the stage; secondary stream sits in an interactive 16:9 inset.
-    /// Tap main video toggles HUD visibility ONLY; 1-tap inset swaps focus.
-    private var focusInsetCanvas: some View {
-        let pair = TwitchDualLayout.heroAndInset(focused: mixer.focusedSlot)
-        let insetDims = TwitchDualLayout.insetSize(for: stageSize)
-        let bottomInsetPadding: CGFloat = hudVisible ? (compactChrome ? 62 : 76) : 14
-
-        return ZStack(alignment: .bottomTrailing) {
-            slotTile(slot: pair.hero, isInset: false)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    toggleHUD()
-                }
-
-            // Interactive 16:9 inset tile — 1 tap swaps focus cleanly with zero flash.
-            Button {
-                withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
-                    host.swapDualFocus()
-                }
-                bumpHUD()
-            } label: {
-                slotTile(slot: pair.inset, isInset: true)
-                    .frame(width: insetDims.width, height: insetDims.height)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(alignment: .topTrailing) {
-                        if hudVisible {
-                            Image(systemName: Symbol.Twitch.swapFocus)
-                                .font(.system(size: 9.5, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 22, height: 22)
-                                .mediaGlassCircle(interactive: false)
-                                .padding(6)
-                                .transition(.opacity)
-                        }
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(accent(for: pair.inset).opacity(0.85), lineWidth: 1.5)
-                    }
-                    .shadow(color: .black.opacity(0.45), radius: 10, y: 4)
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 12)
-            .padding(.bottom, bottomInsetPadding)
-            .accessibilityLabel("\(displayName(for: pair.inset)), \(Copy.Twitch.tapToFocus)")
-            .accessibilityIdentifier("twitch.dual.inset")
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: bottomInsetPadding)
-        }
-    }
-
-    /// 50/50 split: side-by-side ONLY when `width / height > 16 / 9`, stacked vertically everywhere else.
-    /// Tap video toggles HUD ONLY; tap a stream's focus pill focuses that stream.
-    @ViewBuilder
-    private var split5050Canvas: some View {
-        let axis = TwitchDualLayout.splitAxis(for: stageSize)
-        let layout = axis == .horizontal
-            ? AnyLayout(HStackLayout(spacing: 2))
-            : AnyLayout(VStackLayout(spacing: 2))
-        layout {
-            splitTile(for: .primary)
-            splitTile(for: .secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func splitTile(for slot: TwitchDualSlot) -> some View {
-        let isFocused = mixer.focusedSlot == slot
-        return ZStack(alignment: .topLeading) {
-            slotTile(slot: slot, isInset: false)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    toggleHUD()
-                }
-
-            if isFocused {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(accent(for: slot).opacity(0.9), lineWidth: 2)
-                    .allowsHitTesting(false)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-    }
-
-    /// Renders a single native stream slot plus its status/loading/offline state and single-speaker indicator.
-    private func slotTile(slot: TwitchDualSlot, isInset: Bool) -> some View {
-        let isLoading = slot == .primary ? host.isLoading : host.secondaryIsLoading
-        let isBuffering = slot == .primary ? host.isBuffering : host.secondaryIsBuffering
-        let isOffline = slot == .primary ? host.isOffline : host.secondaryIsOffline
-        let hasPlaybackError = slot == .primary ? host.hasPlaybackError : host.secondaryHasPlaybackError
-        let isLouder = mixer.louderSlot == slot && !host.isMuted
-        let isSuspended = mixer.suspendedSlot == slot
-        let isFocused = mixer.focusedSlot == slot
-        let heroAtBottomLeading = host.dualStageMode == .focusInset && !isInset
-
-        return ZStack {
-            Color.black
-            TwitchNativeSlotSurface(slot: slot, holds: holds, pipActive: host.isPiPOwningViews)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .mediaMask()
-                .allowsHitTesting(false)
-
-            if isOffline {
-                VStack(spacing: 4) {
-                    Image(systemName: Symbol.Twitch.warn)
-                        .font(.system(size: isInset ? 14 : 20, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.8))
-                    Text("\(displayName(for: slot)) · \(Copy.Twitch.offline)")
-                        .font(Font.cobalt(isInset ? 10 : 12.5, .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(1)
-                }
-                .padding(6)
-            } else if hasPlaybackError {
-                VStack(spacing: isInset ? 4 : 8) {
-                    Image(systemName: Symbol.Twitch.warn)
-                        .font(.system(size: isInset ? 14 : 20, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.8))
-                    Text("\(displayName(for: slot)) · \(Copy.Twitch.streamError)")
-                        .font(Font.cobalt(isInset ? 10 : 12.5, .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(1)
-                    if !isInset {
-                        Button {
-                            host.retrySlot(slot == .primary ? .a : .b)
-                        } label: {
-                            Label(Copy.Twitch.retry, systemImage: Symbol.Twitch.retry)
-                                .font(Font.cobalt(12, .semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .mediaGlassCapsule(interactive: true)
-                        }
-                        .buttonStyle(.plain)
+                    if isMulti {
+                        host.setSpotlight(slot)
+                    } else {
+                        host.setDualFocus(dualSlot)
                     }
                 }
-                .padding(6)
-            } else if isSuspended {
-                Label(Copy.Twitch.suspendedOnLock, systemImage: Symbol.Twitch.locked)
-                    .font(Font.cobalt(isInset ? 10 : 12, .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .mediaGlassCapsule(interactive: false)
-            } else if isLoading || isBuffering {
-                ProgressView()
-                    .tint(.white)
-                    .scaleEffect(isInset ? 0.75 : 1.0)
-            }
-
-            // Corner identity badge: speaker glyph ONLY on the louder stream (`dualMixer.louderSlot`).
-            // In Focus-Inset mode, anchor the hero badge bottom-leading above the bottom glass bar so the top edge
-            // stays completely clear for the compact `A · B` header pill.
-            VStack {
-                if heroAtBottomLeading { Spacer(minLength: 0) }
-                HStack(spacing: 4) {
-                    slotIdentityBadge(slot: slot, isInset: isInset, isLouder: isLouder, isFocused: isFocused)
-                    Spacer(minLength: 0)
-                }
-                if !heroAtBottomLeading { Spacer(minLength: 0) }
-            }
-            .padding(.horizontal, isInset ? 6 : 10)
-            .padding(.top, heroAtBottomLeading ? 0 : (isInset ? 6 : (showsTopChrome ? 56 : 10)))
-            .padding(.bottom, heroAtBottomLeading ? (hudVisible ? (compactChrome ? 62 : 74) : 14) : 0)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: hudVisible)
-            .allowsHitTesting(host.dualStageMode == .split5050 && !isInset)
-        }
-    }
-
-    @ViewBuilder
-    private func slotIdentityBadge(slot: TwitchDualSlot, isInset: Bool, isLouder: Bool, isFocused: Bool) -> some View {
-        let badgeBody = HStack(spacing: 5) {
-            Circle()
-                .fill(accent(for: slot))
-                .frame(width: isInset ? 6 : 7, height: isInset ? 6 : 7)
-                .shadow(color: accent(for: slot).opacity(isFocused ? 0.7 : 0), radius: 3)
-            Text(displayName(for: slot))
-                .font(Font.cobalt(isInset ? 10.5 : 12, .semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-            if isLouder {
-                Image(systemName: Symbol.Twitch.unmuted)
-                    .font(.system(size: isInset ? 9.5 : 11, weight: .bold))
-                    .foregroundStyle(.white)
-                    .accessibilityLabel(Copy.Twitch.audioMixerLabel)
-            }
-        }
-        .padding(.horizontal, isInset ? 7 : 10)
-        .padding(.vertical, isInset ? 4 : 6)
-        .mediaGlassCapsule(interactive: host.dualStageMode == .split5050 && !isInset)
-
-        if host.dualStageMode == .split5050 && !isInset {
-            Button {
-                host.setDualFocus(slot)
                 bumpHUD()
             } label: {
                 badgeBody
@@ -731,10 +509,10 @@ struct TwitchDualStage: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(displayName(for: slot)), \(isFocused ? Copy.Twitch.watchingNow : Copy.Twitch.tapToFocus)")
-            .accessibilityIdentifier("twitch.dual.focus.\(slot.rawValue)")
+            .accessibilityIdentifier(isMulti ? "twitch.multi.focus.\(slot.label)" : "twitch.dual.focus.\(dualSlot.rawValue)")
         } else {
             badgeBody
-                .opacity(hudVisible || isInset || isLouder ? 1 : 0)
+                .opacity(hudVisible || compact || isAudible ? 1 : 0)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: hudVisible)
         }
     }
@@ -1535,6 +1313,51 @@ struct TwitchDualAudioMixerControl: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibility)
+    }
+}
+
+// MARK: - Persistent Stage Layout
+
+/// Positions persistent multi-stream tiles (`ForEach(activeSlots)`) using exact `TwitchMultiLayout.stageGeometries`
+/// rects so mode transitions (Spotlight <-> Grid, Focus+Inset <-> 50/50, dock tap, rotation) animate frame changes
+/// without ever destroying or reparenting `TwitchNativeSlotSurface` video layers.
+private struct TwitchStageCanvasLayout: Layout {
+    let slots: [TwitchStreamSlot]
+    let count: Int
+    let dualMode: TwitchDualStageMode
+    let multiMode: TwitchMultiStageMode
+    let dualFocused: TwitchDualSlot
+    let spotlight: TwitchStreamSlot
+    let hasVerticalCrease: Bool
+    let hudVisible: Bool
+    let compactChrome: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let geometries = TwitchMultiLayout.stageGeometries(
+            count: count,
+            stageSize: bounds.size,
+            dualMode: dualMode,
+            multiMode: multiMode,
+            dualFocused: dualFocused,
+            spotlight: spotlight,
+            hasVerticalCrease: hasVerticalCrease,
+            hudVisible: hudVisible,
+            compactChrome: compactChrome
+        )
+        for (index, subview) in subviews.enumerated() where index < slots.count {
+            let slot = slots[index]
+            let rect = geometries[slot]?.rect ?? CGRect(origin: .zero, size: bounds.size)
+            subview.place(
+                at: CGPoint(x: bounds.minX + rect.minX, y: bounds.minY + rect.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: rect.width, height: rect.height)
+            )
+        }
     }
 }
 

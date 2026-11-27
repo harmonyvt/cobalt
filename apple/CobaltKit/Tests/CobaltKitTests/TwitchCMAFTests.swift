@@ -1151,7 +1151,11 @@ struct TwitchNativeEngineCMAFTests {
         #expect(diag["reason"] == .string("unsupported codec: hevc"))
 
         // Verify zero PII (no channel login, auth token, or URLs) in diagnostic telemetry metadata.
-        let allowedKeys: Set<String> = ["container", "hasMap", "samples", "keyframes", "segments", "variant", "reason"]
+        let allowedKeys: Set<String> = [
+            "container", "hasMap", "samples", "keyframes", "segments", "variant", "reason",
+            "slot", "phase", "playlist_polls", "init_map_ok", "init_map_ms",
+            "prefetch_fallback", "low_latency", "is_prefetch", "is_ad", "elapsed_ms",
+        ]
         #expect(Set(diag.keys).isSubset(of: allowedKeys))
         for (_, value) in diag {
             if case .string(let s) = value {

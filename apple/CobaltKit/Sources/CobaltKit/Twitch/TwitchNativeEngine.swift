@@ -754,7 +754,12 @@ private final class SampleBufferPipeline: @unchecked Sendable {
         guard vr.status == .failed || vr.requiresFlushToResumeDecoding else { return }
         let wasFailed = vr.status == .failed
         let neededFlush = vr.requiresFlushToResumeDecoding
-        Telemetry.log(.info, .live, "twitch.native.video_flush", data: ["failed": .bool(wasFailed)])
+        Telemetry.log(
+            wasFailed ? .warn : .info,
+            .live,
+            "twitch.native.video_flush",
+            data: ["failed": .bool(wasFailed), "requires_flush": .bool(neededFlush)]
+        )
         vr.flush()
         pendingVideo.removeAll(keepingCapacity: true)
         awaitingKeyframe = true
@@ -1041,6 +1046,7 @@ public actor TwitchNativeEngine {
     private let customSegmentStreamer: SegmentStreamer?
     private let startupTimeout: Duration
     private let firstJoinPrefetchTimeout: Duration
+    private let initMapTimeout: Duration
     private let emptyPlaylistRefreshPolls: Int
     private let audioSession: AudioSessionCoordinator
     private let audioClaimID = "twitch.native.\(UUID().uuidString)"
@@ -1054,10 +1060,20 @@ public actor TwitchNativeEngine {
     private var loadedInitMapKey: InitMapCacheKey?
 
     // Non-PII startup/failure diagnostics for PostHog telemetry.
+    private var diagSlotTag: String?
+    private var diagPhase = "idle"
     private var diagHasMap = false
     private var diagSamples = 0
     private var diagKeyframes = 0
     private var diagSegments = 0
+    private var diagPlaylistPolls = 0
+    private var diagInitMapOK: Bool?
+    private var diagInitMapMs: Int?
+    private var diagPrefetchFallbackUsed = false
+    private var diagFirstSegmentIsPrefetch: Bool?
+    private var diagFirstSegmentIsAd: Bool?
+    private var diagLowLatency: Bool?
+    private var diagStartInstant: ContinuousClock.Instant?
 
     private var onEvent: EventHandler?
     private var onSamples: SampleTap?
@@ -1067,6 +1083,7 @@ public actor TwitchNativeEngine {
     private var variants: [TwitchVariant] = []
     private var selectedVariant: TwitchVariant?
     private var preferredVariantID: String?
+    private var startupBudgetHint: TwitchQualityBudgetHint?
 
     private var userPaused = false
     private var isInterrupted = false
@@ -1089,6 +1106,7 @@ public actor TwitchNativeEngine {
         resolver: TwitchStreamResolver = TwitchStreamResolver(),
         startupTimeout: Duration = .seconds(12),
         firstJoinPrefetchTimeout: Duration = .seconds(4),
+        initMapTimeout: Duration = .seconds(4.5),
         emptyPlaylistRefreshPolls: Int = 10,
         segmentStreamer: SegmentStreamer? = nil,
         audioSession: AudioSessionCoordinator = .shared
@@ -1096,6 +1114,7 @@ public actor TwitchNativeEngine {
         self.resolver = resolver
         self.startupTimeout = startupTimeout
         self.firstJoinPrefetchTimeout = firstJoinPrefetchTimeout
+        self.initMapTimeout = initMapTimeout
         self.emptyPlaylistRefreshPolls = max(2, emptyPlaylistRefreshPolls)
         self.customSegmentStreamer = segmentStreamer
         self.audioSession = audioSession
@@ -1132,7 +1151,13 @@ public actor TwitchNativeEngine {
         pipeline.recoverVideoRenderer()
     }
 
-    public func start(channel: String, authToken: String?, preferredVariantID: String? = nil) {
+    public func start(
+        channel: String,
+        authToken: String?,
+        preferredVariantID: String? = nil,
+        slotTag: String? = nil,
+        budgetHint: TwitchQualityBudgetHint? = nil
+    ) {
         let clean = TwitchStreamResolver.sanitize(channel)
         guard !clean.isEmpty else { return }
         registerAudioObserverIfNeeded()
@@ -1140,6 +1165,10 @@ public actor TwitchNativeEngine {
         self.channel = clean
         self.authToken = authToken
         self.preferredVariantID = preferredVariantID
+        self.diagSlotTag = slotTag
+        self.startupBudgetHint = budgetHint
+        self.diagPhase = "resolving"
+        self.diagStartInstant = .now
         self.userPaused = false
         self.isInterrupted = false
         self.stallRecoveries = 0
@@ -1184,7 +1213,9 @@ public actor TwitchNativeEngine {
             guard let ch = channel else { return }
             let auth = authToken
             let pref = selectedVariant?.id ?? preferredVariantID
-            start(channel: ch, authToken: auth, preferredVariantID: pref)
+            let tag = diagSlotTag
+            let hint = startupBudgetHint
+            start(channel: ch, authToken: auth, preferredVariantID: pref, slotTag: tag, budgetHint: hint)
         }
     }
 
@@ -1358,6 +1389,7 @@ public actor TwitchNativeEngine {
         if playing {
             loadingSince = nil
             stallRecoveries = 0
+            diagPhase = "playing"
         }
         emit(playing ? .playing : .paused)
     }
@@ -1480,6 +1512,24 @@ public actor TwitchNativeEngine {
         diagSamples = 0
         diagKeyframes = 0
         diagSegments = 0
+        diagPlaylistPolls = 0
+        diagInitMapOK = nil
+        diagInitMapMs = nil
+        diagPrefetchFallbackUsed = false
+        diagFirstSegmentIsPrefetch = nil
+        diagFirstSegmentIsAd = nil
+        diagLowLatency = nil
+    }
+
+    private static func elapsedMilliseconds(since instant: ContinuousClock.Instant) -> Int {
+        let elapsed = ContinuousClock.now - instant
+        let ms = elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000
+        return Int(max(0, ms))
+    }
+
+    /// Public non-PII snapshot of this engine's current container/startup telemetry (used by `TwitchPlayerHost` on `twitch_stream_ready`).
+    public func diagnosticSnapshot() -> [String: TelemetryValue] {
+        diagnosticData(reason: nil)
     }
 
     func diagnosticData(reason: String? = nil) -> [String: TelemetryValue] {
@@ -1489,9 +1539,33 @@ public actor TwitchNativeEngine {
             "samples": .int(diagSamples),
             "keyframes": .int(diagKeyframes),
             "segments": .int(diagSegments),
+            "phase": .string(diagPhase),
+            "playlist_polls": .int(diagPlaylistPolls),
+            "prefetch_fallback": .bool(diagPrefetchFallbackUsed),
         ]
+        if let slot = diagSlotTag {
+            data["slot"] = .string(slot)
+        }
         if let variantID = selectedVariant?.id {
             data["variant"] = .string(variantID)
+        }
+        if let ok = diagInitMapOK {
+            data["init_map_ok"] = .bool(ok)
+        }
+        if let ms = diagInitMapMs {
+            data["init_map_ms"] = .int(ms)
+        }
+        if let ll = diagLowLatency {
+            data["low_latency"] = .bool(ll)
+        }
+        if let isPrefetch = diagFirstSegmentIsPrefetch {
+            data["is_prefetch"] = .bool(isPrefetch)
+        }
+        if let isAd = diagFirstSegmentIsAd {
+            data["is_ad"] = .bool(isAd)
+        }
+        if let started = diagStartInstant {
+            data["elapsed_ms"] = .int(Self.elapsedMilliseconds(since: started))
         }
         if let reason {
             data["reason"] = .string(reason)
@@ -1545,22 +1619,48 @@ public actor TwitchNativeEngine {
         return flushed
     }
 
-    private func fetchInitSegmentData(url: URL, byteRange: TwitchByteRange?) async throws -> Data {
-        if let customSegmentStreamer {
-            var collected = Data()
-            for try await chunk in customSegmentStreamer(url) {
-                collected.append(chunk)
-            }
-            if let range = byteRange {
-                let start = max(0, range.offset)
-                let end = min(collected.count, start + range.length)
-                if start <= end && start < collected.count {
-                    return collected.subdata(in: start..<end)
+    private enum InitMapFetchResult: Sendable {
+        case data(Data)
+        case timedOut
+        case failed
+    }
+
+    private func fetchInitSegmentData(url: URL, byteRange: TwitchByteRange?) async -> InitMapFetchResult {
+        let timeout = initMapTimeout
+        let custom = customSegmentStreamer
+        let session = streamer
+        return await withTaskGroup(of: InitMapFetchResult.self) { group in
+            group.addTask {
+                do {
+                    if let custom {
+                        var collected = Data()
+                        for try await chunk in custom(url) {
+                            try Task.checkCancellation()
+                            collected.append(chunk)
+                        }
+                        if let range = byteRange {
+                            let start = max(0, range.offset)
+                            let end = min(collected.count, start + range.length)
+                            if start <= end && start < collected.count {
+                                return .data(collected.subdata(in: start..<end))
+                            }
+                        }
+                        return .data(collected)
+                    }
+                    let fetched = try await session.fetchData(url: url, byteRange: byteRange)
+                    return .data(fetched)
+                } catch {
+                    return .failed
                 }
             }
-            return collected
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return .timedOut
+            }
+            let first = await group.next() ?? .failed
+            group.cancelAll()
+            return first
         }
-        return try await streamer.fetchData(url: url, byteRange: byteRange)
     }
 
     private func ensureInitSegmentLoaded(url: URL, byteRange: TwitchByteRange?, gen: UInt64) async -> Bool {
@@ -1572,10 +1672,18 @@ public actor TwitchNativeEngine {
         let data: Data
         if let cached = initSegmentCache[key] {
             data = cached
+            if diagInitMapOK == nil {
+                diagInitMapOK = true
+                diagInitMapMs = 0
+            }
         } else {
-            do {
-                let fetched = try await fetchInitSegmentData(url: url, byteRange: byteRange)
-                guard gen == generation, !Task.isCancelled, !fetched.isEmpty else { return false }
+            let started = ContinuousClock.now
+            let result = await fetchInitSegmentData(url: url, byteRange: byteRange)
+            let ms = Self.elapsedMilliseconds(since: started)
+            guard gen == generation, !Task.isCancelled else { return false }
+
+            switch result {
+            case .data(let fetched) where !fetched.isEmpty:
                 data = fetched
                 initSegmentCache[key] = fetched
                 initSegmentCacheOrder.append(key)
@@ -1583,7 +1691,39 @@ public actor TwitchNativeEngine {
                     let evicted = initSegmentCacheOrder.removeFirst()
                     initSegmentCache.removeValue(forKey: evicted)
                 }
-            } catch {
+                diagInitMapOK = true
+                diagInitMapMs = ms
+                if ms > 2_000 {
+                    var info: [String: TelemetryValue] = [
+                        "ok": .bool(true),
+                        "ms": .int(ms),
+                        "bytes": .int(fetched.count),
+                        "timed_out": .bool(false),
+                    ]
+                    if let slot = diagSlotTag { info["slot"] = .string(slot) }
+                    Telemetry.log(.warn, .live, "twitch.native.init_map", data: info)
+                }
+            case .timedOut:
+                diagInitMapOK = false
+                diagInitMapMs = ms
+                var info: [String: TelemetryValue] = [
+                    "ok": .bool(false),
+                    "ms": .int(ms),
+                    "timed_out": .bool(true),
+                ]
+                if let slot = diagSlotTag { info["slot"] = .string(slot) }
+                Telemetry.log(.warn, .live, "twitch.native.init_map", data: info)
+                return false
+            case .data, .failed:
+                diagInitMapOK = false
+                diagInitMapMs = ms
+                var info: [String: TelemetryValue] = [
+                    "ok": .bool(false),
+                    "ms": .int(ms),
+                    "timed_out": .bool(false),
+                ]
+                if let slot = diagSlotTag { info["slot"] = .string(slot) }
+                Telemetry.log(.warn, .live, "twitch.native.init_map", data: info)
                 return false
             }
         }
@@ -1609,6 +1749,7 @@ public actor TwitchNativeEngine {
 
     private func runSession(gen: UInt64) async {
         guard let ch = channel else { return }
+        diagPhase = "resolving"
         do {
             let resolved = try await resolver.resolveStream(channel: ch, authToken: authToken)
             guard gen == generation, !Task.isCancelled else { return }
@@ -1621,6 +1762,7 @@ public actor TwitchNativeEngine {
             variants = resolved.variants
             let chosen = pickVariant(from: compatible, preferredID: preferredVariantID)
             selectedVariant = chosen
+            diagPhase = "resolved"
             emit(.streamURL(resolved.masterURL))
             emit(.variants(compatible, selectedID: chosen.id))
             await streamVariantLoop(variant: chosen, gen: gen)
@@ -1643,6 +1785,10 @@ public actor TwitchNativeEngine {
     private func pickVariant(from compatible: [TwitchVariant], preferredID: String?) -> TwitchVariant {
         if let preferredID, let exact = compatible.first(where: { $0.id == preferredID }) {
             return exact
+        }
+        if let hint = startupBudgetHint,
+           let budgeted = TwitchQualityBudgetPolicy.preferredVariant(from: compatible, hint: hint) {
+            return budgeted
         }
         // Default to the best video variant (source / highest bandwidth), never audio-only unless that's all there is.
         if let video = compatible.first(where: { !$0.isAudioOnly }) {
@@ -1705,10 +1851,15 @@ public actor TwitchNativeEngine {
 
         while gen == generation, !Task.isCancelled {
             // 1. Poll the live media playlist.
+            if lastConsumedSeq == nil {
+                diagPhase = "polling"
+            }
             let playlist: TwitchMediaPlaylist
             do {
                 let receivedAt = Date.now
                 playlist = try await resolver.fetchMediaPlaylist(url: activeVariant.url)
+                diagPlaylistPolls += 1
+                diagLowLatency = playlist.isLowLatency
                 playlistFailures = 0
                 if playlist.hasInitMap {
                     diagHasMap = true
@@ -1865,9 +2016,24 @@ public actor TwitchNativeEngine {
 
             // 3. Consume `current` (reusing overlapped fetch if we already started it on the previous turn!).
             let isFirstJoin = (lastConsumedSeq == nil)
-            let keyframeLimit: Duration? = (isFirstJoin && current.isPrefetch && !startupCompletedFallbackUsed)
-                ? firstJoinPrefetchTimeout
-                : nil
+            if isFirstJoin {
+                diagPhase = "first_segment"
+                diagFirstSegmentIsPrefetch = current.isPrefetch
+                diagFirstSegmentIsAd = current.isAd
+            }
+            let keyframeLimit: Duration?
+            if isFirstJoin {
+                if current.isPrefetch && !startupCompletedFallbackUsed {
+                    keyframeLimit = firstJoinPrefetchTimeout
+                } else {
+                    // Bound non-prefetch first-join segments too so a stalled CMAF edge/ad splice fails fast and retries.
+                    keyframeLimit = startupTimeout < .seconds(2)
+                        ? firstJoinPrefetchTimeout
+                        : max(firstJoinPrefetchTimeout, .seconds(6))
+                }
+            } else {
+                keyframeLimit = nil
+            }
             let result = await consumeSegment(
                 current,
                 gen: gen,
@@ -1887,13 +2053,24 @@ public actor TwitchNativeEngine {
             let missingInitialKeyframe = isFirstJoin && current.isPrefetch && !activeVariant.isAudioOnly && !result.hadKeyframe
             if isFirstJoin && current.isPrefetch && (!result.succeeded || missingInitialKeyframe) && !startupCompletedFallbackUsed {
                 startupCompletedFallbackUsed = true
+                diagPrefetchFallbackUsed = true
                 cancelOverlap()
-                Telemetry.log(
-                    .info, .live, "twitch.native.prefetch_fallback",
-                    data: ["ok": .bool(result.succeeded), "keyframe": .bool(result.hadKeyframe)]
-                )
+                var fbLog: [String: TelemetryValue] = [
+                    "ok": .bool(result.succeeded),
+                    "keyframe": .bool(result.hadKeyframe),
+                ]
+                if let slot = diagSlotTag { fbLog["slot"] = .string(slot) }
+                Telemetry.log(.info, .live, "twitch.native.prefetch_fallback", data: fbLog)
                 if let fallbackSeg = playlist.segments.last {
-                    let fb = await consumeSegment(fallbackSeg, gen: gen, firstKeyframeTimeout: nil, audioOnly: activeVariant.isAudioOnly)
+                    let fbLimit: Duration = startupTimeout < .seconds(2)
+                        ? firstJoinPrefetchTimeout
+                        : max(firstJoinPrefetchTimeout, .seconds(6))
+                    let fb = await consumeSegment(
+                        fallbackSeg,
+                        gen: gen,
+                        firstKeyframeTimeout: fbLimit,
+                        audioOnly: activeVariant.isAudioOnly
+                    )
                     guard gen == generation, !Task.isCancelled else { return }
                     if let bad = activeUnsupportedVideoCodec {
                         failSession(gen: gen, reason: "unsupported codec: \(bad)")
@@ -1951,7 +2128,9 @@ public actor TwitchNativeEngine {
 
     private func refreshStreamURL(preferredID: String, attempt: Int) async -> RefreshResult {
         guard let ch = channel else { return .failed }
-        Telemetry.log(.info, .live, "twitch.native.token_refresh", data: ["attempt": .int(attempt)])
+        var refreshData: [String: TelemetryValue] = ["attempt": .int(attempt)]
+        if let slot = diagSlotTag { refreshData["slot"] = .string(slot) }
+        Telemetry.log(.info, .live, "twitch.native.token_refresh", data: refreshData)
         do {
             let refreshed = try await resolver.resolveStream(channel: ch, authToken: authToken)
             let compat = refreshed.variants.filter(\.isNativeCompatible)
@@ -2066,7 +2245,7 @@ public actor TwitchNativeEngine {
             return out
         }
 
-        // Wrap in an OverlappedSegmentFetch when `firstKeyframeTimeout` is active so a stalled first-join prefetch aborts cleanly on deadline.
+        // Wrap in an OverlappedSegmentFetch when `firstKeyframeTimeout` is active so a stalled first-join segment aborts cleanly on deadline.
         if activeFetch == nil, firstKeyframeTimeout != nil {
             let fetch = OverlappedSegmentFetch(segment: segment)
             await fetch.start(stream: activeSegmentStream())
@@ -2074,11 +2253,27 @@ public actor TwitchNativeEngine {
         }
 
         if let fetch = activeFetch {
+            final class TimeoutFlag: @unchecked Sendable {
+                private let lock = NSLock()
+                private var triggered = false
+                func trigger() {
+                    lock.lock()
+                    triggered = true
+                    lock.unlock()
+                }
+                var isTriggered: Bool {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    return triggered
+                }
+            }
+            let timeoutFlag = TimeoutFlag()
             var timeoutTask: Task<Void, Never>?
             if let limit = firstKeyframeTimeout {
                 timeoutTask = Task {
                     try? await Task.sleep(for: limit)
                     guard !Task.isCancelled else { return }
+                    timeoutFlag.trigger()
                     await fetch.cancel()
                 }
             }
@@ -2107,6 +2302,16 @@ public actor TwitchNativeEngine {
                 return SegmentConsumeResult(succeeded: true, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
             } catch {
                 await fetch.cancel()
+                if timeoutFlag.isTriggered {
+                    var info: [String: TelemetryValue] = [
+                        "is_prefetch": .bool(segment.isPrefetch),
+                        "is_ad": .bool(segment.isAd),
+                        "has_map": .bool(segment.initMapURL != nil),
+                        "samples": .int(totalSamples),
+                    ]
+                    if let slot = diagSlotTag { info["slot"] = .string(slot) }
+                    Telemetry.log(.warn, .live, "twitch.native.segment_timeout", data: info)
+                }
                 _ = beginActiveDiscontinuity()
                 return SegmentConsumeResult(succeeded: false, sampleCount: totalSamples, hadKeyframe: hadKeyframe)
             }

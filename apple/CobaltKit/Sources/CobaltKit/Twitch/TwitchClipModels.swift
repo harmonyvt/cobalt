@@ -15,17 +15,36 @@ public struct RecordedChatBadge: Sendable, Equatable, Hashable, Codable {
     public var id: String
     public var title: String
     public var url: URL
+    public var animated: Bool
 
-    public init(id: String, title: String, url: URL) {
+    public init(id: String, title: String, url: URL, animated: Bool = false) {
         self.id = id
         self.title = title
         self.url = url
+        self.animated = animated
     }
 
     public init(_ badge: ChatBadge) {
         self.id = badge.id
         self.title = badge.title
         self.url = badge.url
+        self.animated = badge.animated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, url, animated
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.title = try c.decode(String.self, forKey: .title)
+        self.url = try c.decode(URL.self, forKey: .url)
+        self.animated = try c.decodeIfPresent(Bool.self, forKey: .animated) ?? false
+    }
+
+    public var asChatBadge: ChatBadge {
+        ChatBadge(id: id, title: title, url: url, animated: animated)
     }
 }
 
@@ -59,6 +78,18 @@ public struct RecordedChatEmote: Sendable, Equatable, Hashable, Codable {
         self.zeroWidth = emote.zeroWidth
         self.aspect = emote.aspect
         self.source = emote.source.rawValue
+    }
+
+    public var asChatEmote: ChatEmote {
+        ChatEmote(
+            id: id,
+            name: name,
+            url: url,
+            animated: animated,
+            zeroWidth: zeroWidth,
+            aspect: aspect,
+            source: ChatEmote.Source(rawValue: source) ?? .sevenTv
+        )
     }
 }
 
@@ -99,6 +130,17 @@ public struct RecordedChatPaint: Sendable, Equatable, Hashable, Codable {
         self.angle = paint.angle
         self.stops = paint.resolvedStops.map { Stop(at: $0.at, rgba: $0.rgba) }
         self.color = paint.color
+    }
+
+    public var asSevenTvPaint: SevenTvPaint {
+        SevenTvPaint(
+            id: id,
+            name: name,
+            kind: SevenTvPaint.Kind(rawValue: kind) ?? .linear,
+            angle: angle,
+            stops: stops.map { SevenTvPaint.Stop(at: $0.at, rgba: $0.rgba) },
+            color: color
+        )
     }
 }
 
@@ -163,7 +205,12 @@ public struct RecordedChatEntry: Sendable, Equatable, Hashable, Codable, Identif
         self.notice = notice
     }
 
-    public init?(line: TwitchChatLine, clipRelativeSeconds t: Double, paint: SevenTvPaint?) {
+    public init?(
+        line: TwitchChatLine,
+        clipRelativeSeconds t: Double,
+        paint: SevenTvPaint?,
+        sevenTvBadge: ChatBadge? = nil
+    ) {
         guard !line.deleted else { return nil }
         switch line.kind {
         case .system:
@@ -184,13 +231,70 @@ public struct RecordedChatEntry: Sendable, Equatable, Hashable, Codable, Identif
         self.displayName = line.displayName.isEmpty ? line.login : line.displayName
         self.color = line.color
         self.paint = paint.map(RecordedChatPaint.init)
-        self.badges = line.badges.map(RecordedChatBadge.init)
+        var allBadges = line.badges.map(RecordedChatBadge.init)
+        if let sevenTvBadge, !allBadges.contains(where: { $0.id == sevenTvBadge.id }) {
+            allBadges.append(RecordedChatBadge(sevenTvBadge))
+        }
+        self.badges = allBadges
         self.fragments = line.fragments.map(RecordedChatFragment.init)
     }
 
-    /// Plain text body (used for clear-text fallback, accessibility, and GIF/MP4 rendering).
+    /// Plain text body (space-preserving across emote/text boundaries for clear-text fallback and accessibility).
     public var plainText: String {
-        fragments.map(\.plainText).joined()
+        var out = ""
+        for frag in fragments {
+            let part = frag.plainText
+            guard !part.isEmpty else { continue }
+            if !out.isEmpty,
+               let last = out.last, !last.isWhitespace,
+               let first = part.first, !first.isWhitespace {
+                out.append(" ")
+            }
+            out.append(part)
+        }
+        return out
+    }
+
+    /// Wrap-able visual pieces for live clip editor preview (reusing `TwitchFlow` / `TwitchEmoteView`),
+    /// stacking zero-width emotes onto their preceding base emote and falling back to words when `showEmotes` is false.
+    public func renderPieces(showEmotes: Bool = true) -> [ChatRenderPiece] {
+        var out: [ChatRenderPiece] = []
+        out.reserveCapacity(fragments.count * 2)
+        for frag in fragments {
+            switch frag {
+            case .text(let s):
+                for w in s.split(separator: " ", omittingEmptySubsequences: true) {
+                    out.append(.word(String(w)))
+                }
+            case .emote(let e):
+                if showEmotes {
+                    let chatEmote = e.asChatEmote
+                    if chatEmote.zeroWidth, let lastIdx = out.indices.last,
+                       case .emote(let prevBase, var prevOverlays) = out[lastIdx] {
+                        prevOverlays.append(chatEmote)
+                        out[lastIdx] = .emote(prevBase, prevOverlays)
+                    } else {
+                        out.append(.emote(chatEmote, []))
+                    }
+                } else {
+                    out.append(.word(e.name))
+                }
+            case .stack(let base, let overlays):
+                if showEmotes {
+                    out.append(.emote(base.asChatEmote, overlays.map(\.asChatEmote)))
+                } else {
+                    out.append(.word(base.name))
+                    for over in overlays {
+                        out.append(.word(over.name))
+                    }
+                }
+            case .mention(let m):
+                out.append(.mention(m))
+            case .link(let u):
+                out.append(.link(u))
+            }
+        }
+        return out
     }
 
     /// Deterministic Twitch-style name color when the user has not chosen one.

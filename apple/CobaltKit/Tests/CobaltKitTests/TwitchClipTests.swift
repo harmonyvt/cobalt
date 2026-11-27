@@ -440,4 +440,317 @@ struct TwitchClipTests {
         #expect(afterClip.isSaving == false)
         #expect(afterClip.savingKind == nil)
     }
+
+    // MARK: - 7TV / Twitch Emotes (Animated & Static), Spacing, Backfill, and Overlay Rasterizer
+
+    private static func makeSolidCGImage(width: Int = 32, height: Int = 32, r: UInt8, g: UInt8, b: UInt8) throws -> CGImage {
+        let cs = CGColorSpaceCreateDeviceRGB()
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            pixels[i] = r
+            pixels[i + 1] = g
+            pixels[i + 2] = b
+            pixels[i + 3] = 255
+        }
+        let ctx = try #require(CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        return try #require(ctx.makeImage())
+    }
+
+    @Test func recordedChatBadgeBackwardCompatAndPlainTextSpacing() throws {
+        // Legacy JSON without `animated` decodes cleanly with `animated == false`
+        let legacyJSON = Data(#"{"id":"subscriber/12","title":"1-Year Sub","url":"https://example.invalid/badge.png"}"#.utf8)
+        let decodedLegacy = try JSONDecoder().decode(RecordedChatBadge.self, from: legacyJSON)
+        #expect(decodedLegacy.animated == false)
+        #expect(decodedLegacy.id == "subscriber/12")
+
+        let animBadge = RecordedChatBadge(
+            id: "7tv/vip",
+            title: "7TV",
+            url: URL(string: "https://example.invalid/7tv-badge.webp")!,
+            animated: true
+        )
+        let roundTrip = try JSONDecoder().decode(RecordedChatBadge.self, from: JSONEncoder().encode(animBadge))
+        #expect(roundTrip.animated == true)
+
+        // Emote + text boundary inserts a space instead of jamming `rcdMadgewhy block ceo man`
+        let madge = RecordedChatEmote(
+            id: "7tv:madge",
+            name: "rcdMadge",
+            url: URL(string: "https://example.invalid/madge.webp")!,
+            animated: true,
+            zeroWidth: false
+        )
+        let hat = RecordedChatEmote(
+            id: "7tv:hat",
+            name: "SantaHat",
+            url: URL(string: "https://example.invalid/hat.webp")!,
+            animated: false,
+            zeroWidth: true
+        )
+        let entry = RecordedChatEntry(
+            id: "m1",
+            t: 2.0,
+            login: "itsdarylg",
+            displayName: "itsdarylg",
+            color: 0x33CC66,
+            fragments: [
+                .emote(madge),
+                .emote(hat),
+                .text("why block ceo man"),
+            ]
+        )
+        #expect(entry.plainText == "rcdMadge SantaHat why block ceo man")
+
+        // renderPieces(showEmotes: true) folds trailing zero-width emote onto preceding base emote
+        let visualPieces = entry.renderPieces(showEmotes: true)
+        let hasStack = visualPieces.contains { piece in
+            if case .emote(let base, let overlays) = piece {
+                return base.name == "rcdMadge" && overlays.count == 1 && overlays[0].name == "SantaHat"
+            }
+            return false
+        }
+        #expect(hasStack == true)
+
+        // renderPieces(showEmotes: false) falls back to plain words
+        let textPieces = entry.renderPieces(showEmotes: false)
+        let hasAnyEmote = textPieces.contains { piece in
+            if case .emote = piece { return true }
+            return false
+        }
+        #expect(hasAnyEmote == false)
+        #expect(textPieces.contains { piece in
+            if case .word(let w) = piece { return w == "rcdMadge" }
+            return false
+        })
+    }
+
+    @Test func decodedEmoteAssetRespectsStaticVsAnimatedAndCacheKeyTracksFrames() throws {
+        let red = try Self.makeSolidCGImage(r: 240, g: 30, b: 30)
+        let green = try Self.makeSolidCGImage(r: 30, g: 240, b: 30)
+        let blue = try Self.makeSolidCGImage(r: 30, g: 30, b: 240)
+
+        let staticAsset = DecodedEmoteAsset(frames: [red, green, blue], frameDurations: [0.1, 0.1, 0.1], animated: false)
+        #expect(staticAsset.isAnimated == false)
+        #expect(staticAsset.frameIndex(at: 0.0) == 0)
+        #expect(staticAsset.frameIndex(at: 0.15) == 0)
+        #expect(staticAsset.frameIndex(at: 1.25) == 0)
+
+        let animAsset = DecodedEmoteAsset(frames: [red, green, blue], frameDurations: [0.1, 0.1, 0.1], animated: true)
+        #expect(animAsset.isAnimated == true)
+        #expect(animAsset.frameIndex(at: 0.02) == 0)
+        #expect(animAsset.frameIndex(at: 0.12) == 1)
+        #expect(animAsset.frameIndex(at: 0.22) == 2)
+        // Wraps cleanly after 0.3s total duration
+        #expect(animAsset.frameIndex(at: 0.32) == 0)
+        #expect(animAsset.frameIndex(at: 0.42) == 1)
+
+        let animURL = URL(string: "https://example.invalid/catjam.webp")!
+        let staticURL = URL(string: "https://example.invalid/kekw.webp")!
+        let badgeURL = URL(string: "https://example.invalid/badge.png")!
+
+        let entry = RecordedChatEntry(
+            id: "line-1",
+            t: 1.0,
+            login: "cdawg",
+            displayName: "cdawg",
+            color: 0xFF8844,
+            paint: RecordedChatPaint(
+                id: "p1",
+                name: "Neon",
+                kind: "linear",
+                angle: 90,
+                stops: [
+                    RecordedChatPaint.Stop(at: 0, rgba: 0xFF3366FF),
+                    RecordedChatPaint.Stop(at: 1, rgba: 0x33CCFFFF),
+                ],
+                color: nil
+            ),
+            badges: [RecordedChatBadge(id: "b1", title: "VIP", url: badgeURL, animated: false)],
+            fragments: [
+                .stack(
+                    RecordedChatEmote(id: "e1", name: "catJAM", url: animURL, animated: true, zeroWidth: false),
+                    [RecordedChatEmote(id: "e2", name: "KEKW", url: staticURL, animated: false, zeroWidth: true)]
+                ),
+                .text("lets go"),
+            ]
+        )
+
+        let assets: [URL: DecodedEmoteAsset] = [
+            animURL: animAsset,
+            staticURL: staticAsset,
+            badgeURL: staticAsset,
+        ]
+        var cfg = TwitchClipChatConfig()
+        cfg.showEmotes = true
+        cfg.showBadges = true
+        cfg.showPaints = true
+
+        let key0 = TwitchClipRenderer.overlayCacheKey(inGap: false, entries: [entry], config: cfg, at: 0.02, emoteAssets: assets)
+        let key1 = TwitchClipRenderer.overlayCacheKey(inGap: false, entries: [entry], config: cfg, at: 0.12, emoteAssets: assets)
+        let keyWrap = TwitchClipRenderer.overlayCacheKey(inGap: false, entries: [entry], config: cfg, at: 0.32, emoteAssets: assets)
+        #expect(key0 != key1)
+        #expect(key0 == keyWrap)
+
+        // When showEmotes is false, animated emote frames don't churn the cache key
+        var noEmotesCfg = cfg
+        noEmotesCfg.showEmotes = false
+        let noEmote0 = TwitchClipRenderer.overlayCacheKey(inGap: false, entries: [entry], config: noEmotesCfg, at: 0.02, emoteAssets: assets)
+        let noEmote1 = TwitchClipRenderer.overlayCacheKey(inGap: false, entries: [entry], config: noEmotesCfg, at: 0.12, emoteAssets: assets)
+        #expect(noEmote0 == noEmote1)
+
+        // Rasterizing at frame 0 (red) vs frame 1 (green) yields valid non-nil CGImages with distinct pixel content
+        let img0 = try #require(TwitchClipRenderer.rasterizeChatOverlay(
+            entries: [entry],
+            inGap: false,
+            config: cfg,
+            size: CGSize(width: 600, height: 320),
+            at: 0.02,
+            emoteAssets: assets
+        ))
+        let img1 = try #require(TwitchClipRenderer.rasterizeChatOverlay(
+            entries: [entry],
+            inGap: false,
+            config: cfg,
+            size: CGSize(width: 600, height: 320),
+            at: 0.12,
+            emoteAssets: assets
+        ))
+        #expect(img0.width == 600 && img0.height == 320)
+        #expect(img1.width == 600 && img1.height == 320)
+        let bytes0 = try #require(img0.dataProvider?.data as Data?)
+        let bytes1 = try #require(img1.dataProvider?.data as Data?)
+        #expect(bytes0 != bytes1)
+    }
+
+    @Test func clipRecorderBackfillsLate7TVEmotesPaintsAndDropsDeletedLines() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("twitch-clip-backfill-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let recorder = TwitchClipRecorder()
+        await recorder.reset(for: "cdawg")
+
+        let sps = MPEGTSDemuxerTests.sampleSPS
+        let pps = MPEGTSDemuxerTests.samplePPS
+        let asc = Data([0x11, 0x90])
+        let aacPayload = Data([0x21, 0x10, 0x04, 0x60, 0x8C, 0x1C])
+        var idr = Data([0x00, 0x00, 0x20, 0x01, 0x65])
+        idr.append(Data(repeating: 0x55, count: 0x2000))
+
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        for i in 0..<90 {
+            let pts = Int64(i) * 3_000
+            let isKey = (i % 30 == 0)
+            await recorder.ingestSamples([
+                .video(DemuxedVideoFrame(avccData: idr, pts90k: pts, dts90k: pts, isKeyframe: isKey, sps: isKey ? sps : nil, pps: isKey ? pps : nil)),
+                .audio(DemuxedAudioFrame(aacData: aacPayload, pts90k: pts, sampleRate: 48_000, channels: 2, audioObjectType: 2, audioSpecificConfig: asc)),
+            ], now: base.addingTimeInterval(Double(i) / 30.0))
+        }
+
+        // First snapshot arrives BEFORE 7TV resolves: plain text token + a second message that will be deleted
+        let lineBefore = TwitchChatLine(
+            id: "msg-1",
+            channel: "cdawg",
+            kind: .message,
+            login: "itsdarylg",
+            displayName: "itsdarylg",
+            color: 0x33CC66,
+            badges: [],
+            fragments: [.text("rcdMadge why block ceo man")],
+            timestamp: base.addingTimeInterval(1.0),
+            mentionsMe: false,
+            mine: false,
+            replyTo: nil
+        )
+        let doomedLine = TwitchChatLine(
+            id: "msg-del",
+            channel: "cdawg",
+            kind: .message,
+            login: "spammer",
+            displayName: "spammer",
+            color: nil,
+            badges: [],
+            fragments: [.text("delete me")],
+            timestamp: base.addingTimeInterval(1.2),
+            mentionsMe: false,
+            mine: false,
+            replyTo: nil
+        )
+        var snap1 = TwitchChatSnapshot(channel: "cdawg")
+        snap1.status = .joined(canSend: true)
+        snap1.lines = [lineBefore, doomedLine]
+        await recorder.ingestChatSnapshot(snap1, now: base.addingTimeInterval(1.3))
+
+        // Second snapshot arrives AFTER 7TV backfills animated emote + paint + 7TV badge and mod deletes `msg-del`
+        let resolvedEmote = ChatEmote(
+            id: "7tv:madge",
+            name: "rcdMadge",
+            url: URL(string: "https://example.invalid/rcdMadge.webp")!,
+            animated: true,
+            zeroWidth: false,
+            source: .sevenTv
+        )
+        let lineAfter = TwitchChatLine(
+            id: "msg-1",
+            channel: "cdawg",
+            kind: .message,
+            login: "itsdarylg",
+            displayName: "itsdarylg",
+            color: 0x33CC66,
+            badges: [],
+            fragments: [.emote(resolvedEmote), .text("why block ceo man")],
+            timestamp: base.addingTimeInterval(1.0),
+            mentionsMe: false,
+            mine: false,
+            replyTo: nil
+        )
+        var deletedDoomed = doomedLine
+        deletedDoomed.deleted = true
+        let paint = SevenTvPaint(
+            id: "p1",
+            name: "Gold",
+            kind: .linear,
+            angle: 45,
+            stops: [SevenTvPaint.Stop(at: 0, rgba: 0xFFD700FF), SevenTvPaint.Stop(at: 1, rgba: 0xFF8800FF)],
+            color: nil
+        )
+        let sevenTvBadge = ChatBadge(
+            id: "7tv:sub",
+            title: "7TV",
+            url: URL(string: "https://example.invalid/7tv.webp")!,
+            animated: true
+        )
+        var snap2 = TwitchChatSnapshot(channel: "cdawg")
+        snap2.status = .joined(canSend: true)
+        snap2.lines = [lineAfter, deletedDoomed]
+        snap2.paints = ["itsdarylg": paint]
+        snap2.sevenTvBadges = ["itsdarylg": sevenTvBadge]
+        await recorder.ingestChatSnapshot(snap2, now: base.addingTimeInterval(2.5))
+
+        let saved = try await recorder.saveInstantClip(
+            requestedSeconds: 10,
+            channel: "cdawg",
+            title: "backfill test",
+            destinationDir: tempDir,
+            now: base.addingTimeInterval(3.0)
+        )
+        let chatURL = tempDir.appendingPathComponent(saved.draft.chatFileName)
+        let chatLog = try JSONDecoder().decode(RecordedChatLog.self, from: Data(contentsOf: chatURL))
+        #expect(chatLog.entries.count == 1)
+        let recorded = try #require(chatLog.entries.first)
+        #expect(recorded.id == "msg-1")
+        #expect(recorded.paint?.id == "p1")
+        #expect(recorded.badges.contains(where: { $0.id == "7tv:sub" && $0.animated == true }))
+        #expect(recorded.fragments.first == .emote(RecordedChatEmote(resolvedEmote)))
+        #expect(recorded.plainText == "rcdMadge why block ceo man")
+    }
 }

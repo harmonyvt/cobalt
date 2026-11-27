@@ -234,10 +234,24 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         didSet {
             guard dualStageMode != oldValue else { return }
             syncDualPiPLayout()
+            Breadcrumbs.add("twitch.stage.layout", [
+                "streams": .int(activeChannels.count),
+                "mode": .string(dualStageMode.rawValue),
+            ])
+            scheduleSurfaceHealthCheck(reason: "dual_layout")
         }
     }
     /// Multi-stream visual layout mode (Spotlight vs. Grid/Mosaic/Quad) for N = 3...4.
-    var multiStageMode: TwitchMultiStageMode = .spotlight
+    var multiStageMode: TwitchMultiStageMode = .spotlight {
+        didSet {
+            guard multiStageMode != oldValue else { return }
+            Breadcrumbs.add("twitch.stage.layout", [
+                "streams": .int(activeChannels.count),
+                "mode": .string(multiStageMode.rawValue),
+            ])
+            scheduleSurfaceHealthCheck(reason: "multi_layout")
+        }
+    }
     /// Equal-power audio crossfader + follow-focus pin state machine for N = 2.
     let dualMixer = TwitchDualAudioMixer()
     /// Equal-power N-channel audio mixer for N = 2...4.
@@ -402,6 +416,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         .d: ExtraSlotRuntime(),
     ]
     @ObservationIgnored private var manualQualityOverrides: Set<TwitchStreamSlot> = []
+    @ObservationIgnored private var activeSurfaceIDBySlot: [TwitchStreamSlot: UUID] = [:]
+    @ObservationIgnored private var surfaceHealthTask: Task<Void, Never>?
     @ObservationIgnored private var preThrottleVariantID: String?
     @ObservationIgnored private var lastThermalShouldThrottle = false
     @ObservationIgnored private var resumeSecondaryChannel: String?
@@ -1453,8 +1469,79 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     func notifyNativeViewReparented(for slot: TwitchStreamSlot) {
         guard activeMode == .lowLatency, !isAirPlayingVideo else { return }
         guard let engine = engine(for: slot) else { return }
+        Breadcrumbs.add("twitch.surface.reparent", [
+            "slot": .string(slot.letter),
+            "streams": .int(activeChannels.count),
+        ])
         Task {
             await engine.recoverVideoRenderer()
+        }
+    }
+
+    func registerActiveSurface(_ surfaceID: UUID, for slot: TwitchStreamSlot) {
+        activeSurfaceIDBySlot[slot] = surfaceID
+    }
+
+    func unregisterSurface(_ surfaceID: UUID, for slot: TwitchStreamSlot) {
+        if activeSurfaceIDBySlot[slot] == surfaceID {
+            activeSurfaceIDBySlot.removeValue(forKey: slot)
+        }
+    }
+
+    func isActiveSurface(_ surfaceID: UUID, for slot: TwitchStreamSlot) -> Bool {
+        guard let current = activeSurfaceIDBySlot[slot] else { return true }
+        return current == surfaceID
+    }
+
+    private var activeLayoutTag: String {
+        switch activeChannels.count {
+        case ...1: return "single"
+        case 2: return dualStageMode.rawValue
+        default: return multiStageMode.rawValue
+        }
+    }
+
+    /// Runs a lightweight post-layout check after stage transitions to detect detached, zero-sized, hidden, or failed
+    /// display layers on any playing slot and emit a non-PII `twitch_surface_anomaly` event to PostHog.
+    func scheduleSurfaceHealthCheck(reason: String) {
+        surfaceHealthTask?.cancel()
+        surfaceHealthTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, !Task.isCancelled else { return }
+            guard self.activeMode == .lowLatency, !self.isInBackground, !self.isPiPOwningViews,
+                  !self.isAirPlayingVideo, !self.claims.isEmpty, !self.activeChannels.isEmpty else { return }
+
+            let activeSlots = TwitchStreamSlot.slots(forCount: self.activeChannels.count)
+            for slot in activeSlots {
+                let state = self.slotState(for: slot)
+                guard state.isPlaying, !state.isOffline, !state.hasPlaybackError else { continue }
+                let view = self.nativeView(for: slot)
+                let detached = view.window == nil
+                let emptyBounds = view.bounds.width < 2 || view.bounds.height < 2
+                #if os(iOS)
+                let hidden = view.isHidden || view.alpha < 0.01
+                #else
+                let hidden = view.isHidden || view.alphaValue < 0.01
+                #endif
+                let layerFailed = view.displayLayer.sampleBufferRenderer.status == .failed
+                guard detached || emptyBounds || hidden || layerFailed else { continue }
+
+                let payload: [String: TelemetryValue] = [
+                    "reason": .string(reason),
+                    "slot": .string(slot.letter),
+                    "streams": .int(self.activeChannels.count),
+                    "layout": .string(self.activeLayoutTag),
+                    "detached": .bool(detached),
+                    "empty_bounds": .bool(emptyBounds),
+                    "hidden": .bool(hidden),
+                    "layer_failed": .bool(layerFailed),
+                ]
+                Analytics.event("twitch_surface_anomaly", values: payload)
+                Telemetry.log(.warn, .live, "twitch.surface.anomaly", data: payload)
+                if layerFailed {
+                    self.notifyNativeViewReparented(for: slot)
+                }
+            }
         }
     }
 
@@ -1560,6 +1647,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         applyQualityBudget()
         attachedModel?.twitch.updateCombinedChatFocus(focusedChannel)
         syncPiPAndNowPlaying()
+        scheduleSurfaceHealthCheck(reason: "multi_start")
         Breadcrumbs.add("twitch.multi.start", ["count": .int(normalized.count)])
     }
 
@@ -1753,6 +1841,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     /// Restarts native playback for a single slot after a playback error without disturbing other slots.
     func retrySlot(_ slot: TwitchStreamSlot) {
         guard activeMode == .lowLatency, let ch = channel(for: slot) else { return }
+        Breadcrumbs.add("twitch.slot.retry", [
+            "slot": .string(slot.letter),
+            "streams": .int(activeChannels.count),
+        ])
         switch slot {
         case .a:
             hasPlaybackError = false
@@ -1990,6 +2082,11 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         attachedModel?.twitch.updateCombinedChatFocus(focusedChannel)
         applyQualityBudget()
         syncPiPAndNowPlaying()
+        Breadcrumbs.add("twitch.stage.spotlight", [
+            "slot": .string(slot.letter),
+            "streams": .int(activeChannels.count),
+        ])
+        scheduleSurfaceHealthCheck(reason: "spotlight")
     }
 
     func cycleSpotlight(forward: Bool = true) {
@@ -2013,6 +2110,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         if AppLifecycle.shared.snapshot.shouldThrottle {
             applyThermalThrottling(shouldThrottle: true)
         }
+        Breadcrumbs.add("twitch.stage.focus", ["slot": .string(slot.rawValue)])
+        scheduleSurfaceHealthCheck(reason: "dual_focus")
     }
 
     func swapDualFocus() {
@@ -2296,6 +2395,11 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     }
 
     private func applyBudgetVariant(_ variantID: String, to slot: TwitchStreamSlot) {
+        Breadcrumbs.add("twitch.budget.apply", [
+            "slot": .string(slot.letter),
+            "variant": .string(variantID),
+            "streams": .int(activeChannels.count),
+        ])
         switch slot {
         case .a:
             selectedVariantID = variantID
@@ -2312,6 +2416,21 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             let eng = extraSlots[slot]?.engine
             Task { await eng?.selectVariant(id: variantID) }
         }
+    }
+
+    private func startupBudgetHint(for slot: TwitchStreamSlot) -> TwitchQualityBudgetHint? {
+        let count = max(1, activeChannels.count)
+        guard count >= 2, !manualQualityOverrides.contains(slot) else { return nil }
+        if count == 2 {
+            guard lastThermalShouldThrottle else { return nil }
+            let focused: TwitchStreamSlot = dualMixer.focusedSlot == .primary ? .a : .b
+            return TwitchQualityBudgetHint(streamCount: 2, isSpotlight: slot == focused, isThermalThrottled: true)
+        }
+        return TwitchQualityBudgetHint(
+            streamCount: count,
+            isSpotlight: slot == multiMixer.spotlightSlot,
+            isThermalThrottled: lastThermalShouldThrottle
+        )
     }
 
     /// Steps down the unfocused stream's quality under thermal or memory pressure (`AppLifecycle.snapshot.shouldThrottle`)
@@ -2434,6 +2553,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
         let initialMuted = initialGain <= 0.0001
         let preferredQuality = activeChannels.count >= 3 ? nil : preferredQualityID
+        let budgetHint = startupBudgetHint(for: .a)
 
         nativeEventContinuation?.finish()
         nativeEventContinuation = nil
@@ -2454,7 +2574,11 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         lastLoggedBuffering = false
         hasLoggedVariants = false
         syncPiPAndNowPlaying()
-        Breadcrumbs.add("twitch.native.start", ["quality": .string(preferredQuality ?? "auto")])
+        Breadcrumbs.add("twitch.native.start", [
+            "slot": .string("A"),
+            "streams": .int(max(1, activeChannels.count)),
+            "quality": .string(preferredQuality ?? "auto"),
+        ])
 
         let previous = nativeLifecycleTask
         previous?.cancel()
@@ -2479,7 +2603,13 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             await engine.setVideoOutputEnabled(videoEnabled)
             await engine.setVolume(initialGain)
             await engine.setMuted(initialMuted)
-            await engine.start(channel: channel, authToken: authToken, preferredVariantID: preferredQuality)
+            await engine.start(
+                channel: channel,
+                authToken: authToken,
+                preferredVariantID: preferredQuality,
+                slotTag: "A",
+                budgetHint: budgetHint
+            )
         }
     }
 
@@ -2498,6 +2628,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
         let initialMuted = initialGain <= 0.0001
         let preferredQuality = activeChannels.count >= 3 ? nil : preferredQualityID
+        let budgetHint = startupBudgetHint(for: .b)
 
         secondaryNativeEventContinuation?.finish()
         secondaryNativeEventContinuation = nil
@@ -2515,7 +2646,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         secondaryHasPlaybackError = false
         secondaryStartInstant = .now
         syncPiPAndNowPlaying()
-        Breadcrumbs.add("twitch.native.secondary.start")
+        Breadcrumbs.add("twitch.native.secondary.start", [
+            "slot": .string("B"),
+            "streams": .int(max(2, activeChannels.count)),
+        ])
 
         let previous = secondaryNativeLifecycleTask
         previous?.cancel()
@@ -2534,7 +2668,13 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             await engine.setVideoOutputEnabled(videoEnabled)
             await engine.setVolume(initialGain)
             await engine.setMuted(initialMuted)
-            await engine.start(channel: channel, authToken: authToken, preferredVariantID: preferredQuality)
+            await engine.start(
+                channel: channel,
+                authToken: authToken,
+                preferredVariantID: preferredQuality,
+                slotTag: "B",
+                budgetHint: budgetHint
+            )
         }
     }
 
@@ -2548,6 +2688,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         let engine = ensureExtraNativeEngine(slot: slot)
         let initialGain: Float = isMuted ? 0.0 : multiMixer.gains.gain(for: slot)
         let initialMuted = initialGain <= 0.0001
+        let budgetHint = startupBudgetHint(for: slot)
 
         runtime.eventContinuation?.finish()
         runtime.eventContinuation = nil
@@ -2569,7 +2710,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         extraSlotStates[slot] = st
         runtime.startInstant = .now
         syncPiPAndNowPlaying()
-        Breadcrumbs.add("twitch.native.extra.start", ["slot": .string(slot.letter)])
+        Breadcrumbs.add("twitch.native.extra.start", [
+            "slot": .string(slot.letter),
+            "streams": .int(max(3, activeChannels.count)),
+        ])
 
         let previous = runtime.lifecycleTask
         previous?.cancel()
@@ -2588,7 +2732,13 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             await engine.setVideoOutputEnabled(videoEnabled)
             await engine.setVolume(initialGain)
             await engine.setMuted(initialMuted)
-            await engine.start(channel: channel, authToken: authToken, preferredVariantID: nil)
+            await engine.start(
+                channel: channel,
+                authToken: authToken,
+                preferredVariantID: nil,
+                slotTag: slot.letter,
+                budgetHint: budgetHint
+            )
         }
     }
 
@@ -2794,6 +2944,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
         backgroundVideoOffTask?.cancel()
         backgroundVideoOffTask = nil
+        surfaceHealthTask?.cancel()
+        surfaceHealthTask = nil
+        activeSurfaceIDBySlot.removeAll()
         clearThermalThrottling(restoreVariant: false)
         dualMixer.handleForegrounded()
         multiMixer.handleForegrounded()
@@ -3560,9 +3713,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             hasPlaybackError = false
             if let started = nativeStartInstant {
                 let elapsed = ContinuousClock.now - started
-                let ms = Int(elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
+                let ms = Int(max(0, elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000))
                 nativeStartInstant = nil
-                Breadcrumbs.add("twitch.native.playing", ["ms": .int(max(0, ms))])
+                Breadcrumbs.add("twitch.native.playing", ["slot": .string("A"), "ms": .int(ms)])
+                emitStreamReadyAnalytics(slot: .a, ms: ms, engine: nativeEngine)
             }
             syncPiPAndNowPlaying()
         case .paused:
@@ -3607,7 +3761,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 recordDelay(d)
             }
         case .failed(let reason):
-            Breadcrumbs.add("twitch.native.fallback", ["reason": .string(Self.shortFallbackReason(reason))])
+            Breadcrumbs.add("twitch.native.fallback", ["slot": .string("A"), "reason": .string(Self.shortFallbackReason(reason))])
             // Dual/multi-stream runs native display layers; never drop into a single WebView embed while multi is active,
             // and record a playback error rather than falsely marking a live stream offline.
             if isDualStream {
@@ -3659,9 +3813,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             secondaryHasPlaybackError = false
             if let started = secondaryStartInstant {
                 let elapsed = ContinuousClock.now - started
-                let ms = Int(elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
+                let ms = Int(max(0, elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000))
                 secondaryStartInstant = nil
-                Breadcrumbs.add("twitch.native.secondary.playing", ["ms": .int(max(0, ms))])
+                Breadcrumbs.add("twitch.native.secondary.playing", ["slot": .string("B"), "ms": .int(ms)])
+                emitStreamReadyAnalytics(slot: .b, ms: ms, engine: secondaryNativeEngine)
             }
             syncPiPAndNowPlaying()
         case .paused:
@@ -3706,7 +3861,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             secondaryIsBuffering = false
             secondaryStartInstant = nil
             syncPiPAndNowPlaying()
-            Breadcrumbs.add("twitch.native.secondary.failed", ["reason": .string(Self.shortFallbackReason(reason))])
+            Breadcrumbs.add("twitch.native.secondary.failed", ["slot": .string("B"), "reason": .string(Self.shortFallbackReason(reason))])
         }
     }
 
@@ -3739,9 +3894,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             extraSlotStates[slot] = state
             if let started = runtime.startInstant {
                 let elapsed = ContinuousClock.now - started
-                let ms = Int(elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
+                let ms = Int(max(0, elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000))
                 runtime.startInstant = nil
-                Breadcrumbs.add("twitch.native.extra.playing", ["slot": .string(slot.label), "ms": .int(max(0, ms))])
+                Breadcrumbs.add("twitch.native.extra.playing", ["slot": .string(slot.label), "ms": .int(ms)])
+                emitStreamReadyAnalytics(slot: slot, ms: ms, engine: runtime.engine)
             }
             syncPiPAndNowPlaying()
         case .paused:
@@ -3787,6 +3943,20 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             runtime.startInstant = nil
             syncPiPAndNowPlaying()
             Breadcrumbs.add("twitch.native.extra.failed", ["slot": .string(slot.label), "reason": .string(Self.shortFallbackReason(reason))])
+        }
+    }
+
+    private func emitStreamReadyAnalytics(slot: TwitchStreamSlot, ms: Int, engine: TwitchNativeEngine?) {
+        let streams = max(1, activeChannels.count)
+        let layout = activeLayoutTag
+        let slotLetter = slot.letter
+        Task {
+            var values: [String: TelemetryValue] = await engine?.diagnosticSnapshot() ?? [:]
+            values["slot"] = .string(slotLetter)
+            values["streams"] = .int(streams)
+            values["ms"] = .int(ms)
+            values["layout"] = .string(layout)
+            Analytics.event("twitch_stream_ready", values: values)
         }
     }
 
@@ -4509,7 +4679,8 @@ private struct TwitchPlayerSlot: NSViewRepresentable {
 
 #if os(iOS)
 /// Embeds a single `TwitchNativeVideoView` (Slot A/B/C/D) in `TwitchDualStage` while holding a live claim.
-/// Never yanks the view away while PiP is starting or owns the `AVSampleBufferDisplayLayer` views.
+/// Uses per-surface ownership + `dismantleUIView` + window guards so a fading/exiting container can never steal
+/// a live `AVSampleBufferDisplayLayer` away from the active on-screen container.
 struct TwitchNativeSlotSurface: UIViewRepresentable {
     let slot: TwitchStreamSlot
     let holds: Bool
@@ -4531,34 +4702,85 @@ struct TwitchNativeSlotSurface: UIViewRepresentable {
         let container = TwitchDualSurfaceContainerView()
         container.backgroundColor = .black
         container.clipsToBounds = true
+        container.slot = slot
+        container.holds = holds
+        container.pipActive = pipActive
+        if holds {
+            TwitchPlayerHost.shared.registerActiveSurface(container.surfaceID, for: slot)
+        }
         return container
     }
 
-    func updateUIView(_ container: UIView, context: Context) {
-        guard holds else { return }
-        let host = TwitchPlayerHost.shared
-        let target = host.nativeView(for: slot)
-        for sub in container.subviews where sub !== target {
-            sub.removeFromSuperview()
+    func updateUIView(_ view: UIView, context: Context) {
+        guard let container = view as? TwitchDualSurfaceContainerView else { return }
+        guard !container.isDismantled else { return }
+        let slotChanged = container.slot != slot
+        if slotChanged {
+            TwitchPlayerHost.shared.unregisterSurface(container.surfaceID, for: container.slot)
+            container.slot = slot
+            if holds {
+                TwitchPlayerHost.shared.registerActiveSurface(container.surfaceID, for: slot)
+            }
         }
-        guard !pipActive, !host.isPiPOwningViews else { return }
-        if target.superview !== container {
-            target.removeFromSuperview()
-            target.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            container.addSubview(target)
-            host.notifyNativeViewReparented(for: slot)
-        }
-        if target.frame != container.bounds {
-            target.frame = container.bounds
-        }
+        container.holds = holds
+        container.pipActive = pipActive
+        container.attachTargetIfEligible()
+    }
+
+    static func dismantleUIView(_ view: UIView, coordinator: ()) {
+        guard let container = view as? TwitchDualSurfaceContainerView else { return }
+        container.isDismantled = true
+        TwitchPlayerHost.shared.unregisterSurface(container.surfaceID, for: container.slot)
     }
 }
 
 private final class TwitchDualSurfaceContainerView: UIView {
+    let surfaceID = UUID()
+    var slot: TwitchStreamSlot = .a
+    var holds = false
+    var pipActive = false
+    var isDismantled = false
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, !isDismantled, holds else { return }
+        attachTargetIfEligible()
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         for sub in subviews where sub.frame != bounds {
             sub.frame = bounds
+        }
+        if window != nil, !isDismantled, holds, subviews.isEmpty {
+            attachTargetIfEligible()
+        }
+    }
+
+    func attachTargetIfEligible() {
+        guard holds, !isDismantled else { return }
+        let host = TwitchPlayerHost.shared
+        guard host.isActiveSurface(surfaceID, for: slot) else { return }
+        let target = host.nativeView(for: slot)
+        for sub in subviews where sub !== target {
+            sub.removeFromSuperview()
+        }
+        guard !pipActive, !host.isPiPOwningViews else { return }
+        // Never steal a live surface out of an on-screen superview while this container is still off-window;
+        // `didMoveToWindow()` will claim it as soon as this container enters the hierarchy.
+        if window == nil && target.superview?.window != nil {
+            return
+        }
+        if target.superview !== self {
+            target.removeFromSuperview()
+            target.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            target.isHidden = false
+            target.alpha = 1
+            addSubview(target)
+            host.notifyNativeViewReparented(for: slot)
+        }
+        if target.frame != bounds {
+            target.frame = bounds
         }
     }
 }
@@ -4590,7 +4812,7 @@ private final class TwitchDualPiPAnchorView: UIView {
 }
 #else
 /// Embeds a single `TwitchNativeVideoView` (Slot A/B/C/D) in `TwitchDualStage` on macOS.
-/// Never yanks the view away while `TwitchDualFloatingPanel` is presenting the streams.
+/// Uses per-surface ownership + `dismantleNSView` + window guards so exiting containers cannot steal live layers.
 struct TwitchNativeSlotSurface: NSViewRepresentable {
     let slot: TwitchStreamSlot
     let holds: Bool
@@ -4612,34 +4834,83 @@ struct TwitchNativeSlotSurface: NSViewRepresentable {
         let container = TwitchDualSurfaceContainerView()
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor.black.cgColor
+        container.slot = slot
+        container.holds = holds
+        container.pipActive = pipActive
+        if holds {
+            TwitchPlayerHost.shared.registerActiveSurface(container.surfaceID, for: slot)
+        }
         return container
     }
 
-    func updateNSView(_ container: NSView, context: Context) {
-        guard holds else { return }
-        let host = TwitchPlayerHost.shared
-        let target = host.nativeView(for: slot)
-        for sub in container.subviews where sub !== target {
-            sub.removeFromSuperview()
+    func updateNSView(_ view: NSView, context: Context) {
+        guard let container = view as? TwitchDualSurfaceContainerView else { return }
+        guard !container.isDismantled else { return }
+        let slotChanged = container.slot != slot
+        if slotChanged {
+            TwitchPlayerHost.shared.unregisterSurface(container.surfaceID, for: container.slot)
+            container.slot = slot
+            if holds {
+                TwitchPlayerHost.shared.registerActiveSurface(container.surfaceID, for: slot)
+            }
         }
-        guard !pipActive, !host.isPiPOwningViews else { return }
-        if target.superview !== container {
-            target.removeFromSuperview()
-            target.autoresizingMask = [.width, .height]
-            container.addSubview(target)
-            host.notifyNativeViewReparented(for: slot)
-        }
-        if target.frame != container.bounds {
-            target.frame = container.bounds
-        }
+        container.holds = holds
+        container.pipActive = pipActive
+        container.attachTargetIfEligible()
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: ()) {
+        guard let container = view as? TwitchDualSurfaceContainerView else { return }
+        container.isDismantled = true
+        TwitchPlayerHost.shared.unregisterSurface(container.surfaceID, for: container.slot)
     }
 }
 
 private final class TwitchDualSurfaceContainerView: NSView {
+    let surfaceID = UUID()
+    var slot: TwitchStreamSlot = .a
+    var holds = false
+    var pipActive = false
+    var isDismantled = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil, !isDismantled, holds else { return }
+        attachTargetIfEligible()
+    }
+
     override func layout() {
         super.layout()
         for sub in subviews where sub.frame != bounds {
             sub.frame = bounds
+        }
+        if window != nil, !isDismantled, holds, subviews.isEmpty {
+            attachTargetIfEligible()
+        }
+    }
+
+    func attachTargetIfEligible() {
+        guard holds, !isDismantled else { return }
+        let host = TwitchPlayerHost.shared
+        guard host.isActiveSurface(surfaceID, for: slot) else { return }
+        let target = host.nativeView(for: slot)
+        for sub in subviews where sub !== target {
+            sub.removeFromSuperview()
+        }
+        guard !pipActive, !host.isPiPOwningViews else { return }
+        if window == nil && target.superview?.window != nil {
+            return
+        }
+        if target.superview !== self {
+            target.removeFromSuperview()
+            target.autoresizingMask = [.width, .height]
+            target.isHidden = false
+            target.alphaValue = 1
+            addSubview(target)
+            host.notifyNativeViewReparented(for: slot)
+        }
+        if target.frame != bounds {
+            target.frame = bounds
         }
     }
 }

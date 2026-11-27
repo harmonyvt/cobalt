@@ -153,6 +153,8 @@ public final class TwitchClipDraftStore {
     public private(set) var exportState: ExportState = .idle
     /// Set by UI to present a specific draft in the split-frame editor.
     public var presentedDraftID: String?
+    /// Render stats from the most recent `renderAndUpload` run (for PostHog telemetry).
+    public private(set) var lastRenderStats: TwitchClipRenderStats?
 
     public nonisolated let directory: URL
     @ObservationIgnored private let storage: TwitchClipStorage
@@ -417,8 +419,9 @@ public final class TwitchClipDraftStore {
         let log = await loadChatLog(for: currentDraft)
         let outURL = directory.appendingPathComponent("\(currentDraft.id)-render.mp4")
 
+        lastRenderStats = nil
         do {
-            try await TwitchClipRenderer.renderCompositeMP4(
+            lastRenderStats = try await TwitchClipRenderer.renderCompositeMP4(
                 videoURL: localVideoURL,
                 log: log,
                 config: currentDraft.edit,
