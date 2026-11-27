@@ -15,14 +15,23 @@ struct LiveScreen<Segment: View>: View {
     /// The screen of a segment (`AppShell.tabScreen`).
     @ViewBuilder let segment: (LiveSegment) -> Segment
 
+    private var availableSegments: [LiveSegment] {
+        let filtered = LiveSegment.allCases.filter { $0.tab.isAvailable(with: model.capabilities) }
+        return filtered.isEmpty ? LiveSegment.allCases : filtered
+    }
+
     var body: some View {
-        let current = nav?.live ?? .stage
+        let segments = availableSegments
+        let requested = nav?.live ?? .stage
+        let current = segments.contains(requested) ? requested : (segments.first ?? .stage)
         VStack(spacing: 0) {
-            PhoneSegmentBar(
-                label: Copy.PhoneNav.liveSegments,
-                selection: Binding(get: { nav?.live ?? .stage }, set: { nav?.live = $0 }),
-                options: LiveSegment.allCases.map { .init(value: $0, title: $0.title) },
-                identifier: "live.segments")
+            if segments.count > 1 {
+                PhoneSegmentBar(
+                    label: Copy.PhoneNav.liveSegments,
+                    selection: Binding(get: { current }, set: { nav?.live = $0 }),
+                    options: segments.map { .init(value: $0, title: $0.title) },
+                    identifier: "live.segments")
+            }
             segment(current)
                 .id(current)
         }

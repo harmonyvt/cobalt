@@ -1,0 +1,2230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cobalt · iPhone Duo Vertical Rail &amp; Unified Back Button Mockup</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif);
+    color: var(--foreground, #f2f2f5);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    width: 100%;
+    max-width: 712px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* ── Top interactive control strip (uses host theme vars) ── */
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border-radius: calc(var(--radius, 10px) + 2px);
+    background: var(--secondary, rgba(128,128,140,.14));
+    border: 1px solid var(--border, rgba(128,128,140,.22));
+  }
+  .seg button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--muted-foreground, #9898a2);
+    font: 500 12px/1 var(--font-sans, -apple-system, sans-serif);
+    padding: 6px 10px;
+    border-radius: var(--radius, 8px);
+    cursor: pointer;
+    transition: background .16s ease, color .16s ease, box-shadow .16s ease;
+    white-space: nowrap;
+  }
+  .seg button:hover { color: var(--foreground, #fff); }
+  .seg button.active {
+    background: var(--card, rgba(255,255,255,.12));
+    color: var(--foreground, #fff);
+    box-shadow: 0 1px 3px rgba(0,0,0,.22);
+  }
+  .toggle-btn {
+    appearance: none;
+    border: 1px solid var(--border, rgba(128,128,140,.26));
+    background: var(--secondary, rgba(128,128,140,.12));
+    color: var(--muted-foreground, #9898a2);
+    font: 500 12px/1 var(--font-sans, -apple-system, sans-serif);
+    padding: 7px 11px;
+    border-radius: var(--radius, 8px);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all .16s ease;
+  }
+  .toggle-btn:hover { color: var(--foreground, #fff); }
+  .toggle-btn.active {
+    background: var(--accent-surface, rgba(47,138,249,.18));
+    border-color: var(--ring, #2f8af9);
+    color: var(--foreground, #fff);
+  }
+  .toggle-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; opacity: .6;
+  }
+  .toggle-btn.active .toggle-dot { background: #2f8af9; opacity: 1; }
+
+  .presets {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .presets-label {
+    font: 600 11px/1 var(--font-mono, ui-monospace, monospace);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted-foreground, #8f8f99);
+    margin-right: 2px;
+  }
+  .chip {
+    appearance: none;
+    border: 1px solid var(--border, rgba(128,128,140,.22));
+    background: transparent;
+    color: var(--muted-foreground, #a2a2ac);
+    font: 500 11.5px/1 var(--font-sans, -apple-system, sans-serif);
+    padding: 5px 9px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all .15s ease;
+  }
+  .chip:hover {
+    color: var(--foreground, #fff);
+    border-color: var(--ring, rgba(255,255,255,.35));
+  }
+  .chip.active {
+    background: var(--primary, #e1e1e1);
+    color: var(--primary-foreground, #000);
+    border-color: transparent;
+    font-weight: 600;
+  }
+
+  /* ── Stage hosting the simulated hardware bezel ── */
+  .stage {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    width: 100%;
+    padding: 4px 0;
+  }
+  .stage.compact-mode {
+    align-items: stretch;
+  }
+
+  .bezel {
+    position: relative;
+    width: 100%;
+    max-width: 704px;
+    height: 496px;
+    padding: 9px;
+    border-radius: 38px;
+    background: linear-gradient(155deg, #2b2c31 0%, #151518 48%, #0d0d10 100%);
+    box-shadow:
+      0 18px 42px rgba(0,0,0,.46),
+      0 0 0 1px rgba(255,255,255,.12) inset,
+      0 1px 0 rgba(255,255,255,.22) inset;
+    transition: max-width .38s cubic-bezier(.22,1,.36,1), height .38s cubic-bezier(.22,1,.36,1), border-radius .38s ease;
+    flex-shrink: 0;
+  }
+  .bezel.compact {
+    max-width: 278px;
+    height: 496px;
+    border-radius: 42px;
+    padding: 8px;
+  }
+  .bezel.book::after {
+    content: "";
+    position: absolute;
+    top: 4px; bottom: 4px; left: 50%;
+    width: 6px; margin-left: -3px;
+    background: linear-gradient(90deg, rgba(0,0,0,.6), rgba(255,255,255,.14) 50%, rgba(0,0,0,.6));
+    border-radius: 3px;
+    pointer-events: none;
+    z-index: 60;
+    opacity: .65;
+  }
+
+  /* ── OLED Screen ── */
+  .screen {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 30px;
+    background: #000000;
+    color: #e1e1e1;
+    overflow: hidden;
+    user-select: none;
+  }
+  .bezel.compact .screen {
+    border-radius: 38px;
+  }
+
+  /* ── Main App Content Viewport (respects asymmetric safe area on Duo!) ── */
+  .viewport {
+    position: absolute;
+    inset: 0;
+    padding-right: 64px; /* Asymmetric trailing safe area for iPhone Duo Vertical Controls rail */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: padding .25s ease;
+  }
+  .bezel.compact .viewport {
+    padding-right: 0;
+    padding-top: 44px;
+    padding-bottom: 68px;
+  }
+  .viewport.full-bleed {
+    padding-right: 0; /* Media bleeds under Clear Liquid Glass vertical rail! */
+  }
+  .bezel.compact .viewport.full-bleed {
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  /* ── Liquid Glass Material Tokens (iOS 27.1 Clear / Regular Liquid Glass) ── */
+  .glass-circle {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    border: 0;
+    cursor: pointer;
+    color: #ffffff;
+    background: radial-gradient(120% 120% at 30% 18%, rgba(255,255,255,.22) 0%, rgba(160,165,175,.14) 45%, rgba(28,30,36,.58) 100%);
+    backdrop-filter: blur(22px) saturate(185%);
+    -webkit-backdrop-filter: blur(22px) saturate(185%);
+    box-shadow:
+      0 6px 18px rgba(0,0,0,.44),
+      0 0 0 0.75px rgba(255,255,255,.26) inset,
+      0 1.25px 0 rgba(255,255,255,.38) inset,
+      0 -1px 0 rgba(0,0,0,.35) inset;
+    transition: transform .16s cubic-bezier(.22,1,.36,1), background .16s ease, opacity .18s ease;
+    position: relative;
+    padding: 0;
+  }
+  .glass-circle:hover {
+    background: radial-gradient(120% 120% at 30% 18%, rgba(255,255,255,.30) 0%, rgba(180,185,195,.20) 45%, rgba(36,38,46,.62) 100%);
+  }
+  .glass-circle:active { transform: scale(.91); }
+  .glass-circle.active-tint {
+    background: radial-gradient(120% 120% at 30% 18%, rgba(255,255,255,.96) 0%, rgba(225,228,234,.92) 100%);
+    color: #000000;
+  }
+  .glass-circle.blue-glow {
+    box-shadow:
+      0 0 0 2px rgba(47,138,249,.55),
+      0 6px 20px rgba(47,138,249,.35),
+      0 0 0 0.75px rgba(255,255,255,.35) inset;
+  }
+
+  .glass-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 0;
+    cursor: pointer;
+    color: #ffffff;
+    border-radius: 999px;
+    background: radial-gradient(140% 140% at 25% 12%, rgba(255,255,255,.19) 0%, rgba(145,150,162,.12) 48%, rgba(24,25,30,.62) 100%);
+    backdrop-filter: blur(22px) saturate(185%);
+    -webkit-backdrop-filter: blur(22px) saturate(185%);
+    box-shadow:
+      0 6px 18px rgba(0,0,0,.42),
+      0 0 0 0.75px rgba(255,255,255,.22) inset,
+      0 1px 0 rgba(255,255,255,.34) inset;
+    transition: transform .15s ease, background .15s ease;
+  }
+  .glass-pill:active { transform: scale(.96); }
+
+  /* ── iPhone Duo Trailing Vertical Controls Rail (matches Spotify screenshot!) ── */
+  .duo-rail {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    bottom: 10px;
+    width: 46px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 40;
+    pointer-events: none;
+  }
+  .duo-rail > * { pointer-events: auto; }
+  .bezel.compact .duo-rail { display: none; }
+
+  .rail-top {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* Authentic iOS 27.1 Duo Top-Right Status Circle (from Harmony's Spotify screenshot) */
+  .status-circle {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: rgba(12,13,17,.68);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    box-shadow: 0 0 0 0.75px rgba(255,255,255,.14) inset;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    position: relative;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+  }
+  .status-arc {
+    position: absolute;
+    inset: 2px;
+    pointer-events: none;
+  }
+  .status-time {
+    font-size: 9.5px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -.02em;
+  }
+  .status-batt {
+    font-size: 7.5px;
+    font-weight: 600;
+    color: #b7f5be;
+    line-height: 1;
+  }
+  .status-dots {
+    display: flex;
+    gap: 1.5px;
+    margin-top: 1px;
+  }
+  .status-dots i {
+    width: 2.5px; height: 2.5px; border-radius: 50%; background: #fff; opacity: .9;
+  }
+  .status-dots i:last-child { opacity: .35; }
+
+  /* Unified Back Button Stack + Contextual Toolbar Items in Rail */
+  .rail-back-slot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .back-btn {
+    position: relative;
+  }
+  .screen.guides-on .back-btn::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(47,138,249,.9);
+    pointer-events: none;
+    animation: ringPulse 2.2s ease-out infinite;
+  }
+  @keyframes ringPulse {
+    0% { transform: scale(.96); opacity: .85; }
+    70% { transform: scale(1.16); opacity: 0; }
+    100% { transform: scale(1.16); opacity: 0; }
+  }
+  .depth-badge {
+    position: absolute;
+    top: -3px; right: -3px;
+    min-width: 15px; height: 15px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: #2f8af9;
+    color: #fff;
+    font: 700 9px/15px var(--font-mono, monospace);
+    text-align: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,.5);
+  }
+
+  .rail-actions-pill {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
+    border-radius: 999px;
+    background: radial-gradient(140% 100% at 30% 10%, rgba(255,255,255,.17) 0%, rgba(125,130,145,.10) 48%, rgba(20,21,26,.64) 100%);
+    backdrop-filter: blur(22px) saturate(185%);
+    -webkit-backdrop-filter: blur(22px) saturate(185%);
+    box-shadow:
+      0 8px 22px rgba(0,0,0,.46),
+      0 0 0 0.75px rgba(255,255,255,.22) inset,
+      0 1px 0 rgba(255,255,255,.32) inset;
+  }
+  .rail-mini-btn {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    border: 0;
+    background: transparent;
+    color: rgba(255,255,255,.86);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease, transform .14s ease;
+    position: relative;
+    padding: 0;
+  }
+  .rail-mini-btn:hover { background: rgba(255,255,255,.12); color: #fff; }
+  .rail-mini-btn:active { transform: scale(.9); }
+  .rail-mini-btn.on { background: rgba(255,255,255,.92); color: #000; }
+  .rail-mini-btn .act-dot {
+    position: absolute; top: 6px; right: 6px;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #30bd1b;
+    box-shadow: 0 0 6px rgba(48,189,27,.8);
+  }
+
+  /* Bottom-Right Vertical 4-Tab Capsule + Detached Circular '+' Button (Spotify-style!) */
+  .rail-bottom {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .tab-capsule {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 4px;
+    border-radius: 999px;
+    background: radial-gradient(150% 100% at 28% 8%, rgba(255,255,255,.20) 0%, rgba(130,136,150,.11) 45%, rgba(20,21,26,.68) 100%);
+    backdrop-filter: blur(24px) saturate(190%);
+    -webkit-backdrop-filter: blur(24px) saturate(190%);
+    box-shadow:
+      0 10px 26px rgba(0,0,0,.55),
+      0 0 0 0.75px rgba(255,255,255,.25) inset,
+      0 1.25px 0 rgba(255,255,255,.36) inset;
+  }
+  .tab-btn {
+    width: 36px; height: 34px;
+    border-radius: 999px;
+    border: 0;
+    background: transparent;
+    color: rgba(255,255,255,.56);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    position: relative;
+    transition: background .18s ease, color .18s ease, transform .14s ease;
+    padding: 0;
+  }
+  .tab-btn:hover { color: rgba(255,255,255,.88); }
+  .tab-btn:active { transform: scale(.9); }
+  .tab-btn.active {
+    background: rgba(255,255,255,.18);
+    color: #ffffff;
+    box-shadow: 0 0 0 0.75px rgba(255,255,255,.22) inset;
+  }
+  .tab-badge {
+    position: absolute;
+    top: 3px; right: 3px;
+    min-width: 13px; height: 13px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: #2f8af9;
+    color: #fff;
+    font: 700 8px/13px -apple-system, sans-serif;
+    text-align: center;
+  }
+
+  /* ── Compact iPhone Chrome (Top Bar + Floating Bottom 4-Tab Capsule + Detached '+') ── */
+  .compact-top {
+    display: none;
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    z-index: 40;
+    padding: 8px 14px 4px;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: none;
+  }
+  .compact-top > * { pointer-events: auto; }
+  .bezel.compact .compact-top { display: flex; }
+
+  .compact-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    padding: 0 4px;
+  }
+  .dynamic-island {
+    width: 78px; height: 20px;
+    border-radius: 999px;
+    background: #000;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.08);
+  }
+  .compact-nav-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 36px;
+    gap: 8px;
+  }
+  .compact-nav-row .glass-circle { width: 36px; height: 36px; }
+  .compact-nav-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #f4f4f6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .compact-bottom {
+    display: none;
+    position: absolute;
+    left: 12px; right: 12px; bottom: 12px;
+    z-index: 40;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    pointer-events: none;
+  }
+  .compact-bottom > * { pointer-events: auto; }
+  .bezel.compact .compact-bottom { display: flex; }
+  .compact-tab-capsule {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    padding: 4px;
+    border-radius: 999px;
+    background: radial-gradient(120% 180% at 30% 0%, rgba(255,255,255,.20) 0%, rgba(130,136,150,.11) 45%, rgba(18,19,24,.76) 100%);
+    backdrop-filter: blur(24px) saturate(190%);
+    -webkit-backdrop-filter: blur(24px) saturate(190%);
+    box-shadow:
+      0 10px 26px rgba(0,0,0,.55),
+      0 0 0 0.75px rgba(255,255,255,.25) inset,
+      0 1px 0 rgba(255,255,255,.34) inset;
+  }
+  .compact-tab-btn {
+    height: 40px;
+    border-radius: 999px;
+    border: 0;
+    background: transparent;
+    color: rgba(255,255,255,.56);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    cursor: pointer;
+    font-size: 9px;
+    font-weight: 500;
+    position: relative;
+    padding: 0;
+  }
+  .compact-tab-btn.active {
+    background: rgba(255,255,255,.17);
+    color: #fff;
+  }
+  .compact-plus {
+    width: 48px; height: 48px;
+    flex-shrink: 0;
+  }
+
+  /* ── Quick Action '+' Popover ── */
+  .quick-popover {
+    position: absolute;
+    right: 64px;
+    bottom: 12px;
+    width: 212px;
+    padding: 8px;
+    border-radius: 20px;
+    background: rgba(24,25,30,.86);
+    backdrop-filter: blur(28px) saturate(190%);
+    -webkit-backdrop-filter: blur(28px) saturate(190%);
+    box-shadow:
+      0 18px 42px rgba(0,0,0,.68),
+      0 0 0 0.75px rgba(255,255,255,.22) inset;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    transform-origin: bottom right;
+    animation: popIn .18s cubic-bezier(.22,1,.36,1);
+  }
+  .bezel.compact .quick-popover {
+    right: 14px;
+    bottom: 68px;
+  }
+  @keyframes popIn {
+    from { opacity: 0; transform: scale(.9) translateY(6px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  .pop-item {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: #f0f0f4;
+    font: 500 12px/1.2 -apple-system, sans-serif;
+    padding: 8px 10px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .pop-item:hover { background: rgba(255,255,255,.1); }
+  .pop-item .pop-meta {
+    margin-left: auto;
+    font-size: 10px;
+    color: #8f8f99;
+  }
+  .pop-sep {
+    height: 1px;
+    background: rgba(255,255,255,.08);
+    margin: 3px 6px;
+  }
+
+  /* ── Screen Interiors ── */
+  .page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 16px 10px;
+    flex-shrink: 0;
+  }
+  .bezel.compact .page-header { display: none; }
+  .page-title {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    color: #f4f4f6;
+  }
+  .page-sub {
+    font-size: 11px;
+    color: #8f8f96;
+    margin-left: 8px;
+    font-weight: 500;
+  }
+  .search-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: #17171b;
+    border: 1px solid rgba(255,255,255,.07);
+    color: #8f8f96;
+    font-size: 11.5px;
+    min-width: 150px;
+  }
+
+  .filter-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 16px 10px;
+    flex-shrink: 0;
+    overflow-x: auto;
+  }
+  .fchip {
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #19191d;
+    border: 1px solid rgba(255,255,255,.07);
+    color: #9b9ba4;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .fchip.on {
+    background: #e1e1e1;
+    color: #000;
+    border-color: transparent;
+    font-weight: 600;
+  }
+
+  /* Library 4-col (even fold-safe!) grid */
+  .lib-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 16px 16px;
+    scrollbar-width: none;
+  }
+  .lib-scroll::-webkit-scrollbar { display: none; }
+  .lib-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .bezel.compact .lib-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .tile {
+    position: relative;
+    border-radius: 13px;
+    overflow: hidden;
+    aspect-ratio: 4 / 5;
+    cursor: pointer;
+    border: 1px solid rgba(255,255,255,.08);
+    transition: transform .16s ease, border-color .16s ease;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 8px;
+    text-align: left;
+  }
+  .tile:hover { transform: translateY(-2px); border-color: rgba(255,255,255,.28); }
+  .tile:active { transform: scale(.97); }
+  .tile-top-badge {
+    position: absolute;
+    top: 7px; left: 7px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: rgba(0,0,0,.62);
+    backdrop-filter: blur(8px);
+    font: 600 9px/1.2 var(--font-mono, monospace);
+    color: #e6e6eb;
+  }
+  .tile-dot {
+    position: absolute;
+    top: 8px; right: 8px;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    box-shadow: 0 0 6px currentColor;
+  }
+  .tile-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    text-shadow: 0 1px 6px rgba(0,0,0,.8);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    position: relative;
+    z-index: 2;
+  }
+  .tile-meta {
+    font-size: 9.5px;
+    color: rgba(255,255,255,.72);
+    position: relative;
+    z-index: 2;
+  }
+  .tile-scrim {
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(0,0,0,.05) 35%, rgba(0,0,0,.78) 100%);
+    pointer-events: none;
+  }
+
+  /* ── Ambient Cinema Post Detail ── */
+  .cinema-wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    background: #070709;
+    overflow: hidden;
+  }
+  .bezel.compact .cinema-wrap {
+    flex-direction: column;
+  }
+  .cinema-glow {
+    position: absolute;
+    inset: -20%;
+    filter: blur(52px) saturate(160%);
+    opacity: .56;
+    pointer-events: none;
+    transition: background .4s ease;
+  }
+  .cinema-stage {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 12px 14px 14px;
+    min-width: 0;
+    z-index: 2;
+  }
+  .bezel.compact .cinema-stage {
+    padding: 74px 10px 64px;
+  }
+  .cinema-hud-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-right: 4px;
+  }
+  .bezel.compact .cinema-hud-top {
+    justify-content: center;
+  }
+  .identity-pill {
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    max-width: 245px;
+  }
+  .identity-pill span {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .vis-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  }
+  .cinema-media-card {
+    position: relative;
+    margin: auto;
+    width: 100%;
+    max-width: 280px;
+    aspect-ratio: 16 / 10;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 20px 50px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.14);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .bezel.compact .cinema-media-card {
+    max-width: 230px;
+    aspect-ratio: 4 / 3.8;
+  }
+  .play-orb {
+    width: 46px; height: 46px; border-radius: 50%;
+    background: rgba(255,255,255,.22);
+    backdrop-filter: blur(14px);
+    border: 1px solid rgba(255,255,255,.35);
+    display: grid; place-items: center;
+    color: #fff;
+  }
+  .scrubber {
+    position: absolute; left: 12px; right: 12px; bottom: 10px;
+    display: flex; align-items: center; gap: 8px;
+    font: 500 9.5px/1 var(--font-mono, monospace);
+    color: rgba(255,255,255,.82);
+  }
+  .scrub-track {
+    flex: 1; height: 3px; border-radius: 2px; background: rgba(255,255,255,.25); overflow: hidden;
+  }
+  .scrub-fill { width: 42%; height: 100%; background: #fff; border-radius: 2px; }
+
+  .cinema-hud-bottom {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .rendition-strip {
+    display: inline-flex;
+    gap: 3px;
+    padding: 3px;
+    border-radius: 999px;
+    background: rgba(16,17,22,.62);
+    backdrop-filter: blur(18px);
+    border: 1px solid rgba(255,255,255,.14);
+  }
+  .rend-tab {
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: rgba(255,255,255,.65);
+    border: 0; background: transparent; cursor: pointer;
+  }
+  .rend-tab.on { background: #fff; color: #000; }
+
+  .dual-url-dock {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .cta-prominent {
+    padding: 9px 14px;
+    border-radius: 999px;
+    border: 0;
+    background: #f0f0f3;
+    color: #000;
+    font: 600 11.5px/1 -apple-system, sans-serif;
+    display: inline-flex; align-items: center; gap: 6px;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(0,0,0,.45);
+  }
+  .cta-prominent.copied { background: #30bd1b; color: #000; }
+  .cta-glass {
+    padding: 9px 12px;
+    font: 600 11.5px/1 -apple-system, sans-serif;
+  }
+
+  /* Docked Studio Deck (Right Half in Duo, hidden in Compact) */
+  .studio-deck {
+    width: 248px;
+    padding: 14px 66px 14px 14px; /* Right padding clears Duo vertical rail cleanly! */
+    background: rgba(15,16,21,.76);
+    backdrop-filter: blur(26px);
+    border-left: 1px solid rgba(255,255,255,.09);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 3;
+    flex-shrink: 0;
+  }
+  .bezel.book .studio-deck {
+    width: 50%;
+    padding-left: 18px;
+    border-left: 1px solid rgba(255,255,255,.14);
+  }
+  .bezel.compact .studio-deck { display: none; }
+  .deck-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    padding: 2px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.07);
+  }
+  .deck-tabs button {
+    border: 0; background: transparent; color: #9a9aa6;
+    font-size: 10.5px; font-weight: 600; padding: 5px 4px; border-radius: 8px; cursor: pointer;
+  }
+  .deck-tabs button.on { background: rgba(255,255,255,.16); color: #fff; }
+  .deck-card {
+    background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 13px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .deck-k { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: #8f8f9a; font-weight: 600; }
+  .deck-row {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11.5px; color: #e6e6ec;
+  }
+  .deck-link-btn {
+    margin-top: 2px;
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,.12);
+    background: rgba(255,255,255,.06);
+    color: #fff;
+    font: 600 11px/1 -apple-system, sans-serif;
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: pointer;
+  }
+  .deck-link-btn:hover { background: rgba(255,255,255,.12); }
+
+  /* ── Twitch Browse + Single & Dual Stream ── */
+  .live-seg-bar {
+    display: inline-flex;
+    gap: 3px;
+    padding: 3px;
+    border-radius: 999px;
+    background: #17171b;
+    border: 1px solid rgba(255,255,255,.07);
+  }
+  .live-seg-bar span {
+    padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; color: #8f8f99;
+  }
+  .live-seg-bar span.on { background: #e1e1e1; color: #000; }
+
+  .stream-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .bezel.compact .stream-grid {
+    grid-template-columns: 1fr;
+  }
+  .stream-card {
+    background: #141418;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 15px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform .15s ease, border-color .15s ease;
+    text-align: left;
+    padding: 0;
+    color: inherit;
+  }
+  .stream-card:hover { transform: translateY(-2px); border-color: rgba(169,112,255,.45); }
+  .stream-thumb {
+    height: 86px;
+    position: relative;
+    padding: 8px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+  .live-pill {
+    padding: 2px 6px; border-radius: 5px;
+    background: #ed2236; color: #fff;
+    font: 700 9px/1.2 -apple-system, sans-serif;
+    letter-spacing: .04em;
+  }
+  .viewers-pill {
+    padding: 2px 6px; border-radius: 5px;
+    background: rgba(0,0,0,.62); color: #fff;
+    font: 600 9.5px/1.2 var(--font-mono, monospace);
+  }
+  .stream-info {
+    padding: 9px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .stream-name { font-size: 12.5px; font-weight: 700; color: #f4f4f6; }
+  .stream-game { font-size: 10.5px; color: #8f8f99; }
+  .dual-mini-cta {
+    padding: 5px 8px; border-radius: 8px;
+    background: rgba(169,112,255,.18);
+    border: 1px solid rgba(169,112,255,.35);
+    color: #d6bcff;
+    font: 600 10px/1 -apple-system, sans-serif;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  /* Twitch Live / Dual Watch Stage */
+  .watch-layout {
+    width: 100%; height: 100%;
+    display: flex;
+    background: #060608;
+  }
+  .bezel.compact .watch-layout {
+    flex-direction: column;
+    padding-top: 72px;
+    padding-bottom: 62px;
+  }
+  .watch-video-pane {
+    position: relative;
+    flex: 1.35;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 12px;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .bezel.book .watch-video-pane { flex: 1; }
+  .bezel.compact .watch-video-pane { flex: none; height: 175px; }
+
+  .stream-bg {
+    position: absolute; inset: 0;
+    pointer-events: none;
+  }
+  .stream-hud-top {
+    position: relative; z-index: 3;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .stream-inset {
+    position: absolute;
+    right: 12px; bottom: 54px;
+    width: 124px; height: 70px;
+    border-radius: 11px;
+    overflow: hidden;
+    border: 1.5px solid #22d3ee;
+    box-shadow: 0 10px 24px rgba(0,0,0,.6);
+    cursor: pointer;
+    z-index: 5;
+    display: flex; flex-direction: column; justify-content: space-between;
+    padding: 5px 7px;
+    transition: transform .16s ease;
+  }
+  .stream-inset:hover { transform: scale(1.04); }
+  .stream-inset-label {
+    font: 700 9.5px/1 -apple-system, sans-serif; color: #fff;
+    text-shadow: 0 1px 4px rgba(0,0,0,.9);
+  }
+  .stream-inset-hint {
+    font: 600 8.5px/1 -apple-system, sans-serif;
+    color: rgba(255,255,255,.85);
+    background: rgba(0,0,0,.55);
+    padding: 2px 5px; border-radius: 4px; align-self: flex-start;
+  }
+  .mixer-dock {
+    position: relative; z-index: 4;
+    align-self: center;
+    padding: 4px;
+    gap: 3px;
+  }
+  .mixer-btn {
+    border: 0; background: transparent; color: rgba(255,255,255,.72);
+    font: 600 10.5px/1 -apple-system, sans-serif;
+    padding: 6px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .mixer-btn.on { background: #fff; color: #000; }
+
+  .watch-chat-pane {
+    width: 240px;
+    padding: 12px 66px 12px 12px; /* Clears Duo trailing vertical rail! */
+    background: #0d0d11;
+    border-left: 1px solid rgba(255,255,255,.08);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .bezel.book .watch-chat-pane { width: 50%; padding-left: 18px; }
+  .bezel.compact .watch-chat-pane {
+    width: 100%; flex: 1; padding: 10px 14px; border-left: 0; border-top: 1px solid rgba(255,255,255,.08);
+  }
+  .chat-head {
+    font-size: 11px; font-weight: 700; color: #a1a1ad;
+    text-transform: uppercase; letter-spacing: .05em;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .chat-msgs {
+    flex: 1;
+    display: flex; flex-direction: column; gap: 7px;
+    overflow: hidden;
+    font-size: 11px; line-height: 1.35; color: #d6d6de;
+  }
+  .chat-tag {
+    display: inline-block; padding: 1px 4px; border-radius: 4px;
+    font: 700 9px/1.2 var(--font-mono, monospace); margin-right: 4px; color: #000;
+  }
+  .chat-composer {
+    padding: 7px 10px;
+    border-radius: 999px;
+    background: #1a1a20;
+    border: 1px solid rgba(255,255,255,.08);
+    font-size: 11px; color: #7a7a85;
+  }
+
+  /* ── Tools Hub & Settings Sub-views ── */
+  .hub-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .bezel.compact .hub-grid { grid-template-columns: 1fr; }
+  .hub-card {
+    background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 15px;
+    padding: 12px;
+    display: flex; align-items: center; gap: 11px;
+    cursor: pointer; text-align: left; color: inherit;
+    transition: background .15s ease, border-color .15s ease;
+  }
+  .hub-card:hover { background: rgba(255,255,255,.09); border-color: rgba(255,255,255,.18); }
+  .hub-icon {
+    width: 34px; height: 34px; border-radius: 9px;
+    background: rgba(255,255,255,.07);
+    display: grid; place-items: center; flex-shrink: 0; color: #f0f0f4;
+  }
+  .hub-name { font-size: 13px; font-weight: 600; color: #f4f4f6; }
+  .hub-desc { font-size: 10.5px; color: #8f8f99; margin-top: 1px; }
+  .hub-badge {
+    margin-left: auto;
+    padding: 2px 7px; border-radius: 999px;
+    background: #2f8af9; color: #fff;
+    font: 700 10px/1.3 -apple-system, sans-serif;
+  }
+
+  .settings-list {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .set-group {
+    background: #141418;
+    border: 1px solid rgba(255,255,255,.07);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .set-row {
+    width: 100%; border: 0; background: transparent; color: inherit;
+    padding: 11px 13px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    font-size: 12.5px; cursor: pointer; text-align: left;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+  }
+  .set-row:last-child { border-bottom: 0; }
+  .set-row:hover { background: rgba(255,255,255,.04); }
+  .set-val { font-size: 11.5px; color: #8f8f99; }
+  .pill-switch {
+    width: 34px; height: 20px; border-radius: 999px;
+    background: #30bd1b; position: relative; flex-shrink: 0;
+  }
+  .pill-switch::after {
+    content: ""; position: absolute; top: 2px; right: 2px;
+    width: 16px; height: 16px; border-radius: 50%; background: #fff;
+  }
+
+  /* ── Save / Capture Root ── */
+  .save-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 16px;
+  }
+  .circle-pair {
+    display: flex; align-items: center; gap: 22px;
+  }
+  .cap-circle {
+    width: 68px; height: 68px; border-radius: 50%;
+    border: 0; background: #ffffff; color: #000;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    font: 600 10px/1 -apple-system, sans-serif;
+    cursor: pointer;
+    box-shadow: 0 10px 28px rgba(0,0,0,.55);
+    transition: transform .15s ease;
+  }
+  .cap-circle:active { transform: scale(.93); }
+  .queue-card {
+    width: 100%; max-width: 410px;
+    background: #141418;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 16px;
+    padding: 11px 13px;
+    display: flex; align-items: center; gap: 11px;
+    cursor: pointer;
+  }
+  .queue-card:hover { border-color: rgba(255,255,255,.2); }
+
+  /* ── HIG Guides Overlay ── */
+  .hig-guides {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    z-index: 45;
+    display: none;
+  }
+  .hig-guides.show { display: block; }
+  .hig-rail-zone {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 64px;
+    background: rgba(47,138,249,.12);
+    border-left: 1.5px dashed rgba(47,138,249,.8);
+  }
+  .bezel.compact .hig-rail-zone { display: none; }
+  .hig-fold-zone {
+    position: absolute; top: 0; bottom: 0; left: 50%;
+    width: 18px; margin-left: -9px;
+    background: rgba(245,158,11,.13);
+    border-left: 1px dashed rgba(245,158,11,.75);
+    border-right: 1px dashed rgba(245,158,11,.75);
+  }
+  .bezel.compact .hig-fold-zone { display: none; }
+  .hig-tag {
+    position: absolute;
+    font: 600 9px/1 var(--font-mono, monospace);
+    padding: 3px 6px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+
+  /* ── Compact Side Notes (only shown beside Compact iPhone on desktop) ── */
+  .compact-notes {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    gap: 10px;
+    justify-content: center;
+  }
+  .stage.compact-mode .compact-notes {
+    display: flex;
+  }
+  .note-box {
+    background: var(--card, rgba(255,255,255,.04));
+    border: 1px solid var(--border, rgba(128,128,140,.22));
+    border-radius: var(--radius, 12px);
+    padding: 13px 14px;
+  }
+  .note-box h4 {
+    margin: 0 0 5px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--foreground, #f2f2f5);
+  }
+  .note-box p {
+    margin: 0;
+    font-size: 11.5px;
+    line-height: 1.48;
+    color: var(--muted-foreground, #9a9aa6);
+  }
+  .note-box code {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 10.5px;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--code-background, rgba(128,128,140,.18));
+    color: var(--foreground, #fff);
+  }
+
+  /* ── Bottom Live Inspector Footer ── */
+  .status-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: var(--radius, 12px);
+    background: var(--card, rgba(128,128,140,.08));
+    border: 1px solid var(--border, rgba(128,128,140,.2));
+    font-size: 11.5px;
+  }
+  .crumb {
+    display: flex; align-items: center; gap: 6px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    color: var(--foreground, #f2f2f5);
+  }
+  .crumb-sep { color: var(--muted-foreground, #7a7a85); }
+  .rail-meta {
+    color: var(--muted-foreground, #9a9aa6);
+    font-size: 11px;
+  }
+  .rail-meta strong { color: var(--foreground, #fff); font-weight: 600; }
+
+  /* Toast inside device screen */
+  .screen-toast {
+    position: absolute;
+    top: 14px; left: 50%;
+    transform: translateX(-50%);
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(24,25,30,.85);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,.18);
+    color: #fff;
+    font: 600 11px/1.2 -apple-system, sans-serif;
+    z-index: 70;
+    pointer-events: none;
+    animation: popIn .18s ease;
+  }
+
+  @media (max-width: 640px) {
+    .bezel { height: 390px; border-radius: 26px; padding: 6px; }
+    .screen { border-radius: 20px; }
+    .stage.compact-mode { flex-direction: column; align-items: center; }
+    .compact-notes { width: 100%; }
+    .studio-deck, .watch-chat-pane { width: 185px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- Controls Row 1: Posture + HIG Guides -->
+  <div class="controls">
+    <div class="seg" role="tablist" aria-label="Device posture">
+      <button id="pos-duo" class="active" onclick="setPosture('duo')">Duo Landscape</button>
+      <button id="pos-book" onclick="setPosture('book')">Duo Book Split</button>
+      <button id="pos-compact" onclick="setPosture('compact')">Compact iPhone</button>
+    </div>
+    <button id="btn-guides" class="toggle-btn" onclick="toggleGuides()">
+      <span class="toggle-dot"></span>HIG Guides
+    </button>
+  </div>
+
+  <!-- Controls Row 2: Quick Screen Presets -->
+  <div class="presets">
+    <span class="presets-label">Jump:</span>
+    <button class="chip" data-preset="library" onclick="jumpPreset('library')">Library Grid</button>
+    <button class="chip active" data-preset="detail" onclick="jumpPreset('detail')">Post Detail (Ambient)</button>
+    <button class="chip" data-preset="twitch" onclick="jumpPreset('twitch')">Twitch Live</button>
+    <button class="chip" data-preset="dual" onclick="jumpPreset('dual')">Dual Stream</button>
+    <button class="chip" data-preset="settings" onclick="jumpPreset('settings')">Tools › Settings</button>
+  </div>
+
+  <!-- Device Stage -->
+  <div id="stage" class="stage">
+    <div id="bezel" class="bezel">
+      <div id="screen" class="screen">
+        <!-- Main Content Viewport -->
+        <div id="viewport" class="viewport"></div>
+
+        <!-- iPhone Duo Right-Side Vertical Controls Rail (Spotify-style!) -->
+        <aside class="duo-rail" aria-label="iPhone Duo Vertical Controls Rail">
+          <div class="rail-top">
+            <!-- System Status Circle -->
+            <div class="status-circle" title="iOS 27.1 Duo System Status Circle">
+              <svg class="status-arc" viewBox="0 0 38 38">
+                <circle cx="19" cy="19" r="17" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="2"/>
+                <circle cx="19" cy="19" r="17" fill="none" stroke="#30bd1b" stroke-width="2"
+                  stroke-dasharray="76 110" stroke-linecap="round" transform="rotate(-110 19 19)"/>
+              </svg>
+              <span class="status-time">1:00</span>
+              <span class="status-batt">71⚡</span>
+              <span class="status-dots"><i></i><i></i><i></i><i></i></span>
+            </div>
+
+            <!-- Dynamic Top-Right Rail Slot: Unified Circular Liquid Glass '<' Back Button + Context Actions -->
+            <div id="rail-back-slot" class="rail-back-slot"></div>
+          </div>
+
+          <!-- Bottom-Right: Floating 4-Tab Vertical Liquid Glass Capsule + Detached '+' Action Circle -->
+          <div class="rail-bottom">
+            <nav id="duo-tabs" class="tab-capsule" aria-label="Primary tabs"></nav>
+            <button id="duo-plus-btn" class="glass-circle" onclick="toggleQuickPopover()" title="Quick Capture, Activity &amp; Settings" aria-label="Quick Actions">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+            </button>
+          </div>
+        </aside>
+
+        <!-- Compact iPhone Top & Bottom Chrome -->
+        <div id="compact-top" class="compact-top"></div>
+        <div id="compact-bottom" class="compact-bottom"></div>
+
+        <!-- Quick '+' Popover -->
+        <div id="quick-popover-host"></div>
+
+        <!-- HIG Guides Overlay -->
+        <div id="hig-guides" class="hig-guides">
+          <div class="hig-rail-zone">
+            <span class="hig-tag" style="top:14px; right:68px; background:rgba(47,138,249,.9); color:#fff;">Vertical Controls Rail · safeAreaTrailing</span>
+            <span class="hig-tag" style="top:64px; right:68px; background:rgba(47,138,249,.9); color:#fff;">Unified &lt; Back · 44pt · .visibilityPriority(.high)</span>
+            <span class="hig-tag" style="bottom:20px; right:68px; background:rgba(47,138,249,.9); color:#fff;">4-Tab Capsule + Quick '+'</span>
+          </div>
+          <div class="hig-fold-zone">
+            <span class="hig-tag" style="top:50%; left:50%; transform:translate(-50%,-50%) rotate(-90deg); background:rgba(245,158,11,.92); color:#000;">ReservedRegion(.division)</span>
+          </div>
+        </div>
+
+        <!-- Screen Toast -->
+        <div id="toast-host"></div>
+      </div>
+    </div>
+
+    <!-- Side Comparison Notes when in Compact iPhone Mode -->
+    <div class="compact-notes">
+      <div class="note-box">
+        <h4>Same Circular Liquid Glass <code>&lt;</code> Everywhere</h4>
+        <p>On Compact iPhone, the exact same <code>44pt</code> circular Liquid Glass <code>chevron.backward</code> sits top-leading — never switching to text labels or ad-hoc <code>✕</code> buttons across Detail, Stream, Tools, or Settings.</p>
+      </div>
+      <div class="note-box">
+        <h4>Horizontal Capsule → Duo Vertical Rail</h4>
+        <p>The 4-tab capsule (Save, Library, Live, Tools) and detached <code>+</code> quick-action circle fold seamlessly between the bottom dock (Compact / Inner Portrait) and the right-side Vertical Controls rail (Duo Landscape / Outer).</p>
+      </div>
+      <div class="note-box">
+        <h4>Zero Reflow Across Fold / Unfold</h4>
+        <p>Pushing Detail &amp; Streams inside the shared <code>NavigationStack</code> keeps playback, scroll offset, and the bottom/side tab rail alive without <code>PaneHost</code> covering the system chrome.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Live Navigation Stack Status Footer -->
+  <div class="status-strip">
+    <div id="crumb" class="crumb"></div>
+    <div id="rail-meta" class="rail-meta"></div>
+  </div>
+</div>
+
+<script>
+const ICONS = {
+  back: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>`,
+  save: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8.5 12.5L12 16l3.5-3.5"/></svg>`,
+  library: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="14" height="14" rx="2.5"/><path d="M7 15l3-3 2.5 2.5L15 12l2 2"/><path d="M17 8h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-2"/></svg>`,
+  live: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 19.1a10 10 0 0 1 0-14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></svg>`,
+  tools: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>`,
+  gear: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+  activity: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12h4l2.5-6 3 12 2.5-6H20"/></svg>`,
+  pause: `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1.2"/><rect x="14" y="4" width="4" height="16" rx="1.2"/></svg>`,
+  play: `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12.5-7.5L7 4.5z"/></svg>`,
+  pip: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><rect x="12" y="10" width="7" height="5.5" rx="1" fill="currentColor"/></svg>`,
+  dual: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="16" rx="1.8"/><rect x="13" y="4" width="8" height="16" rx="1.8"/></svg>`,
+  sidebar: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg>`,
+  more: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`,
+  link: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`,
+  share: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>`,
+  chevR: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>`,
+  paste: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>`,
+  file: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>`
+};
+
+const POSTS = [
+  { id: 'tokyo', title: 'tokyo_neon_walk.mp4', kind: 'Video', dur: '0:24', vis: 'Public', visColor: '#30bd1b', bg: 'linear-gradient(155deg,#8b1d5e 0%,#2b1c5a 52%,#0f1c3d 100%)', glow: 'radial-gradient(circle at 35% 35%, #d946ef, #2563eb 55%, #070709 85%)', size: '18.4 MB', res: '1080×1920' },
+  { id: 'capy', title: 'capy_yuzu_bath.mp4', kind: 'WebP', dur: '0:06', vis: 'Private', visColor: '#2f8af9', bg: 'linear-gradient(155deg,#b45309 0%,#713f12 52%,#1c1917 100%)', glow: 'radial-gradient(circle at 40% 35%, #f59e0b, #78350f 55%, #070709 85%)', size: '4.1 MB', res: '720×720' },
+  { id: 'ramm', title: 'mexico_city_clip.mp4', kind: 'Video', dur: '1:12', vis: 'Public', visColor: '#30bd1b', bg: 'linear-gradient(155deg,#991b1b 0%,#450a0a 55%,#111116 100%)', glow: 'radial-gradient(circle at 30% 35%, #ef4444, #7f1d1d 55%, #070709 85%)', size: '42.8 MB', res: '1920×1080' },
+  { id: 'shibuya', title: 'shibuya_crossing', kind: 'Gallery · 6', dur: '6 photos', vis: 'Off', visColor: '#8f8f99', bg: 'linear-gradient(155deg,#0f766e 0%,#134e4a 52%,#0b1320 100%)', glow: 'radial-gradient(circle at 40% 40%, #14b8a6, #0f172a 60%, #070709 85%)', size: '21.0 MB', res: '4032×3024' },
+  { id: 'synth', title: 'midnight_synth_04.mp4', kind: 'Video', dur: '0:41', vis: 'Public', visColor: '#30bd1b', bg: 'linear-gradient(155deg,#4338ca 0%,#1e1b4b 55%,#090910 100%)', glow: 'radial-gradient(circle at 38% 32%, #6366f1, #1e1b4b 58%, #070709 85%)', size: '26.2 MB', res: '1920×1080' },
+  { id: 'peepo', title: 'peepo_spin_7tv.webp', kind: 'WebP', dur: '0:03', vis: 'Public', visColor: '#30bd1b', bg: 'linear-gradient(155deg,#15803d 0%,#14532d 55%,#09120e 100%)', glow: 'radial-gradient(circle at 35% 35%, #22c55e, #14532d 55%, #070709 85%)', size: '1.2 MB', res: '512×512' },
+  { id: 'rain', title: 'kyoto_alley_rain.mp4', kind: 'Video', dur: '0:19', vis: 'Private', visColor: '#2f8af9', bg: 'linear-gradient(155deg,#1d4ed8 0%,#1e3a8a 55%,#0c1222 100%)', glow: 'radial-gradient(circle at 38% 38%, #3b82f6, #1e3a8a 58%, #070709 85%)', size: '14.9 MB', res: '1080×1920' },
+  { id: 'stage', title: 'obs_intro_stinger.mp4', kind: 'Video', dur: '0:08', vis: 'Off', visColor: '#8f8f99', bg: 'linear-gradient(155deg,#6d28d9 0%,#3b0764 55%,#120a1c 100%)', glow: 'radial-gradient(circle at 35% 35%, #a855f7, #3b0764 58%, #070709 85%)', size: '9.4 MB', res: '1920×1080' }
+];
+
+const CHANNELS = [
+  { login: 'caedrel', name: 'Caedrel', game: 'League of Legends', viewers: '48.2K', bg: 'linear-gradient(145deg,#4c1d95,#1e1b4b 60%,#0b0b12)' },
+  { login: 'northernlion', name: 'Northernlion', game: 'Balatro', viewers: '14.6K', bg: 'linear-gradient(145deg,#0f766e,#134e4a 60%,#0a1214)' },
+  { login: 'lirik', name: 'LIRIK', game: 'Just Chatting', viewers: '22.1K', bg: 'linear-gradient(145deg,#9a3412,#431407 60%,#120b09)' },
+  { login: 'piratesoftware', name: 'PirateSoftware', game: 'Software & Game Dev', viewers: '11.4K', bg: 'linear-gradient(145deg,#1d4ed8,#172554 60%,#090e1c)' }
+];
+
+const state = {
+  posture: 'duo', // 'duo' | 'book' | 'compact'
+  guides: false,
+  tab: 'library', // 'save' | 'library' | 'live' | 'tools'
+  stacks: {
+    save: [{ view: 'saveRoot', title: 'Capture' }],
+    library: [
+      { view: 'libraryRoot', title: 'Library' },
+      { view: 'postDetail', title: 'tokyo_neon_walk.mp4', postId: 'tokyo', deckTab: 'access', rend: 'Video', deckOpen: true }
+    ],
+    live: [{ view: 'liveRoot', title: 'Live' }],
+    tools: [{ view: 'toolsRoot', title: 'Tools' }]
+  },
+  quickOpen: false,
+  streamPaused: false,
+  dualFocus: 'primary',
+  audioMix: 'A',
+  copied: false,
+  toastTimer: null
+};
+
+function currentStack() { return state.stacks[state.tab]; }
+function topScreen() { const s = currentStack(); return s[s.length - 1]; }
+function canGoBack() { return currentStack().length > 1; }
+
+function pushScreen(route) {
+  state.quickOpen = false;
+  currentStack().push(route);
+  render();
+}
+
+function popScreen() {
+  state.quickOpen = false;
+  const s = currentStack();
+  if (s.length > 1) {
+    s.pop();
+    render();
+  }
+}
+
+function selectTab(tab) {
+  state.quickOpen = false;
+  if (state.tab === tab) {
+    // Tapping active tab pops to root (standard iOS convention)
+    const s = state.stacks[tab];
+    if (s.length > 1) { s.length = 1; }
+  } else {
+    state.tab = tab;
+  }
+  render();
+}
+
+function setPosture(p) {
+  state.posture = p;
+  state.quickOpen = false;
+  ['duo','book','compact'].forEach(id => {
+    document.getElementById('pos-' + id).classList.toggle('active', id === p);
+  });
+  render();
+}
+
+function toggleGuides() {
+  state.guides = !state.guides;
+  document.getElementById('btn-guides').classList.toggle('active', state.guides);
+  render();
+}
+
+function toggleQuickPopover() {
+  state.quickOpen = !state.quickOpen;
+  render();
+}
+
+function showToast(msg) {
+  const host = document.getElementById('toast-host');
+  host.innerHTML = `<div class="screen-toast">${msg}</div>`;
+  clearTimeout(state.toastTimer);
+  state.toastTimer = setTimeout(() => { host.innerHTML = ''; }, 1700);
+}
+
+function jumpPreset(name) {
+  state.quickOpen = false;
+  if (name === 'library') {
+    state.tab = 'library';
+    state.stacks.library = [{ view: 'libraryRoot', title: 'Library' }];
+  } else if (name === 'detail') {
+    state.tab = 'library';
+    state.stacks.library = [
+      { view: 'libraryRoot', title: 'Library' },
+      { view: 'postDetail', title: 'tokyo_neon_walk.mp4', postId: 'tokyo', deckTab: 'access', rend: 'Video', deckOpen: true }
+    ];
+  } else if (name === 'twitch') {
+    state.tab = 'live';
+    state.stacks.live = [
+      { view: 'liveRoot', title: 'Live' },
+      { view: 'twitchStream', title: 'Caedrel', primary: 'caedrel', secondary: null }
+    ];
+  } else if (name === 'dual') {
+    state.tab = 'live';
+    state.stacks.live = [
+      { view: 'liveRoot', title: 'Live' },
+      { view: 'twitchStream', title: 'Caedrel + Northernlion', primary: 'caedrel', secondary: 'northernlion' }
+    ];
+  } else if (name === 'settings') {
+    state.tab = 'tools';
+    state.stacks.tools = [
+      { view: 'toolsRoot', title: 'Tools' },
+      { view: 'settingsHub', title: 'Settings' },
+      { view: 'settingsGroup', title: 'Media & WebP', group: 'media' }
+    ];
+  }
+  render();
+}
+
+function syncPresetHighlight() {
+  const top = topScreen();
+  let active = '';
+  if (top.view === 'libraryRoot') active = 'library';
+  else if (top.view === 'postDetail' || top.view === 'postSettings') active = 'detail';
+  else if (top.view === 'twitchStream' && !top.secondary) active = 'twitch';
+  else if (top.view === 'twitchStream' && top.secondary) active = 'dual';
+  else if (top.view === 'settingsHub' || top.view === 'settingsGroup') active = 'settings';
+  document.querySelectorAll('.chip[data-preset]').forEach(el => {
+    el.classList.toggle('active', el.dataset.preset === active);
+  });
+}
+
+function openSettingsFromAnywhere() {
+  state.quickOpen = false;
+  state.tab = 'tools';
+  state.stacks.tools = [
+    { view: 'toolsRoot', title: 'Tools' },
+    { view: 'settingsHub', title: 'Settings' }
+  ];
+  render();
+}
+
+function openActivityModal() {
+  state.quickOpen = false;
+  pushScreen({ view: 'activityView', title: 'Activity & Health' });
+}
+
+function toggleDualOnStream() {
+  const top = topScreen();
+  if (top.view !== 'twitchStream') return;
+  if (top.secondary) {
+    top.secondary = null;
+    top.title = CHANNELS.find(c => c.login === top.primary)?.name || top.primary;
+    showToast('Switched to single stream');
+  } else {
+    top.secondary = top.primary === 'caedrel' ? 'northernlion' : 'caedrel';
+    const pName = CHANNELS.find(c => c.login === top.primary)?.name || top.primary;
+    const sName = CHANNELS.find(c => c.login === top.secondary)?.name || top.secondary;
+    top.title = `${pName} + ${sName}`;
+    showToast('Dual Stream active · zero flash');
+  }
+  render();
+}
+
+function renderDuoRail() {
+  const top = topScreen();
+  const depth = currentStack().length - 1;
+  const backSlot = document.getElementById('rail-back-slot');
+
+  let topHTML = '';
+  if (canGoBack()) {
+    topHTML += `
+      <button class="glass-circle back-btn pulse-hint" onclick="popScreen()" title="Back (${currentStack()[currentStack().length - 2].title})" aria-label="Back">
+        ${ICONS.back}
+        ${depth > 1 ? `<span class="depth-badge">${depth}</span>` : ''}
+      </button>`;
+  }
+
+  // Contextual high-priority vertical toolbar items below '<' (or at top on root)
+  if (top.view === 'postDetail') {
+    topHTML += `
+      <div class="rail-actions-pill">
+        <button class="rail-mini-btn ${top.deckOpen ? 'on' : ''}" onclick="toggleDeck()" title="Toggle Studio Deck">${ICONS.sidebar}</button>
+        <button class="rail-mini-btn" onclick="pushScreen({view:'postSettings', title:'Link & Visibility', postId:'${top.postId}'})" title="Link Settings">${ICONS.more}</button>
+      </div>`;
+  } else if (top.view === 'twitchStream') {
+    topHTML += `
+      <div class="rail-actions-pill">
+        <button class="rail-mini-btn" onclick="state.streamPaused=!state.streamPaused;render()" title="${state.streamPaused ? 'Play' : 'Pause'}">${state.streamPaused ? ICONS.play : ICONS.pause}</button>
+        <button class="rail-mini-btn" onclick="showToast('Picture in Picture ready')" title="Picture in Picture">${ICONS.pip}</button>
+        <button class="rail-mini-btn ${top.secondary ? 'on' : ''}" onclick="toggleDualOnStream()" title="Toggle Dual Stream">${ICONS.dual}</button>
+      </div>`;
+  } else if (!canGoBack()) {
+    // Root screens keep the top-right vertical rail super clean: Activity pill + Settings gear
+    topHTML += `
+      <div class="rail-actions-pill">
+        <button class="rail-mini-btn" onclick="openActivityModal()" title="Activity &amp; Queue (1 running)">
+          ${ICONS.activity}<span class="act-dot"></span>
+        </button>
+        <button class="rail-mini-btn" onclick="openSettingsFromAnywhere()" title="Settings">${ICONS.gear}</button>
+      </div>`;
+  }
+
+  backSlot.innerHTML = topHTML;
+
+  // 4-tab vertical Liquid Glass capsule
+  const tabs = [
+    { id: 'save', label: 'Save', icon: ICONS.save },
+    { id: 'library', label: 'Library', icon: ICONS.library },
+    { id: 'live', label: 'Live', icon: ICONS.live },
+    { id: 'tools', label: 'Tools', icon: ICONS.tools, badge: 2 }
+  ];
+  document.getElementById('duo-tabs').innerHTML = tabs.map(t => `
+    <button class="tab-btn ${state.tab === t.id ? 'active' : ''}" onclick="selectTab('${t.id}')" title="${t.label}" aria-label="${t.label}">
+      ${t.icon}
+      ${t.badge ? `<span class="tab-badge">${t.badge}</span>` : ''}
+    </button>
+  `).join('');
+
+  document.getElementById('duo-plus-btn').classList.toggle('active-tint', state.quickOpen);
+}
+
+function renderCompactChrome() {
+  const top = topScreen();
+  const isMedia = top.view === 'postDetail' || top.view === 'twitchStream';
+  const depth = currentStack().length - 1;
+
+  const leftControl = canGoBack()
+    ? `<button class="glass-circle back-btn" onclick="popScreen()" aria-label="Back">${ICONS.back}${depth > 1 ? `<span class="depth-badge">${depth}</span>` : ''}</button>`
+    : `<span class="compact-nav-title">${top.title}</span>`;
+
+  const centerTitle = canGoBack() && !isMedia
+    ? `<span class="compact-nav-title">${top.title}</span>`
+    : `<span></span>`;
+
+  let rightControl = '';
+  if (top.view === 'twitchStream') {
+    rightControl = `<button class="glass-circle ${top.secondary ? 'active-tint' : ''}" onclick="toggleDualOnStream()" title="Dual Stream">${ICONS.dual}</button>`;
+  } else if (top.view === 'postDetail') {
+    rightControl = `<button class="glass-circle" onclick="pushScreen({view:'postSettings', title:'Link & Visibility', postId:'${top.postId}'})" title="Link Settings">${ICONS.more}</button>`;
+  } else {
+    rightControl = `<button class="glass-circle" onclick="openSettingsFromAnywhere()" title="Settings">${ICONS.gear}</button>`;
+  }
+
+  document.getElementById('compact-top').innerHTML = `
+    <div class="compact-status">
+      <span>1:00</span>
+      <div class="dynamic-island"></div>
+      <span>5G · 71%</span>
+    </div>
+    <div class="compact-nav-row">
+      ${leftControl}
+      ${centerTitle}
+      ${rightControl}
+    </div>
+  `;
+
+  const tabs = [
+    { id: 'save', label: 'Save', icon: ICONS.save },
+    { id: 'library', label: 'Library', icon: ICONS.library },
+    { id: 'live', label: 'Live', icon: ICONS.live },
+    { id: 'tools', label: 'Tools', icon: ICONS.tools, badge: 2 }
+  ];
+  document.getElementById('compact-bottom').innerHTML = `
+    <nav class="compact-tab-capsule" aria-label="Primary tabs">
+      ${tabs.map(t => `
+        <button class="compact-tab-btn ${state.tab === t.id ? 'active' : ''}" onclick="selectTab('${t.id}')">
+          ${t.icon}<span>${t.label}</span>
+          ${t.badge ? `<span class="tab-badge">${t.badge}</span>` : ''}
+        </button>
+      `).join('')}
+    </nav>
+    <button class="glass-circle compact-plus ${state.quickOpen ? 'active-tint' : ''}" onclick="toggleQuickPopover()" aria-label="Quick Actions">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  `;
+}
+
+function renderQuickPopover() {
+  const host = document.getElementById('quick-popover-host');
+  if (!state.quickOpen) { host.innerHTML = ''; return; }
+  host.innerHTML = `
+    <div class="quick-popover">
+      <button class="pop-item" onclick="state.quickOpen=false;showToast('Pasted link queued to Save');render()">
+        ${ICONS.paste}<span>Paste Link</span><span class="pop-meta">⌘V</span>
+      </button>
+      <button class="pop-item" onclick="state.quickOpen=false;showToast('Opened Photos picker');render()">
+        ${ICONS.library}<span>Import from Photos</span>
+      </button>
+      <button class="pop-item" onclick="state.quickOpen=false;showToast('Opened Files importer');render()">
+        ${ICONS.file}<span>Choose File</span>
+      </button>
+      <div class="pop-sep"></div>
+      <button class="pop-item" onclick="openActivityModal()">
+        ${ICONS.activity}<span>Activity &amp; Health</span><span class="pop-meta" style="color:#30bd1b;">1 live</span>
+      </button>
+      <button class="pop-item" onclick="openSettingsFromAnywhere()">
+        ${ICONS.gear}<span>Settings</span>
+      </button>
+    </div>
+  `;
+}
+
+function toggleDeck() {
+  const top = topScreen();
+  if (top.view === 'postDetail') {
+    top.deckOpen = !top.deckOpen;
+    render();
+  }
+}
+
+function setDeckTab(t) {
+  const top = topScreen();
+  if (top.view === 'postDetail') { top.deckTab = t; render(); }
+}
+
+function setRendition(r) {
+  const top = topScreen();
+  if (top.view === 'postDetail') { top.rend = r; render(); }
+}
+
+function copyShareLink() {
+  state.copied = true;
+  showToast('Copied share link');
+  render();
+  setTimeout(() => { state.copied = false; render(); }, 1400);
+}
+
+function renderViewport() {
+  const vp = document.getElementById('viewport');
+  const top = topScreen();
+  const isFullBleed = top.view === 'postDetail' || top.view === 'twitchStream';
+  vp.classList.toggle('full-bleed', isFullBleed);
+
+  if (top.view === 'saveRoot') {
+    vp.innerHTML = `
+      <div class="page-header">
+        <div><span class="page-title">Capture</span><span class="page-sub">capystore · online</span></div>
+        <span class="fchip on">Auto-title ON</span>
+      </div>
+      <div class="save-body">
+        <div class="circle-pair">
+          <button class="cap-circle" onclick="showToast('Clipboard link queued')">
+            ${ICONS.paste}<span>paste</span>
+          </button>
+          <button class="cap-circle" onclick="showToast('Choose Photos or Files')">
+            ${ICONS.file}<span>file</span>
+          </button>
+        </div>
+        <div class="queue-card" onclick="openActivityModal()">
+          <div class="hub-icon" style="background:rgba(48,189,27,.16); color:#30bd1b;">${ICONS.activity}</div>
+          <div style="flex:1; min-width:0;">
+            <div class="hub-name" style="font-size:12px;">tokyo_neon_walk.mp4 · WebP transcode</div>
+            <div class="hub-desc">78% · Tap to open Activity (pushes with &lt; back)</div>
+          </div>
+          ${ICONS.chevR}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (top.view === 'libraryRoot') {
+    vp.innerHTML = `
+      <div class="page-header">
+        <div><span class="page-title">Library</span><span class="page-sub">4-col fold-safe grid</span></div>
+        <div class="search-pill">Search library…</div>
+      </div>
+      <div class="filter-row">
+        <span class="fchip on">All · 148</span>
+        <span class="fchip">Video</span>
+        <span class="fchip">WebP</span>
+        <span class="fchip">Galleries</span>
+        <span class="fchip">Collections</span>
+      </div>
+      <div class="lib-scroll">
+        <div class="lib-grid">
+          ${POSTS.map(p => `
+            <button class="tile" style="background:${p.bg}" onclick="pushScreen({view:'postDetail', title:'${p.title}', postId:'${p.id}', deckTab:'access', rend:'${p.kind === 'WebP' ? 'WebP 1' : 'Video'}', deckOpen:true})">
+              <div class="tile-scrim"></div>
+              <span class="tile-top-badge">${p.dur}</span>
+              <span class="tile-dot" style="background:${p.visColor}; color:${p.visColor};"></span>
+              <div class="tile-title">${p.title}</div>
+              <div class="tile-meta">${p.kind} · ${p.size}</div>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (top.view === 'postDetail') {
+    const p = POSTS.find(x => x.id === top.postId) || POSTS[0];
+    const showDeck = top.deckOpen || state.posture === 'book';
+    let deckContent = '';
+    if (top.deckTab === 'access') {
+      deckContent = `
+        <div class="deck-card">
+          <div class="deck-k">Visibility</div>
+          <div class="deck-row"><span>Link Mode</span><strong style="color:${p.visColor}">${p.vis}</strong></div>
+          <div class="deck-row"><span>Resolution</span><span>${p.res}</span></div>
+          <div class="deck-row"><span>File Size</span><span>${p.size}</span></div>
+        </div>
+        <button class="deck-link-btn" onclick="pushScreen({view:'postSettings', title:'Link &amp; Visibility', postId:'${p.id}'})">
+          <span>Link &amp; Visibility Settings</span>${ICONS.chevR}
+        </button>
+      `;
+    } else if (top.deckTab === 'tools') {
+      deckContent = `
+        <div class="deck-card">
+          <div class="deck-k">Quick Actions</div>
+          <button class="deck-link-btn" onclick="showToast('Opened Trim WebP studio')"><span>Make New WebP</span>${ICONS.chevR}</button>
+          <button class="deck-link-btn" onclick="showToast('Saved to Cobalt Photos album')"><span>Save to Photos</span>${ICONS.chevR}</button>
+          <button class="deck-link-btn" onclick="showToast('Opened Post Frame picker')"><span>Post Frame</span>${ICONS.chevR}</button>
+        </div>
+      `;
+    } else {
+      deckContent = `
+        <div class="deck-card">
+          <div class="deck-k">Transcript · CC</div>
+          <div style="font-size:11px; line-height:1.45; color:#c8c8d2;">
+            <div style="color:#8f8f99; font-family:monospace; font-size:9.5px;">00:04</div>
+            "Walking down Omoide Yokocho right after the rain…"
+            <div style="color:#8f8f99; font-family:monospace; font-size:9.5px; margin-top:6px;">00:12</div>
+            "Look how crisp the neon reflections look on OLED."
+          </div>
+        </div>
+      `;
+    }
+
+    vp.innerHTML = `
+      <div class="cinema-wrap">
+        <div class="cinema-glow" style="background:${p.glow}"></div>
+        <div class="cinema-stage" style="${!showDeck && state.posture !== 'compact' ? 'padding-right:68px;' : ''}">
+          <div class="cinema-hud-top">
+            <button class="glass-pill identity-pill" onclick="showToast('Visibility: ${p.vis} · Inline Rename')">
+              <span class="vis-dot" style="background:${p.visColor}"></span>
+              <span>${p.title}</span>
+            </button>
+            ${state.posture !== 'compact' ? `<span class="glass-pill" style="padding:5px 10px; font-size:10.5px; color:rgba(255,255,255,.78);">Ambient Cinema</span>` : ''}
+          </div>
+
+          <div class="cinema-media-card" style="background:${p.bg}">
+            <div class="play-orb">${ICONS.play}</div>
+            <div class="scrubber">
+              <span>0:10</span>
+              <div class="scrub-track"><div class="scrub-fill"></div></div>
+              <span>${p.dur}</span>
+            </div>
+          </div>
+
+          <div class="cinema-hud-bottom">
+            <div class="rendition-strip">
+              ${['Video','WebP 1','WebP 2'].map(r => `<button class="rend-tab ${top.rend === r ? 'on' : ''}" onclick="setRendition('${r}')">${r}</button>`).join('')}
+            </div>
+            <div class="dual-url-dock">
+              <button class="cta-prominent ${state.copied ? 'copied' : ''}" onclick="copyShareLink()">
+                ${ICONS.link}<span>${state.copied ? 'Copied!' : 'Copy Share'}</span>
+              </button>
+              <button class="glass-pill cta-glass" onclick="showToast('Copied direct CDN URL')">Direct</button>
+              <button class="glass-circle" style="width:34px;height:34px;" onclick="showToast('Opened iOS Share Sheet')">${ICONS.share}</button>
+            </div>
+          </div>
+        </div>
+
+        ${showDeck ? `
+          <div class="studio-deck">
+            <div class="deck-tabs">
+              <button class="${top.deckTab==='access'?'on':''}" onclick="setDeckTab('access')">Access</button>
+              <button class="${top.deckTab==='tools'?'on':''}" onclick="setDeckTab('tools')">Tools</button>
+              <button class="${top.deckTab==='cc'?'on':''}" onclick="setDeckTab('cc')">CC</button>
+            </div>
+            ${deckContent}
+            <div style="margin-top:auto; font-size:10px; color:#7d7d88; line-height:1.4;">
+              Top-right <strong>&lt;</strong> in the Duo rail pops cleanly back to Library while tabs stay reachable.
+            </div>
+          </div>
+        ` : ''}
+      </div>
+    `;
+    return;
+  }
+
+  if (top.view === 'postSettings') {
+    const p = POSTS.find(x => x.id === top.postId) || POSTS[0];
+    vp.innerHTML = `
+      <div class="page-header">
+        <div><span class="page-title">Link &amp; Visibility</span><span class="page-sub">${p.title}</span></div>
+      </div>
+      <div class="lib-scroll">
+        <div class="settings-list">
+          <div class="set-group">
+            <div class="set-row"><span>Share Link Mode</span><span class="set-val" style="color:${p.visColor}; font-weight:600;">${p.vis}</span></div>
+            <div class="set-row"><span>Private Secret URL</span><span class="set-val">capy.st/p/9f3k…</span></div>
+            <div class="set-row"><span>Keep Offline Copy</span><span class="pill-switch"></span></div>
+          </div>
+          <div class="set-group">
+            <div class="set-row"><span>Search Index</span><span class="set-val">Indexed · 14 tags</span></div>
+            <div class="set-row"><span>Post Frame Thumbnail</span><span class="set-val">00:04.2</span></div>
+          </div>
+          <div style="font-size:11px; color:#8f8f99; padding:4px 2px;">
+            Depth 2 pushed view: tap the circular <strong style="color:#fff;">&lt;</strong> button in the top-right rail to return to Post Detail, then again to Library.
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (top.view === 'liveRoot') {
+    vp.innerHTML = `
+      <div class="page-header">
+        <div class="live-seg-bar">
+          <span class="on">Twitch</span><span>Stage</span><span>7TV</span>
+        </div>
+        <div class="search-pill">Search channel…</div>
+      </div>
+      <div class="lib-scroll">
+        <div class="stream-grid">
+          ${CHANNELS.map(c => `
+            <div class="stream-card" onclick="pushScreen({view:'twitchStream', title:'${c.name}', primary:'${c.login}', secondary:null})">
+              <div class="stream-thumb" style="background:${c.bg}">
+                <span class="live-pill">LIVE</span>
+                <span class="viewers-pill">${c.viewers}</span>
+              </div>
+              <div class="stream-info">
+                <div style="min-width:0;">
+                  <div class="stream-name">${c.name}</div>
+                  <div class="stream-game">${c.game}</div>
+                </div>
+                <button class="dual-mini-cta" onclick="event.stopPropagation(); pushScreen({view:'twitchStream', title:'${c.name} + Northernlion', primary:'${c.login}', secondary:'${c.login === 'northernlion' ? 'caedrel' : 'northernlion'}'})">Dual +</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (top.view === 'twitchStream') {
+    const chA = CHANNELS.find(c => c.login === top.primary) || CHANNELS[0];
+    const chB = top.secondary ? (CHANNELS.find(c => c.login === top.secondary) || CHANNELS[1]) : null;
+    const hero = (chB && state.dualFocus === 'secondary') ? chB : chA;
+    const inset = (chB && state.dualFocus === 'secondary') ? chA : chB;
+
+    vp.innerHTML = `
+      <div class="watch-layout">
+        <div class="watch-video-pane">
+          <div class="stream-bg" style="background:${hero.bg}"></div>
+          <div class="stream-hud-top">
+            <span class="glass-pill" style="padding:6px 11px; font-size:11.5px; font-weight:600;">
+              <span class="vis-dot" style="background:#ed2236"></span>
+              ${hero.name} · ${hero.viewers}
+            </span>
+            ${chB ? `<span class="glass-pill" style="padding:5px 10px; font-size:10.5px; color:#c4b5fd;">Dual Stage</span>` : ''}
+          </div>
+
+          <div style="position:relative; z-index:2; margin:auto; text-align:center;">
+            <div style="font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:rgba(255,255,255,.55);">${state.streamPaused ? 'PAUSED' : '1080p60 · LOW LATENCY'}</div>
+            <div style="font-size:17px; font-weight:700; margin-top:3px;">${hero.game}</div>
+          </div>
+
+          ${inset ? `
+            <button class="stream-inset" style="background:${inset.bg}" onclick="state.dualFocus = state.dualFocus==='primary'?'secondary':'primary'; showToast('Focused ${inset.name}'); render()">
+              <span class="stream-inset-label">${inset.name}</span>
+              <span class="stream-inset-hint">Tap to swap</span>
+            </button>
+          ` : ''}
+
+          ${chB ? `
+            <div class="glass-pill mixer-dock">
+              ${['A','Mix','B'].map(m => `<button class="mixer-btn ${state.audioMix===m?'on':''}" onclick="state.audioMix='${m}';render()">${m === 'A' ? chA.name.slice(0,5) : m === 'B' ? chB.name.slice(0,5) : 'Mix'}</button>`).join('')}
+            </div>
+          ` : `<div style="height:10px;"></div>`}
+        </div>
+
+        <div class="watch-chat-pane">
+          <div class="chat-head">
+            <span>${chB ? 'Combined Chat' : 'Live Chat'}</span>
+            <span style="color:#30bd1b;">7TV</span>
+          </div>
+          <div class="chat-msgs">
+            <div>${chB ? `<span class="chat-tag" style="background:#a78bfa;">A</span>` : ''}<strong style="color:#60a5fa;">peachy</strong> that Duo side rail looks SO clean</div>
+            <div>${chB ? `<span class="chat-tag" style="background:#22d3ee;">B</span>` : ''}<strong style="color:#34d399;">capy_enjoyer</strong> KEKW look at the play</div>
+            <div>${chB ? `<span class="chat-tag" style="background:#a78bfa;">A</span>` : ''}<strong style="color:#f472b6;">harmony</strong> unified back button right under status circle</div>
+            <div>${chB ? `<span class="chat-tag" style="background:#22d3ee;">B</span>` : ''}<strong style="color:#fbbf24;">mod_bot</strong> Dual-stream PiP active</div>
+            <div>${chB ? `<span class="chat-tag" style="background:#a78bfa;">A</span>` : ''}<strong style="color:#c084fc;">neko</strong> PogChamp</div>
+          </div>
+          <div class="chat-composer">Send a message to ${hero.name}…</div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (top.view === 'toolsRoot') {
+    const items = [
+      { id: 'links', name: 'Links & Collections', desc: 'Share links, sets & private URLs', icon: ICONS.link, action: `pushScreen({view:'toolsSub', title:'Links & Collections', sub:'links'})` },
+      { id: 'assistants', name: 'Chat & Swarms', desc: 'AI assistants & active agent runs', icon: ICONS.activity, badge: 2, action: `pushScreen({view:'toolsSub', title:'Chat & Swarms', sub:'assistants'})` },
+      { id: 'editor', name: 'Editor & Trim', desc: 'Slideshows, overlays & WebP', icon: ICONS.dual, action: `pushScreen({view:'toolsSub', title:'Editor & Trim', sub:'editor'})` },
+      { id: 'settings', name: 'Settings', desc: 'Account, storage, media & live', icon: ICONS.gear, action: `pushScreen({view:'settingsHub', title:'Settings'})` }
+    ];
+    vp.innerHTML = `
+      <div class="page-header">
+        <div><span class="page-title">Tools</span><span class="page-sub">Secondary workspaces</span></div>
+      </div>
+      <div class="lib-scroll">
+        <div class="hub-grid">
+          ${items.map(it => `
+            <button class="hub-card" onclick="${it.action}">
+              <div class="hub-icon">${it.icon}</div>
+              <div style="min-width:0;">
+                <div class="hub-name">${it.name}</div>
+                <div class="hub-desc">${it.desc}</div>
+              </div>
+              ${it.badge ? `<span class="hub-badge">${it.badge}</span>` : `<span style="margin-left:auto;color:#6e6e78;">${ICONS.chevR}</span>`}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (top.view === 'toolsSub') {
+    vp.innerHTML = `
+      <div class="page-header">
+        <div><span class="page-title">${top.title}</span><span class="page-sub">Pushed inside Tools stack</span></div>
+      </div>
+      <div class="lib-scroll">
+        <div class="settings-list">
+          <div class="set-group">
+            <div class="set-row"><span>${top.sub === 'assistants' ? 'Swarm #42 · Clip Highlights' : 'capy.st/c/tokyo-trip'}</span><span class="set-val" style="color:#2f8af9;">Active</span></div>
+            <div class="set-row"><span>${top.sub === 'assistants' ? 'Swarm #41 · Emote Pack' : 'capy.st/s/stream-clips'}</span><span class="set-val">Updated 12m ago</span></div>
+            <div class="set-row"><span>${top.sub === 'assistants' ? 'Video Q&amp;A Thread' : 'Private Vault Link'}</span><span class="set-val">Ready</span></div>
+          </div>
+          <div style="font-size:11px; color:#8f8f99; padding:4px 2px;">
+            Tap the circular <strong style="color:#fff;">&lt;</strong> back button below the top-right status circle to return to Tools.
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (top.view === 'settingsHub') {
+    const groups = [
+      { id: 'account', name: 'Account & Server', desc: 'capystore.harmony.dev · Connected' },
+      { id: 'downloads', name: 'Downloads & Storage', desc: 'Photos sync, offline cache (1.4 GB)' },
+      { id: 'media', name: 'Media & WebP', desc: 'Ambient Cinema, auto-captions, quality' },
+      { id: 'live', name: 'Live & Integrations', desc: 'Twitch dual-stream, OBS Stage, 7TV' }
+    ];
+    vp.innerHTML = `
+      <div class="page-header">
+        <div><span class="page-title">Settings</span><span class="page-sub">4 grouped sections</span></div>
+      </div>
+      <div class="lib-scroll">
+        <div class="set-group">
+          ${groups.map(g => `
+            <button class="set-row" onclick="pushScreen({view:'settingsGroup', title:'${g.name}', group:'${g.id}'})">
+              <div>
+                <div style="font-weight:600; color:#f4f4f6;">${g.name}</div>
+                <div style="font-size:11px; color:#8f8f99; margin-top:2px;">${g.desc}</div>
+              </div>
+              <span style="color:#6e6e78;">${ICONS.chevR}</span>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (top.view === 'settingsGroup') {
+    vp.innerHTML = `
+      <div class="page-header">
+        <div><span class="page-title">${top.title}</span><span class="page-sub">Settings › Depth 2</span></div>
+      </div>
+      <div class="lib-scroll">
+        <div class="settings-list">
+          <div class="set-group">
+            <div class="set-row"><span>Ambient Cinema Backdrop</span><span class="pill-switch"></span></div>
+            <div class="set-row"><span>Auto-Generate WebP Previews</span><span class="pill-switch"></span></div>
+            <div class="set-row"><span>Haptic Feedback</span><span class="pill-switch"></span></div>
+            <div class="set-row"><span>Default Share Link</span><span class="set-val">Short Share URL</span></div>
+          </div>
+          <div style="font-size:11px; color:#8f8f99; padding:4px 2px;">
+            Unified Spotify-style <strong style="color:#fff;">&lt;</strong> back button pops step-by-step: <code>${top.title}</code> → <code>Settings</code> → <code>Tools</code>.
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (top.view === 'activityView') {
+    vp.innerHTML = `
+      <div class="page-header">
+        <div><span class="page-title">Activity &amp; Health</span><span class="page-sub">1 active job · Server OK</span></div>
+      </div>
+      <div class="lib-scroll">
+        <div class="settings-list">
+          <div class="set-group">
+            <div class="set-row"><span>tokyo_neon_walk.mp4 · WebP</span><span class="set-val" style="color:#30bd1b;">78%</span></div>
+            <div class="set-row"><span>shibuya_crossing · Gallery</span><span class="set-val">Done · 2m ago</span></div>
+            <div class="set-row"><span>Server Latency</span><span class="set-val">24 ms</span></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+}
+
+function renderStatusFooter() {
+  const s = currentStack();
+  const crumbHTML = s.map((item, idx) =>
+    (idx > 0 ? `<span class="crumb-sep">›</span>` : '') +
+    `<span style="${idx === s.length - 1 ? 'font-weight:700;' : 'opacity:.65;'}">${item.title}</span>`
+  ).join('');
+  document.getElementById('crumb').innerHTML = crumbHTML;
+
+  const backWhere = !canGoBack()
+    ? `Root screen (<strong>&lt;</strong> hidden · Activity &amp; Gear in rail)`
+    : state.posture === 'compact'
+      ? `<strong>&lt;</strong> Top-leading Liquid Glass circle · Depth ${s.length - 1}`
+      : `<strong>&lt;</strong> Top-right Duo rail (below Status Circle) · Depth ${s.length - 1}`;
+  document.getElementById('rail-meta').innerHTML = backWhere;
+}
+
+function render() {
+  const bezel = document.getElementById('bezel');
+  const stage = document.getElementById('stage');
+  const screen = document.getElementById('screen');
+  bezel.classList.toggle('compact', state.posture === 'compact');
+  bezel.classList.toggle('book', state.posture === 'book');
+  stage.classList.toggle('compact-mode', state.posture === 'compact');
+  screen.classList.toggle('guides-on', state.guides);
+  document.getElementById('hig-guides').classList.toggle('show', state.guides);
+
+  renderViewport();
+  renderDuoRail();
+  renderCompactChrome();
+  renderQuickPopover();
+  renderStatusFooter();
+  syncPresetHighlight();
+}
+
+render();
+</script>
+</body>
+</html>

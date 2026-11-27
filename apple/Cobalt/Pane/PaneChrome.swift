@@ -48,10 +48,21 @@ struct PaneChrome: View {
         return PaneHinge(axis: .horizontal, position: max(0, hinge.position - reservedHeaderHeight - 0.5))
     }
 
+    /// On iOS, standard pane pages use the native `NavigationStack` toolbar with `CobaltBackToolbarItem`
+    /// so the Spotify-style circular Liquid Glass `<` back button lands directly below the Duo status circle
+    /// (and top-leading on compact iPhone). macOS keeps its inline column header with span + close.
+    private var usesNativeToolbarHeader: Bool {
+        #if os(iOS)
+        return !hidesChromeHeader
+        #else
+        return false
+        #endif
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if !floatingHeader && !hidesChromeHeader {
+                if !floatingHeader && !hidesChromeHeader && !usesNativeToolbarHeader {
                     Color.clear.frame(height: reservedHeaderHeight)
                     Rectangle()
                         .fill(CobaltColor.hairline)
@@ -62,19 +73,31 @@ struct PaneChrome: View {
                     .environment(\.paneItem, item)
                     .environment(\.paneShape, shape)
                     .environment(\.paneHinge, effectiveHinge)
-                    .environment(\.paneHeaderHeight, (floatingHeader && !hidesChromeHeader) ? Self.headerHeight : 0)
+                    .environment(\.paneHeaderHeight, (floatingHeader && !hidesChromeHeader && !usesNativeToolbarHeader) ? Self.headerHeight : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .onPreferenceChange(PaneFloatingHeaderKey.self) { floatingHeader = $0 }
             .onPreferenceChange(PaneHidesChromeHeaderKey.self) { hidesChromeHeader = $0 }
             .onPreferenceChange(PaneShowsSystemToolbarKey.self) { showsSystemToolbar = $0 }
             .overlayPreferenceValue(PaneMoreKey.self, alignment: .top) { more in
-                if !hidesChromeHeader {
+                if !hidesChromeHeader && !usesNativeToolbarHeader {
                     header(more, floating: floatingHeader)
                 }
             }
             #if os(iOS)
-            .toolbar(showsSystemToolbar ? .visible : .hidden, for: .navigationBar)
+            .navigationTitle(usesNativeToolbarHeader ? Copy.Pane.context(item) : "")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if usesNativeToolbarHeader {
+                    CobaltBackToolbarItem(
+                        title: Copy.Pane.close,
+                        accessibilityIdentifier: "pane.close"
+                    ) {
+                        pane.requestClose()
+                    }
+                }
+            }
+            .toolbar((usesNativeToolbarHeader || showsSystemToolbar) ? .visible : .hidden, for: .navigationBar)
             .toolbarBackgroundVisibility(showsSystemToolbar ? .hidden : .automatic, for: .navigationBar)
             #endif
         }

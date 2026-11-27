@@ -47,7 +47,12 @@ struct AmbientCinemaPostStudio: View {
     @State private var toastToken = 0
     @State private var insightStore = StudioDeckInsightStore()
     @State private var openedNeighbour: OpenedMedia?
+    @State private var canvasWidth: CGFloat = 0
     @FocusState private var editingTitle: Bool
+
+    private var isWideCanvas: Bool {
+        canvasWidth >= DetailWidth.wide && !typeSize.isAccessibilitySize
+    }
 
     private var item: MediaItem { context.item }
     private var rendition: Rendition { context.rendition }
@@ -178,9 +183,17 @@ struct AmbientCinemaPostStudio: View {
             }
             .environment(\.ambientVideoSampler, videoSampler)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { canvasWidth = $0 }
         .background(Color(hex: 0x070709).ignoresSafeArea())
         .preferredColorScheme(.dark)
         .preference(key: PaneHidesChromeHeaderKey.self, value: showsCloseButton)
+        #if os(iOS)
+        .preference(key: PaneShowsSystemToolbarKey.self, value: showsCloseButton)
+        .toolbar {
+            studioToolbar
+        }
+        .duoToolbarCompression(.prefersToolbarItems)
+        #endif
         .sheet(isPresented: $compactSheetOpen) {
             compactDeckSheet
         }
@@ -272,11 +285,68 @@ struct AmbientCinemaPostStudio: View {
         }
     }
 
+    // MARK: - Rule 15 System Toolbar (iPhone Duo Vertical Rail + Compact Nav Bar)
+
+    #if os(iOS)
+    @ToolbarContentBuilder
+    private var studioToolbar: some ToolbarContent {
+        if showsCloseButton {
+            CobaltBackToolbarItem(title: Copy.close, accessibilityIdentifier: "pane.close") {
+                context.leave()
+            }
+        }
+
+        let deckActive = isWideCanvas ? wideDeckOpen : compactSheetOpen
+        ToolbarItem(placement: .primaryAction) {
+            DuoToolbarButton(
+                title: deckActive ? "Hide Studio Deck" : "Show Studio Deck",
+                systemImage: "sidebar.right"
+            ) {
+                if isWideCanvas {
+                    wideDeckOpen.toggle()
+                } else {
+                    compactSheetOpen.toggle()
+                }
+            }
+            .accessibilityIdentifier("ambient.studioDeckToggle")
+        }
+        .duoVisibilityPriority(.high)
+
+        ToolbarItem(placement: .automatic) {
+            DuoToolbarButton(
+                title: ambientEnabled ? "Turn off ambient cinema glow" : "Turn on ambient cinema glow",
+                systemImage: ambientEnabled ? "sun.max.fill" : "sun.max"
+            ) {
+                ambientEnabled.toggle()
+            }
+            .accessibilityIdentifier("ambient.glowToggle")
+        }
+        .duoVisibilityPriority(.automatic)
+
+        if hasTranscript, let subtitles {
+            ToolbarItem(placement: .automatic) {
+                DuoToolbarButton(
+                    title: captionsActive ? Copy.Subtitles.turnOff : Copy.Subtitles.turnOn,
+                    systemImage: captionsActive ? Symbol.Subtitles.on : Symbol.Subtitles.off
+                ) {
+                    subtitles.toggle()
+                }
+            }
+            .duoVisibilityPriority(.automatic)
+        }
+
+        DuoOverflowToolbarMenu(Copy.Media.more) {
+            moreMenuItems
+        }
+    }
+    #endif
+
     // MARK: - Top Clear Liquid Glass HUD
 
     private func topGlassHUD(isWide: Bool) -> some View {
         MediaGlassGroup(spacing: 8) {
             HStack(spacing: 8) {
+                #if os(macOS)
                 if showsCloseButton {
                     Button {
                         context.leave()
@@ -294,12 +364,15 @@ struct AmbientCinemaPostStudio: View {
                     .accessibilityLabel(Copy.close)
                     .accessibilityIdentifier("pane.close")
                 }
+                #endif
 
                 identityVisibilityPill
 
                 Spacer(minLength: 4)
 
+                #if os(macOS)
                 rightGlassControls(isWide: isWide)
+                #endif
             }
         }
         .padding(.horizontal, 12)
@@ -403,60 +476,65 @@ struct AmbientCinemaPostStudio: View {
         }
     }
 
+    @ViewBuilder
+    private var moreMenuItems: some View {
+        if let url = liveShareURL {
+            Button(
+                model.capabilities.hasLinkPair(url) ? Copy.LinkPair.copyShareLink : Copy.copyLink,
+                systemImage: Symbol.Media.copyLink
+            ) {
+                copyLink(url, form: .share)
+            }
+            if model.capabilities.hasLinkPair(url) && currentFileLink != .private {
+                Button(Copy.LinkPair.copyDirectLink, systemImage: Symbol.LinkPair.direct) {
+                    copyLink(url, form: .direct)
+                }
+            }
+            Divider()
+        }
+
+        Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) {
+            renameDraft = displayTitle
+            showIdentityPopover = true
+        }
+
+        if let add = kit.addToLinkAction(item) {
+            Button(add.title, systemImage: add.systemImage, action: add.perform)
+                .disabled(add.isDisabled || (add.needsServer && offline && !add.queuesOffline))
+        }
+
+        if let edit = kit.editAction(item) {
+            Button(edit.title, systemImage: edit.systemImage, action: edit.perform)
+                .disabled(edit.isDisabled || (edit.needsServer && offline && !edit.queuesOffline))
+        }
+
+        if model.capabilities.chat, item.post != nil, !isHidden {
+            Button(Copy.Chat.askAbout, systemImage: Symbol.chatAsk) {
+                kit.askAbout(item)
+            }
+            .disabled(offline)
+        }
+
+        if let openLib = kit.openInLibraryAction(item) {
+            Button(openLib.title, systemImage: openLib.systemImage, action: openLib.perform)
+        }
+
+        if let hide = kit.hideAction(item) {
+            Divider()
+            Button(hide.title, systemImage: hide.systemImage, action: hide.perform)
+                .disabled(hide.isDisabled || (hide.needsServer && offline && !hide.queuesOffline))
+        }
+
+        if let delete = kit.deleteAction(item) {
+            Divider()
+            Button(delete.title, systemImage: delete.systemImage, role: .destructive, action: delete.perform)
+                .disabled(delete.isDisabled)
+        }
+    }
+
     private var moreMenuButton: some View {
         Menu {
-            if let url = liveShareURL {
-                Button(
-                    model.capabilities.hasLinkPair(url) ? Copy.LinkPair.copyShareLink : Copy.copyLink,
-                    systemImage: Symbol.Media.copyLink
-                ) {
-                    copyLink(url, form: .share)
-                }
-                if model.capabilities.hasLinkPair(url) && currentFileLink != .private {
-                    Button(Copy.LinkPair.copyDirectLink, systemImage: Symbol.LinkPair.direct) {
-                        copyLink(url, form: .direct)
-                    }
-                }
-                Divider()
-            }
-
-            Button(Copy.Library2.rename, systemImage: Symbol.Library.rename) {
-                renameDraft = displayTitle
-                showIdentityPopover = true
-            }
-
-            if let add = kit.addToLinkAction(item) {
-                Button(add.title, systemImage: add.systemImage, action: add.perform)
-                    .disabled(add.isDisabled || (add.needsServer && offline && !add.queuesOffline))
-            }
-
-            if let edit = kit.editAction(item) {
-                Button(edit.title, systemImage: edit.systemImage, action: edit.perform)
-                    .disabled(edit.isDisabled || (edit.needsServer && offline && !edit.queuesOffline))
-            }
-
-            if model.capabilities.chat, item.post != nil, !isHidden {
-                Button(Copy.Chat.askAbout, systemImage: Symbol.chatAsk) {
-                    kit.askAbout(item)
-                }
-                .disabled(offline)
-            }
-
-            if let openLib = kit.openInLibraryAction(item) {
-                Button(openLib.title, systemImage: openLib.systemImage, action: openLib.perform)
-            }
-
-            if let hide = kit.hideAction(item) {
-                Divider()
-                Button(hide.title, systemImage: hide.systemImage, action: hide.perform)
-                    .disabled(hide.isDisabled || (hide.needsServer && offline && !hide.queuesOffline))
-            }
-
-            if let delete = kit.deleteAction(item) {
-                Divider()
-                Button(delete.title, systemImage: delete.systemImage, role: .destructive, action: delete.perform)
-                    .disabled(delete.isDisabled)
-            }
+            moreMenuItems
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 14, weight: .semibold))
@@ -830,6 +908,7 @@ struct AmbientCinemaPostStudio: View {
     private var separatedCreaseDeck: some View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
+                #if os(macOS)
                 if showsCloseButton {
                     Button { context.leave() } label: {
                         Image(systemName: "chevron.backward")
@@ -844,6 +923,7 @@ struct AmbientCinemaPostStudio: View {
                     .accessibilityLabel(Copy.close)
                     .accessibilityIdentifier("pane.close")
                 }
+                #endif
 
                 HStack(spacing: 6) {
                     Circle().fill(visibilityState.tint).frame(width: 7, height: 7)

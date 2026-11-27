@@ -62,13 +62,10 @@ private struct SheetCorner<Extras: View>: ViewModifier {
             }
             #else
             content.toolbar {
+                CobaltBackToolbarItem(title: Copy.closeA11y, cancels: true) { close.run() }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     extras()
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    CloseButton(cancels: true) { close.run() }
-                }
-                .duoVisibilityPriority(.high)
             }
             #endif
         } else {
