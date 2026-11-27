@@ -1,0 +1,2847 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cobalt v10.4 — Bulk Audio Leveling & ?audio=normal Share Gate (4 Variations)</title>
+<style>
+:root {
+  color-scheme: dark;
+  --c-bg: #000000;
+  --c-surface: #191919;
+  --c-elevated: #282828;
+  --c-row: #1c1c1e;
+  --c-text: #e1e1e1;
+  --c-caption: #8f8f8f;
+  --c-border: rgba(255, 255, 255, 0.11);
+  --c-border-strong: rgba(255, 255, 255, 0.2);
+  --c-hairline: rgba(255, 255, 255, 0.08);
+  --c-glass: rgba(28, 28, 34, 0.72);
+  --c-glass-hi: rgba(255, 255, 255, 0.12);
+  --c-emerald: #34d399;
+  --c-emerald-bg: rgba(52, 211, 153, 0.16);
+  --c-emerald-bd: rgba(52, 211, 153, 0.42);
+  --c-loud: #f87171;
+  --c-loud-bg: rgba(248, 113, 113, 0.16);
+  --c-loud-bd: rgba(248, 113, 113, 0.4);
+  --c-quiet: #38bdf8;
+  --c-quiet-bg: rgba(56, 189, 248, 0.16);
+  --c-quiet-bd: rgba(56, 189, 248, 0.4);
+  --c-amber: #fbbf24;
+  --c-amber-bg: rgba(251, 191, 36, 0.16);
+  --c-amber-bd: rgba(251, 191, 36, 0.42);
+  --c-collection: #f0b44c;
+  --c-collection-bg: #2a2418;
+  --c-blue: #2f8af9;
+  --c-blue-bg: rgba(47, 138, 249, 0.16);
+  --c-purple: #b69cff;
+  --c-purple-bg: #231d36;
+  --c-red: #ff5c6c;
+  --c-red-bg: rgba(255, 92, 108, 0.16);
+  --shell-card: var(--card, #111116);
+  --shell-fg: var(--foreground, #f2f2f5);
+  --shell-muted: var(--muted-foreground, #92929e);
+  --shell-border: var(--border, rgba(255, 255, 255, 0.11));
+  --shell-radius: var(--radius, 14px);
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans: var(--font-sans, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--shell-fg);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.4;
+}
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+button:focus-visible {
+  outline: 2px solid var(--c-blue);
+  outline-offset: 2px;
+}
+svg { display: block; flex: none; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.wrap {
+  container-type: inline-size;
+  max-width: 1180px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ====== SHOWCASE CONTROLS ====== */
+.controls-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  background: var(--shell-card);
+  border: 1px solid var(--shell-border);
+  border-radius: var(--shell-radius);
+}
+.ctrl-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.brand-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #34d399, #2f8af9);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.65);
+}
+.brand-title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.ver-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: var(--c-emerald-bg);
+  color: #6ee7b7;
+  border: 1px solid var(--c-emerald-bd);
+}
+
+.var-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--shell-border);
+}
+.var-tab {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 5px 7.5px;
+  border-radius: 8px;
+  color: var(--shell-muted);
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.var-tab:hover { color: #fff; }
+.var-tab.active {
+  background: #f2f2f5;
+  color: #09090b;
+}
+.var-tab.compare-tab.active {
+  background: linear-gradient(135deg, #34d399, #38bdf8);
+  color: #041914;
+}
+
+.state-strip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.strip-lbl {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--shell-muted);
+  margin-right: 2px;
+}
+.state-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--shell-border);
+  color: var(--shell-muted);
+  transition: all 0.14s;
+  white-space: nowrap;
+}
+.state-btn:hover { color: #fff; border-color: rgba(255, 255, 255, 0.24); }
+.state-btn.active {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.36);
+  color: #fff;
+}
+.sdot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.sdot.red { background: var(--c-loud); box-shadow: 0 0 6px var(--c-loud); }
+.sdot.amber { background: var(--c-amber); box-shadow: 0 0 6px var(--c-amber); }
+.sdot.green { background: var(--c-emerald); box-shadow: 0 0 6px var(--c-emerald); }
+.sdot.sky { background: var(--c-quiet); box-shadow: 0 0 6px var(--c-quiet); }
+.sdot.gray { background: #71717a; }
+
+.surface-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--shell-border);
+}
+.surface-seg button {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: var(--shell-muted);
+}
+.surface-seg button.active {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+/* Variation Intro Banner */
+.var-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--shell-border);
+}
+.var-banner-main { min-width: 240px; flex: 1; }
+.var-banner h2 {
+  margin: 0 0 2px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 650;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.rec-badge {
+  font-size: 9.5px;
+  padding: 1.5px 6px;
+  border-radius: 99px;
+  background: var(--c-emerald-bg);
+  border: 1px solid var(--c-emerald-bd);
+  color: #6ee7b7;
+  font-weight: 700;
+}
+.var-banner p {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--shell-muted);
+}
+.gate-pill-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+.gate-pill-live.blocked {
+  background: var(--c-loud-bg);
+  border: 1px solid var(--c-loud-bd);
+  color: #fecaca;
+}
+.gate-pill-live.unlocked {
+  background: var(--c-emerald-bg);
+  border: 1px solid var(--c-emerald-bd);
+  color: #a7f3d0;
+}
+.gate-pill-live.na {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--c-border);
+  color: var(--c-caption);
+}
+
+/* ====== STAGE LAYOUT ====== */
+.stage-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+.screen-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.screen-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--shell-muted);
+  padding: 0 2px;
+}
+.screen-label strong { color: #e1e1e1; font-weight: 600; }
+
+/* ====== IPHONE DUO HARDWARE FRAME ====== */
+.duo-frame {
+  position: relative;
+  background: #000000;
+  border: 2px solid #26262c;
+  border-radius: 26px;
+  overflow: hidden;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.58), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  font-family: var(--font-mono);
+  color: var(--c-text);
+}
+
+.duo-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px;
+  min-height: 496px;
+}
+@container (max-width: 580px) {
+  .duo-shell { grid-template-columns: minmax(0, 1fr); }
+  .duo-rail { display: none !important; }
+}
+
+/* Vertical Controls Side Rail (authentic iPhone Duo IMG_0648 / IMG_0649) */
+.duo-rail {
+  background: #000;
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 4px 12px;
+  gap: 10px;
+  user-select: none;
+}
+.rail-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  color: #f4f4f6;
+}
+.rail-ring {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-bottom-color: rgba(255, 255, 255, 0.25);
+  display: grid;
+  place-items: center;
+  font-size: 8.5px;
+  font-weight: 700;
+}
+.rail-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.11);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  display: grid;
+  place-items: center;
+  color: #e4e4e7;
+}
+.rail-pill-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #d4d4d8;
+}
+.rail-pill-group .active-tab {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+
+/* ====== SHARE LINK PANE (LinkPanePage — IMG_0648) ====== */
+.link-pane {
+  display: grid;
+  grid-template-columns: 0.84fr 1.16fr;
+  gap: 14px;
+  padding: 14px 10px 14px 14px;
+  align-items: start;
+}
+@container (max-width: 660px) {
+  .link-pane {
+    grid-template-columns: 1fr;
+    padding: 12px;
+  }
+  .hero-col { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; }
+  .hero-grid-2x2 { max-width: 170px; }
+}
+.pane-top-title {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 10px;
+}
+.hero-col {
+  display: flex;
+  flex-direction: column;
+}
+.hero-grid-2x2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  width: 100%;
+}
+.hero-tile {
+  position: relative;
+  aspect-ratio: 1 / 1.15;
+  border-radius: 11px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+.hero-tile .play-circle {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.56);
+  backdrop-filter: blur(8px);
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+.hero-tile .hero-badge {
+  position: absolute;
+  bottom: 5px;
+  right: 5px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  font-size: 8.5px;
+  font-weight: 650;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.hero-tile .hero-badge.ok { color: #6ee7b7; border-color: var(--c-emerald-bd); }
+.hero-tile .hero-badge.loud { color: #fca5a5; border-color: var(--c-loud-bd); }
+.hero-tile .hero-badge.quiet { color: #7dd3fc; border-color: var(--c-quiet-bd); }
+.hero-tile .hero-badge.rendering { color: #fde68a; border-color: var(--c-amber-bd); }
+.hero-tile .hero-badge.img { color: #d4d4d8; }
+
+/* Synthetic realistic dark video/photo thumbnails */
+.art-1 { background: linear-gradient(155deg, #4b4744 0%, #2a282c 52%, #18171c 100%); }
+.art-2 { background: linear-gradient(160deg, #988673 0%, #5c4c3f 55%, #2a211b 100%); }
+.art-3 { background: linear-gradient(150deg, #8b735a 0%, #564a46 48%, #2e3346 100%); }
+.art-4 { background: radial-gradient(circle at 60% 35%, #524b3a 0%, #1d1e24 46%, #070709 100%); }
+.art-5 { background: linear-gradient(165deg, #475569 0%, #1e293b 55%, #0f172a 100%); }
+.art-6 { background: linear-gradient(145deg, #3b5249 0%, #1d2d28 60%, #0d1614 100%); }
+.art-7 { background: linear-gradient(150deg, #524163 0%, #261f33 58%, #120f19 100%); }
+.art-8 { background: linear-gradient(160deg, #6b3f47 0%, #311c24 56%, #130b0e 100%); }
+.art-caption {
+  position: absolute;
+  top: 7px;
+  left: 6px;
+  right: 6px;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: 7.5px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+  line-height: 1.2;
+}
+
+.detail-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.detail-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #f0f0f0;
+  letter-spacing: -0.02em;
+}
+.detail-sub {
+  font-size: 10.5px;
+  color: var(--c-caption);
+  margin-top: 2px;
+}
+
+/* 2x2 Pane Action Tiles (IMG_0648) */
+.pane-grid-2x2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+.pane-grid-2x3 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 7px;
+}
+.pane-tile {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 10px 11px;
+  border-radius: 14px;
+  background: #0a0a0c;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  text-align: left;
+  transition: transform 0.12s, border-color 0.16s, background 0.16s, opacity 0.16s;
+  min-height: 62px;
+}
+.pane-tile:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.28); background: #121216; }
+.pane-tile:active:not(:disabled) { transform: scale(0.975); }
+.pane-tile .tile-lbl {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #e6e6e6;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  width: 100%;
+  justify-content: space-between;
+}
+.pane-tile .tile-sub {
+  font-size: 9px;
+  color: var(--c-caption);
+  display: block;
+  margin-top: 1px;
+}
+.pane-tile.destructive {
+  background: rgba(112, 34, 42, 0.42);
+  border-color: rgba(255, 92, 108, 0.28);
+}
+.pane-tile.destructive .tile-lbl,
+.pane-tile.destructive svg { color: var(--c-red); }
+
+.pane-tile.emerald {
+  background: rgba(16, 62, 46, 0.45);
+  border-color: var(--c-emerald-bd);
+}
+.pane-tile.emerald .tile-lbl,
+.pane-tile.emerald svg { color: #6ee7b7; }
+
+.pane-tile.amber {
+  background: rgba(74, 54, 14, 0.44);
+  border-color: var(--c-amber-bd);
+}
+.pane-tile.amber .tile-lbl,
+.pane-tile.amber svg { color: #fde68a; }
+
+.pane-tile.locked {
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(255, 255, 255, 0.08);
+  border-style: dashed;
+  opacity: 0.62;
+}
+.pane-tile.locked .tile-lbl { color: #9a9aa6; }
+.pane-tile.locked svg { color: #7c7c88; }
+.pane-tile .tile-progress-bg {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: rgba(251, 191, 36, 0.22);
+  pointer-events: none;
+  transition: width 0.28s ease;
+}
+
+/* URL Row + Badges */
+.url-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.url-text {
+  font-size: 10.5px;
+  color: var(--c-caption);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.url-text .q-normal {
+  color: #6ee7b7;
+  font-weight: 700;
+}
+.share-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(47, 138, 249, 0.16);
+  border: 1px solid rgba(47, 138, 249, 0.34);
+  color: var(--c-blue);
+  display: grid;
+  place-items: center;
+  flex: none;
+  transition: all 0.14s;
+}
+.share-icon-btn:hover { background: rgba(47, 138, 249, 0.28); }
+.share-icon-btn.emerald-mode {
+  background: var(--c-emerald-bg);
+  border-color: var(--c-emerald-bd);
+  color: #6ee7b7;
+}
+.share-icon-btn.locked-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #6b6b76;
+}
+
+.tags-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--c-elevated);
+  color: #b8b8c0;
+}
+.tag-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--c-collection);
+}
+
+/* ====== CLEAR LIQUID GLASS CARDS / DOCKS ====== */
+.glass-card {
+  background: rgba(24, 24, 30, 0.72);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  border-radius: 15px;
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.glass-card.state-unlocked {
+  border-color: rgba(52, 211, 153, 0.36);
+  background: linear-gradient(180deg, rgba(16, 46, 36, 0.42), rgba(20, 22, 26, 0.8));
+}
+.glass-card.state-blocked {
+  border-color: rgba(248, 113, 113, 0.25);
+}
+.glass-card.state-working {
+  border-color: rgba(251, 191, 36, 0.35);
+}
+
+/* Segmented Mode Pill (Variation A) */
+.mode-seg {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.48);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.mode-seg button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 5px 6px;
+  border-radius: 7px;
+  color: var(--c-caption);
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.mode-seg button.active {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.mode-seg button.active.em {
+  background: var(--c-emerald);
+  color: #042117;
+}
+.mode-seg button.locked-seg {
+  color: #6f6f7a;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Stacked Distribution Bar */
+.dist-bar {
+  height: 5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+  display: flex;
+  gap: 1.5px;
+}
+.dist-seg { height: 100%; transition: width 0.32s ease; }
+.dist-seg.ok { background: var(--c-emerald); }
+.dist-seg.rendering { background: var(--c-amber); }
+.dist-seg.loud { background: var(--c-loud); }
+.dist-seg.quiet { background: var(--c-quiet); }
+.dist-seg.img { background: #52525b; }
+
+/* CTA Pill Buttons */
+.cta-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 650;
+  padding: 5px 10px;
+  border-radius: 9px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.cta-pill.primary-em {
+  background: var(--c-emerald);
+  color: #042016;
+}
+.cta-pill.primary-em:hover { filter: brightness(1.08); }
+.cta-pill.soft-em {
+  background: var(--c-emerald-bg);
+  border: 1px solid var(--c-emerald-bd);
+  color: #6ee7b7;
+}
+.cta-pill.soft-amber {
+  background: var(--c-amber-bg);
+  border: 1px solid var(--c-amber-bd);
+  color: #fde68a;
+}
+.cta-pill.soft-white {
+  background: #e8e8ec;
+  color: #09090b;
+}
+.cta-pill.soft-ghost {
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #e4e4e7;
+}
+.cta-pill.locked-pill {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  color: #7c7c88;
+}
+
+.gate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.gate-msg {
+  font-size: 10px;
+  color: var(--c-caption);
+  line-height: 1.35;
+  flex: 1;
+  min-width: 140px;
+}
+.gate-msg svg {
+  display: inline-block;
+  vertical-align: -1.5px;
+  margin-right: 3px;
+}
+.gate-msg strong { color: #e4e4e7; font-weight: 600; }
+.gate-msg.warn { color: #fca5a5; }
+.gate-msg.amber { color: #fde68a; }
+.gate-msg.ok { color: #6ee7b7; }
+
+/* ====== UNIFIED LUFS RULER (LoudnessRulerView.swift) ====== */
+.lufs-ruler {
+  position: relative;
+  padding: 9px 0 13px;
+}
+.lufs-track {
+  position: relative;
+  height: 7px;
+  border-radius: 99px;
+  overflow: hidden;
+  border: 0.75px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.08);
+}
+.lufs-track .z-quiet { position: absolute; left: 0; width: 31.25%; top: 0; bottom: 0; background: rgba(56, 189, 248, 0.48); }
+.lufs-track .z-bal { position: absolute; left: 31.25%; width: 31.25%; top: 0; bottom: 0; background: rgba(52, 211, 153, 0.45); }
+.lufs-track .z-clip {
+  position: absolute; left: 62.5%; width: 4.69%; top: 0; bottom: 0;
+  background: repeating-linear-gradient(-45deg, rgba(251, 191, 36, 0.78) 0 2px, rgba(251, 191, 36, 0.18) 2px 5px);
+}
+.lufs-track .z-loud { position: absolute; left: 67.19%; right: 0; top: 0; bottom: 0; background: rgba(248, 113, 113, 0.52); }
+.lufs-target {
+  position: absolute;
+  top: 5px;
+  height: 15px;
+  width: 1.5px;
+  left: 56.25%; /* -14 LUFS on [-32, 0] */
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 1px;
+}
+.lufs-dot {
+  position: absolute;
+  top: 12.5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid #fff;
+  transition: left 0.35s ease, background 0.25s ease;
+}
+.lufs-dot.ok { background: var(--c-emerald); box-shadow: 0 0 6px rgba(52, 211, 153, 0.85); width: 9px; height: 9px; z-index: 3; }
+.lufs-dot.loud { background: var(--c-loud); box-shadow: 0 0 5px rgba(248, 113, 113, 0.8); z-index: 2; }
+.lufs-dot.quiet { background: var(--c-quiet); box-shadow: 0 0 5px rgba(56, 189, 248, 0.8); z-index: 2; }
+.lufs-dot.rendering { background: var(--c-amber); box-shadow: 0 0 6px rgba(251, 191, 36, 0.9); z-index: 4; }
+.lufs-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8px;
+  color: var(--c-caption);
+  margin-top: 4px;
+}
+.lufs-axis .tgt { color: #e4e4e7; font-weight: 700; }
+
+/* Mini Spark Ruler inside file rows */
+.mini-ruler {
+  position: relative;
+  width: 48px;
+  height: 5px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, rgba(56,189,248,0.4) 0 31%, rgba(52,211,153,0.4) 31% 62%, rgba(251,191,36,0.5) 62% 67%, rgba(248,113,113,0.45) 67% 100%);
+  flex: none;
+}
+.mini-ruler .mr-tgt {
+  position: absolute; left: 56.25%; top: -1px; bottom: -1px; width: 1px; background: rgba(255,255,255,0.7);
+}
+.mini-ruler .mr-dot {
+  position: absolute; top: 50%; width: 6px; height: 6px; border-radius: 50%;
+  transform: translate(-50%, -50%); border: 1px solid #fff;
+}
+
+/* ====== FILES · IN ORDER LIST (IMG_0648) ====== */
+.files-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--c-caption);
+}
+.filter-mini-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.fmini {
+  font-size: 9px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--c-caption);
+  border: 1px solid transparent;
+}
+.fmini.active {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 228px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.files-list::-webkit-scrollbar { width: 4px; }
+.files-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 99px; }
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 12px;
+  background: var(--c-surface);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  transition: border-color 0.15s;
+}
+.file-row.is-rendering { border-color: rgba(251, 191, 36, 0.32); }
+.file-row.is-failed { border-color: rgba(255, 92, 108, 0.34); }
+.file-num {
+  width: 14px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--c-caption);
+  flex: none;
+}
+.file-thumb {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  overflow: hidden;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.file-info {
+  min-width: 0;
+  flex: 1;
+}
+.file-title {
+  font-size: 11px;
+  font-weight: 500;
+  color: #e6e6e6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-meta {
+  font-size: 9.5px;
+  color: var(--c-caption);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 1px;
+  flex-wrap: wrap;
+}
+.lufs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 650;
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+  flex: none;
+}
+.lufs-badge.ok { background: var(--c-emerald-bg); color: #6ee7b7; border: 1px solid rgba(52,211,153,0.3); }
+.lufs-badge.loud { background: var(--c-loud-bg); color: #fca5a5; border: 1px solid rgba(248,113,113,0.28); }
+.lufs-badge.quiet { background: var(--c-quiet-bg); color: #7dd3fc; border: 1px solid rgba(56,189,248,0.28); }
+.lufs-badge.balanced { background: rgba(255,255,255,0.08); color: #d4d4d8; border: 1px solid rgba(255,255,255,0.12); }
+.lufs-badge.rendering { background: var(--c-amber-bg); color: #fde68a; border: 1px solid rgba(251,191,36,0.32); }
+.lufs-badge.failed { background: var(--c-red-bg); color: #fda4af; border: 1px solid rgba(255,92,108,0.34); }
+.lufs-badge.muted { background: rgba(255,255,255,0.06); color: #9a9aa6; }
+
+.row-level-btn {
+  font-size: 9px;
+  font-weight: 650;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(52, 211, 153, 0.14);
+  border: 1px solid rgba(52, 211, 153, 0.34);
+  color: #6ee7b7;
+  flex: none;
+}
+.row-level-btn:hover { background: rgba(52, 211, 153, 0.28); }
+
+/* Variation D 2-Step Rail */
+.step-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-radius: 15px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(22, 22, 28, 0.78);
+}
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+}
+.step-item + .step-item {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.step-item.step-unlocked {
+  background: rgba(16, 62, 46, 0.35);
+}
+.step-item.step-locked {
+  background: rgba(0, 0, 0, 0.25);
+  opacity: 0.72;
+}
+.step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  flex: none;
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  color: #e4e4e7;
+}
+.step-num.done { background: var(--c-emerald); border-color: var(--c-emerald); color: #042117; }
+.step-num.busy { border-color: var(--c-amber); color: #fde68a; background: var(--c-amber-bg); }
+.step-num.locked { border-style: dashed; border-color: rgba(255, 255, 255, 0.18); color: #71717a; }
+.step-copy { flex: 1; min-width: 0; }
+.step-copy strong { display: block; font-size: 11px; color: #f4f4f6; }
+.step-copy span { display: block; font-size: 9.5px; color: var(--c-caption); }
+
+/* ====== LIBRARY MULTI-SELECT SCREEN (IMG_0649) ====== */
+.lib-screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 10px 10px 12px;
+  min-height: 496px;
+  background: #000;
+}
+.lib-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.lib-nav-title strong {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: #fff;
+}
+.lib-nav-title span {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  color: var(--c-caption);
+}
+.lib-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  color: var(--c-caption);
+}
+.lib-select-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.glass-pill-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #f0f0f0;
+}
+.glass-pill-sm:hover { background: rgba(255, 255, 255, 0.18); }
+
+.lib-mosaic {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  flex: 1;
+}
+@container (max-width: 520px) {
+  .lib-mosaic { grid-template-columns: repeat(3, 1fr); }
+}
+.lib-tile {
+  position: relative;
+  aspect-ratio: 3 / 4.2;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.12s, border-color 0.14s;
+  text-align: left;
+}
+.lib-tile:active { transform: scale(0.97); }
+.lib-tile.picked {
+  border-color: var(--c-blue);
+  box-shadow: 0 0 0 1px rgba(47, 138, 249, 0.45);
+}
+.lib-tile-badges {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 99px;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(8px);
+  font-size: 8.5px;
+  color: #8ab8ff;
+}
+.lib-tile-pick {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  border: 1.5px solid rgba(255, 255, 255, 0.72);
+  background: rgba(0, 0, 0, 0.35);
+  color: transparent;
+}
+.lib-tile.picked .lib-tile-pick {
+  background: #f0f0f0;
+  border-color: #f0f0f0;
+  color: #000;
+}
+.lib-tile-audio {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 8.5px;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+}
+.tile-lufs-chip {
+  padding: 1.5px 5px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(6px);
+  font-weight: 650;
+  font-size: 8px;
+}
+.tile-lufs-chip.ok { color: #6ee7b7; border: 1px solid rgba(52,211,153,0.4); }
+.tile-lufs-chip.loud { color: #fca5a5; border: 1px solid rgba(248,113,113,0.4); }
+.tile-lufs-chip.quiet { color: #7dd3fc; border: 1px solid rgba(56,189,248,0.4); }
+.tile-lufs-chip.rendering { color: #fde68a; border: 1px solid rgba(251,191,36,0.45); }
+.tile-lufs-chip.img { color: #d4d4d8; border: 1px solid rgba(255,255,255,0.16); }
+
+/* Floating Bottom Clear Liquid Glass Picked Sheet (IMG_0649) */
+.picked-sheet-wrap {
+  position: relative;
+  z-index: 5;
+  margin: -148px auto 0;
+  width: 100%;
+  max-width: 500px;
+}
+.picked-sheet {
+  position: relative;
+  border-radius: 22px;
+  background: rgba(34, 34, 42, 0.74);
+  backdrop-filter: blur(26px) saturate(175%);
+  -webkit-backdrop-filter: blur(26px) saturate(175%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.68), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+}
+.sheet-grabber {
+  width: 34px;
+  height: 3.5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.28);
+  margin: 7px auto 4px;
+}
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 12px 6px;
+}
+.sheet-head-txt {
+  font-size: 11px;
+  color: var(--c-caption);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sheet-head-txt strong { color: #f2f2f5; font-weight: 600; }
+.sheet-head-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+.sheet-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.11);
+  color: #d4d4d8;
+  white-space: nowrap;
+}
+.sheet-mini-btn:hover { background: rgba(255, 255, 255, 0.2); color: #fff; }
+
+.pick-strip {
+  display: flex;
+  gap: 7px;
+  padding: 2px 12px 9px;
+  overflow-x: auto;
+}
+.pick-thumb {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.pick-thumb .pt-num {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #f0f0f0;
+  color: #000;
+  font-family: var(--font-sans);
+  font-size: 9px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+}
+.pick-thumb .pt-x {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.68);
+  color: #fff;
+  font-size: 8px;
+  display: grid;
+  place-items: center;
+}
+.pick-thumb .pt-dot {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.7);
+}
+.pick-thumb .pt-dot.ok { background: var(--c-emerald); }
+.pick-thumb .pt-dot.loud { background: var(--c-loud); }
+.pick-thumb .pt-dot.quiet { background: var(--c-quiet); }
+.pick-thumb .pt-dot.rendering { background: var(--c-amber); }
+.pick-thumb .pt-dot.img { background: #a1a1aa; }
+
+.sheet-hairline {
+  position: relative;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.sheet-hairline .sweep {
+  position: absolute;
+  left: 0; top: -0.5px; height: 2px;
+  background: linear-gradient(90deg, var(--c-amber), var(--c-emerald));
+  transition: width 0.3s ease;
+}
+
+/* Inline Audio Strip inside Picked Sheet (Variations A & D) */
+.sheet-audio-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 11px;
+  background: rgba(0, 0, 0, 0.26);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 10px;
+}
+.sheet-audio-strip.ready-strip {
+  background: rgba(16, 62, 46, 0.36);
+}
+.sheet-audio-drawer {
+  padding: 8px 11px;
+  background: rgba(10, 10, 14, 0.56);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.drawer-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 9.5px;
+}
+.drawer-item-row .dname {
+  color: #e4e4e7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+/* 2x4 Action Grid (IMG_0649 exact tones) */
+.sheet-actions-wrap {
+  padding: 8px 9px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.select-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+}
+.select-grid.cols-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+.sel-tile {
+  position: relative;
+  overflow: hidden;
+  height: 42px;
+  border-radius: 10px;
+  padding: 4px 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2.5px;
+  font-size: 9.5px;
+  font-weight: 600;
+  transition: transform 0.1s, filter 0.14s, opacity 0.15s;
+  white-space: nowrap;
+}
+.sel-tile:active:not(:disabled) { transform: scale(0.95); }
+.sel-tile:disabled { opacity: 0.36; cursor: not-allowed; }
+.sel-tile.t-primary { background: #e6e6e6; color: #050507; }
+.sel-tile.t-neutral { background: rgba(255, 255, 255, 0.13); border: 1px solid rgba(255, 255, 255, 0.14); color: #e6e6e6; }
+.sel-tile.t-collection { background: rgba(42, 36, 24, 0.9); border: 1px solid rgba(240, 180, 76, 0.32); color: var(--c-collection); }
+.sel-tile.t-add { background: rgba(47, 138, 249, 0.18); border: 1px solid rgba(47, 138, 249, 0.34); color: #60a5fa; }
+.sel-tile.t-share { background: rgba(47, 138, 249, 0.16); border: 1px solid rgba(47, 138, 249, 0.3); color: #60a5fa; }
+.sel-tile.t-edit { background: rgba(35, 29, 54, 0.92); border: 1px solid rgba(182, 156, 255, 0.3); color: var(--c-purple); }
+.sel-tile.t-delete { background: rgba(255, 92, 108, 0.16); border: 1px solid rgba(255, 92, 108, 0.3); color: var(--c-red); }
+.sel-tile.t-level { background: rgba(16, 62, 46, 0.78); border: 1px solid var(--c-emerald-bd); color: #6ee7b7; }
+.sel-tile.t-level-busy { background: rgba(74, 54, 14, 0.8); border: 1px solid var(--c-amber-bd); color: #fde68a; }
+.sel-tile .tile-count-badge {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  font-size: 8px;
+  font-weight: 700;
+  padding: 0.5px 4px;
+  border-radius: 99px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.sel-tile .sel-fill-bar {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: rgba(52, 211, 153, 0.24);
+  pointer-events: none;
+  transition: width 0.28s ease;
+}
+
+.sheet-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--c-caption);
+  padding: 0 2px;
+}
+.normal-opt-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 2.5px 7px;
+  border-radius: 99px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #a1a1aa;
+}
+.normal-opt-pill.unlocked-on {
+  background: var(--c-emerald-bg);
+  border-color: var(--c-emerald-bd);
+  color: #6ee7b7;
+}
+.normal-opt-pill.locked {
+  border-style: dashed;
+  color: #71717a;
+}
+
+/* ====== COMPARE ALL 4 MATRIX ====== */
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+@container (max-width: 640px) {
+  .compare-grid { grid-template-columns: 1fr; }
+}
+.cmp-card {
+  background: var(--shell-card);
+  border: 1px solid var(--shell-border);
+  border-radius: 15px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.cmp-card.recommended {
+  border-color: rgba(52, 211, 153, 0.48);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.18);
+}
+.cmp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cmp-head h3 {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: #fff;
+}
+.cmp-mini-wire {
+  background: #050507;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 11px;
+  padding: 9px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cmp-bullets {
+  margin: 0;
+  padding-left: 15px;
+  font-size: 11px;
+  color: var(--shell-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cmp-bullets li strong { color: #e4e4e7; }
+
+/* ====== TOAST & SHAKE ====== */
+.toast-host {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%) translateY(18px);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 99;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(18, 18, 24, 0.94);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #fff;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  transition: all 0.2s ease;
+  max-width: 92vw;
+  text-align: center;
+}
+.toast-host.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast-host.toast-err { border-color: var(--c-loud-bd); color: #fecaca; }
+.toast-host.toast-ok { border-color: var(--c-emerald-bd); color: #a7f3d0; }
+
+@keyframes shakeX {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(3px); }
+}
+.shake { animation: shakeX 0.32s ease; }
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse { animation: pulseDot 1.1s ease-in-out infinite; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- TOP SHOWCASE BAR -->
+  <div class="controls-bar">
+    <div class="ctrl-row">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span class="brand-title">cobalt · bulk audio leveling &amp; ?audio=normal gate</span>
+        <span class="ver-pill">v10.4 · 4 variations</span>
+      </div>
+      <div class="surface-seg" id="surfaceSeg" role="group" aria-label="Surface filter">
+        <button class="active" data-surface="both">both screens</button>
+        <button data-surface="link">share link</button>
+        <button data-surface="library">library select</button>
+      </div>
+    </div>
+
+    <div class="ctrl-row">
+      <div class="var-tabs" id="varTabs" role="tablist">
+        <button class="var-tab active" data-var="A">A · Studio Audio Dock</button>
+        <button class="var-tab" data-var="B">B · Native Action Grid</button>
+        <button class="var-tab" data-var="C">C · Loudness Preflight</button>
+        <button class="var-tab" data-var="D">D · 2-Step Gate Rail</button>
+        <button class="var-tab compare-tab" data-var="CMP">Compare All 4</button>
+      </div>
+    </div>
+
+    <div class="state-strip" id="scenarioStrip">
+      <span class="strip-lbl">Scenario</span>
+      <button class="state-btn active" data-scenario="zero"><i class="sdot red"></i>0/10 leveled (blocked)</button>
+      <button class="state-btn" data-scenario="progress"><i class="sdot amber"></i>6/10 leveling (blocked)</button>
+      <button class="state-btn" data-scenario="ready"><i class="sdot green"></i>10/10 all leveled (unlocked)</button>
+      <button class="state-btn" data-scenario="mixed"><i class="sdot sky"></i>mixed (6 vid + 4 img)</button>
+      <button class="state-btn" data-scenario="images_only"><i class="sdot gray"></i>0 videos (images only)</button>
+    </div>
+  </div>
+
+  <!-- ACTIVE VARIATION SUMMARY BANNER -->
+  <div id="varBannerHost"></div>
+
+  <!-- INTERACTIVE STAGE -->
+  <div id="stageHost"></div>
+</div>
+
+<div class="toast-host" id="toastHost" role="status" aria-live="polite"></div>
+
+<script>
+// ====== ICON LIBRARY (Crisp SF-Symbol-inspired inline SVGs) ======
+const IC = {
+  copy: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`,
+  edit: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`,
+  lock: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`,
+  lockSm: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`,
+  revoke: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="8" y1="12" x2="16" y2="12"/></svg>`,
+  share: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>`,
+  wave: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><line x1="4" y1="10" x2="4" y2="14"/><line x1="8" y1="6" x2="8" y2="18"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="16" y1="7" x2="16" y2="17"/><line x1="20" y1="10" x2="20" y2="14"/></svg>`,
+  waveSm: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="4" y1="10" x2="4" y2="14"/><line x1="8" y1="6" x2="8" y2="18"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="16" y1="7" x2="16" y2="17"/><line x1="20" y1="10" x2="20" y2="14"/></svg>`,
+  check: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+  globe: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>`,
+  folder: `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M3 6a2 2 0 0 1 2-2h4.6a2 2 0 0 1 1.4.6L12.4 6H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z"/></svg>`,
+  link: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>`,
+  film: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="4" x2="7" y2="20"/><line x1="17" y1="4" x2="17" y2="20"/><line x1="3" y1="12" x2="21" y2="12"/></svg>`,
+  switches: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="6" rx="3"/><circle cx="15" cy="8" r="1.5" fill="currentColor"/><rect x="3" y="13" width="18" height="6" rx="3"/><circle cx="9" cy="16" r="1.5" fill="currentColor"/></svg>`,
+  trash: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>`,
+  play: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 20 12 7 20 7 4"/></svg>`,
+  playSm: `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 20 12 7 20 7 4"/></svg>`,
+  photo: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m21 15-5-5-8 8"/></svg>`,
+  chevR: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="9 6 15 12 9 18"/></svg>`,
+  chevL: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="15 6 9 12 15 18"/></svg>`,
+  dots: `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>`,
+  search: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="16.5" y2="16.5"/></svg>`,
+  x: `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>`,
+  alert: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>`,
+  mute: `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>`,
+};
+
+// ====== SCENARIO PRESETS ======
+const BASE_LINK_ITEMS = [
+  { id: "f1", title: "instagram · DgCRj0Jx9xI", kind: "video", dur: "0:21", art: "art-1", lufs: -6.8, tp: 0.2, zone: "loud" },
+  { id: "f2", title: "Two men demonstrate two-factor...", kind: "video", dur: "0:17", art: "art-2", cap: "two factor authentication...", lufs: -8.4, tp: -0.4, zone: "loud" },
+  { id: "f3", title: "Two cats lounge around a glowi...", kind: "video", dur: "0:08", art: "art-3", lufs: -26.2, tp: -6.1, zone: "quiet" },
+  { id: "f4", title: "matteo_czt · late night drive", kind: "video", dur: "0:14", art: "art-4", lufs: -9.1, tp: -0.1, zone: "loud" },
+  { id: "f5", title: "dna test results reaction", kind: "video", dur: "0:33", art: "art-5", lufs: -24.5, tp: -4.2, zone: "quiet" },
+  { id: "f6", title: "capybara hot spring yuzu bath", kind: "video", dur: "0:19", art: "art-6", lufs: -15.2, tp: -1.9, zone: "balanced" },
+  { id: "f7", title: "desk setup teardown clip", kind: "video", dur: "0:27", art: "art-7", lufs: -7.9, tp: -0.2, zone: "loud" },
+  { id: "f8", title: "late night synth jam", kind: "video", dur: "0:42", art: "art-8", lufs: -11.2, tp: 0.1, zone: "loud" },
+  { id: "f9", title: "rain on balcony window", kind: "video", dur: "0:12", art: "art-5", lufs: -28.1, tp: -8.4, zone: "quiet" },
+  { id: "f10", title: "discord call chaos highlight", kind: "video", dur: "0:24", art: "art-1", lufs: -6.2, tp: 0.4, zone: "loud" },
+];
+
+const BASE_LIBRARY_TILES = [
+  { id: "l1", title: "lounge aroun...", kind: "video", dur: "8.4 s", art: "art-3", lufs: -26.2, zone: "quiet" },
+  { id: "l2", title: "two-factor auth", kind: "video", dur: "17 s", art: "art-2", cap: "how universities be making you use two factor...", lufs: -8.4, zone: "loud" },
+  { id: "l3", title: "DgCRj0Jx9xI", kind: "video", dur: "21 s", art: "art-1", lufs: -6.8, zone: "loud" },
+  { id: "l4", title: "matteo_czt", kind: "video", dur: "14 s", art: "art-4", lufs: -9.1, zone: "loud" },
+  { id: "l5", title: "DNA TEST RESU", kind: "video", dur: "33 s", art: "art-5", cap: "DNA TEST RESULTS", lufs: -24.5, zone: "quiet" },
+  { id: "l6", title: "studio still.png", kind: "image", dur: "PNG", art: "art-6", lufs: null, zone: "none" },
+  { id: "l7", title: "cat portrait.webp", kind: "image", dur: "WEBP", art: "art-7", lufs: null, zone: "none" },
+  { id: "l8", title: "silent b-roll", kind: "video", dur: "6.2 s", art: "art-8", lufs: -72, zone: "silent" },
+];
+
+function buildScenario(key) {
+  let linkItems = [];
+  let libTiles = BASE_LIBRARY_TILES.map(t => ({ ...t, state: t.kind === "video" ? (t.zone === "silent" ? "skipped" : "measured") : "none", outLufs: null, pct: 0 }));
+  let picked = ["l1", "l2", "l3", "l4"];
+
+  if (key === "zero") {
+    linkItems = BASE_LINK_ITEMS.map((it, idx) => ({
+      ...it,
+      state: idx === 9 ? "failed" : "measured",
+      error: idx === 9 ? "loudnorm timeout" : null,
+      outLufs: null,
+      pct: 0,
+    }));
+  } else if (key === "progress") {
+    linkItems = BASE_LINK_ITEMS.map((it, idx) => {
+      if (idx < 6) return { ...it, state: "ready", outLufs: -14.0, pct: 100 };
+      if (idx === 6) return { ...it, state: "rendering", outLufs: null, pct: 72 };
+      if (idx === 7) return { ...it, state: "rendering", outLufs: null, pct: 34 };
+      return { ...it, state: "pending", outLufs: null, pct: 0 };
+    });
+    libTiles[0].state = "ready"; libTiles[0].outLufs = -14.0;
+    libTiles[1].state = "ready"; libTiles[1].outLufs = -14.0;
+    libTiles[2].state = "rendering"; libTiles[2].pct = 64;
+    libTiles[3].state = "rendering"; libTiles[3].pct = 28;
+  } else if (key === "ready") {
+    linkItems = BASE_LINK_ITEMS.map(it => ({ ...it, state: "ready", outLufs: -14.0, pct: 100 }));
+    libTiles.forEach(t => { if (t.kind === "video" && t.zone !== "silent") { t.state = "ready"; t.outLufs = -14.0; t.pct = 100; } });
+  } else if (key === "mixed") {
+    linkItems = [
+      { ...BASE_LINK_ITEMS[0], state: "ready", outLufs: -14.0, pct: 100 },
+      { ...BASE_LINK_ITEMS[1], state: "measured", outLufs: null, pct: 0 },
+      { id: "m3", title: "sunset balcony.jpg", kind: "image", dur: "JPG", art: "art-6", lufs: null, zone: "none", state: "none", outLufs: null, pct: 0 },
+      { ...BASE_LINK_ITEMS[2], state: "measured", outLufs: null, pct: 0 },
+      { ...BASE_LINK_ITEMS[3], state: "ready", outLufs: -14.0, pct: 100 },
+      { id: "m6", title: "sticker pack.webp", kind: "image", dur: "WEBP", art: "art-7", lufs: null, zone: "none", state: "none", outLufs: null, pct: 0 },
+      { ...BASE_LINK_ITEMS[5], state: "ready", outLufs: -14.0, pct: 100 },
+      { id: "m8", title: "muted screen recording", kind: "video", dur: "0:09", art: "art-8", lufs: -72, tp: -70, zone: "silent", state: "skipped", outLufs: null, pct: 0 },
+      { id: "m9", title: "receipt crop.png", kind: "image", dur: "PNG", art: "art-5", lufs: null, zone: "none", state: "none", outLufs: null, pct: 0 },
+      { id: "m10", title: "duo mockup.png", kind: "image", dur: "PNG", art: "art-4", lufs: null, zone: "none", state: "none", outLufs: null, pct: 0 },
+    ];
+    libTiles[0].state = "ready"; libTiles[0].outLufs = -14.0;
+    picked = ["l1", "l2", "l6", "l7"];
+  } else if (key === "images_only") {
+    linkItems = [
+      { id: "i1", title: "sunset balcony.jpg", kind: "image", dur: "JPG", art: "art-6", lufs: null, zone: "none", state: "none", outLufs: null, pct: 0 },
+      { id: "i2", title: "sticker pack.webp", kind: "image", dur: "WEBP", art: "art-7", lufs: null, zone: "none", state: "none", outLufs: null, pct: 0 },
+      { id: "i3", title: "receipt crop.png", kind: "image", dur: "PNG", art: "art-5", lufs: null, zone: "none", state: "none", outLufs: null, pct: 0 },
+      { id: "i4", title: "duo mockup.png", kind: "image", dur: "PNG", art: "art-4", lufs: null, zone: "none", state: "none", outLufs: null, pct: 0 },
+    ];
+    picked = ["l6", "l7"];
+  }
+  return { linkItems, libTiles, picked };
+}
+
+// ====== APP STATE ======
+const app = {
+  variation: "A",
+  scenario: "zero",
+  surface: "both",
+  useNormalLink: false,
+  useNormalNewLink: false,
+  cDrawerOpen: true,
+  dFilter: "all",
+  linkItems: [],
+  libTiles: [],
+  picked: [],
+  linkSimTimer: null,
+  libSimTimer: null,
+};
+
+function loadScenario(key) {
+  stopTimers();
+  app.scenario = key;
+  const s = buildScenario(key);
+  app.linkItems = s.linkItems;
+  app.libTiles = s.libTiles;
+  app.picked = s.picked;
+  const gate = computeGate(app.linkItems);
+  app.useNormalLink = gate.status === "unlocked";
+  const libGate = computeGate(getPickedItems());
+  app.useNormalNewLink = libGate.status === "unlocked";
+  app.dFilter = "all";
+  render();
+}
+
+function stopTimers() {
+  if (app.linkSimTimer) { clearInterval(app.linkSimTimer); app.linkSimTimer = null; }
+  if (app.libSimTimer) { clearInterval(app.libSimTimer); app.libSimTimer = null; }
+}
+
+function getPickedItems() {
+  return app.picked.map(id => app.libTiles.find(t => t.id === id)).filter(Boolean);
+}
+
+// ====== STRICT ?audio=normal GATE LOGIC ======
+function computeGate(items) {
+  const videos = items.filter(i => i.kind === "video");
+  const audible = videos.filter(i => i.zone !== "silent");
+  const silent = videos.filter(i => i.zone === "silent");
+  const images = items.filter(i => i.kind !== "video");
+  const leveled = audible.filter(i => i.state === "ready");
+  const rendering = audible.filter(i => i.state === "rendering");
+  const failed = audible.filter(i => i.state === "failed");
+  const unleveled = audible.filter(i => i.state !== "ready");
+  const queueable = audible.filter(i => i.state !== "ready" && i.state !== "rendering");
+
+  let status = "unlocked";
+  if (audible.length === 0) status = "na";
+  else if (unleveled.length > 0) status = "blocked";
+
+  const pct = audible.length === 0 ? 100 : Math.round(
+    (audible.reduce((acc, it) => acc + (it.state === "ready" ? 100 : it.state === "rendering" ? (it.pct || 25) : 0), 0)) / audible.length
+  );
+
+  let reason = "";
+  if (status === "na") {
+    reason = videos.length === 0 ? "images only · no audio tracks to level" : "silent clips only · no audible tracks";
+  } else if (status === "blocked") {
+    if (rendering.length > 0) {
+      reason = `${unleveled.length} of ${audible.length} video${audible.length === 1 ? "" : "s"} still leveling`;
+    } else if (failed.length > 0 && failed.length === unleveled.length) {
+      reason = `${failed.length} video${failed.length === 1 ? "" : "s"} failed leveling`;
+    } else {
+      reason = `${unleveled.length} of ${audible.length} video${audible.length === 1 ? "" : "s"} aren't leveled yet`;
+    }
+  } else {
+    reason = `all ${audible.length} audible video${audible.length === 1 ? "" : "s"} leveled to -14 LUFS`;
+  }
+
+  return { status, videos, audible, silent, images, leveled, rendering, failed, unleveled, queueable, pct, reason };
+}
+
+function lufsPct(lufs) {
+  if (lufs == null || !isFinite(lufs)) return 56.25;
+  const clamped = Math.min(0, Math.max(-32, lufs));
+  return ((clamped - (-32)) / 32) * 100;
+}
+
+// ====== INTERACTIVE SIMULATORS ======
+function startBulkLevelLink(singleId = null) {
+  const targets = singleId
+    ? app.linkItems.filter(i => i.id === singleId && i.kind === "video" && i.zone !== "silent" && i.state !== "ready")
+    : app.linkItems.filter(i => i.kind === "video" && i.zone !== "silent" && i.state !== "ready");
+  if (!targets.length) return;
+
+  targets.forEach((it, idx) => {
+    it.error = null;
+    if (it.state !== "rendering") {
+      it.state = idx < 2 ? "rendering" : "pending";
+      it.pct = idx < 2 ? Math.max(it.pct || 0, 14) : 0;
+    }
+  });
+  showToast(`Queued ${targets.length} video${targets.length === 1 ? "" : "s"} for -14 LUFS leveling…`, "neutral");
+  render();
+
+  if (app.linkSimTimer) clearInterval(app.linkSimTimer);
+  app.linkSimTimer = setInterval(() => {
+    const active = app.linkItems.filter(i => i.state === "rendering");
+    const waiting = app.linkItems.filter(i => i.state === "pending" && i.kind === "video" && i.zone !== "silent");
+    // Keep 2 rendering concurrently
+    while (active.length < 2 && waiting.length > 0) {
+      const next = waiting.shift();
+      next.state = "rendering";
+      next.pct = 12;
+      active.push(next);
+    }
+    if (active.length === 0) {
+      clearInterval(app.linkSimTimer);
+      app.linkSimTimer = null;
+      const g = computeGate(app.linkItems);
+      if (g.status === "unlocked") {
+        app.useNormalLink = true;
+        showToast("All videos leveled (-14.0 LUFS) · ?audio=normal unlocked!", "ok");
+      }
+      render();
+      return;
+    }
+    active.forEach(it => {
+      it.pct = Math.min(100, (it.pct || 0) + 22 + Math.floor(Math.random() * 14));
+      if (it.pct >= 100) {
+        it.state = "ready";
+        it.outLufs = -14.0;
+        it.pct = 100;
+      }
+    });
+    const g = computeGate(app.linkItems);
+    if (g.status === "unlocked") {
+      clearInterval(app.linkSimTimer);
+      app.linkSimTimer = null;
+      app.useNormalLink = true;
+      showToast("All videos leveled (-14.0 LUFS) · ?audio=normal unlocked!", "ok");
+    }
+    render();
+  }, 420);
+}
+
+function startBulkLevelLibrary() {
+  const picked = getPickedItems();
+  const targets = picked.filter(i => i.kind === "video" && i.zone !== "silent" && i.state !== "ready");
+  if (!targets.length) return;
+  targets.forEach((it, idx) => {
+    it.state = idx < 2 ? "rendering" : "pending";
+    it.pct = idx < 2 ? Math.max(it.pct || 0, 18) : 0;
+  });
+  showToast(`Leveling ${targets.length} selected video${targets.length === 1 ? "" : "s"} to -14 LUFS…`, "neutral");
+  render();
+
+  if (app.libSimTimer) clearInterval(app.libSimTimer);
+  app.libSimTimer = setInterval(() => {
+    const active = app.libTiles.filter(i => i.state === "rendering");
+    const waiting = getPickedItems().filter(i => i.state === "pending" && i.kind === "video" && i.zone !== "silent");
+    while (active.length < 2 && waiting.length > 0) {
+      const next = waiting.shift();
+      next.state = "rendering";
+      next.pct = 18;
+      active.push(next);
+    }
+    if (active.length === 0) {
+      clearInterval(app.libSimTimer);
+      app.libSimTimer = null;
+      const g = computeGate(getPickedItems());
+      if (g.status === "unlocked") {
+        app.useNormalNewLink = true;
+        showToast("Selected videos leveled · ?audio=normal ready for new share link!", "ok");
+      }
+      render();
+      return;
+    }
+    active.forEach(it => {
+      it.pct = Math.min(100, (it.pct || 0) + 26 + Math.floor(Math.random() * 14));
+      if (it.pct >= 100) {
+        it.state = "ready";
+        it.outLufs = -14.0;
+        it.pct = 100;
+      }
+    });
+    const g = computeGate(getPickedItems());
+    if (g.status === "unlocked") {
+      clearInterval(app.libSimTimer);
+      app.libSimTimer = null;
+      app.useNormalNewLink = true;
+      showToast("Selected videos leveled · ?audio=normal ready for new share link!", "ok");
+    }
+    render();
+  }, 400);
+}
+
+// ====== TOAST & CLIPBOARD FEEDBACK ======
+let toastTimer = null;
+function showToast(msg, tone = "neutral") {
+  const el = document.getElementById("toastHost");
+  el.textContent = msg;
+  el.className = "toast-host show" + (tone === "err" ? " toast-err" : tone === "ok" ? " toast-ok" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.classList.remove("show"); }, 2600);
+}
+
+function triggerShake(el) {
+  if (!el) return;
+  el.classList.remove("shake");
+  void el.offsetWidth;
+  el.classList.add("shake");
+}
+
+function attemptNormalCopy(el, isShareSheet = false) {
+  const g = computeGate(app.linkItems);
+  if (g.status !== "unlocked") {
+    triggerShake(el);
+    if (g.status === "na") {
+      showToast("No audible videos in this link — ?audio=normal is not applicable.", "err");
+    } else {
+      showToast(`Blocked: ${g.reason} — level remaining videos to unlock ?audio=normal`, "err");
+    }
+    return;
+  }
+  const url = "share.capybaraharmony.com/g/8962396074701362336?audio=normal";
+  showToast(isShareSheet ? `Share sheet opened: ${url}` : `Copied: ${url}`, "ok");
+}
+
+function copyBareLink(isShareSheet = false) {
+  const url = "share.capybaraharmony.com/g/8962396074701362336";
+  showToast(isShareSheet ? `Share sheet opened (original): ${url}` : `Copied original: ${url}`, "neutral");
+}
+
+// ====== SHARED RENDER HELPERS ======
+function renderDuoRail(mode) {
+  if (mode === "link") {
+    return `
+      <aside class="duo-rail" aria-hidden="true">
+        <div class="rail-status">
+          <span>11:52</span>
+          <div class="rail-ring">95</div>
+        </div>
+        <div class="rail-btn">${IC.chevL}</div>
+        <div class="rail-btn">${IC.dots}</div>
+      </aside>`;
+  }
+  return `
+    <aside class="duo-rail" aria-hidden="true">
+      <div class="rail-status">
+        <span>11:52</span>
+        <div class="rail-ring">95</div>
+      </div>
+      <div class="rail-btn">${IC.link}</div>
+      <div class="rail-pill-group">
+        <span>${IC.copy}</span>
+        <span>${IC.folder}</span>
+        <span>${IC.dots}</span>
+      </div>
+      <div style="flex:1"></div>
+      <div class="rail-pill-group">
+        <span class="active-tab">${IC.photo}</span>
+        <span>${IC.waveSm}</span>
+        <span>${IC.film}</span>
+      </div>
+    </aside>`;
+}
+
+function renderHeroGrid(items) {
+  const shown = items.slice(0, 4);
+  return `
+    <div class="hero-col">
+      <div class="pane-top-title">link</div>
+      <div class="hero-grid-2x2">
+        ${shown.map(it => {
+          let bClass = "img", bText = it.dur;
+          if (it.kind === "video") {
+            if (it.state === "ready") { bClass = "ok"; bText = "-14.0 ✓"; }
+            else if (it.state === "rendering") { bClass = "rendering"; bText = `${it.pct}%`; }
+            else if (it.zone === "silent") { bClass = "img"; bText = "silent"; }
+            else if (it.zone === "loud") { bClass = "loud"; bText = `${it.lufs.toFixed(1)}`; }
+            else if (it.zone === "quiet") { bClass = "quiet"; bText = `${it.lufs.toFixed(1)}`; }
+            else { bClass = "img"; bText = `${it.lufs.toFixed(1)}`; }
+          }
+          return `
+            <div class="hero-tile ${it.art}">
+              ${it.cap ? `<div class="art-caption">${it.cap}</div>` : ""}
+              ${it.kind === "video" ? `<div class="play-circle">${IC.play}</div>` : ""}
+              <span class="hero-badge ${bClass}">${bText}</span>
+            </div>`;
+        }).join("")}
+      </div>
+    </div>`;
+}
+
+function renderDistBar(g) {
+  const total = Math.max(1, g.audible.length + g.images.length + g.silent.length);
+  const okW = (g.leveled.length / total) * 100;
+  const renW = (g.rendering.length / total) * 100;
+  const loudW = (g.unleveled.filter(i => i.state !== "rendering" && (i.zone === "loud" || i.state === "failed")).length / total) * 100;
+  const quietW = (g.unleveled.filter(i => i.state !== "rendering" && i.zone !== "loud" && i.state !== "failed").length / total) * 100;
+  const imgW = ((g.images.length + g.silent.length) / total) * 100;
+  return `
+    <div class="dist-bar" title="Leveled / Leveling / Loud / Quiet / Non-audio">
+      ${okW ? `<span class="dist-seg ok" style="width:${okW}%"></span>` : ""}
+      ${renW ? `<span class="dist-seg rendering pulse" style="width:${renW}%"></span>` : ""}
+      ${loudW ? `<span class="dist-seg loud" style="width:${loudW}%"></span>` : ""}
+      ${quietW ? `<span class="dist-seg quiet" style="width:${quietW}%"></span>` : ""}
+      ${imgW ? `<span class="dist-seg img" style="width:${imgW}%"></span>` : ""}
+    </div>`;
+}
+
+function renderAggregateRuler(items) {
+  const audible = items.filter(i => i.kind === "video" && i.zone !== "silent");
+  const dots = audible.map((it, idx) => {
+    const val = it.state === "ready" ? (it.outLufs ?? -14.0) : it.lufs;
+    const cls = it.state === "ready" ? "ok" : it.state === "rendering" ? "rendering pulse" : it.zone === "loud" ? "loud" : it.zone === "quiet" ? "quiet" : "ok";
+    // Tiny horizontal jitter when stacked on -14.0 so multiple leveled dots stay legible
+    const jitter = it.state === "ready" ? ((idx % 3) - 1) * 0.7 : 0;
+    return `<span class="lufs-dot ${cls}" style="left:${Math.min(97, Math.max(3, lufsPct(val) + jitter))}%" title="${it.title}: ${val.toFixed(1)} LUFS"></span>`;
+  }).join("");
+  return `
+    <div class="lufs-ruler">
+      <div class="lufs-track">
+        <span class="z-quiet"></span><span class="z-bal"></span><span class="z-clip"></span><span class="z-loud"></span>
+      </div>
+      <span class="lufs-target"></span>
+      ${dots}
+      <div class="lufs-axis">
+        <span>-32</span><span>-22</span><span class="tgt">-14 target</span><span>-10.5</span><span>0 LUFS</span>
+      </div>
+    </div>`;
+}
+
+function renderFileBadge(it) {
+  if (it.kind !== "video") return `<span class="lufs-badge muted">${IC.photo} ${it.dur.toLowerCase()}</span>`;
+  if (it.zone === "silent") return `<span class="lufs-badge muted">${IC.mute} silent</span>`;
+  if (it.state === "ready") return `<span class="lufs-badge ok">${IC.check} -14.0</span>`;
+  if (it.state === "rendering") return `<span class="lufs-badge rendering pulse">${IC.waveSm} ${it.pct}%</span>`;
+  if (it.state === "failed") return `<span class="lufs-badge failed">${IC.alert} failed</span>`;
+  if (it.zone === "loud") return `<span class="lufs-badge loud">${it.lufs.toFixed(1)} loud</span>`;
+  if (it.zone === "quiet") return `<span class="lufs-badge quiet">${it.lufs.toFixed(1)} quiet</span>`;
+  return `<span class="lufs-badge balanced">${it.lufs.toFixed(1)} ok</span>`;
+}
+
+function renderFilesList(items, variant) {
+  let shown = items;
+  if (variant === "D" && app.dFilter === "needs") {
+    shown = items.filter(i => i.kind === "video" && i.zone !== "silent" && i.state !== "ready");
+  } else if (variant === "D" && app.dFilter === "leveled") {
+    shown = items.filter(i => i.kind === "video" && i.state === "ready");
+  }
+  const g = computeGate(items);
+  return `
+    <div class="files-section">
+      <div class="files-head">
+        <span>files · in order</span>
+        <span>${shown.length} of ${items.length}</span>
+      </div>
+      ${variant === "D" && g.audible.length > 0 ? `
+        <div class="filter-mini-row">
+          <button class="fmini ${app.dFilter === "all" ? "active" : ""}" data-dfilter="all">all (${items.length})</button>
+          <button class="fmini ${app.dFilter === "needs" ? "active" : ""}" data-dfilter="needs">needs level (${g.unleveled.length})</button>
+          <button class="fmini ${app.dFilter === "leveled" ? "active" : ""}" data-dfilter="leveled">leveled (${g.leveled.length})</button>
+        </div>` : ""}
+      <div class="files-list">
+        ${shown.map((it, idx) => {
+          const origIdx = items.indexOf(it) + 1;
+          const isVid = it.kind === "video";
+          const canLevelRow = isVid && it.zone !== "silent" && it.state !== "ready" && it.state !== "rendering";
+          const dotColor = it.state === "ready" ? "#34d399" : it.state === "rendering" ? "#fbbf24" : it.zone === "loud" ? "#f87171" : it.zone === "quiet" ? "#38bdf8" : "#9ca3af";
+          const dotPos = lufsPct(it.state === "ready" ? -14.0 : it.lufs);
+          return `
+            <div class="file-row ${it.state === "rendering" ? "is-rendering" : ""} ${it.state === "failed" ? "is-failed" : ""}">
+              <span class="file-num">${origIdx}</span>
+              <div class="file-thumb ${it.art}">
+                ${isVid ? IC.playSm : IC.photo}
+              </div>
+              <div class="file-info">
+                <div class="file-title">${it.title}</div>
+                <div class="file-meta">
+                  <span>${isVid ? `video · ${it.dur}` : `image · ${it.dur.toLowerCase()}`}</span>
+                  ${variant === "A" && isVid && it.zone !== "silent" ? `
+                    <span class="mini-ruler"><i class="mr-tgt"></i><i class="mr-dot" style="left:${dotPos}%;background:${dotColor}"></i></span>` : ""}
+                  ${variant === "B" && isVid && it.zone !== "silent" ? `<span>· ${it.state === "ready" ? "leveled -14.0" : it.state === "rendering" ? `leveling ${it.pct}%` : `${it.lufs.toFixed(1)} LUFS`}</span>` : ""}
+                </div>
+              </div>
+              ${variant === "C" && isVid && it.zone !== "silent" ? `
+                <span class="mini-ruler" title="LUFS position"><i class="mr-tgt"></i><i class="mr-dot" style="left:${dotPos}%;background:${dotColor}"></i></span>` : ""}
+              ${renderFileBadge(it)}
+              ${variant === "C" && canLevelRow ? `<button class="row-level-btn" data-level-one="${it.id}">${it.state === "failed" ? "retry" : "level"}</button>` : `<span style="color:var(--c-caption)">${IC.chevR}</span>`}
+            </div>`;
+        }).join("")}
+      </div>
+    </div>`;
+}
+
+// ====== VARIATION RENDERERS — SHARE LINK (LinkPanePage) ======
+function renderLinkPane(variant) {
+  const items = app.linkItems;
+  const g = computeGate(items);
+  const unlocked = g.status === "unlocked";
+  const isNA = g.status === "na";
+  const activeNormal = unlocked && app.useNormalLink;
+  const shortUrl = `share.capybaraharmony...m/g/8962396074701362336`;
+  const mixedNote = (g.images.length > 0 || g.silent.length > 0)
+    ? `${[g.images.length ? `${g.images.length} img` : "", g.silent.length ? `${g.silent.length} silent` : ""].filter(Boolean).join(" · ")} won't block`
+    : "";
+
+  let rightBody = "";
+
+  // --- VARIATION A: Inline Audio Dock + Segmented Address Bar ---
+  if (variant === "A") {
+    rightBody = `
+      <div class="pane-grid-2x2">
+        <button class="pane-tile ${activeNormal ? "emerald" : ""}" data-action="${activeNormal ? "copy-normal" : "copy-orig"}">
+          ${activeNormal ? IC.wave : IC.copy}
+          <span class="tile-lbl"><span>${activeNormal ? "copy · leveled" : "copy link"}</span>${activeNormal ? `<span class="tile-sub" style="color:#6ee7b7">?audio=normal</span>` : ""}</span>
+        </button>
+        <button class="pane-tile" data-toast="Opened LinkScreen editor">${IC.edit}<span class="tile-lbl">edit</span></button>
+        <button class="pane-tile" data-toast="Switched link to private">${IC.lock}<span class="tile-lbl">make private</span></button>
+        <button class="pane-tile destructive" data-toast="Revoke confirmation dialog">${IC.revoke}<span class="tile-lbl">revoke</span></button>
+      </div>
+
+      <!-- Studio Audio & Link Mode Dock -->
+      <div class="glass-card ${unlocked ? "state-unlocked" : g.rendering.length ? "state-working" : isNA ? "" : "state-blocked"}">
+        <div class="mode-seg">
+          <button class="${!activeNormal ? "active" : ""}" data-set-normal="0">original audio</button>
+          <button class="${activeNormal ? "active em" : unlocked ? "" : "locked-seg"}" data-set-normal="1">
+            ${unlocked ? IC.waveSm : IC.lockSm}
+            <span>${isNA ? "?audio=normal · n/a" : "leveled (?audio=normal)"}</span>
+          </button>
+        </div>
+
+        <div class="url-row">
+          <span class="url-text">${shortUrl}${activeNormal ? `<span class="q-normal">?audio=normal</span>` : ""}</span>
+          <button class="share-icon-btn ${activeNormal ? "emerald-mode" : ""}" data-action="${activeNormal ? "share-normal" : "share-orig"}" title="Share active link">${IC.share}</button>
+        </div>
+
+        ${!isNA ? renderDistBar(g) : ""}
+
+        <div class="gate-row">
+          <div class="gate-msg ${unlocked ? "ok" : g.rendering.length ? "amber" : isNA ? "" : "warn"}">
+            ${unlocked
+              ? `<strong>${g.leveled.length}/${g.audible.length} leveled</strong> · ?audio=normal ready${mixedNote ? ` (${mixedNote})` : ""}`
+              : isNA
+                ? `${g.reason}`
+                : `<strong>${g.leveled.length}/${g.audible.length} leveled</strong> · ${g.reason}${mixedNote ? ` · ${mixedNote}` : ""}`}
+          </div>
+          ${!unlocked && !isNA ? `
+            <button class="cta-pill ${g.rendering.length ? "soft-amber" : "primary-em"}" data-bulk-link>
+              ${IC.waveSm} ${g.rendering.length ? `leveling ${g.pct}%…` : `level ${g.queueable.length} video${g.queueable.length === 1 ? "" : "s"}`}
+            </button>` : ""}
+        </div>
+      </div>
+
+      <div class="tags-row">
+        <span class="tag-pill">${IC.globe} public</span>
+        <span class="tag-folder">${IC.folder} Lia Share 40</span>
+      </div>`;
+  }
+
+  // --- VARIATION B: Action-Tile First + Inline Gate Banner ---
+  else if (variant === "B") {
+    const levelLabel = isNA
+      ? "no audio"
+      : unlocked
+        ? "all leveled"
+        : g.rendering.length
+          ? `leveling ${g.leveled.length}/${g.audible.length}`
+          : `level ${g.queueable.length} video${g.queueable.length === 1 ? "" : "s"}`;
+    const levelClass = isNA ? "locked" : unlocked ? "emerald" : g.rendering.length ? "amber" : "emerald";
+
+    rightBody = `
+      <div class="pane-grid-2x3">
+        <button class="pane-tile" data-action="copy-orig">
+          ${IC.copy}
+          <span class="tile-lbl"><span>copy link</span><span class="tile-sub">original</span></span>
+        </button>
+        <button class="pane-tile ${unlocked ? "emerald" : "locked"}" data-action="copy-normal">
+          ${unlocked ? IC.wave : IC.lock}
+          <span class="tile-lbl">
+            <span>copy leveled</span>
+            <span class="tile-sub" style="color:${unlocked ? "#6ee7b7" : "#8f8f9b"}">${isNA ? "n/a" : unlocked ? "?audio=normal" : `locked · ${g.leveled.length}/${g.audible.length}`}</span>
+          </span>
+        </button>
+        <button class="pane-tile ${levelClass}" ${!unlocked && !isNA ? "data-bulk-link" : `data-toast="${isNA ? "No audible videos to level" : "All videos already leveled to -14.0 LUFS"}"`}>
+          ${g.rendering.length ? `<span class="tile-progress-bg" style="width:${g.pct}%"></span>` : ""}
+          ${unlocked ? IC.check : IC.wave}
+          <span class="tile-lbl"><span>${levelLabel}</span><span class="tile-sub">${isNA ? "images only" : unlocked ? "-14.0 LUFS" : `${g.pct}%`}</span></span>
+        </button>
+        <button class="pane-tile" data-toast="Opened LinkScreen editor">${IC.edit}<span class="tile-lbl">edit</span></button>
+        <button class="pane-tile" data-toast="Switched link to private">${IC.lock}<span class="tile-lbl">make private</span></button>
+        <button class="pane-tile destructive" data-toast="Revoke confirmation dialog">${IC.revoke}<span class="tile-lbl">revoke</span></button>
+      </div>
+
+      ${!unlocked && !isNA ? `
+        <div class="glass-card ${g.rendering.length ? "state-working" : "state-blocked"}" style="padding:7px 9px;gap:5px">
+          <div class="gate-row">
+            <span class="gate-msg ${g.rendering.length ? "amber" : "warn"}">${IC.lockSm} <strong>?audio=normal locked</strong> — ${g.reason}${mixedNote ? ` (${mixedNote})` : ""}</span>
+            <button class="cta-pill ${g.rendering.length ? "soft-amber" : "soft-em"}" data-bulk-link>
+              ${g.rendering.length ? `${g.pct}%` : `level ${g.queueable.length}`}
+            </button>
+          </div>
+          ${renderDistBar(g)}
+        </div>` : ""}
+
+      <div class="url-row">
+        <span class="url-text">${shortUrl}${unlocked ? `<span class="q-normal">?audio=normal</span>` : ""}</span>
+        <button class="share-icon-btn" data-action="share-orig" title="Share original link">${IC.share}</button>
+        <button class="share-icon-btn ${unlocked ? "emerald-mode" : "locked-btn"}" data-action="share-normal" title="${unlocked ? "Share ?audio=normal link" : "Locked until all videos are leveled"}">${unlocked ? IC.waveSm : IC.lockSm}</button>
+      </div>
+
+      <div class="tags-row">
+        <span class="tag-pill">${IC.globe} public</span>
+        <span class="tag-folder">${IC.folder} Lia Share 40</span>
+        ${mixedNote ? `<span class="tag-pill">${mixedNote}</span>` : ""}
+      </div>`;
+  }
+
+  // --- VARIATION C: Loudness Preflight Inspector + Split Copy/Share ---
+  else if (variant === "C") {
+    rightBody = `
+      <div class="pane-grid-2x2">
+        <button class="pane-tile" data-action="copy-orig">${IC.copy}<span class="tile-lbl">copy link</span></button>
+        <button class="pane-tile" data-toast="Opened LinkScreen editor">${IC.edit}<span class="tile-lbl">edit</span></button>
+        <button class="pane-tile" data-toast="Switched link to private">${IC.lock}<span class="tile-lbl">make private</span></button>
+        <button class="pane-tile destructive" data-toast="Revoke confirmation dialog">${IC.revoke}<span class="tile-lbl">revoke</span></button>
+      </div>
+
+      <!-- Live Loudness Preflight Card with Multi-Dot LUFS Ruler -->
+      <div class="glass-card ${unlocked ? "state-unlocked" : g.rendering.length ? "state-working" : isNA ? "" : "state-blocked"}">
+        <div class="gate-row">
+          <span style="font-size:9.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:${unlocked ? "#6ee7b7" : isNA ? "#8f8f8f" : g.rendering.length ? "#fde68a" : "#fca5a5"}">
+            ${unlocked ? "● audio gate · passed" : isNA ? "○ audio gate · n/a" : g.rendering.length ? `◐ audio gate · leveling (${g.leveled.length}/${g.audible.length})` : `● audio gate · blocked (${g.leveled.length}/${g.audible.length})`}
+          </span>
+          ${!unlocked && !isNA ? `
+            <button class="cta-pill ${g.rendering.length ? "soft-amber" : "primary-em"}" data-bulk-link>
+              ${IC.waveSm} ${g.rendering.length ? `${g.pct}%…` : `level ${g.queueable.length} remaining`}
+            </button>` : unlocked ? `<span class="lufs-badge ok">${IC.check} -14.0 LUFS</span>` : ""}
+        </div>
+
+        ${!isNA ? renderAggregateRuler(items) : `<div class="gate-msg">${g.reason}</div>`}
+
+        <div class="gate-row" style="padding-top:2px;border-top:1px solid rgba(255,255,255,0.08)">
+          <span class="url-text" style="font-size:9.5px">${shortUrl}${unlocked ? `<span class="q-normal">?audio=normal</span>` : ""}</span>
+          <div style="display:inline-flex;gap:5px;flex:none">
+            <button class="cta-pill ${unlocked ? "primary-em" : "locked-pill"}" data-action="copy-normal">
+              ${unlocked ? IC.copy : IC.lockSm} ?audio=normal
+            </button>
+            <button class="share-icon-btn ${unlocked ? "emerald-mode" : "locked-btn"}" data-action="${unlocked ? "share-normal" : "share-normal"}" title="${unlocked ? "Share ?audio=normal" : "Locked"}">${IC.share}</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tags-row">
+        <span class="tag-pill">${IC.globe} public</span>
+        <span class="tag-folder">${IC.folder} Lia Share 40</span>
+        ${mixedNote ? `<span class="tag-pill">${mixedNote}</span>` : ""}
+      </div>`;
+  }
+
+  // --- VARIATION D: 2-Step Gate Rail (Task-Guided & Calm) ---
+  else if (variant === "D") {
+    rightBody = `
+      <div class="pane-grid-2x2">
+        <button class="pane-tile" data-action="copy-orig">${IC.copy}<span class="tile-lbl"><span>copy link</span><span class="tile-sub">original</span></span></button>
+        <button class="pane-tile" data-toast="Opened LinkScreen editor">${IC.edit}<span class="tile-lbl">edit</span></button>
+        <button class="pane-tile" data-toast="Switched link to private">${IC.lock}<span class="tile-lbl">make private</span></button>
+        <button class="pane-tile destructive" data-toast="Revoke confirmation dialog">${IC.revoke}<span class="tile-lbl">revoke</span></button>
+      </div>
+
+      <!-- 2-Step Guided Share Audio Rail -->
+      <div class="step-rail">
+        <div class="step-item">
+          <div class="step-num ${unlocked || isNA ? "done" : g.rendering.length ? "busy" : ""}">
+            ${unlocked || isNA ? IC.check : "1"}
+          </div>
+          <div class="step-copy">
+            <strong>${isNA ? "no audio leveling needed" : unlocked ? `all ${g.audible.length} videos leveled` : g.rendering.length ? `leveling ${g.leveled.length} of ${g.audible.length} videos…` : `level ${g.unleveled.length} of ${g.audible.length} videos`}</strong>
+            <span>${isNA ? g.reason : unlocked ? `normalized to -14.0 LUFS${mixedNote ? ` · ${mixedNote}` : ""}` : `${g.reason}${mixedNote ? ` · ${mixedNote}` : ""}`}</span>
+          </div>
+          ${!unlocked && !isNA ? `
+            <button class="cta-pill ${g.rendering.length ? "soft-amber" : "primary-em"}" data-bulk-link>
+              ${g.rendering.length ? `${g.pct}%` : `level all`}
+            </button>` : ""}
+        </div>
+
+        <div class="step-item ${unlocked ? "step-unlocked" : "step-locked"}">
+          <div class="step-num ${unlocked ? "done" : "locked"}">${unlocked ? IC.waveSm : IC.lockSm}</div>
+          <div class="step-copy">
+            <strong>${unlocked ? "share leveled link (?audio=normal)" : isNA ? "?audio=normal not applicable" : "?audio=normal locked"}</strong>
+            <span>${unlocked ? `${shortUrl}?audio=normal` : isNA ? "share original link above instead" : "unlocks automatically when step 1 finishes"}</span>
+          </div>
+          <div style="display:inline-flex;gap:5px;flex:none">
+            <button class="cta-pill ${unlocked ? "primary-em" : "locked-pill"}" data-action="copy-normal">copy</button>
+            <button class="share-icon-btn ${unlocked ? "emerald-mode" : "locked-btn"}" data-action="share-normal">${IC.share}</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tags-row">
+        <span class="tag-pill">${IC.globe} public</span>
+        <span class="tag-folder">${IC.folder} Lia Share 40</span>
+        <span class="url-text" style="flex:none">${shortUrl}</span>
+      </div>`;
+  }
+
+  return `
+    <div class="duo-frame">
+      <div class="duo-shell">
+        <div class="link-pane">
+          ${renderHeroGrid(items)}
+          <div class="detail-col">
+            <div class="detail-head">
+              <h3>${items.length} files</h3>
+              <div class="detail-sub">${items.length} files · public · today 23:50</div>
+            </div>
+            ${rightBody}
+            ${renderFilesList(items, variant)}
+          </div>
+        </div>
+        ${renderDuoRail("link")}
+      </div>
+    </div>`;
+}
+
+// ====== VARIATION RENDERERS — LIBRARY MULTI-SELECT (LibraryPickedSheet) ======
+function renderLibrarySheet(variant) {
+  const picked = getPickedItems();
+  const g = computeGate(picked);
+  const unlocked = g.status === "unlocked";
+  const isNA = g.status === "na";
+  const vidCount = g.videos.length;
+  const imgCount = g.images.length;
+  const kindSummary = [
+    vidCount ? `${vidCount} video${vidCount === 1 ? "" : "s"}` : "",
+    imgCount ? `${imgCount} image${imgCount === 1 ? "" : "s"}` : "",
+  ].filter(Boolean).join(", ");
+  const hasPicks = picked.length > 0;
+  const normalNewActive = unlocked && app.useNormalNewLink;
+
+  // Picked strip
+  const stripHtml = hasPicks ? `
+    <div class="pick-strip">
+      ${picked.map((it, idx) => {
+        const dotCls = it.kind !== "video" ? "img" : it.state === "ready" ? "ok" : it.state === "rendering" ? "rendering pulse" : it.zone === "loud" ? "loud" : it.zone === "quiet" ? "quiet" : "img";
+        return `
+          <div class="pick-thumb ${it.art}">
+            <span class="pt-num">${idx + 1}</span>
+            <button class="pt-x" data-unpick="${it.id}" title="Remove from selection">${IC.x}</button>
+            <span class="pt-dot ${dotCls}"></span>
+          </div>`;
+      }).join("")}
+    </div>` : "";
+
+  // Variation-specific audio integration inside the floating Liquid Glass sheet
+  let preGridHtml = "";
+  let gridHtml = "";
+  let footerHtml = "";
+
+  const standard8Tiles = `
+    <button class="sel-tile t-primary" ${picked.length < 2 ? "disabled" : ""} data-make-link>
+      ${IC.link}<span>${normalNewActive ? "link · normal" : "make share link"}</span>
+    </button>
+    <button class="sel-tile t-neutral" data-toast="Toggled public / private link mode">${IC.globe}<span>public</span></button>
+    <button class="sel-tile t-collection" ${picked.length < 2 ? "disabled" : ""} data-toast="Opened collection picker">${IC.folder}<span>collection</span></button>
+    <button class="sel-tile t-add" ${!hasPicks ? "disabled" : ""} data-toast="Opened add to link picker">${IC.link}<span>add to link</span></button>
+    <button class="sel-tile t-share" ${!hasPicks ? "disabled" : ""} data-toast="Preparing ${picked.length} files for share sheet">${IC.share}<span>share</span></button>
+    <button class="sel-tile t-edit" ${!vidCount ? "disabled" : ""} data-toast="Opened timeline editor">${IC.film}<span>edit</span></button>
+    <button class="sel-tile t-neutral" ${!hasPicks ? "disabled" : ""} data-toast="Opened status menu (public / private / hidden)">${IC.switches}<span>status...</span></button>
+    <button class="sel-tile t-delete" ${!hasPicks ? "disabled" : ""} data-toast="Opened delete confirmation">${IC.trash}<span>delete</span></button>`;
+
+  if (variant === "A") {
+    // Slim Liquid Glass audio strip directly between thumbnail rail and 2x4 grid
+    if (hasPicks) {
+      preGridHtml = `
+        <div class="sheet-audio-strip ${unlocked ? "ready-strip" : ""}">
+          <span style="display:inline-flex;align-items:center;gap:5px;color:${unlocked ? "#6ee7b7" : g.rendering.length ? "#fde68a" : "#e4e4e7"}">
+            ${IC.waveSm}
+            ${isNA
+              ? "no audible videos selected"
+              : unlocked
+                ? `all ${g.audible.length} videos leveled (-14 LUFS)`
+                : g.rendering.length
+                  ? `leveling ${g.leveled.length}/${g.audible.length} (${g.pct}%)…`
+                  : `${g.audible.length} video${g.audible.length === 1 ? "" : "s"} · ${g.unleveled.length} need leveling`}
+          </span>
+          ${!unlocked && !isNA ? `
+            <button class="cta-pill ${g.rendering.length ? "soft-amber" : "primary-em"}" style="padding:3.5px 9px;font-size:9.5px" data-bulk-lib>
+              ${g.rendering.length ? `${g.pct}%` : `level ${g.queueable.length}`}
+            </button>` : unlocked ? `
+            <button class="normal-opt-pill ${normalNewActive ? "unlocked-on" : ""}" data-toggle-new-normal>
+              ${normalNewActive ? IC.check : IC.waveSm} ?audio=normal
+            </button>` : ""}
+        </div>`;
+    }
+    gridHtml = `<div class="select-grid">${standard8Tiles}</div>`;
+    footerHtml = `
+      <div class="sheet-footer">
+        <span>${picked.length} files · ${normalNewActive ? "one link (?audio=normal)" : "one link"}</span>
+        ${!unlocked && !isNA && hasPicks ? `<span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;color:#fca5a5">${IC.lockSm} ?audio=normal locked</span>` : ""}
+      </div>`;
+  } else if (variant === "B") {
+    // Dedicated 9th 'level audio' tile right inside Cobalt's tile grammar (3x3 balanced grid)
+    const lvlTitle = isNA ? "no audio" : unlocked ? "leveled ✓" : g.rendering.length ? `${g.pct}%…` : `level (${g.queueable.length})`;
+    const lvlCls = isNA ? "t-neutral" : unlocked ? "t-level" : g.rendering.length ? "t-level-busy" : "t-level";
+    gridHtml = `
+      <div class="select-grid cols-3">
+        <button class="sel-tile t-primary" ${picked.length < 2 ? "disabled" : ""} data-make-link>${IC.link}<span>${normalNewActive ? "link · normal" : "make share link"}</span></button>
+        <button class="sel-tile ${lvlCls}" ${isNA || unlocked ? "disabled" : ""} data-bulk-lib>
+          ${g.rendering.length ? `<span class="sel-fill-bar" style="width:${g.pct}%"></span>` : ""}
+          ${unlocked ? IC.check : IC.wave}
+          <span>${lvlTitle}</span>
+        </button>
+        <button class="sel-tile t-neutral" data-toast="Toggled public / private">${IC.globe}<span>public</span></button>
+        <button class="sel-tile t-collection" ${picked.length < 2 ? "disabled" : ""} data-toast="Opened collection picker">${IC.folder}<span>collection</span></button>
+        <button class="sel-tile t-add" ${!hasPicks ? "disabled" : ""} data-toast="Opened add to link">${IC.link}<span>add to link</span></button>
+        <button class="sel-tile t-share" ${!hasPicks ? "disabled" : ""} data-toast="Sharing ${picked.length} files">${IC.share}<span>share</span></button>
+        <button class="sel-tile t-edit" ${!vidCount ? "disabled" : ""} data-toast="Opened editor">${IC.film}<span>edit</span></button>
+        <button class="sel-tile t-neutral" ${!hasPicks ? "disabled" : ""} data-toast="Opened status menu">${IC.switches}<span>status...</span></button>
+        <button class="sel-tile t-delete" ${!hasPicks ? "disabled" : ""} data-toast="Opened delete confirm">${IC.trash}<span>delete</span></button>
+      </div>`;
+    footerHtml = `
+      <div class="sheet-footer">
+        <span>${picked.length} files · ${isNA ? "images only" : unlocked ? "all leveled" : `${g.unleveled.length} need leveling`}</span>
+        <button class="normal-opt-pill ${unlocked ? (normalNewActive ? "unlocked-on" : "") : "locked"}" data-toggle-new-normal>
+          ${unlocked ? IC.waveSm : IC.lockSm} ?audio=normal
+        </button>
+      </div>`;
+  } else if (variant === "C") {
+    // Expandable inline Loudness Drawer triggered from header pill
+    if (hasPicks && app.cDrawerOpen) {
+      preGridHtml = `
+        <div class="sheet-audio-drawer">
+          <div class="gate-row">
+            <span style="font-size:9.5px;font-weight:700;color:${unlocked ? "#6ee7b7" : "#e4e4e7"}">
+              ${isNA ? "AUDIO INSPECTOR · IMAGES ONLY" : unlocked ? "AUDIO INSPECTOR · READY FOR ?audio=normal" : `AUDIO INSPECTOR · ${g.unleveled.length} OF ${g.audible.length} NEED LEVELING`}
+            </span>
+            ${!unlocked && !isNA ? `
+              <button class="cta-pill ${g.rendering.length ? "soft-amber" : "primary-em"}" style="padding:3px 8px;font-size:9.5px" data-bulk-lib>
+                ${IC.waveSm} ${g.rendering.length ? `leveling ${g.pct}%` : `level ${g.queueable.length} to -14`}
+              </button>` : ""}
+          </div>
+          ${picked.slice(0, 4).map(it => {
+            const dotPos = lufsPct(it.state === "ready" ? -14.0 : it.lufs);
+            const dotColor = it.state === "ready" ? "#34d399" : it.state === "rendering" ? "#fbbf24" : it.zone === "loud" ? "#f87171" : "#38bdf8";
+            return `
+              <div class="drawer-item-row">
+                <span class="dname">${it.title}</span>
+                ${it.kind === "video" && it.zone !== "silent" ? `<span class="mini-ruler"><i class="mr-tgt"></i><i class="mr-dot" style="left:${dotPos}%;background:${dotColor}"></i></span>` : ""}
+                ${renderFileBadge(it)}
+              </div>`;
+          }).join("")}
+        </div>`;
+    }
+    gridHtml = `<div class="select-grid">${standard8Tiles}</div>`;
+    footerHtml = `
+      <div class="sheet-footer">
+        <span>${picked.length} files · one link</span>
+        <button class="normal-opt-pill ${unlocked ? (normalNewActive ? "unlocked-on" : "") : "locked"}" data-toggle-new-normal>
+          ${unlocked ? IC.waveSm : IC.lockSm} ${unlocked ? (normalNewActive ? "create with ?audio=normal" : "add ?audio=normal") : `?audio=normal locked (${g.leveled.length}/${g.audible.length})`}
+        </button>
+      </div>`;
+  } else {
+    // Variation D: Calm progress sweep along hairline + smart interactive footer bar
+    gridHtml = `<div class="select-grid">${standard8Tiles}</div>`;
+    footerHtml = `
+      <div class="sheet-footer" style="padding-top:3px;border-top:1px solid rgba(255,255,255,0.08)">
+        <span style="color:${unlocked ? "#6ee7b7" : g.rendering.length ? "#fde68a" : "#d4d4d8"}">
+          ${!hasPicks ? "pick files to level or share"
+            : isNA ? `${picked.length} images · audio leveling n/a`
+            : unlocked ? `✓ ${g.audible.length}/${g.audible.length} leveled · ?audio=normal unlocked`
+            : g.rendering.length ? `leveling ${g.leveled.length}/${g.audible.length} videos (${g.pct}%)…`
+            : `${g.unleveled.length} of ${g.audible.length} videos un-leveled`}
+        </span>
+        ${hasPicks && !unlocked && !isNA ? `
+          <button class="cta-pill ${g.rendering.length ? "soft-amber" : "primary-em"}" style="padding:3px 9px;font-size:9.5px" data-bulk-lib>
+            ${g.rendering.length ? `${g.pct}%` : `level ${g.queueable.length} now`}
+          </button>` : hasPicks && unlocked ? `
+          <button class="normal-opt-pill ${normalNewActive ? "unlocked-on" : ""}" data-toggle-new-normal>
+            ${IC.waveSm} + ?audio=normal
+          </button>` : ""}
+      </div>`;
+  }
+
+  return `
+    <div class="duo-frame">
+      <div class="duo-shell">
+        <div class="lib-screen">
+          <div class="lib-nav">
+            <div class="lib-nav-title">
+              <strong>library</strong>
+              <span>${picked.length} selected</span>
+            </div>
+            <div class="lib-search">${IC.search} search titles and what'...</div>
+          </div>
+
+          <div class="lib-select-top">
+            <button class="glass-pill-sm" data-toast="Exited select mode">${IC.x} done</button>
+            <span style="font-size:11.5px;font-weight:600">${picked.length} picked</span>
+            <span style="flex:1"></span>
+            <button class="glass-pill-sm" data-toggle-all>${picked.length === app.libTiles.length ? "none" : "all"}</button>
+          </div>
+
+          <div class="lib-mosaic">
+            ${app.libTiles.map(t => {
+              const pIdx = app.picked.indexOf(t.id);
+              const isPicked = pIdx !== -1;
+              let chipCls = "img", chipTxt = t.dur;
+              if (t.kind === "video") {
+                if (t.state === "ready") { chipCls = "ok"; chipTxt = "-14.0 ✓"; }
+                else if (t.state === "rendering") { chipCls = "rendering pulse"; chipTxt = `${t.pct}%`; }
+                else if (t.zone === "silent") { chipCls = "img"; chipTxt = "silent"; }
+                else if (t.zone === "loud") { chipCls = "loud"; chipTxt = `${t.lufs.toFixed(1)}`; }
+                else { chipCls = "quiet"; chipTxt = `${t.lufs.toFixed(1)}`; }
+              }
+              return `
+                <button class="lib-tile ${t.art} ${isPicked ? "picked" : ""}" data-pick-tile="${t.id}" title="Click to toggle selection">
+                  ${t.cap ? `<div class="art-caption" style="top:28px">${t.cap}</div>` : ""}
+                  <span class="lib-tile-badges">🔗 1 📁</span>
+                  <span class="lib-tile-pick">${isPicked ? pIdx + 1 : ""}</span>
+                  <div class="lib-tile-audio">
+                    <span class="tile-lufs-chip ${chipCls}">${chipTxt}</span>
+                    <span>${t.dur}</span>
+                  </div>
+                </button>`;
+            }).join("")}
+          </div>
+
+          <!-- Floating Liquid Glass Multi-Select Bar -->
+          <div class="picked-sheet-wrap">
+            <div class="picked-sheet">
+              <div class="sheet-grabber"></div>
+              <div class="sheet-head">
+                <div class="sheet-head-txt">
+                  <strong>${picked.length} selected</strong>${kindSummary ? ` · ${kindSummary}` : ""}
+                </div>
+                <div class="sheet-head-btns">
+                  ${variant === "C" && hasPicks ? `
+                    <button class="sheet-mini-btn" style="color:${unlocked ? "#6ee7b7" : "#fde68a"}" data-toggle-cdrawer>
+                      ${IC.waveSm} ${app.cDrawerOpen ? "hide audio" : isNA ? "images" : unlocked ? "all leveled" : `${g.unleveled.length} un-leveled`}
+                    </button>` : ""}
+                  ${hasPicks ? `<button class="sheet-mini-btn" data-clear-picks>clear</button>` : ""}
+                </div>
+              </div>
+              ${stripHtml}
+              <div class="sheet-hairline">
+                ${g.rendering.length ? `<div class="sweep" style="width:${g.pct}%"></div>` : ""}
+              </div>
+              ${preGridHtml}
+              <div class="sheet-actions-wrap">
+                ${gridHtml}
+                ${footerHtml}
+              </div>
+            </div>
+          </div>
+        </div>
+        ${renderDuoRail("library")}
+      </div>
+    </div>`;
+}
+
+// ====== COMPARE ALL 4 VIEW ======
+function renderCompareAll() {
+  const g = computeGate(app.linkItems);
+  const unlocked = g.status === "unlocked";
+  const cards = [
+    {
+      id: "A",
+      name: "A · Studio Audio Dock + Segmented Address Bar",
+      rec: true,
+      wire: `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+          <div style="padding:5px;border-radius:6px;background:${unlocked ? "rgba(52,211,153,0.22)" : "#16161a"};border:1px solid ${unlocked ? "#34d399" : "#2d2d35"};color:${unlocked ? "#6ee7b7" : "#e4e4e7"}">${unlocked ? "copy · leveled" : "copy link"}</div>
+          <div style="padding:5px;border-radius:6px;background:#16161a;border:1px solid #2d2d35;color:#a1a1aa">edit / private / revoke</div>
+        </div>
+        <div style="padding:6px;border-radius:8px;background:rgba(28,28,36,0.9);border:1px solid ${unlocked ? "rgba(52,211,153,0.45)" : "rgba(248,113,113,0.35)"}">
+          <div style="display:flex;gap:4px;margin-bottom:4px">
+            <span style="flex:1;text-align:center;padding:2px;border-radius:5px;background:${unlocked ? "transparent" : "rgba(255,255,255,0.14)"}">original</span>
+            <span style="flex:1;text-align:center;padding:2px;border-radius:5px;background:${unlocked ? "#34d399" : "rgba(255,255,255,0.04)"};color:${unlocked ? "#042016" : "#71717a"}">${unlocked ? "leveled ✓" : "🔒 leveled"}</span>
+          </div>
+          <div style="color:${unlocked ? "#6ee7b7" : "#fca5a5"}">${unlocked ? "all leveled · ?audio=normal active" : `${g.reason} · [level remaining]`}</div>
+        </div>`,
+      pros: "Zero disruption to existing 2×2 & 2×4 grids; single source of truth for Copy + Share Sheet; clear segmented switch.",
+      cons: "Adds one compact Liquid Glass card between tiles and file list (~92pt height).",
+    },
+    {
+      id: "B",
+      name: "B · Native Action Grid (2×3 Link · 3×3 Select)",
+      rec: false,
+      wire: `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+          <div style="padding:5px;border-radius:6px;background:#16161a;border:1px solid #2d2d35">copy link</div>
+          <div style="padding:5px;border-radius:6px;background:${unlocked ? "rgba(52,211,153,0.2)" : "transparent"};border:1px ${unlocked ? "solid #34d399" : "dashed #3f3f46"};color:${unlocked ? "#6ee7b7" : "#71717a"}">${unlocked ? "copy leveled ✓" : "🔒 copy leveled"}</div>
+          <div style="padding:5px;border-radius:6px;background:rgba(52,211,153,0.14);border:1px solid rgba(52,211,153,0.38);color:#6ee7b7">${unlocked ? "all leveled" : `level ${g.queueable.length} videos`}</div>
+          <div style="padding:5px;border-radius:6px;background:#16161a;border:1px solid #2d2d35;color:#a1a1aa">edit / private / revoke</div>
+        </div>`,
+      pros: "100% pure Cobalt tile grammar; instant 1-tap choice between bare copy vs leveled copy without switching modes.",
+      cons: "Two copy tiles + 3×3 select grid slightly increases density and breaks the 2×4 even column rhythm on Duo.",
+    },
+    {
+      id: "C",
+      name: "C · Loudness Preflight Inspector + Per-Row Level",
+      rec: false,
+      wire: `
+        <div style="padding:6px;border-radius:8px;background:rgba(28,28,36,0.9);border:1px solid ${unlocked ? "rgba(52,211,153,0.45)" : "rgba(248,113,113,0.35)"}">
+          <div style="margin-bottom:4px;color:${unlocked ? "#6ee7b7" : "#fca5a5"}">${unlocked ? "AUDIO GATE · PASSED" : `AUDIO GATE · BLOCKED (${g.leveled.length}/${g.audible.length})`}</div>
+          ${renderAggregateRuler(app.linkItems)}
+        </div>`,
+      pros: "Richest audio telemetry (multi-dot LoudnessRulerView across the whole link + per-row level/retry buttons).",
+      cons: "Heavier visual footprint for everyday quick sharing; more telemetry than needed when you just want to level & send.",
+    },
+    {
+      id: "D",
+      name: "D · 2-Step Guided Gate Rail",
+      rec: false,
+      wire: `
+        <div style="border-radius:8px;border:1px solid #2d2d35;overflow:hidden">
+          <div style="padding:5px 7px;background:#141418;display:flex;justify-content:space-between"><span>${unlocked ? "✓" : "1."} level link audio</span><span style="color:#6ee7b7">${unlocked ? "done" : "[level all]"}</span></div>
+          <div style="padding:5px 7px;background:${unlocked ? "rgba(16,62,46,0.4)" : "#0b0b0e"};border-top:1px solid #27272d;color:${unlocked ? "#6ee7b7" : "#71717a"}">${unlocked ? "2. share ?audio=normal → [copy] [share]" : "🔒 2. unlocks after step 1"}</div>
+        </div>`,
+      pros: "Impossible to misunderstand why ?audio=normal is gated; ultra-calm progressive workflow on iPhone Duo.",
+      cons: "Takes two stacked rows even when all videos are already leveled; slightly less compact than A.",
+    },
+  ];
+  return `
+    <div class="compare-grid">
+      ${cards.map(c => `
+        <div class="cmp-card ${c.rec ? "recommended" : ""}">
+          <div class="cmp-head">
+            <h3>${c.name} ${c.rec ? `<span class="rec-badge">Recommended</span>` : ""}</h3>
+            <button class="cta-pill soft-ghost" data-jump-var="${c.id}">inspect →</button>
+          </div>
+          <div class="cmp-mini-wire">${c.wire}</div>
+          <ul class="cmp-bullets">
+            <li><strong>Strength:</strong> ${c.pros}</li>
+            <li><strong>Tradeoff:</strong> ${c.cons}</li>
+          </ul>
+        </div>`).join("")}
+    </div>`;
+}
+
+// ====== VARIATION METADATA ======
+const VAR_INFO = {
+  A: {
+    title: "Variation A — Studio Audio Dock + Segmented Address Bar",
+    rec: true,
+    desc: "Keeps the 2×2 link tiles & 2×4 library grid untouched. Adds a unified Liquid Glass Audio Mode & Gate Dock below the link tiles (with Original vs ?audio=normal switch) and a slim audio strip above the library action grid.",
+  },
+  B: {
+    title: "Variation B — Native Action Grid (Tile-First)",
+    rec: false,
+    desc: "Expresses bulk leveling and ?audio=normal purely as Cobalt action tiles: expands the link grid to 2×3 (copy link, locked/unlocked copy leveled, live-progress level all) and adds a dedicated level tile to the library multi-select sheet.",
+  },
+  C: {
+    title: "Variation C — Loudness Preflight Inspector",
+    rec: false,
+    desc: "Plots every video in the link on an aggregate LoudnessRulerView (-32 to 0 LUFS) with an explicit Audio Gate preflight card, per-row level/retry controls, and a collapsible Audio Inspector drawer inside the library select sheet.",
+  },
+  D: {
+    title: "Variation D — 2-Step Guided Gate Rail",
+    rec: false,
+    desc: "Linear, calm 2-step flow (Step 1: Level link audio → Step 2: Share ?audio=normal) with status filters on the file list and a smart hairline-sweep leveling bar integrated into the library select footer.",
+  },
+  CMP: {
+    title: "Side-by-Side Comparison — All 4 Variations",
+    rec: false,
+    desc: "Compare the architecture, gate behavior, and tradeoffs of all 4 directions for the currently selected scenario. Click any card's 'inspect →' to interact with the full iPhone Duo prototype.",
+  },
+};
+
+// ====== MASTER RENDER ======
+function render() {
+  // Update top tabs & pills
+  document.querySelectorAll("#varTabs .var-tab").forEach(b => b.classList.toggle("active", b.dataset.var === app.variation));
+  document.querySelectorAll("#scenarioStrip .state-btn").forEach(b => b.classList.toggle("active", b.dataset.scenario === app.scenario));
+  document.querySelectorAll("#surfaceSeg button").forEach(b => b.classList.toggle("active", b.dataset.surface === app.surface));
+
+  const g = computeGate(app.linkItems);
+  const info = VAR_INFO[app.variation];
+  const gatePillCls = g.status === "unlocked" ? "unlocked" : g.status === "na" ? "na" : "blocked";
+  const gatePillTxt = g.status === "unlocked"
+    ? `${IC.check} ?audio=normal UNLOCKED (${g.leveled.length}/${g.audible.length})`
+    : g.status === "na"
+      ? `?audio=normal N/A (${g.reason})`
+      : `${IC.lockSm} ?audio=normal BLOCKED (${g.leveled.length}/${g.audible.length})`;
+
+  document.getElementById("varBannerHost").innerHTML = `
+    <div class="var-banner">
+      <div class="var-banner-main">
+        <h2>${info.title} ${info.rec ? `<span class="rec-badge">Recommended</span>` : ""}</h2>
+        <p>${info.desc}</p>
+      </div>
+      <div class="gate-pill-live ${gatePillCls}">${gatePillTxt}</div>
+    </div>`;
+
+  const stage = document.getElementById("stageHost");
+  if (app.variation === "CMP") {
+    stage.innerHTML = renderCompareAll();
+    return;
+  }
+
+  const showLink = app.surface === "both" || app.surface === "link";
+  const showLib = app.surface === "both" || app.surface === "library";
+
+  stage.innerHTML = `
+    <div class="stage-grid">
+      ${showLink ? `
+        <div class="screen-card">
+          <div class="screen-label">
+            <span><strong>Share Link Detail</strong> · LinkPanePage.swift (iPhone Duo)</span>
+            <span>Try tapping locked ?audio=normal or bulk level ↓</span>
+          </div>
+          ${renderLinkPane(app.variation)}
+        </div>` : ""}
+      ${showLib ? `
+        <div class="screen-card">
+          <div class="screen-label">
+            <span><strong>Library Multi-Select</strong> · LibraryPickedSheet (iPhone Duo)</span>
+            <span>Tap grid tiles to mix videos/images · bulk level live ↓</span>
+          </div>
+          ${renderLibrarySheet(app.variation)}
+        </div>` : ""}
+    </div>`;
+}
+
+// ====== EVENT DELEGATION ======
+document.addEventListener("click", (e) => {
+  const varBtn = e.target.closest("[data-var]");
+  if (varBtn) { app.variation = varBtn.dataset.var; render(); return; }
+
+  const jumpBtn = e.target.closest("[data-jump-var]");
+  if (jumpBtn) { app.variation = jumpBtn.dataset.jumpVar; render(); return; }
+
+  const scenBtn = e.target.closest("[data-scenario]");
+  if (scenBtn) { loadScenario(scenBtn.dataset.scenario); return; }
+
+  const surfBtn = e.target.closest("[data-surface]");
+  if (surfBtn) { app.surface = surfBtn.dataset.surface; render(); return; }
+
+  const bulkLink = e.target.closest("[data-bulk-link]");
+  if (bulkLink) { startBulkLevelLink(); return; }
+
+  const levelOne = e.target.closest("[data-level-one]");
+  if (levelOne) { startBulkLevelLink(levelOne.dataset.levelOne); return; }
+
+  const bulkLib = e.target.closest("[data-bulk-lib]");
+  if (bulkLib) { startBulkLevelLibrary(); return; }
+
+  const setNorm = e.target.closest("[data-set-normal]");
+  if (setNorm) {
+    const want = setNorm.dataset.setNormal === "1";
+    const g = computeGate(app.linkItems);
+    if (want && g.status !== "unlocked") {
+      triggerShake(setNorm);
+      showToast(g.status === "na" ? "No audible videos in this link." : `Blocked: ${g.reason} — level remaining videos first.`, "err");
+      return;
+    }
+    app.useNormalLink = want;
+    render();
+    return;
+  }
+
+  const act = e.target.closest("[data-action]");
+  if (act) {
+    const kind = act.dataset.action;
+    if (kind === "copy-normal") attemptNormalCopy(act, false);
+    else if (kind === "share-normal") attemptNormalCopy(act, true);
+    else if (kind === "copy-orig") copyBareLink(false);
+    else if (kind === "share-orig") copyBareLink(true);
+    return;
+  }
+
+  const dflt = e.target.closest("[data-dfilter]");
+  if (dflt) { app.dFilter = dflt.dataset.dfilter; render(); return; }
+
+  const pickTile = e.target.closest("[data-pick-tile]");
+  if (pickTile) {
+    const id = pickTile.dataset.pickTile;
+    const idx = app.picked.indexOf(id);
+    if (idx === -1) app.picked.push(id); else app.picked.splice(idx, 1);
+    const g = computeGate(getPickedItems());
+    if (g.status !== "unlocked") app.useNormalNewLink = false;
+    render();
+    return;
+  }
+
+  const unpick = e.target.closest("[data-unpick]");
+  if (unpick) {
+    app.picked = app.picked.filter(x => x !== unpick.dataset.unpick);
+    const g = computeGate(getPickedItems());
+    if (g.status !== "unlocked") app.useNormalNewLink = false;
+    render();
+    return;
+  }
+
+  if (e.target.closest("[data-clear-picks]")) {
+    app.picked = [];
+    app.useNormalNewLink = false;
+    render();
+    return;
+  }
+
+  if (e.target.closest("[data-toggle-all]")) {
+    if (app.picked.length === app.libTiles.length) app.picked = [];
+    else app.picked = app.libTiles.map(t => t.id);
+    const g = computeGate(getPickedItems());
+    if (g.status !== "unlocked") app.useNormalNewLink = false;
+    render();
+    return;
+  }
+
+  const togNewNorm = e.target.closest("[data-toggle-new-normal]");
+  if (togNewNorm) {
+    const g = computeGate(getPickedItems());
+    if (g.status !== "unlocked") {
+      triggerShake(togNewNorm);
+      showToast(g.status === "na" ? "Select at least one audible video for ?audio=normal." : `Blocked: ${g.reason} — level selected videos first.`, "err");
+      return;
+    }
+    app.useNormalNewLink = !app.useNormalNewLink;
+    render();
+    return;
+  }
+
+  if (e.target.closest("[data-toggle-cdrawer]")) {
+    app.cDrawerOpen = !app.cDrawerOpen;
+    render();
+    return;
+  }
+
+  const makeLink = e.target.closest("[data-make-link]");
+  if (makeLink) {
+    const g = computeGate(getPickedItems());
+    const withNormal = g.status === "unlocked" && app.useNormalNewLink;
+    const url = "share.capybaraharmony.com/g/9014820471920411820" + (withNormal ? "?audio=normal" : "");
+    showToast(`Created & copied: ${url}`, withNormal ? "ok" : "neutral");
+    return;
+  }
+
+  const toastBtn = e.target.closest("[data-toast]");
+  if (toastBtn) {
+    showToast(toastBtn.dataset.toast, "neutral");
+    return;
+  }
+});
+
+// Boot
+loadScenario("zero");
+</script>
+</body>
+</html>

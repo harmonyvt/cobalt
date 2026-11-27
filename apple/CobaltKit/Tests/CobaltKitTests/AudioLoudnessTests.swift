@@ -185,4 +185,192 @@ struct AudioLoudnessTests {
         #expect(AudioRulerScale.fraction(for: -99) == 0.0)
         #expect(AudioRulerScale.fraction(for: 5) == 1.0)
     }
+
+    @Test("AudioShareGate strictly enforces ?audio=normal hard gate across mixed media and edge cases")
+    func shareGateRules() throws {
+        let base = try #require(URL(string: "https://share.capybaraharmony.com/g/9000000000000000001"))
+        let alreadyNormal = try #require(URL(string: "https://share.capybaraharmony.com/g/9000000000000000001?audio=normal"))
+
+        let leveled = AudioLoudnessInfo(
+            integratedLufs: -7.2, truePeakDbtp: -0.2, zone: .loud, state: .ready,
+            targetLufs: -14, outputLufs: -14.0, outputTruePeak: -1.5, altID: "alt01"
+        )
+        let loudUnleveled = AudioLoudnessInfo(integratedLufs: -6.4, truePeakDbtp: -0.1, zone: .loud, state: .measured)
+        let quietUnleveled = AudioLoudnessInfo(integratedLufs: -25.0, truePeakDbtp: -4.2, zone: .quiet, state: .measured)
+        let rendering = AudioLoudnessInfo(integratedLufs: -8.1, truePeakDbtp: -0.4, zone: .loud, state: .rendering)
+        let failed = AudioLoudnessInfo(integratedLufs: -6.8, truePeakDbtp: -0.2, zone: .loud, state: .failed, error: "ffmpeg timeout")
+        let silent = AudioLoudnessInfo(integratedLufs: -70.0, truePeakDbtp: -70.0, zone: .silent, state: .skipped)
+
+        // 1. Mixed link with photos, WebPs, silent video, and all audible videos leveled -> unlocked
+        let unlocked = AudioShareGate(items: [
+            AudioGateItem(id: "v1", isVideo: true, audio: leveled),
+            AudioGateItem(id: "v2", isVideo: true, audio: silent),
+            AudioGateItem(id: "p1", isVideo: false, audio: nil),
+            AudioGateItem(id: "w1", isVideo: false, audio: nil),
+        ])
+        #expect(unlocked.status == .unlocked)
+        #expect(unlocked.canShareNormalAudio)
+        #expect(unlocked.audibleVideoCount == 1)
+        #expect(unlocked.leveledCount == 1)
+        #expect(unlocked.silentVideoCount == 1)
+        #expect(unlocked.nonVideoCount == 2)
+        #expect(unlocked.unleveledVideoIDs.isEmpty)
+        #expect(unlocked.blockedReason == nil)
+        #expect(unlocked.resolveURL(base: base, useNormal: true).absoluteString == "https://share.capybaraharmony.com/g/9000000000000000001?audio=normal")
+        #expect(unlocked.resolveURL(base: base, useNormal: false).absoluteString == "https://share.capybaraharmony.com/g/9000000000000000001")
+
+        // 2. Partial leveled + loud + quiet + nil (unknown) + failed + rendering -> strictly blocked
+        let blocked = AudioShareGate(items: [
+            AudioGateItem(id: "v1", isVideo: true, audio: leveled),
+            AudioGateItem(id: "v2", isVideo: true, audio: loudUnleveled),
+            AudioGateItem(id: "v3", isVideo: true, audio: quietUnleveled),
+            AudioGateItem(id: "v4", isVideo: true, audio: nil),
+            AudioGateItem(id: "v5", isVideo: true, audio: rendering),
+            AudioGateItem(id: "v6", isVideo: true, audio: failed),
+            AudioGateItem(id: "v7", isVideo: true, audio: silent),
+            AudioGateItem(id: "img", isVideo: false, audio: nil),
+        ])
+        #expect(blocked.status == .blocked)
+        #expect(!blocked.canShareNormalAudio)
+        #expect(blocked.audibleVideoCount == 6)
+        #expect(blocked.leveledCount == 1)
+        #expect(blocked.unleveledCount == 5)
+        #expect(blocked.renderingCount == 1)
+        #expect(blocked.failedCount == 1)
+        #expect(blocked.loudCount == 1)
+        #expect(blocked.quietCount == 1)
+        #expect(blocked.unmeasuredCount == 1)
+        #expect(blocked.unleveledVideoIDs == ["v2", "v3", "v4", "v5", "v6"])
+        // rendering item v5 is excluded from queueableVideoIDs, failed v6 IS retryable
+        #expect(blocked.queueableVideoIDs == ["v2", "v3", "v4", "v6"])
+        #expect(blocked.blockedReason == "5 of 6 videos aren't leveled yet")
+        // Hard gate: MUST NEVER append ?audio=normal, and MUST strip it if already present
+        #expect(blocked.resolveURL(base: base, useNormal: true).absoluteString == base.absoluteString)
+        #expect(blocked.resolveURL(base: alreadyNormal, useNormal: true).absoluteString == base.absoluteString)
+
+        // 3. Only images & silent videos -> notApplicable (and never appends ?audio=normal)
+        let noAudible = AudioShareGate(items: [
+            AudioGateItem(id: "p1", isVideo: false, audio: nil),
+            AudioGateItem(id: "v-silent", isVideo: true, audio: silent),
+        ])
+        #expect(noAudible.status == .notApplicable)
+        #expect(!noAudible.canShareNormalAudio)
+        #expect(noAudible.audibleVideoCount == 0)
+        #expect(noAudible.blockedReason == nil)
+        #expect(noAudible.resolveURL(base: base, useNormal: true).absoluteString == base.absoluteString)
+
+        // 4. All remaining videos actively leveling via inFlight -> leveling reason
+        let inFlight = AudioShareGate(
+            items: [
+                AudioGateItem(id: "v1", isVideo: true, audio: leveled),
+                AudioGateItem(id: "v2", isVideo: true, audio: loudUnleveled),
+            ],
+            inFlight: ["v2"]
+        )
+        #expect(inFlight.status == .blocked)
+        #expect(inFlight.isLeveling)
+        #expect(inFlight.queueableVideoIDs.isEmpty)
+        #expect(inFlight.blockedReason == "leveling 1 of 2 videos…")
+
+        // 5. All unleveled videos failed -> retry hint
+        let allFailed = AudioShareGate(items: [
+            AudioGateItem(id: "v1", isVideo: true, audio: leveled),
+            AudioGateItem(id: "v2", isVideo: true, audio: failed),
+        ])
+        #expect(allFailed.blockedReason == "1 video failed leveling · retry to unlock")
+    }
+
+    @Test("ShareSetItem decodes optional audio summary and forShareSet skips private/hidden items")
+    func shareSetItemAudioDecodingAndGate() throws {
+        let json = """
+        {
+          "id": "9000000000000000099",
+          "url": "https://share.capybaraharmony.com/g/9000000000000000099",
+          "title": "loudness test",
+          "created_at": 1700000000000,
+          "items": [
+            {
+              "id": "vidReady",
+              "url": "https://media.capybaraharmony.com/VidReady01.mp4",
+              "content_type": "video/mp4",
+              "audio": {
+                "integrated_lufs": -7.5,
+                "true_peak_dbtp": -0.2,
+                "zone": "loud",
+                "state": "ready",
+                "target_lufs": -14,
+                "output_lufs": -14.0,
+                "output_true_peak": -1.5,
+                "alt_id": "altReady01",
+                "alt_url": "https://media.capybaraharmony.com/AltReady01.mp4"
+              }
+            },
+            {
+              "id": "vidPrivate",
+              "url": null,
+              "content_type": "video/mp4"
+            },
+            {
+              "id": "vidHidden",
+              "url": "https://media.capybaraharmony.com/VidHidden1.mp4",
+              "content_type": "video/mp4",
+              "hidden": true
+            },
+            {
+              "id": "imgPhoto",
+              "url": "https://media.capybaraharmony.com/Photo00001.jpg",
+              "content_type": "image/jpeg"
+            }
+          ]
+        }
+        """
+        let set = try CobaltJSON.decoder().decode(ShareSet.self, from: Data(json.utf8))
+        #expect(set.items[0].audio?.isLeveled == true)
+        #expect(set.items[0].audio?.altID == "altReady01")
+        #expect(set.items[3].audio == nil)
+
+        // Private & hidden un-leveled videos are excluded from the live page, so gate unlocks!
+        let gate = AudioShareGate.forShareSet(set)
+        #expect(gate.status == .unlocked)
+        #expect(gate.audibleVideoCount == 1)
+        #expect(gate.nonVideoCount == 1)
+    }
+
+    @Test("AudioLevelStore.levelItems deduplicates, skips leveled/silent, and queues remaining videos")
+    @MainActor
+    func bulkLevelItems() async throws {
+        let model = AppModel.preview(.happy)
+        let leveled = AudioLoudnessInfo(integratedLufs: -8.0, zone: .loud, state: .ready, targetLufs: -14, outputLufs: -14.0, altID: "alt1")
+        let silent = AudioLoudnessInfo(integratedLufs: -72.0, zone: .silent, state: .skipped)
+        let loud = AudioLoudnessInfo(integratedLufs: -6.5, zone: .loud, state: .measured)
+        let lookup: [String: AudioLoudnessInfo] = [
+            "done-1": leveled,
+            "silent-1": silent,
+            "need-1": loud,
+            "need-2": loud,
+        ]
+
+        let result = await model.audioLeveling.levelItems(
+            ids: ["done-1", "silent-1", "need-1", "need-1", "need-2"],
+            target: .lufs14,
+            audioLookup: { lookup[$0] }
+        )
+        #expect(result.queued == ["need-1", "need-2"])
+        #expect(result.skipped == ["done-1", "silent-1"])
+        #expect(result.failed.isEmpty)
+        #expect(model.audioLeveling.activeBulkIDs.contains("need-1"))
+        #expect(model.audioLeveling.activeBulkIDs.contains("need-2"))
+        #expect(model.audioLeveling.optimisticAudio(for: "need-1", fallback: loud)?.isRendering == true)
+
+        // Re-submitting the same IDs while active skips them cleanly
+        let second = await model.audioLeveling.levelItems(
+            ids: ["need-1", "need-2"],
+            audioLookup: { lookup[$0] }
+        )
+        #expect(second.queued.isEmpty)
+        #expect(second.skipped == ["need-1", "need-2"])
+
+        model.audioLeveling.reset()
+        #expect(!model.audioLeveling.isBulkLeveling)
+    }
 }

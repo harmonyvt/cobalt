@@ -46,4 +46,16 @@ extension Symbol {
     static let collectionSet = "square.stack.3d.up"
     /// "new set".
     static let collectionSetNew = "plus"
+
+    // MARK: bulk audio leveling & ?audio=normal gate
+
+    enum AudioBulk {
+        static let waveform = "waveform"
+        static let leveled = "checkmark.circle.fill"
+        static let locked = "lock.fill"
+        static let unlocked = "lock.open.fill"
+        static let failed = "exclamationmark.triangle.fill"
+        static let retry = "arrow.clockwise"
+        static let silent = "speaker.slash.fill"
+    }
 }

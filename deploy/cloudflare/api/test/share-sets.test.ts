@@ -279,4 +279,63 @@ describe("the share host", () => {
     it("set ids are 19 digits", () => {
         for (let i = 0; i < 50; i++) expect(mintSetId()).toMatch(/^[1-9][0-9]{18}$/);
     });
+    it("attaches per-item audio loudness summary on create, list, patch and private home", async () => {
+        const alt = row({ visibility: "public", public_key: "AlTnOrM001.mp4", content_type: "video/mp4" });
+        const vid2 = row({ visibility: "public", public_key: "ViDeO00002.mp4", content_type: "video/mp4" });
+        db.raw
+            .prepare(
+                `INSERT INTO media_audio (item_id, integrated_lufs, true_peak_dbtp, lra_lu, threshold_lufs, offset_db, zone, state, target_lufs, output_lufs, output_true_peak, alt_item_id, attempts, error, measured_at, leveled_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(video.id, -7.4, -0.2, 5.1, -18.0, 0.4, "loud", "ready", -14, -14.1, -1.6, alt.id, 1, null, 2000, 3000, 3000);
+        db.raw
+            .prepare(
+                `INSERT INTO media_audio (item_id, integrated_lufs, true_peak_dbtp, lra_lu, threshold_lufs, offset_db, zone, state, target_lufs, output_lufs, output_true_peak, alt_item_id, attempts, error, measured_at, leveled_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(vid2.id, -24.8, -5.2, 8.2, -35.0, 0.2, "quiet", "measured", null, null, null, null, 0, null, 2100, null, 2100);
+
+        const created = (await (
+            await get(`${API}/share/sets`, {
+                method: "POST",
+                headers: { ...AUTH, "content-type": "application/json" },
+                body: JSON.stringify({ items: [video.id, photo.id] }),
+            })
+        ).json()) as any;
+        expect(created.set.items[0].audio).toMatchObject({
+            integrated_lufs: -7.4,
+            zone: "loud",
+            state: "ready",
+            target_lufs: -14,
+            output_lufs: -14.1,
+            alt_id: alt.id,
+            alt_url: `${MEDIA}AlTnOrM001.mp4`,
+        });
+        expect("audio" in created.set.items[1]).toBe(false);
+
+        const patched = (await (
+            await get(`${API}/share/sets/${created.set.id}`, {
+                method: "PATCH",
+                headers: { ...AUTH, "content-type": "application/json" },
+                body: JSON.stringify({ items: [video.id, vid2.id, photo.id] }),
+            })
+        ).json()) as any;
+        expect(patched.set.items[0].audio.state).toBe("ready");
+        expect(patched.set.items[1].audio).toMatchObject({
+            integrated_lufs: -24.8,
+            zone: "quiet",
+            state: "measured",
+            alt_id: null,
+            alt_url: null,
+        });
+        expect("audio" in patched.set.items[2]).toBe(false);
+
+        const listed = (await (await get(`${API}/share/sets`, { headers: AUTH })).json()) as any;
+        const found = listed.sets.find((s: any) => s.id === created.set.id);
+        expect(found.items.map((it: any) => it.audio?.state ?? null)).toEqual(["ready", "measured", null]);
+
+        const priv = (await (await get(`${API}/share/private`, { headers: AUTH })).json()) as any;
+        const foundPriv = priv.sets.find((s: any) => s.id === created.set.id);
+        expect(foundPriv.items.map((it: any) => it.audio?.state ?? null)).toEqual(["ready", "measured", null]);
+    });
 });

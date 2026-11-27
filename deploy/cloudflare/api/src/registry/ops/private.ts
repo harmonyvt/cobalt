@@ -104,7 +104,7 @@ const ROUTE_OPS = [
         run: async (ctx, d) => {
             const sd = shareSetDeps(ctx);
             // the private links, the setting and the gallery list are one round trip (the key check is the other)
-            const home = sd ? await readPrivateHome(d.db, SHARE_LIST_MAX) : null;
+            const home = sd ? await readPrivateHome(d.db, SHARE_LIST_MAX, sd.mediaBaseUrl) : null;
             if (home && sd) {
                 return {
                     status: 200,

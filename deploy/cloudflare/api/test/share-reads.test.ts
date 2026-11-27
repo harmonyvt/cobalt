@@ -295,6 +295,38 @@ describe("batched and one after another", () => {
             ["2222222222222222222", 0],
         ]);
     });
+
+    it("audio summaries match between batched and sequential reads, and tolerate missing media_audio", async () => {
+        const seedAudio = (w: World) => {
+            const a = publicFile(w, 1);
+            const b = publicFile(w, 2);
+            const alt = publicFile(w, 3, { public_key: "AlTnOrM003.mp4" });
+            w.db.raw
+                .prepare(
+                    `INSERT INTO media_audio (item_id, integrated_lufs, true_peak_dbtp, lra_lu, threshold_lufs, offset_db, zone, state, target_lufs, output_lufs, output_true_peak, alt_item_id, attempts, error, measured_at, leveled_at, updated_at)
+                     VALUES (?, -6.8, -0.1, 4.4, -17.0, 0.3, 'loud', 'ready', -14, -14.0, -1.5, ?, 1, NULL, 100, 200, 200)`,
+                )
+                .run(a, alt);
+            return { a, b };
+        };
+        const plain = world(readsInTurn(createBatchD1()));
+        const batched = world(createBatchD1());
+        const p = seedAudio(plain);
+        const b = seedAudio(batched);
+        const pCreated = await createShareSet(plain.sets, post({ items: [p.a, p.b] }), "key-1");
+        const bCreated = await createShareSet(batched.sets, post({ items: [b.a, b.b] }), "key-1");
+        expect(bCreated).toEqual(pCreated);
+        expect((bCreated.body as any).set.items[0].audio).toMatchObject({ state: "ready", alt_url: `${MEDIA}AlTnOrM003.mp4` });
+        expect((await listShareSets(batched.sets)).body).toEqual((await listShareSets(plain.sets)).body);
+
+        const pre0047 = world(createBatchD1());
+        const x = publicFile(pre0047, 1);
+        const y = publicFile(pre0047, 2);
+        pre0047.db.raw.exec("DROP TABLE media_audio;");
+        const made = await createShareSet(pre0047.sets, post({ items: [x, y] }), "key-1");
+        expect(made.status).toBe(201);
+        expect(((await listShareSets(pre0047.sets)).body as any).sets).toHaveLength(1);
+    });
 });
 
 describe("round trips", () => {

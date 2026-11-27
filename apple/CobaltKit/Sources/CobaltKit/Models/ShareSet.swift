@@ -96,10 +96,13 @@ public struct ShareSetItem: Sendable, Equatable, Identifiable, Decodable {
     /// `hidden` (APP-API-CONTRACT 37.2): the file's post is hidden, so the link leaves it out (`url` is null too).
     /// False when absent.
     public var hidden: Bool
+    /// `audio` (v10.1): EBU R128 loudness & leveled-alt metadata attached by the server when `media_audio` exists.
+    public var audio: AudioLoudnessInfo?
 
     public init(
         id: String, url: URL? = nil, contentType: String? = nil, posterURL: URL? = nil,
-        width: Int? = nil, height: Int? = nil, duration: Double? = nil, hidden: Bool = false
+        width: Int? = nil, height: Int? = nil, duration: Double? = nil, hidden: Bool = false,
+        audio: AudioLoudnessInfo? = nil
     ) {
         self.id = id
         self.url = url
@@ -109,6 +112,7 @@ public struct ShareSetItem: Sendable, Equatable, Identifiable, Decodable {
         self.height = height
         self.duration = duration
         self.hidden = hidden
+        self.audio = audio
     }
 
     /// The still to draw: the poster, else the file itself when it is an image (a photo or a webp); nil for a video
@@ -126,7 +130,7 @@ public struct ShareSetItem: Sendable, Equatable, Identifiable, Decodable {
     public var isVideo: Bool { contentType?.lowercased().hasPrefix("video/") == true }
 
     enum CodingKeys: String, CodingKey {
-        case id, url, contentType, width, height, duration, hidden
+        case id, url, contentType, width, height, duration, hidden, audio
         case posterURL = "posterUrl"           // `poster_url` after convertFromSnakeCase
     }
 
@@ -140,6 +144,7 @@ public struct ShareSetItem: Sendable, Equatable, Identifiable, Decodable {
         height = (try? c.decodeIfPresent(Int.self, forKey: .height)) ?? nil
         duration = (try? c.decodeIfPresent(Double.self, forKey: .duration)) ?? nil
         hidden = ((try? c.decodeIfPresent(Bool.self, forKey: .hidden)) ?? nil) ?? false
+        audio = (try? c.decodeIfPresent(AudioLoudnessInfo.self, forKey: .audio)) ?? nil
     }
 }
 

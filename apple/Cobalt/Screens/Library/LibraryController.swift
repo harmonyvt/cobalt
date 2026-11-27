@@ -207,6 +207,10 @@ final class LibraryController {
     /// The select panel's `public` / `private` choice for the next gallery link (APP-API-CONTRACT 36.6); nil follows
     /// settings › sharing (`new_links`).
     var shareLinkPrivate: Bool?
+    /// Whether the next gallery link created from multi-select should copy with `?audio=normal` (strictly gated).
+    var shareLinkNormalAudio = false
+    /// True while bulk loudness leveling for picked library items is submitting requests.
+    var levelingPickedAudio = false
     /// Rows confirmed made public during this select session (bridges sync-engine URL hydration before creating a link).
     var recentlyMadePublic: Set<String> = []
     /// Bumped when a copy, a save, a visibility switch or a delete lands (success haptic), half lands (warning) or
@@ -338,11 +342,15 @@ final class LibraryController {
         selecting = false
         pickAnchor = nil
         recentlyMadePublic = []
+        shareLinkNormalAudio = false
         setPicks([])
         peek = nil
     }
 
     private func setPicks(_ ids: [String]) {
+        if ids != pickOrder {
+            shareLinkNormalAudio = false
+        }
         pickOrder = ids
         picked = Set(ids)
     }
@@ -756,13 +764,27 @@ final class LibraryController {
         guard !makingShareLink, shareLinkVerdict(rows) == .ready else { return false }
         let ids = shareLinkPicks(rows).compactMap(\.fileID)
         let isPrivate = makesPrivateLink
+        let wantsNormal = model.capabilities.audioLeveling && shareLinkNormalAudio
         makingShareLink = true
         defer { makingShareLink = false }
         do {
             // with private links the choice is always sent, so the link is what the panel showed
             let set = try await model.shareSets.create(
                 items: ids, title: nil, private: model.capabilities.privateLinks ? isPrivate : nil)
-            Pasteboard.copy(set.url.absoluteString)
+            let copyURL: URL
+            if wantsNormal {
+                let store = model.audioLeveling
+                let inFlight = store.inFlightItems.union(store.activeBulkIDs)
+                let createdGate = AudioShareGate.forShareSet(
+                    set,
+                    audioFor: { item in store.optimisticAudio(for: item.id, fallback: item.audio) },
+                    inFlight: inFlight
+                )
+                copyURL = createdGate.resolveURL(base: set.url, useNormal: true)
+            } else {
+                copyURL = set.url
+            }
+            Pasteboard.copy(copyURL.absoluteString)
             if let target {
                 do {
                     let name: String
@@ -780,6 +802,8 @@ final class LibraryController {
                     warnTick += 1
                     return true
                 }
+            } else if AudioShareURL.hasNormalAudio(copyURL) {
+                showStatus(Copy.AudioBulk.copiedNormal)
             } else {
                 showStatus(set.isPrivate ? Copy.PrivateLinks.copiedPrivate : Copy.Media.copied)
             }
@@ -793,6 +817,90 @@ final class LibraryController {
             failTick += 1
         }
         return false
+    }
+
+    // MARK: bulk audio leveling & strictly gated ?audio=normal
+
+    /// Resolves the server-backed library file standing for `row` in a share link or bulk audio leveling action.
+    func resolvedAudioFile(for row: LibraryRow) -> (id: String, isVideo: Bool, audio: AudioLoudnessInfo?)? {
+        let item = row.item
+        let chosenID = (makesPrivateLink ? ShareSetRule.privateFileID(for: item) : ShareSetRule.fileID(for: item))
+            ?? ShareSetRule.privateFileID(for: item)
+        let renditionFiles = item.renditions.flatMap { [$0.file, $0.hosted].compactMap { $0 } }
+        let allFiles = (item.post?.files ?? []) + renditionFiles
+        if let chosenID, let file = allFiles.first(where: { $0.id == chosenID }) {
+            let isVideo: Bool
+            if let ct = file.contentType?.lowercased() {
+                isVideo = ct.hasPrefix("video/")
+            } else {
+                isVideo = item.kind == .video && (file.id == item.video?.file?.id || file.id == item.video?.hosted?.id)
+            }
+            let audio = isVideo
+                ? model.audioLeveling.optimisticAudio(for: file.id, fallback: file.audio)
+                : nil
+            return (file.id, isVideo, audio)
+        }
+        return nil
+    }
+
+    /// Evaluates the strict `?audio=normal` hard gate across the picked rows on screen.
+    func audioGate(for rows: [LibraryRow]) -> AudioShareGate {
+        let picks = pickedRows(rows)
+        let items: [AudioGateItem] = picks.compactMap { row in
+            guard let resolved = resolvedAudioFile(for: row) else { return nil }
+            return AudioGateItem(id: resolved.id, isVideo: resolved.isVideo, audio: resolved.audio)
+        }
+        let inFlight = model.audioLeveling.inFlightItems.union(model.audioLeveling.activeBulkIDs)
+        return AudioShareGate(items: items, inFlight: inFlight)
+    }
+
+    /// Feedback when tapping a locked `?audio=normal` toggle in Library multi-select.
+    func blockedAudioTap(gate: AudioShareGate) {
+        showStatus(gate.blockedReason ?? Copy.AudioBulk.lockedSuffix)
+        failTick += 1
+    }
+
+    /// Bulk-levels every un-leveled audible video currently picked in the Library.
+    func levelPickedAudio(_ rows: [LibraryRow]) {
+        guard model.capabilities.audioLeveling, !levelingPickedAudio else { return }
+        let gate = audioGate(for: rows)
+        let ids = gate.queueableVideoIDs
+        guard !ids.isEmpty else {
+            if gate.canShareNormalAudio {
+                showStatus(Copy.AudioBulk.alreadyLeveled)
+            }
+            return
+        }
+        levelingPickedAudio = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.levelingPickedAudio = false }
+            let result = await self.model.audioLeveling.levelItems(
+                ids: ids,
+                onRefresh: { [weak self] in
+                    await self?.model.library.refresh()
+                },
+                audioLookup: { [weak self] id in
+                    self?.model.library.posts
+                        .lazy
+                        .flatMap(\.files)
+                        .first(where: { $0.id == id })?
+                        .audio
+                }
+            )
+            if !result.queued.isEmpty && result.failed.isEmpty {
+                self.showStatus(Copy.AudioBulk.queuedToast(result.queued.count))
+                self.doneTick += 1
+            } else if !result.queued.isEmpty {
+                self.showStatus(Copy.AudioBulk.partialToast(queued: result.queued.count, failed: result.failed.count))
+                self.warnTick += 1
+            } else if !result.failed.isEmpty {
+                self.showStatus(Copy.AudioBulk.failedToast(result.failed.count))
+                self.failTick += 1
+            } else {
+                self.showStatus(Copy.AudioBulk.alreadyLeveled)
+            }
+        }
     }
 
     private func setShareState(_ id: String, _ state: SharePrepRow.State) {
