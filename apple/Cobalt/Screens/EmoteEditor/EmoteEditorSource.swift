@@ -120,17 +120,18 @@ final class EmotePlayback {
     private(set) var frame: CGImage?
     /// The `draftRevision` this plays; a view uses the draft only while it equals the editor's.
     private(set) var revision = -1
-    @ObservationIgnored private var animation: MediaAnimation?
+    private let slot = MediaAnimationSlot()
     @ObservationIgnored private var stillTask: Task<Void, Never>?
 
     func play(data: Data, animated: Bool, revision: Int, reduceMotion: Bool, maxPixel: Int = 512) {
         stop()
         self.revision = revision
         if animated, !reduceMotion {
-            animation = MediaAnimation.play(data: data, maxPixel: maxPixel) { [weak self] box in
+            let next = MediaAnimation.play(data: data, maxPixel: maxPixel) { [weak self] box in
                 self?.frame = box.image
             }
-            if animation != nil { return }
+            slot.set(next)
+            if next != nil { return }
         }
         stillTask = Task { [weak self] in
             let image = await Self.firstFrame(of: data, maxPixel: maxPixel)
@@ -142,8 +143,7 @@ final class EmotePlayback {
     func stop() {
         stillTask?.cancel()
         stillTask = nil
-        animation?.stop()
-        animation = nil
+        slot.stop()
     }
 
     @concurrent

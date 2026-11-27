@@ -194,7 +194,7 @@ struct TwitchChatRow: View, Equatable {
                 .foregroundStyle(.clear)
                 .overlay {
                     base
-                        .overlay { EmotePicture(url: imageURL, animated: true, side: 96, fill: true) }
+                        .overlay { EmotePicture(url: imageURL, animated: true, side: 36, fill: true) }
                         .clipped()
                 }
                 .mask { label }
@@ -291,19 +291,39 @@ struct TwitchEmoteView: View {
 }
 
 /// Wraps its children like words: left to right, a new line when the next one does not fit, each line centred vertically.
+/// Caches natural subview sizes and the last arranged rows across `sizeThatFits` -> `placeSubviews` so rotations and
+/// scrolling do not measure every word twice.
 struct TwitchFlow: Layout {
     var spacing: CGFloat = 4
     var lineSpacing: CGFloat = 2
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
+    struct Cache {
+        var naturalSizes: [CGSize] = []
+        var lastWidth: CGFloat = -1
+        var lastRows: [Row] = []
+    }
+
+    func makeCache(subviews: Subviews) -> Cache {
+        var cache = Cache()
+        cache.naturalSizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        return cache
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache.naturalSizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        cache.lastWidth = -1
+        cache.lastRows = []
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews, cache: &cache)
         let height = rows.reduce(0) { $0 + $1.height } + lineSpacing * CGFloat(max(0, rows.count - 1))
         let width = rows.map(\.width).max() ?? 0
         return CGSize(width: proposal.width ?? width, height: height)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let rows = arrange(width: bounds.width, subviews: subviews)
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let rows = arrange(width: bounds.width, subviews: subviews, cache: &cache)
         var y = bounds.minY
         for row in rows {
             var x = bounds.minX
@@ -318,25 +338,32 @@ struct TwitchFlow: Layout {
         }
     }
 
-    private struct Item {
+    struct Item {
         var index: Int
         var size: CGSize
     }
 
-    private struct Row {
+    struct Row {
         var items: [Item] = []
         var width: CGFloat = 0
         var height: CGFloat = 0
     }
 
-    private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
+    private func arrange(width: CGFloat, subviews: Subviews, cache: inout Cache) -> [Row] {
+        if cache.naturalSizes.count != subviews.count {
+            cache.naturalSizes = subviews.map { $0.sizeThatFits(.unspecified) }
+            cache.lastWidth = -1
+        }
+        if cache.lastWidth == width {
+            return cache.lastRows
+        }
         var rows: [Row] = []
         var row = Row()
-        for (i, sub) in subviews.enumerated() {
-            var size = sub.sizeThatFits(.unspecified)
+        for i in subviews.indices {
+            var size = cache.naturalSizes[i]
             if size.width > width {
                 // a very long word or link: as wide as the line, wrapped inside
-                size = sub.sizeThatFits(ProposedViewSize(width: width, height: nil))
+                size = subviews[i].sizeThatFits(ProposedViewSize(width: width, height: nil))
                 size.width = min(size.width, width)
             }
             let needed = row.items.isEmpty ? size.width : row.width + spacing + size.width
@@ -349,6 +376,8 @@ struct TwitchFlow: Layout {
             row.items.append(Item(index: i, size: size))
         }
         if !row.items.isEmpty { rows.append(row) }
+        cache.lastWidth = width
+        cache.lastRows = rows
         return rows
     }
 }

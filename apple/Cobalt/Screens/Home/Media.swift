@@ -135,14 +135,24 @@ private final class AnimatedImageModel {
     /// assigns them. 8.16 handed every frame over at full size.
     func play(file url: URL, maxPixel: Int) {
         stop()
-        let next = MediaAnimation.play(file: url, maxPixel: maxPixel) { [weak self] frame in self?.show(frame) }
+        let next = MediaAnimation.play(
+            file: url,
+            maxPixel: maxPixel,
+            onFail: { [weak self] in self?.failed = true },
+            onFrame: { [weak self] frame in self?.show(frame) }
+        )
         slot.set(next)
         failed = next == nil
     }
 
     func play(data: Data, maxPixel: Int) {
         stop()
-        let next = MediaAnimation.play(data: data, maxPixel: maxPixel) { [weak self] frame in self?.show(frame) }
+        let next = MediaAnimation.play(
+            data: data,
+            maxPixel: maxPixel,
+            onFail: { [weak self] in self?.failed = true },
+            onFrame: { [weak self] frame in self?.show(frame) }
+        )
         slot.set(next)
         failed = next == nil
     }

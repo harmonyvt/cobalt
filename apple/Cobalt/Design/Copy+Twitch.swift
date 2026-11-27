@@ -119,6 +119,7 @@ extension Copy {
         static let emotesNone = "no emote by that name"
         static let showEmotes = "emotes"
         static let hideEmotes = "hide emotes"
+        static let hideKeyboard = "hide keyboard"
         static let emotesChannel = "this channel · 7tv"
         static let emotesYours = "your twitch emotes"
         static let emotesGlobal = "7tv global"

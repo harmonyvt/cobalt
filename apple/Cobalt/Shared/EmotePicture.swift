@@ -16,28 +16,45 @@ struct EmotePicture: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
-    @State private var ticket = MotionTicket()
-    @State private var onScreen = false
-    @State private var playing = false
 
     /// Pixels on the tile's side: the still and every frame are decoded to this, never the 7TV file's own size.
     private var maxPixel: Int { MediaPipeline.maxPixel(points: side, scale: displayScale) }
-
-    /// Reduce Motion keeps every emote on its still.
-    private var wantsMotion: Bool { animated && !reduceMotion && url != nil }
-    private var moves: Bool { wantsMotion && ticket.granted }
 
     // Session replay (APP-API-CONTRACT 58): media is always masked.
     var body: some View { mediaBody.mediaMask() }
 
     @ViewBuilder private var mediaBody: some View {
+        // Static badges/emotes (the vast majority of chat rows) render `EmoteStill` directly with zero
+        // `MotionTicket` or `.onScrollVisibilityChange` observers, avoiding AttributeGraph storms on rotation.
+        if animated && !reduceMotion, let url {
+            AnimatedEmotePicture(url: url, side: side, maxPixel: maxPixel, fill: fill)
+        } else {
+            EmoteStill(url: url, maxPixel: maxPixel, fill: fill)
+                .frame(width: fill ? nil : side, height: fill ? nil : side)
+        }
+    }
+}
+
+private struct AnimatedEmotePicture: View {
+    let url: URL
+    let side: CGFloat
+    let maxPixel: Int
+    var fill: Bool = false
+
+    @State private var ticket = MotionTicket()
+    @State private var onScreen = false
+    @State private var playing = false
+
+    private var moves: Bool { ticket.granted }
+
+    var body: some View {
         ZStack {
             // The still leaves once a frame is playing. An emote's frames are transparent, so a first frame left
             // underneath shows as a second, frozen copy.
             if !moves || !playing {
                 EmoteStill(url: url, maxPixel: maxPixel, fill: fill)
             }
-            if moves, let url {
+            if moves {
                 // a new emote is a new player: the old one's last frame never sits under the new animation
                 EmoteMotion(url: url, maxPixel: maxPixel, fill: fill, started: $playing).id(url)
             }
@@ -45,15 +62,18 @@ struct EmotePicture: View {
         .frame(width: fill ? nil : side, height: fill ? nil : side)
         .onChange(of: url) { _, _ in playing = false }
         .onChange(of: moves) { _, now in if !now { playing = false } }
-        .onChange(of: wantsMotion) { _, _ in askBudget() }
         .onAppear { onScreen = true; askBudget() }
         .onDisappear { onScreen = false; askBudget() }
         // a lazy grid keeps a few rows past the edge alive: those give their slot back too
-        .onScrollVisibilityChange(threshold: 0.1) { visible in onScreen = visible; askBudget() }
+        .onScrollVisibilityChange(threshold: 0.1) { visible in
+            guard visible != onScreen else { return }
+            onScreen = visible
+            askBudget()
+        }
     }
 
     private func askBudget() {
-        MotionBudget.shared.want(ticket, onScreen && wantsMotion)
+        MotionBudget.shared.want(ticket, onScreen)
     }
 }
 
@@ -61,21 +81,22 @@ struct EmotePicture: View {
 private final class EmoteMotionModel {
     var image: ImageBox?
     var hasFrame = false
-    @ObservationIgnored private var animation: MediaAnimation?
+    /// A slot, not a plain property: freeing the model (e.g. a chat row evicted without `onDisappear`)
+    /// stops the animation immediately instead of leaking background decodes forever.
+    private let slot = MediaAnimationSlot()
 
     func play(data: Data, maxPixel: Int) {
         stop()
-        // frames arrive here already shrunk to the tile, one at a time; this only assigns them
-        animation = MediaAnimation.play(data: data, maxPixel: maxPixel) { [weak self] frame in
+        // frames arrive here already decoded at `maxPixel` off the main thread; this only assigns them
+        slot.set(MediaAnimation.play(data: data, maxPixel: maxPixel) { [weak self] frame in
             guard let self else { return }
             self.image = frame
             if !self.hasFrame { self.hasFrame = true }
-        }
+        })
     }
 
     func stop() {
-        animation?.stop()
-        animation = nil
+        slot.stop()
     }
 }
 

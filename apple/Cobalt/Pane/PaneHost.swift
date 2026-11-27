@@ -55,12 +55,17 @@ struct PaneHost<Content: View>: View {
 
     /// Resolves placement from size class, window size, and live iOS 27.1+ `ReservedRegion(.division)`.
     ///
-    /// In the background iOS lays the window out again at other sizes for the app switcher's snapshots. The placement the
-    /// owner left stays meanwhile: a flip to `.compact` and back closed and reopened the pane (and the library's select
-    /// actions with it), a 0.5-1 s main-thread stall on every trip away in the 8.40 sessions. Back in front it is measured
-    /// again, so a fold made while away still lands.
+    /// While `.inactive` or `.background` on iOS (entering PiP, app switcher snapshots, Control Center), UIKit
+    /// transiently measures the window at compact sizes. Keeping the previous placement prevents a spurious
+    /// `wide -> compact -> wide` `layout.swap` stall (0.6–1.3 s in PostHog sessions) and re-resolves as soon
+    /// as the app becomes active again, so a fold made while away still lands.
     private var placement: PanePlacement {
-        guard measured, lifecycle.phase != .background else { return pane.placement }
+        #if os(iOS)
+        let allowsResolve = lifecycle.isActive || lifecycle.phase == .launching
+        #else
+        let allowsResolve = lifecycle.phase != .background
+        #endif
+        guard measured, allowsResolve else { return pane.placement }
         return PanePlacement.resolve(
             size: size,
             isRegular: sizeClass == .regular,
