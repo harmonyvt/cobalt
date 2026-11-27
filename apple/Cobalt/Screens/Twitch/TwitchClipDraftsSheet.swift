@@ -292,6 +292,8 @@ struct TwitchClipDraftsSheet: View {
                     Label(Copy.Twitch.openInEditor, systemImage: Symbol.Twitch.splitFrame)
                         .font(CobaltType.captionSmall)
                         .fontWeight(.semibold)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(CobaltColor.elevated, in: Capsule())
@@ -310,9 +312,11 @@ struct TwitchClipDraftsSheet: View {
                                 Image(systemName: Symbol.Twitch.sendToStudio)
                             }
                             Text(isSending ? Copy.Twitch.sendingToStudio : Copy.Twitch.sendToStudio)
+                                .lineLimit(1)
                         }
                         .font(CobaltType.captionSmall)
                         .fontWeight(.semibold)
+                        .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(TwitchClipPalette.chatPurple.opacity(0.18), in: Capsule())

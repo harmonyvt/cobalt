@@ -434,6 +434,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     }
     @ObservationIgnored private let clipRecorder = TwitchClipRecorder()
     @ObservationIgnored private var clipStateTask: Task<Void, Never>?
+    @ObservationIgnored private var clipErrorClearTask: Task<Void, Never>?
 
     #if os(iOS)
     @ObservationIgnored private var madeAirPlay: TwitchAirPlayVideoView?
@@ -768,10 +769,36 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
     }
 
+    private func setClipCaptureError(_ message: String?) {
+        clipErrorClearTask?.cancel()
+        clipErrorClearTask = nil
+        clipCaptureError = message
+        guard message != nil else { return }
+        clipErrorClearTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            self?.clipCaptureError = nil
+        }
+    }
+
+    private static func friendlyClipError(_ error: Error) -> String {
+        if let rec = error as? TwitchClipRecorderError {
+            switch rec {
+            case .noBufferedVideo: return Copy.Twitch.waitingForBuffer
+            case .alreadyRecording: return Copy.Twitch.recordingPill
+            case .alreadySaving: return Copy.Twitch.savingDraft
+            case .notRecording: return Copy.Twitch.clipFailed
+            case .missingFormatDescription: return Copy.Twitch.waitingForBuffer
+            case .writerFailed(let detail): return detail
+            }
+        }
+        return error.localizedDescription
+    }
+
     /// Flushes the last `seconds` (30 or 60) from the rolling H.264/AAC buffer + synced chat into a local draft.
     func saveInstantClip(seconds: Int, model: AppModel) async {
         guard let ch = channel else { return }
-        clipCaptureError = nil
+        setClipCaptureError(nil)
         let displayName = model.twitch.displayName(for: ch)
         let streamTitle = model.twitch.stream?.title
         let title = Self.defaultClipTitle(channel: displayName, streamTitle: streamTitle)
@@ -784,14 +811,14 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             )
             model.twitchClips.recordSaved(result)
         } catch {
-            clipCaptureError = error.localizedDescription
+            setClipCaptureError(Self.friendlyClipError(error))
         }
     }
 
     /// Toggles continuous video + synced chat recording on the active stream.
     func toggleClipRecording(model: AppModel) async {
         guard let ch = channel else { return }
-        clipCaptureError = nil
+        setClipCaptureError(nil)
         if clipCapture.isRecording {
             let displayName = model.twitch.displayName(for: ch)
             let streamTitle = model.twitch.stream?.title
@@ -800,7 +827,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 let result = try await clipRecorder.stopRecording(title: title)
                 model.twitchClips.recordSaved(result)
             } catch {
-                clipCaptureError = error.localizedDescription
+                setClipCaptureError(Self.friendlyClipError(error))
             }
         } else {
             do {
@@ -809,7 +836,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                     destinationDir: model.twitchClips.directory
                 )
             } catch {
-                clipCaptureError = error.localizedDescription
+                setClipCaptureError(Self.friendlyClipError(error))
             }
         }
     }
@@ -2443,7 +2470,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             let recorder = self.clipRecorder
             await recorder.reset(for: channel)
             await engine.setSampleTap { samples in
-                Task { await recorder.ingestSamples(samples) }
+                recorder.enqueueSamples(samples)
             }
             await engine.setEventHandler { event in
                 continuation.yield(event)
@@ -2782,6 +2809,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         stopSecondaryNative()
         stopExtraNative(slot: .c)
         stopExtraNative(slot: .d)
+        setClipCaptureError(nil)
         let recorder = clipRecorder
         Task { await recorder.reset(for: nil) }
         reset()

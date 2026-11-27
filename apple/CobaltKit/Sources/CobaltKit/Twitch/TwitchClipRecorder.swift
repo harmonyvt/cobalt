@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 public enum TwitchClipRecorderError: Error, Sendable, Equatable {
     case noBufferedVideo
     case alreadyRecording
+    case alreadySaving
     case notRecording
     case missingFormatDescription
     case writerFailed(String)
@@ -81,6 +82,10 @@ public actor TwitchClipRecorder {
     // Continuous recording session (when user taps Record)
     private var recording: ActiveRecording?
     private var isSaving = false
+    private var savingKind: TwitchClipKind?
+
+    // Ordered FIFO sample ingestion stream (avoids out-of-order Task-per-chunk delivery)
+    private let sampleContinuation: AsyncStream<([DemuxedSample], Date)>.Continuation
 
     // Throttled state publisher
     public nonisolated let states: AsyncStream<TwitchClipCaptureState>
@@ -89,10 +94,28 @@ public actor TwitchClipRecorder {
 
     public init() {
         (states, stateContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let (sampleStream, sampleCont) = AsyncStream.makeStream(
+            of: ([DemuxedSample], Date).self,
+            bufferingPolicy: .bufferingNewest(600)
+        )
+        self.sampleContinuation = sampleCont
+        Task { [weak self] in
+            for await (samples, wall) in sampleStream {
+                guard let self else { break }
+                await self.ingestSamples(samples, now: wall)
+            }
+        }
     }
 
     deinit {
+        sampleContinuation.finish()
         stateContinuation.finish()
+    }
+
+    /// Synchronously enqueues demuxed samples onto the recorder's FIFO stream without spawning per-chunk Tasks.
+    public nonisolated func enqueueSamples(_ samples: [DemuxedSample], now: Date = Date()) {
+        guard !samples.isEmpty else { return }
+        sampleContinuation.yield((samples, now))
     }
 
     // MARK: - Session & Input Feeding
@@ -113,6 +136,7 @@ public actor TwitchClipRecorder {
         latestPPS = nil
         recording = nil
         isSaving = false
+        savingKind = nil
         publishState(force: true)
     }
 
@@ -240,7 +264,8 @@ public actor TwitchClipRecorder {
             isRecording: recording != nil,
             recordingSeconds: recSeconds,
             recordingChatCount: recChatCount,
-            isSaving: isSaving
+            isSaving: isSaving,
+            savingKind: savingKind
         )
     }
 
@@ -254,6 +279,9 @@ public actor TwitchClipRecorder {
         destinationDir: URL,
         now: Date = Date()
     ) async throws -> TwitchClipSaveResult {
+        guard !isSaving else {
+            throw TwitchClipRecorderError.alreadySaving
+        }
         guard let lastVideo = videoRing.last else {
             throw TwitchClipRecorderError.noBufferedVideo
         }
@@ -271,19 +299,21 @@ public actor TwitchClipRecorder {
             throw TwitchClipRecorderError.noBufferedVideo
         }
 
-        let startPTS = sliceVideo[0].frame.pts90k
+        let startBase = min(sliceVideo[0].frame.dts90k, sliceVideo[0].frame.pts90k)
         let endPTS = sliceVideo[sliceVideo.count - 1].frame.pts90k
-        let actualDuration = max(0.5, Double(endPTS - startPTS) / Self.timescale90k)
+        let actualDuration = max(0.5, Double(endPTS - sliceVideo[0].frame.pts90k) / Self.timescale90k)
         let wasPartial = actualDuration < requestedSeconds - 1.5
 
-        let sliceAudio = audioRing.filter { $0.frame.pts90k >= startPTS && $0.frame.pts90k <= endPTS }
+        let sliceAudio = audioRing.filter { $0.frame.pts90k >= startBase && $0.frame.pts90k <= endPTS }
         let startWall = sliceVideo[0].wallTime
         let endWall = sliceVideo[sliceVideo.count - 1].wallTime
 
         isSaving = true
+        savingKind = .clip
         publishState(force: true, now: now)
         defer {
             isSaving = false
+            savingKind = nil
             publishState(force: true, now: Date())
         }
 
@@ -293,7 +323,7 @@ public actor TwitchClipRecorder {
             title: title,
             videoFrames: sliceVideo,
             audioFrames: sliceAudio,
-            startPTS90k: startPTS,
+            startPTS90k: startBase,
             duration: actualDuration,
             startWall: startWall,
             endWall: endWall,
@@ -307,6 +337,7 @@ public actor TwitchClipRecorder {
 
     /// Begins recording incoming video, audio, and chat until `stopRecording` is called.
     public func startRecording(channel: String, destinationDir: URL, now: Date = Date()) throws {
+        guard !isSaving else { throw TwitchClipRecorderError.alreadySaving }
         guard recording == nil else { throw TwitchClipRecorderError.alreadyRecording }
         let id = Self.mintDraftID()
         var rec = ActiveRecording(
@@ -320,17 +351,17 @@ public actor TwitchClipRecorder {
             startedAt: now
         )
 
-        // Seed from the most recent IDR keyframe in the rolling buffer (within the last 2.5s) so recording
-        // starts cleanly with zero waiting and zero black frames!
+        // Seed from the most recent IDR keyframe in the rolling buffer (within 4.5s, covering both 2s and 4s GOPs)
+        // so recording starts cleanly with zero waiting and zero black frames!
         if let lastIDRIdx = videoRing.lastIndex(where: { $0.frame.isKeyframe }),
            let lastFrame = videoRing.last,
-           Double(lastFrame.frame.pts90k - videoRing[lastIDRIdx].frame.pts90k) / Self.timescale90k <= 3.0 {
+           Double(lastFrame.frame.pts90k - videoRing[lastIDRIdx].frame.pts90k) / Self.timescale90k <= 4.5 {
             let seedVideo = Array(videoRing[lastIDRIdx...])
-            let seedStartPTS = seedVideo[0].frame.pts90k
-            let seedAudio = audioRing.filter { $0.frame.pts90k >= seedStartPTS }
+            let seedStartBase = min(seedVideo[0].frame.dts90k, seedVideo[0].frame.pts90k)
+            let seedAudio = audioRing.filter { $0.frame.pts90k >= seedStartBase }
             rec.videoFrames = seedVideo
             rec.audioFrames = seedAudio
-            rec.startPTS90k = seedStartPTS
+            rec.startPTS90k = seedStartBase
             rec.latestPTS90k = seedVideo.last?.frame.pts90k
             rec.firstWallTime = seedVideo[0].wallTime
         }
@@ -341,6 +372,7 @@ public actor TwitchClipRecorder {
 
     /// Stops an active continuous recording and flushes the captured MP4 + `.chat.json` + thumbnail to disk.
     public func stopRecording(title: String? = nil, now: Date = Date()) async throws -> TwitchClipSaveResult {
+        guard !isSaving else { throw TwitchClipRecorderError.alreadySaving }
         guard let rec = recording else { throw TwitchClipRecorderError.notRecording }
         recording = nil
 
@@ -354,9 +386,11 @@ public actor TwitchClipRecorder {
         let endWall = rec.videoFrames.last?.wallTime ?? now
 
         isSaving = true
+        savingKind = .recording
         publishState(force: true, now: now)
         defer {
             isSaving = false
+            savingKind = nil
             publishState(force: true, now: Date())
         }
 
@@ -389,7 +423,7 @@ public actor TwitchClipRecorder {
         guard var rec = recording else { return }
         if rec.startPTS90k == nil {
             guard item.frame.isKeyframe else { return }
-            rec.startPTS90k = item.frame.pts90k
+            rec.startPTS90k = min(item.frame.dts90k, item.frame.pts90k)
             rec.firstWallTime = item.wallTime
         }
         guard let startPTS = rec.startPTS90k else { return }
@@ -557,9 +591,71 @@ public actor TwitchClipRecorder {
         }
         writer.add(videoInput)
 
+        guard let firstKeyIdx = videoFrames.firstIndex(where: { $0.isKeyframe }) else {
+            throw TwitchClipRecorderError.noBufferedVideo
+        }
+        let effectiveBase90k = min(
+            basePTS90k,
+            min(videoFrames[firstKeyIdx].dts90k, videoFrames[firstKeyIdx].pts90k)
+        )
+
+        // Pre-normalize monotonic rebased video frames (preserving B-frame PTS >= DTS offsets).
+        struct NormalizedVideo {
+            let avccData: Data
+            let pts90k: Int64
+            let dts90k: Int64
+            let isKeyframe: Bool
+            let sps: Data?
+            let pps: Data?
+        }
+        var preparedVideo: [NormalizedVideo] = []
+        preparedVideo.reserveCapacity(videoFrames.count - firstKeyIdx)
+        var lastDTS: Int64 = Int64.min
+        for raw in videoFrames[firstKeyIdx...] {
+            let rebasedPTS = raw.pts90k - effectiveBase90k
+            var rebasedDTS = raw.dts90k - effectiveBase90k
+            if rebasedPTS < 0 { continue }
+            if rebasedDTS < 0 { rebasedDTS = max(0, rebasedPTS) }
+            if rebasedDTS <= lastDTS {
+                rebasedDTS = lastDTS + 1
+            }
+            let safePTS = max(rebasedPTS, rebasedDTS)
+            preparedVideo.append(NormalizedVideo(
+                avccData: raw.avccData,
+                pts90k: safePTS,
+                dts90k: rebasedDTS,
+                isKeyframe: raw.isKeyframe,
+                sps: raw.sps,
+                pps: raw.pps
+            ))
+            lastDTS = rebasedDTS
+        }
+        guard !preparedVideo.isEmpty else {
+            throw TwitchClipRecorderError.noBufferedVideo
+        }
+
+        // Pre-normalize monotonic rebased audio frames.
+        var preparedAudio: [DemuxedAudioFrame] = []
+        preparedAudio.reserveCapacity(audioFrames.count)
+        var lastAudioPTS: Int64 = Int64.min
+        for raw in audioFrames {
+            let rebasedPTS = raw.pts90k - effectiveBase90k
+            guard rebasedPTS >= 0, rebasedPTS > lastAudioPTS, !raw.aacData.isEmpty else { continue }
+            preparedAudio.append(DemuxedAudioFrame(
+                aacData: raw.aacData,
+                pts90k: rebasedPTS,
+                sampleRate: raw.sampleRate,
+                channels: raw.channels,
+                audioObjectType: raw.audioObjectType,
+                audioSpecificConfig: raw.audioSpecificConfig
+            ))
+            lastAudioPTS = rebasedPTS
+        }
+
         var audioInput: AVAssetWriterInput?
         var audioFormat: CMAudioFormatDescription?
-        if let firstAudio = audioFrames.first,
+        if let firstAudio = preparedAudio.first,
+           !firstAudio.audioSpecificConfig.isEmpty,
            let fmt = TwitchSampleBufferFactory.audioFormatDescription(
                sampleRate: firstAudio.sampleRate,
                channels: firstAudio.channels,
@@ -580,79 +676,104 @@ public actor TwitchClipRecorder {
         }
         writer.startSession(atSourceTime: .zero)
 
-        // Append video frames with rebased, strictly monotonic DTS.
-        var lastDTS: Int64 = Int64.min
+        // Interleave video and audio in chronological order so AVAssetWriter never stalls waiting on the other track.
         var currentFormat = videoFormat
         var currentSPS = sps
         var currentPPS = pps
         var appendedVideo = 0
+        var vIdx = 0
+        var aIdx = 0
+        var vDone = preparedVideo.isEmpty
+        var aDone = (audioInput == nil) || preparedAudio.isEmpty
+        if vDone { videoInput.markAsFinished() }
+        if aDone, let audioInput { audioInput.markAsFinished() }
 
-        for raw in videoFrames {
-            let rebasedPTS = raw.pts90k - basePTS90k
-            var rebasedDTS = raw.dts90k - basePTS90k
-            if rebasedPTS < 0 { continue }
-            if rebasedDTS < 0 { rebasedDTS = max(0, rebasedPTS) }
-            if rebasedDTS <= lastDTS {
-                rebasedDTS = lastDTS + 1
-            }
-            if appendedVideo == 0 && !raw.isKeyframe { continue }
-
-            if let newSPS = raw.sps, let newPPS = raw.pps, (newSPS != currentSPS || newPPS != currentPPS),
+        func appendNextVideo() -> Bool {
+            guard vIdx < preparedVideo.count else { return false }
+            let item = preparedVideo[vIdx]
+            vIdx += 1
+            if let newSPS = item.sps, let newPPS = item.pps, (newSPS != currentSPS || newPPS != currentPPS),
                let nextFmt = TwitchSampleBufferFactory.videoFormatDescription(sps: newSPS, pps: newPPS) {
                 currentFormat = nextFmt
                 currentSPS = newSPS
                 currentPPS = newPPS
             }
-
-            let rebased = DemuxedVideoFrame(
-                avccData: raw.avccData,
-                pts90k: max(rebasedPTS, rebasedDTS),
-                dts90k: rebasedDTS,
-                isKeyframe: raw.isKeyframe,
+            let frame = DemuxedVideoFrame(
+                avccData: item.avccData,
+                pts90k: item.pts90k,
+                dts90k: item.dts90k,
+                isKeyframe: item.isKeyframe,
                 sps: currentSPS,
                 pps: currentPPS
             )
-            guard let sb = TwitchSampleBufferFactory.videoSampleBuffer(frame: rebased, formatDescription: currentFormat) else {
-                continue
+            guard let sb = TwitchSampleBufferFactory.videoSampleBuffer(frame: frame, formatDescription: currentFormat) else {
+                return true
             }
-            while !videoInput.isReadyForMoreMediaData && writer.status == .writing {
-                try? await Task.sleep(for: .milliseconds(2))
-            }
-            guard writer.status == .writing else { break }
             if videoInput.append(sb) {
-                lastDTS = rebasedDTS
                 appendedVideo += 1
             }
+            return true
         }
-        videoInput.markAsFinished()
 
-        // Append audio frames with rebased monotonic PTS.
-        if let audioInput, let audioFormat {
-            var lastAudioPTS: Int64 = Int64.min
-            for raw in audioFrames {
-                let rebasedPTS = raw.pts90k - basePTS90k
-                guard rebasedPTS >= 0, rebasedPTS > lastAudioPTS else { continue }
-                let rebased = DemuxedAudioFrame(
-                    aacData: raw.aacData,
-                    pts90k: rebasedPTS,
-                    sampleRate: raw.sampleRate,
-                    channels: raw.channels,
-                    audioObjectType: raw.audioObjectType,
-                    audioSpecificConfig: raw.audioSpecificConfig
-                )
-                guard let sb = TwitchSampleBufferFactory.audioSampleBuffer(frame: rebased, formatDescription: audioFormat) else {
-                    continue
+        func appendNextAudio(_ input: AVAssetWriterInput, format: CMAudioFormatDescription) -> Bool {
+            guard aIdx < preparedAudio.count else { return false }
+            let item = preparedAudio[aIdx]
+            aIdx += 1
+            guard let sb = TwitchSampleBufferFactory.audioSampleBuffer(frame: item, formatDescription: format) else {
+                return true
+            }
+            _ = input.append(sb)
+            return true
+        }
+
+        var stalledTicks = 0
+        let maxStalledTicks = 2_500 // 5 seconds safety cap at 2 ms/tick
+
+        while writer.status == .writing && (!vDone || !aDone) {
+            var progressed = false
+            let vTime: Int64 = vDone ? .max : preparedVideo[vIdx].dts90k
+            let aTime: Int64 = aDone ? .max : preparedAudio[aIdx].pts90k
+            let preferVideo = vTime <= aTime
+
+            if preferVideo {
+                if !vDone && videoInput.isReadyForMoreMediaData {
+                    progressed = appendNextVideo()
+                } else if !aDone, let audioInput, let audioFormat, audioInput.isReadyForMoreMediaData {
+                    progressed = appendNextAudio(audioInput, format: audioFormat)
                 }
-                while !audioInput.isReadyForMoreMediaData && writer.status == .writing {
-                    try? await Task.sleep(for: .milliseconds(2))
-                }
-                guard writer.status == .writing else { break }
-                if audioInput.append(sb) {
-                    lastAudioPTS = rebasedPTS
+            } else {
+                if !aDone, let audioInput, let audioFormat, audioInput.isReadyForMoreMediaData {
+                    progressed = appendNextAudio(audioInput, format: audioFormat)
+                } else if !vDone && videoInput.isReadyForMoreMediaData {
+                    progressed = appendNextVideo()
                 }
             }
-            audioInput.markAsFinished()
+
+            if !vDone && vIdx >= preparedVideo.count {
+                videoInput.markAsFinished()
+                vDone = true
+                progressed = true
+            }
+            if !aDone && aIdx >= preparedAudio.count {
+                audioInput?.markAsFinished()
+                aDone = true
+                progressed = true
+            }
+
+            if progressed {
+                stalledTicks = 0
+            } else {
+                stalledTicks += 1
+                if stalledTicks >= maxStalledTicks {
+                    writer.cancelWriting()
+                    throw TwitchClipRecorderError.writerFailed("AVAssetWriter stalled while writing tracks")
+                }
+                try? await Task.sleep(for: .milliseconds(2))
+            }
         }
+
+        if !vDone { videoInput.markAsFinished() }
+        if !aDone { audioInput?.markAsFinished() }
 
         await writer.finishWriting()
         guard writer.status == .completed, appendedVideo > 0 else {

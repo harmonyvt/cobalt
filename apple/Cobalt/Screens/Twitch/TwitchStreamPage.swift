@@ -366,7 +366,7 @@ struct TwitchStreamPage: View {
         }
         .duoVisibilityPriority(.low)
 
-        if store.canClip {
+        if (isDualStream || !host.canCaptureLocally) && store.canClip {
             ToolbarItem(placement: .automatic) {
                 DuoToolbarButton(title: Copy.Twitch.clip, systemImage: Symbol.Twitch.clip) {
                     makeClip()
@@ -938,14 +938,18 @@ struct TwitchStreamPage: View {
                     streamBar
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: isSideBySide ? .infinity : nil)
+            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: isSideBySide ? .infinity : nil)
+            .clipped()
 
             hairline(horizontal: !isSideBySide)
 
             chatPanel
                 .frame(width: isSideBySide ? chatWidth : nil)
-                .frame(maxWidth: isSideBySide ? nil : .infinity, maxHeight: .infinity)
+                .frame(minWidth: 0, maxWidth: isSideBySide ? chatWidth : .infinity, maxHeight: .infinity)
+                .clipped()
         }
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
     }
 
     /// Stage height cap in stacked portrait: gives 50/50 dual-stream and 3–4 stream Spotlight/Grid enough room when
@@ -969,7 +973,8 @@ struct TwitchStreamPage: View {
                 streamBar
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
     }
 
     private var streamBar: some View {
@@ -1059,6 +1064,14 @@ struct TwitchStreamPage: View {
                     VStack(spacing: 0) {
                         if !usesStatusAdjacentBar {
                             singleStreamChannelPill(compact: compactControls)
+                        } else if host.clipCapture.isRecording {
+                            HStack {
+                                recordingLiveBadge
+                                Spacer(minLength: 64)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.top, 8)
+                            .allowsHitTesting(false)
                         }
                         Spacer(minLength: 0)
                         if let toast = clipStore.toast {
@@ -1112,13 +1125,17 @@ struct TwitchStreamPage: View {
                 .frame(width: 7, height: 7)
             Text("\(Copy.Twitch.recordingPill.uppercased()) \(TwitchClipDraftsSheet.clock(host.clipCapture.recordingSeconds))")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .monospacedDigit()
                 .foregroundStyle(.white)
+                .lineLimit(1)
             if host.clipCapture.recordingChatCount > 0 {
                 Text("· \(host.clipCapture.recordingChatCount) \(Copy.Twitch.chat)")
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
         .mediaGlassCapsule(interactive: false, tint: TwitchClipPalette.recRed.opacity(0.35))
@@ -1169,6 +1186,8 @@ struct TwitchStreamPage: View {
                 Text(Copy.Twitch.editNow)
                     .font(.system(size: 11.5, weight: .bold))
                     .foregroundStyle(.black)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(.white, in: Capsule())
@@ -1241,7 +1260,7 @@ struct TwitchStreamPage: View {
                 recordingLiveBadge
                     .padding(.leading, 6)
             }
-            Spacer(minLength: 92)
+            Spacer(minLength: compact ? 64 : 84)
         }
         .padding(.horizontal, 10)
         .padding(.top, compact ? 6 : 8)
@@ -1251,12 +1270,15 @@ struct TwitchStreamPage: View {
     /// Compact Clear Liquid Glass playback controls overlaid on single-stream video in Tabletop or Keyboard-Open postures
     /// so no separate stream bar competes for vertical height with chat & keyboard.
     private var floatingCompactControls: some View {
-        MediaGlassGroup(spacing: 6) {
+        let floatingNote = host.clipCaptureError ?? clipText
+        let floatingFailed = host.clipCaptureError != nil || store.clipState == .failed
+        return MediaGlassGroup(spacing: 6) {
             HStack(spacing: 6) {
-                if let clipText {
-                    Text(clipText)
+                if let floatingNote {
+                    Text(floatingNote)
                         .font(CobaltType.captionSmall)
-                        .foregroundStyle(store.clipState == .failed ? CobaltColor.errorText : CobaltColor.success)
+                        .lineLimit(1)
+                        .foregroundStyle(floatingFailed ? CobaltColor.errorText : CobaltColor.success)
                         .padding(.horizontal, 10)
                         .frame(minHeight: 32)
                         .mediaGlassCapsule(interactive: false)
@@ -1984,7 +2006,14 @@ private struct TwitchStreamBar: View {
     @State private var width: CGFloat = 0
 
     private var inline: Bool {
-        TwitchWatchLayout.isInlineStreamBar(width: width, accessibilityText: typeSize.isAccessibilitySize)
+        guard TwitchWatchLayout.isInlineStreamBar(width: width, accessibilityText: typeSize.isAccessibilitySize) else {
+            return false
+        }
+        // Local capture adds clip + record + drafts pills; require enough room so identity and pills never squeeze.
+        if canCaptureLocally && width < 560 {
+            return false
+        }
+        return true
     }
 
     var body: some View {
@@ -1992,27 +2021,28 @@ private struct TwitchStreamBar: View {
             if inline {
                 HStack(spacing: 12) {
                     identity
-                    Spacer(minLength: 0)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     controls(spreadStop: false)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     identity
-                    if typeSize.isAccessibilitySize {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            controls(spreadStop: false)
-                        }
-                    } else {
-                        controls(spreadStop: true)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        controls(spreadStop: false)
+                            .padding(.horizontal, 14)
                     }
+                    .frame(minWidth: 0, maxWidth: .infinity)
                 }
-                .padding(.horizontal, 14)
                 .padding(.vertical, 8)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .clipped()
         .background(CobaltColor.bg)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
@@ -2052,8 +2082,11 @@ private struct TwitchStreamBar: View {
     }
 
     private func controls(spreadStop: Bool) -> some View {
-        GlassEffectContainer(spacing: 4) {
-            HStack(spacing: 5) {
+        let isSavingClip = capture.isSaving && capture.savingKind != .recording
+        let isSavingRecording = capture.isSaving && capture.savingKind == .recording
+
+        return GlassEffectContainer(spacing: 4) {
+            HStack(spacing: 6) {
                 Button(action: onPlayPause) {
                     Label(isPlaying ? Copy.Twitch.pause : Copy.Twitch.play,
                           systemImage: isPlaying ? "pause.fill" : "play.fill")
@@ -2062,38 +2095,39 @@ private struct TwitchStreamBar: View {
                 .accessibilityIdentifier("twitch.playpause")
 
                 if canCaptureLocally {
-                    // Instant clip split pill: [ scissors clip | 30s/60s ]
+                    // Instant clip split pill: [ scissors | 30s/60s ]
                     HStack(spacing: 0) {
                         Button(action: onSaveLocalClip) {
-                            HStack(spacing: 4) {
-                                if capture.isSaving {
+                            Group {
+                                if isSavingClip {
                                     ProgressView().controlSize(.mini)
                                 } else {
                                     Image(systemName: Symbol.Twitch.clip)
-                                        .font(.system(size: 11.5, weight: .semibold))
+                                        .font(.system(size: 12, weight: .semibold))
                                 }
-                                Text(Copy.Twitch.clipShort)
-                                    .font(.system(size: 12, weight: .semibold))
                             }
-                            .padding(.leading, 9)
-                            .padding(.trailing, 7)
-                            .frame(height: 30)
+                            .frame(minWidth: 28, minHeight: 30)
+                            .padding(.leading, 4)
+                            .padding(.trailing, 3)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(capture.bufferedSeconds < 1 || capture.isSaving)
                         .foregroundStyle((capture.bufferedSeconds < 1 || capture.isSaving) ? CobaltColor.caption.opacity(0.5) : CobaltColor.text)
                         .help(capture.bufferedSeconds < 1 ? Copy.Twitch.waitingForBuffer : Copy.Twitch.clipLast(selectedClipDuration))
+                        .accessibilityLabel(Copy.Twitch.clipLast(selectedClipDuration))
                         .accessibilityIdentifier("twitch.localClip")
 
                         Rectangle()
                             .fill(CobaltColor.border.opacity(0.7))
-                            .frame(width: 1, height: 16)
+                            .frame(width: 1, height: 15)
 
                         Button(action: onToggleClipDuration) {
                             Text(Copy.Twitch.durationChoice(selectedClipDuration))
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .padding(.horizontal, 7)
+                                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, 8)
                                 .frame(height: 30)
                                 .foregroundStyle(CobaltColor.caption)
                                 .contentShape(Rectangle())
@@ -2102,19 +2136,34 @@ private struct TwitchStreamBar: View {
                         .help(Copy.Twitch.buffered(Int(capture.bufferedSeconds.rounded()), Int(capture.maxBufferSeconds)))
                         .accessibilityIdentifier("twitch.clipDuration")
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                     .background(CobaltColor.elevated, in: Capsule())
                     .overlay(Capsule().stroke(CobaltColor.border.opacity(0.6), lineWidth: 1))
 
                     // Continuous Record (+ chat) toggle
                     Button(action: onToggleRecord) {
-                        HStack(spacing: 4) {
-                            Image(systemName: capture.isRecording ? Symbol.Twitch.recordStop : Symbol.Twitch.record)
-                                .font(.system(size: 12, weight: .semibold))
-                            Text(capture.isRecording ? Copy.Twitch.stopRecording : Copy.Twitch.record)
-                                .font(.system(size: 12, weight: .semibold))
+                        HStack(spacing: 5) {
+                            if isSavingRecording {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: capture.isRecording ? Symbol.Twitch.recordStop : Symbol.Twitch.record)
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            Text(
+                                isSavingRecording
+                                    ? Copy.Twitch.savingDraft
+                                    : (capture.isRecording
+                                        ? TwitchClipDraftsSheet.clock(capture.recordingSeconds)
+                                        : Copy.Twitch.recordingPill)
+                            )
+                            .font(.system(size: 12, weight: .semibold, design: capture.isRecording ? .monospaced : .default))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         }
-                        .padding(.horizontal, 9)
+                        .padding(.horizontal, 10)
                         .frame(height: 30)
+                        .fixedSize(horizontal: true, vertical: false)
                         .background(
                             capture.isRecording ? TwitchClipPalette.recRed.opacity(0.22) : CobaltColor.elevated,
                             in: Capsule()
@@ -2129,6 +2178,7 @@ private struct TwitchStreamBar: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(capture.isSaving)
+                    .accessibilityLabel(capture.isRecording ? Copy.Twitch.stopRecording : Copy.Twitch.recordPlusChat)
                     .accessibilityIdentifier("twitch.record")
                 } else if canClip {
                     Button(action: onClip) {
@@ -2143,10 +2193,12 @@ private struct TwitchStreamBar: View {
                 Button(action: onOpenDrafts) {
                     HStack(spacing: 4) {
                         Image(systemName: Symbol.Twitch.drafts)
-                            .font(.system(size: 11.5, weight: .semibold))
+                            .font(.system(size: 12, weight: .semibold))
                         if totalDrafts > 0 {
                             Text("\(totalDrafts)")
                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                                 .foregroundStyle(unreadDrafts > 0 ? .white : CobaltColor.text)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
@@ -2156,8 +2208,9 @@ private struct TwitchStreamBar: View {
                                 )
                         }
                     }
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, 9)
                     .frame(height: 30)
+                    .fixedSize(horizontal: true, vertical: false)
                     .background(CobaltColor.elevated, in: Capsule())
                     .overlay(Capsule().stroke(CobaltColor.border.opacity(0.6), lineWidth: 1))
                     .foregroundStyle(CobaltColor.text)

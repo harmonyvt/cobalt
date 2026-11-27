@@ -517,6 +517,7 @@ public struct TwitchClipCaptureState: Sendable, Equatable {
     public var recordingSeconds: Double
     public var recordingChatCount: Int
     public var isSaving: Bool
+    public var savingKind: TwitchClipKind?
 
     public init(
         channel: String? = nil,
@@ -525,7 +526,8 @@ public struct TwitchClipCaptureState: Sendable, Equatable {
         isRecording: Bool = false,
         recordingSeconds: Double = 0,
         recordingChatCount: Int = 0,
-        isSaving: Bool = false
+        isSaving: Bool = false,
+        savingKind: TwitchClipKind? = nil
     ) {
         self.channel = channel
         self.bufferedSeconds = bufferedSeconds
@@ -534,6 +536,7 @@ public struct TwitchClipCaptureState: Sendable, Equatable {
         self.recordingSeconds = recordingSeconds
         self.recordingChatCount = recordingChatCount
         self.isSaving = isSaving
+        self.savingKind = savingKind
     }
 
     public static let idle = TwitchClipCaptureState()

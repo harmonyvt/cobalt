@@ -181,7 +181,9 @@ struct TwitchClipEditorView: View {
                         Text(Copy.Twitch.sendToStudio)
                             .font(CobaltType.captionSmall)
                             .fontWeight(.semibold)
+                            .lineLimit(1)
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
                     .background(TwitchClipPalette.chatPurple.opacity(0.20), in: Capsule())
@@ -207,7 +209,9 @@ struct TwitchClipEditorView: View {
                     Text(Copy.Twitch.renderVideo)
                         .font(CobaltType.captionSmall)
                         .fontWeight(.semibold)
+                        .lineLimit(1)
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
                 .background(CobaltColor.linkBlue, in: Capsule())

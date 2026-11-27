@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import CobaltKit
@@ -253,5 +254,190 @@ struct TwitchClipTests {
         #expect(loaded[0].edit.chat.look == .clearText)
         #expect(loaded[0].edit.chat.syncOffset == -0.25)
         #expect(loaded[0].totalChatGapSeconds == 4.0)
+    }
+
+    // MARK: - Passthrough MP4 Multi-Track Interleaving (Regression for AVAssetWriter Deadlock)
+
+    @Test func passthroughMP4InterleavesLongMultiTrackClipWithBFrames() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("twitch-clip-mp4-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let sps = MPEGTSDemuxerTests.sampleSPS
+        let pps = MPEGTSDemuxerTests.samplePPS
+        let asc = Data([0x11, 0x90]) // 48 kHz stereo AAC-LC
+        let aacPayload = Data([0x21, 0x10, 0x04, 0x60, 0x8C, 0x1C])
+
+        // 12 KB per video frame × 600 frames (~7.2 MB at 60 fps = 10 s) exceeds AVAssetWriter's
+        // single-track interleave buffer and would deadlock forever if video were written before audio.
+        func makeAVCC(nalHeader: UInt8, bodySize: Int) -> Data {
+            let nalLen = UInt32(1 + bodySize)
+            var out = Data(capacity: 4 + Int(nalLen))
+            out.append(UInt8((nalLen >> 24) & 0xFF))
+            out.append(UInt8((nalLen >> 16) & 0xFF))
+            out.append(UInt8((nalLen >> 8) & 0xFF))
+            out.append(UInt8(nalLen & 0xFF))
+            out.append(nalHeader)
+            out.append(Data(repeating: 0xAA, count: bodySize))
+            return out
+        }
+        let idrAVCC = makeAVCC(nalHeader: 0x65, bodySize: 12_000)
+        let sliceAVCC = makeAVCC(nalHeader: 0x41, bodySize: 12_000)
+
+        let base90k: Int64 = 900_000
+        let frameStep: Int64 = 1_500 // 60 fps in 90 kHz ticks
+        // Realistic B-frame reorder pattern (PTS >= DTS with positive composition offsets)
+        let ctsPattern: [Int64] = [3_000, 4_500, 0, 1_500]
+        var videoFrames: [DemuxedVideoFrame] = []
+        videoFrames.reserveCapacity(600)
+        for i in 0..<600 {
+            let dts = base90k + Int64(i) * frameStep
+            let pts = dts + ctsPattern[i % ctsPattern.count]
+            let isKey = (i % 120 == 0)
+            videoFrames.append(DemuxedVideoFrame(
+                avccData: isKey ? idrAVCC : sliceAVCC,
+                pts90k: pts,
+                dts90k: dts,
+                isKeyframe: isKey,
+                sps: isKey ? sps : nil,
+                pps: isKey ? pps : nil
+            ))
+        }
+
+        // 10 seconds of 48 kHz AAC (1024 samples/frame = 1920 ticks at 90 kHz)
+        var audioFrames: [DemuxedAudioFrame] = []
+        audioFrames.reserveCapacity(469)
+        for i in 0..<469 {
+            let pts = base90k + Int64(i) * 1_920
+            audioFrames.append(DemuxedAudioFrame(
+                aacData: aacPayload,
+                pts90k: pts,
+                sampleRate: 48_000,
+                channels: 2,
+                audioObjectType: 2,
+                audioSpecificConfig: asc
+            ))
+        }
+
+        let outputURL = tempDir.appendingPathComponent("interleaved-10s.mp4")
+        let size = try await TwitchClipRecorder.writePassthroughMP4(
+            videoFrames: videoFrames,
+            audioFrames: audioFrames,
+            basePTS90k: videoFrames[0].pts90k, // Intentionally pass PTS (> DTS) to verify B-frame base clamping
+            to: outputURL
+        )
+        #expect(size.w > 0 && size.h > 0)
+        #expect(FileManager.default.fileExists(atPath: outputURL.path))
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        #expect(videoTracks.count == 1)
+        #expect(audioTracks.count == 1)
+        #expect(duration >= 9.5 && duration <= 10.6)
+    }
+
+    @Test func continuousRecordingStartStopAndInstantClipClearSavingState() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("twitch-clip-rec-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let recorder = TwitchClipRecorder()
+        await recorder.reset(for: "yogscast")
+
+        let sps = MPEGTSDemuxerTests.sampleSPS
+        let pps = MPEGTSDemuxerTests.samplePPS
+        let asc = Data([0x11, 0x90])
+        let aacPayload = Data([0x21, 0x10, 0x04, 0x60, 0x8C, 0x1C])
+
+        var idr = Data([0x00, 0x00, 0x20, 0x01, 0x65])
+        idr.append(Data(repeating: 0x55, count: 0x2000))
+        var nonIdr = Data([0x00, 0x00, 0x20, 0x01, 0x41])
+        nonIdr.append(Data(repeating: 0x33, count: 0x2000))
+
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+
+        // Seed 2 seconds before starting recording
+        for i in 0..<60 {
+            let pts = Int64(i) * 3_000
+            let isKey = (i % 30 == 0)
+            let samples: [DemuxedSample] = [
+                .video(DemuxedVideoFrame(
+                    avccData: isKey ? idr : nonIdr,
+                    pts90k: pts,
+                    dts90k: pts,
+                    isKeyframe: isKey,
+                    sps: isKey ? sps : nil,
+                    pps: isKey ? pps : nil
+                )),
+                .audio(DemuxedAudioFrame(
+                    aacData: aacPayload,
+                    pts90k: pts,
+                    sampleRate: 48_000,
+                    channels: 2,
+                    audioObjectType: 2,
+                    audioSpecificConfig: asc
+                )),
+            ]
+            await recorder.ingestSamples(samples, now: base.addingTimeInterval(Double(i) / 30.0))
+        }
+
+        try await recorder.startRecording(channel: "yogscast", destinationDir: tempDir, now: base.addingTimeInterval(2.0))
+        let midState = await recorder.currentState(now: base.addingTimeInterval(2.0))
+        #expect(midState.isRecording == true)
+        #expect(midState.isSaving == false)
+
+        // Feed 6 more seconds during continuous recording
+        for i in 60..<240 {
+            let pts = Int64(i) * 3_000
+            let isKey = (i % 30 == 0)
+            let samples: [DemuxedSample] = [
+                .video(DemuxedVideoFrame(
+                    avccData: isKey ? idr : nonIdr,
+                    pts90k: pts,
+                    dts90k: pts,
+                    isKeyframe: isKey,
+                    sps: isKey ? sps : nil,
+                    pps: isKey ? pps : nil
+                )),
+                .audio(DemuxedAudioFrame(
+                    aacData: aacPayload,
+                    pts90k: pts,
+                    sampleRate: 48_000,
+                    channels: 2,
+                    audioObjectType: 2,
+                    audioSpecificConfig: asc
+                )),
+            ]
+            await recorder.ingestSamples(samples, now: base.addingTimeInterval(Double(i) / 30.0))
+        }
+
+        let recResult = try await recorder.stopRecording(title: "yogscast rec", now: base.addingTimeInterval(8.0))
+        #expect(recResult.draft.kind == .recording)
+        #expect(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent(recResult.draft.videoFileName).path))
+        #expect(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent(recResult.draft.chatFileName).path))
+
+        let afterRec = await recorder.currentState(now: base.addingTimeInterval(8.1))
+        #expect(afterRec.isRecording == false)
+        #expect(afterRec.isSaving == false)
+        #expect(afterRec.savingKind == nil)
+
+        // Instant clip right after recording should also succeed and clear isSaving
+        let clipResult = try await recorder.saveInstantClip(
+            requestedSeconds: 30,
+            channel: "yogscast",
+            title: "yogscast instant",
+            destinationDir: tempDir,
+            now: base.addingTimeInterval(8.2)
+        )
+        #expect(clipResult.draft.kind == .clip)
+        #expect(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent(clipResult.draft.videoFileName).path))
+
+        let afterClip = await recorder.currentState(now: base.addingTimeInterval(8.3))
+        #expect(afterClip.isSaving == false)
+        #expect(afterClip.savingKind == nil)
     }
 }
