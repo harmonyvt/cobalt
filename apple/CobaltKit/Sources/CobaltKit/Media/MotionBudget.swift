@@ -15,6 +15,9 @@ import UIKit
 @MainActor
 public final class MotionBudget {
     public static let shared = MotionBudget(limit: MotionBudget.deviceLimit)
+    /// Dedicated budget for GPU-only animated 7TV name paint shaders so they pause in Low Power Mode without taking
+    /// decode slots away from animated WebP emotes.
+    public static let shader = MotionBudget(limit: 24)
 
     /// 10 on iPhone, 16 on iPad and Mac so busy dual-stream chats stay smooth during scrolls and rotations.
     public static var deviceLimit: Int {
@@ -41,9 +44,9 @@ public final class MotionBudget {
         guard watchPower else { return }
         observer = NotificationCenter.default.addObserver(
             forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main
-        ) { @Sendable _ in
+        ) { @Sendable [weak self] _ in
             let low = ProcessInfo.processInfo.isLowPowerModeEnabled
-            Task { @MainActor in MotionBudget.shared.setLowPower(low) }
+            Task { @MainActor [weak self] in self?.setLowPower(low) }
         }
     }
 

@@ -143,8 +143,13 @@ struct TwitchChatRow: View, Equatable {
         return Array(out.prefix(4))
     }
 
+    private var fallbackNameRGBA: SevenTvRGBA {
+        TwitchChatPalette.rgbaValues(line.color, login: line.login, dark: scheme == .dark, avoiding: avoidAccentHues)
+    }
+
     private var fallbackNameColor: Color {
-        TwitchChatPalette.color(line.color, login: line.login, dark: scheme == .dark, avoiding: avoidAccentHues)
+        let c = fallbackNameRGBA
+        return Color(.sRGB, red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
     }
 
     private var nameStyle: AnyShapeStyle {
@@ -187,24 +192,17 @@ struct TwitchChatRow: View, Equatable {
     }
 
     @ViewBuilder private var nameView: some View {
-        let label = Text(line.displayName).font(TwitchChatMetrics.font.weight(.bold))
-        if let paint, paint.kind == .image, let imageURL = paint.imageURL {
-            let base = paint.color.map { TwitchChatPalette.rgba($0) } ?? fallbackNameColor
-            label
-                .foregroundStyle(.clear)
-                .overlay {
-                    base
-                        .overlay { EmotePicture(url: imageURL, animated: true, side: 36, fill: true) }
-                        .clipped()
-                }
-                .mask { label }
-                .sevenTvShadows(paint.shadows)
-        } else if let paint, let style = TwitchChatPalette.style(for: paint) {
-            label
-                .foregroundStyle(style)
-                .sevenTvShadows(paint.shadows)
+        if let paint {
+            SevenTvPaintedLabel(
+                text: line.displayName,
+                font: TwitchChatMetrics.font.weight(.bold),
+                paint: paint,
+                fallback: fallbackNameRGBA
+            )
         } else {
-            label.foregroundStyle(fallbackNameColor)
+            Text(line.displayName)
+                .font(TwitchChatMetrics.font.weight(.bold))
+                .foregroundStyle(fallbackNameColor)
         }
     }
 
@@ -421,7 +419,7 @@ enum TwitchChatPalette {
         return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
     }
 
-    static func color(_ rgb: UInt32?, login: String, dark: Bool, avoiding accentHues: [Double] = []) -> Color {
+    static func rgbaValues(_ rgb: UInt32?, login: String, dark: Bool, avoiding accentHues: [Double] = []) -> SevenTvRGBA {
         let raw = rgb ?? TwitchUsernameColorShifter.defaultTwitchColor(for: login)
         let value = accentHues.isEmpty
             ? raw
@@ -438,7 +436,12 @@ enum TwitchChatPalette {
             let t = 0.4
             r *= 1 - t; g *= 1 - t; b *= 1 - t
         }
-        return Color(.sRGB, red: r, green: g, blue: b, opacity: 1)
+        return SevenTvRGBA(r: Float(r), g: Float(g), b: Float(b), a: 1)
+    }
+
+    static func color(_ rgb: UInt32?, login: String, dark: Bool, avoiding accentHues: [Double] = []) -> Color {
+        let c = rgbaValues(rgb, login: login, dark: dark, avoiding: accentHues)
+        return Color(.sRGB, red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
     }
 
     static func rgba(_ v: UInt32) -> Color {
@@ -447,69 +450,35 @@ enum TwitchChatPalette {
             blue: Double((v >> 8) & 0xFF) / 255, opacity: max(0.35, Double(v & 0xFF) / 255))
     }
 
-    static func shadowColor(_ v: UInt32) -> Color {
-        Color(
-            .sRGB, red: Double((v >> 24) & 0xFF) / 255, green: Double((v >> 16) & 0xFF) / 255,
-            blue: Double((v >> 8) & 0xFF) / 255, opacity: Double(v & 0xFF) / 255)
-    }
-
-    /// A 7TV paint as a fill for the name.
+    /// A 7TV paint as a SwiftUI ShapeStyle (used for `/me` action message text; usernames use `SevenTvPaintedLabel`).
     static func style(for paint: SevenTvPaint) -> AnyShapeStyle? {
-        let stops = paint.resolvedStops.map { Gradient.Stop(color: rgba($0.rgba), location: $0.at) }
-        switch paint.kind {
+        let primary = paint.resolvedLayers.last(where: { $0.kind != .image }) ?? paint.resolvedLayers.last
+        let kind = primary?.kind ?? paint.kind
+        let angle = primary?.angle ?? paint.angle
+        let shape = primary?.shape ?? paint.shape
+        let rawStops = primary.map { SevenTvPaint.resolveStops($0.stops, repeats: $0.repeats) } ?? paint.resolvedStops
+        let stops = rawStops.map { Gradient.Stop(color: rgba($0.rgba), location: $0.at) }
+        switch kind {
         case .plain:
-            guard let c = paint.color else { return nil }
+            guard let c = primary?.color ?? paint.color else { return nil }
             return AnyShapeStyle(rgba(c))
         case .linear:
-            guard !stops.isEmpty else { return paint.color.map { AnyShapeStyle(rgba($0)) } }
+            guard !stops.isEmpty else { return (primary?.color ?? paint.color).map { AnyShapeStyle(rgba($0)) } }
             // CSS angles: 0 points up, 90 right
-            let a = paint.angle * .pi / 180
+            let a = angle * .pi / 180
             let dx = sin(a) / 2
             let dy = -cos(a) / 2
             return AnyShapeStyle(LinearGradient(
                 stops: stops, startPoint: UnitPoint(x: 0.5 - dx, y: 0.5 - dy), endPoint: UnitPoint(x: 0.5 + dx, y: 0.5 + dy)))
         case .radial:
-            guard !stops.isEmpty else { return paint.color.map { AnyShapeStyle(rgba($0)) } }
+            guard !stops.isEmpty else { return (primary?.color ?? paint.color).map { AnyShapeStyle(rgba($0)) } }
+            if shape == .circle {
+                return AnyShapeStyle(RadialGradient(stops: stops, center: .center, startRadius: 0, endRadius: 48))
+            }
             return AnyShapeStyle(EllipticalGradient(stops: stops, center: .center, startRadiusFraction: 0, endRadiusFraction: 0.5))
         case .image:
-            return paint.color.map { AnyShapeStyle(rgba($0)) }
+            return (primary?.color ?? paint.color).map { AnyShapeStyle(rgba($0)) }
         }
-    }
-}
-
-private struct SevenTvShadows: ViewModifier {
-    let shadows: [SevenTvPaint.Shadow]
-
-    func body(content: Content) -> some View {
-        let s0 = shadows.count > 0 ? shadows[0] : nil
-        let s1 = shadows.count > 1 ? shadows[1] : nil
-        let s2 = shadows.count > 2 ? shadows[2] : nil
-        content
-            .modifier(SingleShadow(shadow: s0))
-            .modifier(SingleShadow(shadow: s1))
-            .modifier(SingleShadow(shadow: s2))
-    }
-
-    private struct SingleShadow: ViewModifier {
-        let shadow: SevenTvPaint.Shadow?
-
-        func body(content: Content) -> some View {
-            if let shadow {
-                content.shadow(
-                    color: TwitchChatPalette.shadowColor(shadow.rgba),
-                    radius: max(0.5, min(shadow.radius, 10) * 0.6),
-                    x: max(-4, min(4, shadow.xOffset)),
-                    y: max(-4, min(4, shadow.yOffset)))
-            } else {
-                content
-            }
-        }
-    }
-}
-
-private extension View {
-    func sevenTvShadows(_ shadows: [SevenTvPaint.Shadow]) -> some View {
-        modifier(SevenTvShadows(shadows: shadows))
     }
 }
 
