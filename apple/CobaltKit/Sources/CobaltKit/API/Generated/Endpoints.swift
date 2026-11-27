@@ -186,6 +186,31 @@ enum Endpoints {
         APIEndpoint(op: "library.visibility.migrate", method: "POST", path: "/library/visibility/migrate", auth: .keyOrService)
     }
 
+    /// `GET /audio/settings` (op `audio.settings.get`, auth key_or_service): Read audio loudness leveling settings and library counts (GET /audio/settings).
+    static func audioSettingsGet() -> APIEndpoint<AudioSettingsGetResponse> {
+        APIEndpoint(op: "audio.settings.get", method: "GET", path: "/audio/settings", auth: .keyOrService)
+    }
+
+    /// `PUT /audio/settings` (op `audio.settings.set`, auth key_or_service): Update audio loudness leveling settings (PUT /audio/settings).
+    static func audioSettingsSet() -> APIEndpoint<AudioSettingsSetResponse> {
+        APIEndpoint(op: "audio.settings.set", method: "PUT", path: "/audio/settings", auth: .keyOrService)
+    }
+
+    /// `POST /library/items/:id/audio/level` (op `library.item.audio.level`, auth key_or_service): Queue EBU R128 loudness leveling for a library video (POST /library/items/:id/audio/level).
+    static func libraryItemAudioLevel(id: String) -> APIEndpoint<LibraryItemAudioLevelResponse> {
+        APIEndpoint(op: "library.item.audio.level", method: "POST", path: "/library/items/\(HTTPCobaltClient.encode(id))/audio/level", auth: .keyOrService)
+    }
+
+    /// `DELETE /library/items/:id/audio/level` (op `library.item.audio.remove`, auth key_or_service): Delete the leveled audio alternate for a library video (DELETE /library/items/:id/audio/level).
+    static func libraryItemAudioRemove(id: String) -> APIEndpoint<LibraryItemAudioRemoveResponse> {
+        APIEndpoint(op: "library.item.audio.remove", method: "DELETE", path: "/library/items/\(HTTPCobaltClient.encode(id))/audio/level", auth: .keyOrService)
+    }
+
+    /// `POST /audio/backfill` (op `audio.backfill`, auth key_or_service): Queue a background backfill sweep of unmeasured/unleveled videos (POST /audio/backfill).
+    static func audioBackfill() -> APIEndpoint<AudioBackfillResponse> {
+        APIEndpoint(op: "audio.backfill", method: "POST", path: "/audio/backfill", auth: .keyOrService)
+    }
+
     /// `GET /chat/threads` (op `chat.threads.list`, auth key): The chat threads.
     static func chatThreadsList() -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "chat.threads.list", method: "GET", path: "/chat/threads", auth: .key)
@@ -1202,6 +1227,61 @@ struct LibraryIndexResponse: Decodable, Sendable {
     var usage: LibraryIndexResponseUsage?
     /// the cursor of the next page, null on the last
     var next: String?
+}
+
+struct AudioSettingsGetResponseCounts: Decodable, Sendable {
+    var totalVideos: Int
+    var measured: Int
+    var leveled: Int
+    var needsLevel: Int
+    var rendering: Int
+    var failed: Int
+}
+
+struct AudioSettingsGetResponse: Decodable, Sendable {
+    var status: String
+    var mode: String
+    var defaultLink: String
+    var updatedAt: Int
+    var counts: AudioSettingsGetResponseCounts
+}
+
+struct AudioSettingsSetResponseCounts: Decodable, Sendable {
+    var totalVideos: Int
+    var measured: Int
+    var leveled: Int
+    var needsLevel: Int
+    var rendering: Int
+    var failed: Int
+}
+
+struct AudioSettingsSetResponse: Decodable, Sendable {
+    var status: String
+    var mode: String
+    var defaultLink: String
+    var updatedAt: Int
+    var counts: AudioSettingsSetResponseCounts
+}
+
+struct LibraryItemAudioLevelResponse: Decodable, Sendable {
+    var status: String
+    var state: String
+    var queued: Bool
+}
+
+struct LibraryItemAudioRemoveResponse: Decodable, Sendable {
+    var status: String
+    var removed: Bool
+    var altId: String?
+    var bytes: Int
+}
+
+struct AudioBackfillResponse: Decodable, Sendable {
+    var status: String
+    var queuedMeasure: Int
+    var queuedLevel: Int
+    var eligible: Int
+    var mode: String
 }
 
 struct ChatShareGetResponseShare: Decodable, Sendable {

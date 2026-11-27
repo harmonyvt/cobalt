@@ -11,6 +11,7 @@ import { liveSetRow, pageHtml, parseItems, privateLiveSet, rowsById } from "./sh
 import { notHiddenClause } from "./hidden-store";
 import { parseRange } from "./studio";
 import { ITEM_COLUMNS, effectiveVisibility, extOf, type MediaRow } from "./visibility";
+import { findAudioAlt, wantsNormalAudio, withNormalAudioQuery, withoutAudioQuery } from "./audio-loudness";
 
 // What streaming needs of an R2 bucket (the real binding has all of it).
 export interface ByteBucket {
@@ -93,21 +94,41 @@ async function privatePage(d: ShareDeps, request: Request, key: string): Promise
     if (!link) return NOT_FOUND();
     const share = withSlash(d.shareBaseUrl);
     const media = withSlash(d.mediaBaseUrl);
-    const pageUrl = `${share}p/${key}`;
+    const basePageUrl = `${share}p/${key}`;
+    const wantsNormal = wantsNormalAudio(new URL(request.url));
     let html: string;
     if (link.kind === "item") {
         const row = await privateItem(d.db, link.target_id);
         if (!row) return NOT_FOUND();
-        const fileUrl = privateFileUrl(share, key, 1, row);
+        const baseFileUrl = privateFileUrl(share, key, 1, row);
+        const type = typeOf(row, row.r2_key);
+        const audioAlt = type.startsWith("video/") ? await findAudioAlt(d.db, row.id) : null;
+        const useNormal = wantsNormal && Boolean(audioAlt);
+        const fileUrl = useNormal ? withNormalAudioQuery(baseFileUrl) : baseFileUrl;
+        const pageUrl = useNormal ? withNormalAudioQuery(basePageUrl) : basePageUrl;
+        const audioToggle = audioAlt
+            ? {
+                  active: (useNormal ? "normal" : "original") as "normal" | "original",
+                  toggleUrl: useNormal ? withoutAudioQuery(basePageUrl) : withNormalAudioQuery(basePageUrl),
+              }
+            : null;
         const poster = row.poster && row.poster.startsWith(media) ? privatePosterUrl(share, key, 1) : null;
         // the caption the file got while it was public, if any (a private file is never sent to the model from here)
         const caption = (row.custom_title ?? "").trim() !== "" ? null : await captionOf(d.db, itemSubject(row.id));
-        html = singlePageHtml({ row, type: typeOf(row, row.r2_key), fileUrl, poster, pageUrl, caption });
+        html = singlePageHtml({ row, type, fileUrl, poster, pageUrl, caption, audioToggle });
     } else {
         const set = await liveSetRow(d.db, link.target_id);
-        const s = set ? await privateLiveSet(d, set, key) : null;
+        const s = set ? await privateLiveSet(d, set, key, wantsNormal) : null;
         if (!s) return NOT_FOUND();
-        html = pageHtml(d, s, /discordbot/i.test(request.headers.get("user-agent") ?? ""), pageUrl);
+        const useNormal = wantsNormal && Boolean(s.hasAudioAlt);
+        const pageUrl = useNormal ? withNormalAudioQuery(basePageUrl) : basePageUrl;
+        const audioToggle = s.hasAudioAlt
+            ? {
+                  active: (useNormal ? "normal" : "original") as "normal" | "original",
+                  toggleUrl: useNormal ? withoutAudioQuery(basePageUrl) : withNormalAudioQuery(basePageUrl),
+              }
+            : null;
+        html = pageHtml(d, s, /discordbot/i.test(request.headers.get("user-agent") ?? ""), pageUrl, audioToggle);
     }
     if (request.method === "GET") await noteOpened(d.db, key, (d.now ?? Date.now)());
     return new Response(request.method === "HEAD" ? null : html, {
@@ -126,10 +147,15 @@ async function privateFile(d: ShareDeps, request: Request, key: string, n: numbe
         return streamObject(d.media, row.poster.slice(media.length), request, "image/jpeg");
     }
     if (ext.toLowerCase() !== fileExt(row)) return NOT_FOUND();
+    let target = row;
+    if (wantsNormalAudio(new URL(request.url)) && typeOf(row, row.r2_key).startsWith("video/")) {
+        const alt = await findAudioAlt(d.db, row.id);
+        if (alt) target = alt;
+    }
     // the bytes live where the row says: a webp never switched private in the public bucket, the rest in the private one
-    const bucket = row.bucket === "media" ? d.media : d.originals;
+    const bucket = target.bucket === "media" ? d.media : d.originals;
     if (!bucket) return NOT_FOUND();
-    return streamObject(bucket, row.r2_key, request, typeOf(row, row.r2_key));
+    return streamObject(bucket, target.r2_key, request, typeOf(target, target.r2_key));
 }
 
 // One stored object, Range aware (a single `bytes=` range: 206; unsatisfiable: 416), never cached. The size comes from

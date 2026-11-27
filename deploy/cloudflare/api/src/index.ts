@@ -187,6 +187,7 @@ export class CobaltContainer extends Container<Env> {
                     path.startsWith("/poster") ||
                     path.startsWith("/about") ||
                     path.startsWith("/safety") ||
+                    path.startsWith("/audio/") ||
                     path.startsWith("/emote-fit") ||
                     (path.startsWith("/fetch/") && path.endsWith("/file"));
                 // A clip's own signal sits past the worker's SAFETY_CALL_MS. Stills and /about stay on 300 s.
@@ -681,6 +682,19 @@ async function runScheduled(
                 console.error("[safety] kick failed", e instanceof Error ? e.name : "error");
             }
             lap("safety_kick");
+            // EBU R128 loudness measurement & auto-leveling (v10.1): queues recent unmeasured videos and pending auto-level renders.
+            try {
+                const res = await getContainer(env.COBALT, "main").fetch(
+                    new Request("https://do.internal/audio/kick?limit=25", { method: "POST", headers: { [KEY_ID_HEADER]: "cron:audio" } }),
+                );
+                const body = await res.text().catch(() => "");
+                if (!res.ok || (!body.includes('"queued_measure":0') || !body.includes('"queued_level":0'))) {
+                    console.log("[audio] kick", res.status, body.slice(0, 200));
+                }
+            } catch (e) {
+                console.error("[audio] kick failed", e instanceof Error ? e.name : "error");
+            }
+            lap("audio_kick");
             if (env.AI) {
                 try {
                     const r = await rateSafety({ db: env.DB, originals: env.ORIGINALS, ai: env.AI, now: () => Date.now(), cfg: safetyCfg });

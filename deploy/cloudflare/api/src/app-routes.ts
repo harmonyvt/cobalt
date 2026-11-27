@@ -23,6 +23,15 @@
 // not); the fork's Worker bundles this one field.
 import { SHARE_SET_MAX } from "./share-sets";
 import { deleteAboutObjects } from "./about-store";
+import {
+    AUDIO_JOIN_COLUMNS,
+    audioSummariesForFiles,
+    buildAudioSummaries,
+    isVideoContentType,
+    removeAudioAlt,
+    type AudioJoinedRow,
+    type AudioSummary,
+} from "./audio-loudness";
 import { chatVideoReady } from "./chat-video";
 import { postFrameReady } from "./post-frame";
 import { EDIT_MAX_CLIPS, EDIT_MAX_PROJECTS, EDIT_MAX_SECONDS, EDIT_OVERLAY_TRACKS, EDIT_TIMELINE_VERSION } from "../../editor/helper/timeline.js";
@@ -381,6 +390,8 @@ export async function capabilities(
                 // /booru/*: Danbooru search with this key's level (general or sensitive; never questionable or explicit), themes and
                 // blacklist (APP-API-CONTRACT.md section 72); settings writes answer 503 until migration 0046 is applied
                 booru: true,
+                // EBU R128 loudness measurement & opt-in `?audio=normal` leveling (v10.1); routes answer 503 until migration 0047 is applied
+                audio_leveling: true,
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
                 edit_live_push: editor === true && livePush === true,
                 // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)
@@ -1136,6 +1147,7 @@ export async function assemblePosts(
     // (null) asked for below, where they always were
     let priv: Map<string, string> | null = null;
     let hiddenOf: Map<string, HiddenRow> | null = null;
+    let audioOf: Map<string, AudioSummary> | null = null;
     if (page.length > 0) {
         const marks = placeholders(page.length);
         const binds = page.map((k) => k.post_key);
@@ -1157,12 +1169,22 @@ export async function assemblePosts(
         const TOMB_COLUMNS = "id, name, content_type, bytes, width, height, duration, created_at, poster";
 
         // Everything about these posts in ONE round trip: files, sessions, titles, and what used to wait for the files
-        // (the legacy tombs, the private links) or came after them (the hidden rows). No batch, or a batch that failed
-        // (a database without the private_links table fails it): one by one below, with the handling each always had.
+        // (the legacy tombs, the private links, the audio loudness rows) or came after them (the hidden rows). No batch,
+        // or a batch that failed (a database without the private_links or media_audio table fails it): one by one below,
+        // with the handling each always had.
         const ready = await hiddenReady(db);
         const tombsAt = v2 ? -1 : 3;
         const privAt = d.shareBaseUrl ? (v2 ? 3 : 4) : -1;
         const hiddenAt = ready ? 3 + (v2 ? 0 : 1) + (d.shareBaseUrl ? 1 : 0) : -1;
+        const audioAt = 3 + (v2 ? 0 : 1) + (d.shareBaseUrl ? 1 : 0) + (ready ? 1 : 0);
+        const audioStmt = db
+            .prepare(
+                `SELECT ${AUDIO_JOIN_COLUMNS}
+                   FROM media_audio a
+                   LEFT JOIN media_items alt ON alt.id = a.alt_item_id AND alt.deleted_at IS NULL
+                  WHERE a.item_id IN (SELECT id FROM ${pageFiles})`,
+            )
+            .bind(...binds);
         const together = await readTogether(db, () => [
             filesStmt,
             sessionsStmt,
@@ -1179,6 +1201,7 @@ export async function assemblePosts(
                   ]),
             ...(d.shareBaseUrl ? [liveLinksInStmt(db, "item", `SELECT id FROM ${pageFiles}`, binds)] : []),
             ...(ready ? [hiddenRowsStmt(db, binds)] : []),
+            audioStmt,
         ]);
         if (together) {
             files = together[0] as unknown as FileRow[];
@@ -1192,6 +1215,7 @@ export async function assemblePosts(
             }
             hiddenOf = new Map();
             if (hiddenAt >= 0) for (const r of together[hiddenAt] as unknown as HiddenRow[]) hiddenOf.set(r.post_key, r);
+            audioOf = buildAudioSummaries(together[audioAt] as unknown as AudioJoinedRow[], d.mediaBaseUrl);
         } else {
             files = (await filesStmt.all<FileRow>()).results;
             sessions = (await sessionsStmt.all<SessionRowLite>()).results;
@@ -1214,7 +1238,9 @@ export async function assemblePosts(
     priv ??= await privateUrlsOf(d, files.map((f) => f.id));
     // section 37.2: whether the post is hidden, and by whom (a held or exempt post is not hidden)
     hiddenOf ??= await hiddenRows(db, page.map((k) => k.post_key));
-    const posts = shapeLibraryPosts(d, page, { files, sessions, titles, tombs, priv, hiddenOf }, { v2, v3, now });
+    // v10.1: EBU R128 loudness & leveled alt metadata per file (empty map before migration 0047)
+    audioOf ??= files.length > 0 ? await audioSummariesForFiles(db, files, d.mediaBaseUrl) : new Map();
+    const posts = shapeLibraryPosts(d, page, { files, sessions, titles, tombs, priv, hiddenOf, audioOf }, { v2, v3, now });
     return { posts, files };
 }
 
@@ -1230,6 +1256,7 @@ export function shapeLibraryPosts(
         tombs: Map<string, Tomb>;
         priv: Map<string, string>;
         hiddenOf: Map<string, HiddenRow>;
+        audioOf?: Map<string, AudioSummary>;
     },
     o: { v2: boolean; v3: boolean; now: number },
 ): any[] {
@@ -1297,10 +1324,12 @@ export function shapeLibraryPosts(
     // a file with its own private link also carries its bytes' address under it (36.3), for the apps' "direct link"
     const keyOf = new Map(rows.files.map((f) => [f.id, f.r2_key]));
     for (const p of posts)
-        for (const f of p.files as { id: string; private_url?: string | null; private_file_url?: string }[]) {
+        for (const f of p.files as { id: string; private_url?: string | null; private_file_url?: string; audio?: AudioSummary }[]) {
             f.private_url = rows.priv.get(f.id) ?? null;
             const key = keyOf.get(f.id);
             if (f.private_url && key) f.private_file_url = `${f.private_url}/1.${extOf(key)}`;
+            const audio = rows.audioOf?.get(f.id);
+            if (audio) f.audio = audio;
         }
     for (const p of posts as Record<string, unknown>[]) {
         const h = rows.hiddenOf.get(p.id as string);
@@ -1899,6 +1928,7 @@ export async function libraryPostDelete(d: AppDeps, id: string): Promise<StudioR
     // throws):
     await background(d.waitUntil, async () => {
         // the "what it's about" frames and sound cut from each deleted file (section 34.2), best effort
+        // (media_audio state is cleaned automatically by the media_audio_cleanup_deleted trigger on media_items)
         for (const f of marked) await deleteAboutObjects(d.originals, f.id);
 
         // 2b. the posters of the rows just deleted (section 13): each object goes unless a live row
@@ -2066,15 +2096,35 @@ export async function libraryPostersBackfill(d: AppDeps, limit?: number): Promis
 // caller answers 502 and a retry finishes it). Throws on a storage or D1 failure.
 // The poster, the edge copy and the probe's objects are what no answer reports (each logs its own failure and never
 // throws): they do not hold the answer where the request can keep work alive (waitUntil), and are awaited where not.
-async function removeFile(d: AppDeps, f: FileRow): Promise<{ bytes: number }> {
+const ALT_ITEM_COLUMNS = ITEM_COLUMNS.split(", ")
+    .map((c) => `m.${c}`)
+    .join(", ");
+
+async function removeFile(d: AppDeps, f: FileRow, prefetchedAudioAlt?: MediaRow | null): Promise<{ bytes: number }> {
     await (f.bucket === "media" ? d.media : d.originals).delete(f.r2_key);
     if (f.public_key) await d.media.delete(f.public_key);
-    await d.db.prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL").bind(d.now(), f.id).run();
+    const now = d.now();
+    await d.db.prepare("UPDATE media_items SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL").bind(now, f.id).run();
     await background(d.waitUntil, async () => {
         if (f.poster) await releasePoster(d.db, d.media, f.poster);
         if (f.url) await purgeUrls(d, [f.url]);
         // the "what it's about" frames and sound cut from it (section 34.2); the row moves to the next lead on the next sync
         await deleteAboutObjects(d.originals, f.id);
+        // v10.1: remove owned audio_level alt when deleting a parent video (media_audio row itself is cleaned by trigger)
+        if (prefetchedAudioAlt !== undefined) {
+            if (prefetchedAudioAlt !== null) {
+                await removeAudioAlt(
+                    { db: d.db, originals: d.originals, media: d.media, mediaBaseUrl: d.mediaBaseUrl, now: d.now, purge: d.purge },
+                    f.id,
+                    prefetchedAudioAlt,
+                ).catch((e) => console.error("[audio] removeFile alt cleanup failed", f.id, String(e)));
+            }
+        } else if (f.role !== "alt" && isVideoContentType(f.content_type)) {
+            await removeAudioAlt(
+                { db: d.db, originals: d.originals, media: d.media, mediaBaseUrl: d.mediaBaseUrl, now: d.now, purge: d.purge },
+                f.id,
+            ).catch((e) => console.error("[audio] removeFile alt cleanup failed", f.id, String(e)));
+        }
     });
     return { bytes: typeof f.bytes === "number" ? f.bytes : 0 };
 }
@@ -2085,9 +2135,11 @@ export async function libraryItemDelete(d: AppDeps, id: string): Promise<StudioR
     let row: FileRow | null;
     // how many other live items its post has; null = not asked yet
     let others: number | null = null;
+    // any live audio_level alt owned by this file (undefined = not checked in batch)
+    let audioAlt: MediaRow | null | undefined = undefined;
     try {
-        // The file and (for an item) how many other items its post has, in one round trip: the count names the file by
-        // the same lookup instead of waiting for its row. No batch: the file alone, and the count below as before.
+        // The file, how many other items its post has, and any owned audio_level alt, in one round trip.
+        // No batch (or pre-0047 DB without media_audio): the file alone, and the count below as before.
         const together = await readTogether(d.db, () => [
             d.db.prepare(FILE_BY_ID).bind(id),
             d.db
@@ -2096,10 +2148,22 @@ export async function libraryItemDelete(d: AppDeps, id: string): Promise<StudioR
                       WHERE m.deleted_at IS NULL AND m.role = 'item' AND m.id <> a.id AND ${POST_KEY_SQL} = a.post_key`,
                 )
                 .bind(id),
+            d.db
+                .prepare(
+                    `SELECT ${ALT_ITEM_COLUMNS} FROM media_items m
+                      WHERE m.deleted_at IS NULL AND m.role = 'alt'
+                        AND m.id IN (
+                            SELECT a.alt_item_id FROM media_audio a JOIN (${FILE_BY_ID}) f ON a.item_id = f.id
+                             WHERE a.alt_item_id IS NOT NULL
+                        )
+                      LIMIT 1`,
+                )
+                .bind(id),
         ]);
         if (together) {
             row = (together[0]![0] as unknown as FileRow | undefined) ?? null;
             others = Number((together[1]![0] as { n: number } | undefined)?.n ?? 0);
+            audioAlt = (together[2]![0] as unknown as MediaRow | undefined) ?? null;
         } else {
             row = await getFile(d.db, id);
         }
@@ -2128,7 +2192,7 @@ export async function libraryItemDelete(d: AppDeps, id: string): Promise<StudioR
     }
     let deleted: { bytes: number };
     try {
-        deleted = await removeFile(d, row);
+        deleted = await removeFile(d, row, audioAlt);
     } catch (e) {
         console.error("[library] item delete failed", row.id, String(e));
         return err(502, "error.library.storage");

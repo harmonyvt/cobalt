@@ -47,10 +47,26 @@ struct LibraryMenuItems: View {
             ) { controller.copy($0, form: $1) }
         }
         if item.kind != .photo, let url = controller.videoLink(item) {
-            CopyLinkMenuItems(
-                url: url, capabilities: controller.model.capabilities, name: Copy.LinkPair.videoLink,
-                single: Copy.Library2.copyVideoLink
-            ) { controller.copy($0, form: $1) }
+            if controller.model.capabilities.audioLeveling, let audio = item.primaryAudio, audio.isLeveled {
+                let prefersLeveled = controller.model.audioLeveling.prefersLeveledLink(for: audio)
+                CopyLinkMenuItems(
+                    url: url,
+                    capabilities: controller.model.capabilities,
+                    name: prefersLeveled ? "\(Copy.LinkPair.videoLink) (leveled)" : Copy.LinkPair.videoLink,
+                    single: prefersLeveled ? "Copy video link (leveled)" : Copy.Library2.copyVideoLink
+                ) { _, form in controller.copyVideoLink(item, form: form, useLeveled: prefersLeveled) }
+                Button(
+                    prefersLeveled ? "Copy original link" : "Copy leveled link (?audio=normal)",
+                    systemImage: prefersLeveled ? Symbol.Media.copyLink : "waveform"
+                ) {
+                    controller.copyVideoLink(item, form: .share, useLeveled: !prefersLeveled)
+                }
+            } else {
+                CopyLinkMenuItems(
+                    url: url, capabilities: controller.model.capabilities, name: Copy.LinkPair.videoLink,
+                    single: Copy.Library2.copyVideoLink
+                ) { controller.copy($0, form: $1) }
+            }
         }
         // the file, its share link or its direct link (a submenu when there is more than one)
         if let targets = controller.shareTargets(item) {
@@ -87,6 +103,17 @@ struct LibraryMenuItems: View {
         }
         if let made = controller.model.emoteTarget(item: item) {
             Button(Copy.EmoteEditor.makeAnEmote, systemImage: Symbol.EmoteEditor.make) { controller.makingEmote = made }
+        }
+        if controller.model.capabilities.audioLeveling, !row.isHidden, item.primaryAudioFileID != nil {
+            if item.primaryAudio?.isLeveled == true {
+                Button("Remove Leveled Copy", systemImage: "waveform.slash", role: .destructive) {
+                    controller.removeItemAudioLevel(item)
+                }
+            } else if item.primaryAudio?.isRendering != true, item.primaryAudio?.isSilent != true {
+                Button("Level Audio", systemImage: "waveform") {
+                    controller.levelItemAudio(item)
+                }
+            }
         }
         OfflineMenuItems(item: item, controller: controller, askRemove: askRemove)
         ShowInFilesButton(model: controller.model, item: item)

@@ -169,6 +169,13 @@ import {
     buildSafetyAudioArgs,
     prepDetail,
     parseMeanVolume,
+    AUDIO_LEVEL_TIMEOUT_MS,
+    AUDIO_MEASURE_TIMEOUT_MS,
+    AUDIO_SILENCE_LUFS,
+    buildLoudnormLevelArgs,
+    buildLoudnormMeasureArgs,
+    parseAudioTarget,
+    parseLoudnormStats,
     checkPublicUrl,
     directHeadOk,
     filenameFromUrl,
@@ -1358,6 +1365,8 @@ export function createHelper(opts = {}) {
 
             /** @type {string | null} */
             let audio = null;
+            /** @type {{ integrated_lufs: number, true_peak_dbtp: number, lra_lu: number, threshold_lufs: number, offset_db: number } | null} */
+            let loudness = null;
             if (info.hasAudio) {
                 const output = path.join(dir, "audio.mp3");
                 const r = await runFfmpegCapture(buildAboutAudioArgs({ input, output }), deadline - Date.now());
@@ -1365,6 +1374,23 @@ export function createHelper(opts = {}) {
                 const size = (await stat(output).catch(() => null))?.size ?? 0;
                 // silent (or no measurement): no sound worth transcribing
                 if (r.code === 0 && size > 0 && mean !== null && mean >= ABOUT_SILENCE_DB) audio = (await readFile(output)).toString("base64");
+                // Piggyback EBU R128 Pass 1 loudness measurement while `input` is already on disk (zero extra R2 read).
+                const leftForLoudness = deadline - Date.now();
+                if (leftForLoudness >= 2000) {
+                    const lr = await runFfmpegCapture(buildLoudnormMeasureArgs({ input }), Math.min(leftForLoudness, AUDIO_MEASURE_TIMEOUT_MS));
+                    const stats = lr.code === 0 ? parseLoudnormStats(lr.stderr) : null;
+                    if (stats) {
+                        loudness = {
+                            integrated_lufs: stats.integrated_lufs,
+                            true_peak_dbtp: stats.true_peak_dbtp,
+                            lra_lu: stats.lra_lu,
+                            threshold_lufs: stats.threshold_lufs,
+                            offset_db: stats.offset_db,
+                        };
+                    }
+                }
+            } else {
+                loudness = { integrated_lufs: -99, true_peak_dbtp: -99, lra_lu: 0, threshold_lufs: -99, offset_db: 0 };
             }
             // Safety uses only the time the about probe has left. It does not extend this request. When the cut
             // does not fit, the frames and sound still succeed and the worker queues a safety job of its own.
@@ -1397,6 +1423,7 @@ export function createHelper(opts = {}) {
                 frames,
                 audio,
                 duration: info.duration ?? null,
+                ...(loudness ? { loudness } : {}),
                 ...(safety ? { safety } : {}),
                 ...(safetyDeferred ? { safety_deferred: safetyDeferred } : {}),
             };
@@ -1418,6 +1445,221 @@ export function createHelper(opts = {}) {
             code === "error.studio.too_large" ? 413 : code === "error.studio.not_video" ? 400 : code === "error.about.failed" ? 422 : 502,
             code,
         );
+    }
+
+    // POST /audio/measure?id=&target=-14|-16: standalone EBU R128 Pass 1 measurement (used for backfill and
+    // direct on-demand measurement when the about probe hasn't run on an item).
+    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {URL} url */
+    async function handleAudioMeasure(req, res, url) {
+        if (req.method !== "POST") return fail(res, 405, "error.webp.bad_request");
+        const id = url.searchParams.get("id") ?? "";
+        const target = parseAudioTarget(url.searchParams.get("target"));
+        if (!ID_RE.test(id) || target === null) return failAndClose(req, res, 400, "error.webp.invalid_params");
+        if (busy()) return failAndClose(req, res, 429, "error.webp.busy");
+        const declared = Number(req.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > MAX_FETCH) return failAndClose(req, res, 413, "error.studio.too_large");
+
+        const key = `am-${id}`;
+        probing.add(key);
+        const unwatch = watchClient(req, res);
+        const dir = path.join(ABOUT_DIR, key);
+        const input = path.join(dir, "in");
+        let n = 0;
+        const counter = new Transform({
+            transform(chunk, _e, cb) {
+                n += chunk.length;
+                if (n > MAX_FETCH) cb(new JobError("error.studio.too_large"));
+                else cb(null, chunk);
+            },
+        });
+        /** @type {{ has_audio: boolean, duration: number | null, loudness: { integrated_lufs: number, true_peak_dbtp: number, lra_lu: number, threshold_lufs: number, offset_db: number } } | null} */
+        let answer = null;
+        let code = "";
+        let detail = "";
+        try {
+            await mkdir(dir, { recursive: true });
+            await pipeline(req, counter, createWriteStream(input));
+            if (n === 0) throw new JobError("error.studio.not_video");
+            const info = await probeAV(input);
+            if (!info.hasAudio) {
+                answer = {
+                    has_audio: false,
+                    duration: info.duration ?? null,
+                    loudness: { integrated_lufs: -99, true_peak_dbtp: -99, lra_lu: 0, threshold_lufs: -99, offset_db: 0 },
+                };
+            } else {
+                const r = await runFfmpegCapture(buildLoudnormMeasureArgs({ input, target }), AUDIO_MEASURE_TIMEOUT_MS);
+                if (r.timedOut) throw new JobError("error.audio.failed", "audio measure timed out");
+                const stats = r.code === 0 ? parseLoudnormStats(r.stderr) : null;
+                if (!stats) throw new JobError("error.audio.failed", "loudnorm stats missing");
+                answer = {
+                    has_audio: true,
+                    duration: info.duration ?? null,
+                    loudness: {
+                        integrated_lufs: stats.integrated_lufs,
+                        true_peak_dbtp: stats.true_peak_dbtp,
+                        lra_lu: stats.lra_lu,
+                        threshold_lufs: stats.threshold_lufs,
+                        offset_db: stats.offset_db,
+                    },
+                };
+            }
+        } catch (e) {
+            if (e instanceof JobError) {
+                code = e.code;
+                detail = e.detail || "";
+            } else {
+                code = "error.audio.failed";
+                console.error("[webp-helper] audio measure failed:", e);
+            }
+        } finally {
+            killFfmpeg();
+            unwatch();
+            await rm(dir, { recursive: true, force: true }).catch(() => {});
+            probing.delete(key);
+        }
+        if (res.headersSent || res.destroyed) return;
+        if (answer) return send(res, 200, answer);
+        const status = code === "error.studio.too_large" ? 413 : code === "error.studio.not_video" ? 400 : 422;
+        return failAndClose(req, res, status, code, detail);
+    }
+
+    // POST /audio/level?id=&target=-14|-16[&mi=&mtp=&mlra=&mthresh=&offset=]: Pass 2 non-destructive leveling.
+    // Keeps the video bitstream untouched (`-c:v copy`, falling back to libx264 only when the source codec cannot
+    // be muxed into MP4) and applies two-pass loudnorm (running Pass 1 automatically if measured params weren't supplied).
+    /** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {URL} url */
+    async function handleAudioLevel(req, res, url) {
+        if (req.method !== "POST") return fail(res, 405, "error.webp.bad_request");
+        const id = url.searchParams.get("id") ?? "";
+        const target = parseAudioTarget(url.searchParams.get("target"));
+        if (!ID_RE.test(id) || target === null) return failAndClose(req, res, 400, "error.webp.invalid_params");
+        if (busy()) return failAndClose(req, res, 429, "error.webp.busy");
+        const declared = Number(req.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > MAX_FETCH) return failAndClose(req, res, 413, "error.studio.too_large");
+
+        const optNum = (k) => {
+            const raw = url.searchParams.get(k);
+            if (raw === null || raw === "") return null;
+            const v = Number(raw);
+            return Number.isFinite(v) ? v : NaN;
+        };
+        const qMi = optNum("mi");
+        const qMtp = optNum("mtp");
+        const qMlra = optNum("mlra");
+        const qMthresh = optNum("mthresh");
+        const qOffset = optNum("offset");
+        if ([qMi, qMtp, qMlra, qMthresh, qOffset].some((v) => Number.isNaN(v))) {
+            return failAndClose(req, res, 400, "error.webp.invalid_params");
+        }
+        /** @type {{ integrated_lufs: number, true_peak_dbtp: number, lra_lu: number, threshold_lufs: number, offset_db: number } | null} */
+        let measured =
+            qMi !== null && qMtp !== null && qMlra !== null && qMthresh !== null && qOffset !== null
+                ? { integrated_lufs: qMi, true_peak_dbtp: qMtp, lra_lu: qMlra, threshold_lufs: qMthresh, offset_db: qOffset }
+                : null;
+
+        const key = `al-${id}`;
+        probing.add(key);
+        const unwatch = watchClient(req, res);
+        const dir = path.join(ABOUT_DIR, key);
+        const input = path.join(dir, "in");
+        const output = path.join(dir, "out.mp4");
+        let n = 0;
+        const counter = new Transform({
+            transform(chunk, _e, cb) {
+                n += chunk.length;
+                if (n > MAX_FETCH) cb(new JobError("error.studio.too_large"));
+                else cb(null, chunk);
+            },
+        });
+        let code = "";
+        let detail = "";
+        let okOut = false;
+        let outSize = 0;
+        /** @type {ReturnType<typeof parseLoudnormStats>} */
+        let pass2Stats = null;
+        /** @type {{ duration: number | null, width: number | null, height: number | null, hasAudio: boolean } | null} */
+        let info = null;
+        try {
+            await mkdir(dir, { recursive: true });
+            await pipeline(req, counter, createWriteStream(input));
+            if (n === 0) throw new JobError("error.studio.not_video");
+            const deadline = Date.now() + AUDIO_LEVEL_TIMEOUT_MS;
+            info = await probeAV(input);
+            if (!info.hasAudio) throw new JobError("error.audio.no_audio", "video has no audio stream");
+
+            if (!measured) {
+                const m = await runFfmpegCapture(buildLoudnormMeasureArgs({ input, target }), Math.min(deadline - Date.now(), AUDIO_MEASURE_TIMEOUT_MS));
+                if (m.timedOut) throw new JobError("error.audio.failed", "audio measure timed out");
+                const stats = m.code === 0 ? parseLoudnormStats(m.stderr) : null;
+                if (!stats) throw new JobError("error.audio.failed", "loudnorm pass 1 failed");
+                measured = {
+                    integrated_lufs: stats.integrated_lufs,
+                    true_peak_dbtp: stats.true_peak_dbtp,
+                    lra_lu: stats.lra_lu,
+                    threshold_lufs: stats.threshold_lufs,
+                    offset_db: stats.offset_db,
+                };
+            }
+            if (measured.integrated_lufs <= AUDIO_SILENCE_LUFS) {
+                throw new JobError("error.audio.silent", "audio track is silent");
+            }
+
+            let r = await runFfmpegCapture(buildLoudnormLevelArgs({ input, output, target, measured, reencodeVideo: false }), deadline - Date.now());
+            if (r.timedOut) throw new JobError("error.audio.failed", "audio level timed out");
+            outSize = (await stat(output).catch(() => null))?.size ?? 0;
+            // Fallback: exotic video codecs (e.g. VP8/Theora in WebM) cannot be stream-copied into MP4.
+            if (r.code !== 0 || outSize <= 32) {
+                await rm(output, { force: true }).catch(() => {});
+                r = await runFfmpegCapture(buildLoudnormLevelArgs({ input, output, target, measured, reencodeVideo: true }), deadline - Date.now());
+                if (r.timedOut) throw new JobError("error.audio.failed", "audio level timed out");
+                outSize = (await stat(output).catch(() => null))?.size ?? 0;
+            }
+            if (r.code !== 0 || outSize <= 32) throw new JobError("error.audio.failed", "loudnorm pass 2 failed");
+            if (outSize > MAX_FETCH) throw new JobError("error.studio.too_large", "leveled output too large");
+            pass2Stats = parseLoudnormStats(r.stderr);
+            okOut = true;
+            if (!res.headersSent && !res.destroyed) {
+                /** @type {Record<string, string | number>} */
+                const headers = {
+                    "content-type": "video/mp4",
+                    "content-length": outSize,
+                    "x-audio-input-lufs": String(measured.integrated_lufs),
+                    "x-audio-input-tp": String(measured.true_peak_dbtp),
+                    "x-audio-input-lra": String(measured.lra_lu),
+                    "x-audio-input-thresh": String(measured.threshold_lufs),
+                    "x-audio-offset": String(measured.offset_db),
+                    "x-audio-target-lufs": String(target),
+                };
+                if (pass2Stats?.output_lufs !== null && pass2Stats?.output_lufs !== undefined) {
+                    headers["x-audio-output-lufs"] = String(pass2Stats.output_lufs);
+                }
+                if (pass2Stats?.output_true_peak !== null && pass2Stats?.output_true_peak !== undefined) {
+                    headers["x-audio-output-tp"] = String(pass2Stats.output_true_peak);
+                }
+                if (pass2Stats?.normalization_type) headers["x-audio-norm-type"] = pass2Stats.normalization_type;
+                if (info.width !== null) headers["x-audio-width"] = String(info.width);
+                if (info.height !== null) headers["x-audio-height"] = String(info.height);
+                if (info.duration !== null) headers["x-audio-duration"] = String(info.duration);
+                res.writeHead(200, headers);
+                await pipeline(createReadStream(output), res);
+            }
+        } catch (e) {
+            if (e instanceof JobError) {
+                code = e.code;
+                detail = e.detail || "";
+            } else if (!okOut) {
+                code = "error.audio.failed";
+                console.error("[webp-helper] audio level failed:", e);
+            }
+        } finally {
+            killFfmpeg();
+            unwatch();
+            await rm(dir, { recursive: true, force: true }).catch(() => {});
+            probing.delete(key);
+        }
+        if (okOut || res.headersSent || res.destroyed) return;
+        const status = code === "error.studio.too_large" ? 413 : code === "error.studio.not_video" ? 400 : 422;
+        return failAndClose(req, res, status, code, detail);
     }
 
     // POST /safety?id=&kind=clip|still: the same body as /about, for a file that is not the lead. A still is one 768 px
@@ -2210,6 +2452,8 @@ export function createHelper(opts = {}) {
             if (pathname === "/probe") return await handleProbe(req, res, url);
             if (pathname === "/poster") return await handlePoster(req, res, url);
             if (pathname === "/about") return await handleAbout(req, res, url);
+            if (pathname === "/audio/measure") return await handleAudioMeasure(req, res, url);
+            if (pathname === "/audio/level") return await handleAudioLevel(req, res, url);
             if (pathname === "/safety") return await handleSafety(req, res, url);
             if (pathname === "/emote-fit") return await handleEmoteFit(req, res, url);
             if (pathname === "/fetch" || pathname.startsWith("/fetch/")) {

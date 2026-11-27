@@ -14,6 +14,7 @@ import { shareSetRoute } from "./share-sets";
 import { privateRoute, type ByteBucket } from "./share-private";
 import { chatShareRoute } from "./chat-share-page";
 import { ITEM_COLUMNS, effectiveVisibility, extOf, type MediaRow } from "./visibility";
+import { findAudioAlt, isAudioLevelSpec, wantsNormalAudio, withNormalAudioQuery, withoutAudioQuery } from "./audio-loudness";
 
 export type ShareDeps = {
     db: D1Database;
@@ -179,6 +180,8 @@ const fmtDuration = (s: number): string => {
     return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 };
 
+export type ShareAudioToggle = { active: "original" | "normal"; toggleUrl: string };
+
 // The page of one file: its Open Graph and Twitter card tags and a plain player. `fileUrl`, `poster` and `pageUrl` are
 // where the page says the file, its poster and the page itself are: the media domain for a public file (section 22),
 // share.../p/<key>/ for a private link (section 36).
@@ -192,8 +195,10 @@ export function singlePageHtml(p: {
     // Public HDR alternates first, then the original with its codecs, then a plain video/mp4 catch-all.
     // Absent (a private link): one plain source for the file.
     sources?: PageSource[];
+    // Zero-JS link toggle between original and `?audio=normal` leveled audio when a leveled copy exists.
+    audioToggle?: ShareAudioToggle | null;
 }): string {
-    const { row, type, fileUrl, poster, pageUrl } = p;
+    const { row, type, fileUrl, poster, pageUrl, audioToggle } = p;
     const isVideo = type.startsWith("video/");
     const isImage = type.startsWith("image/");
     // a title Harmony set wins; then the roast caption (section 25); then the file name
@@ -254,6 +259,12 @@ export function singlePageHtml(p: {
         : isImage
           ? `<img src="${e(fileUrl)}" alt="${e(title)}">`
           : `<a href="${e(fileUrl)}">${e(title)}</a>`;
+    const audioBar = audioToggle
+        ? `<nav class="ab"><a class="ap${audioToggle.active === "normal" ? " on" : ""}" href="${e(audioToggle.toggleUrl)}">${audioToggle.active === "normal" ? "Audio leveled · Hear original" : "Hear leveled audio"}</a></nav>`
+        : "";
+    const audioCss = audioToggle
+        ? "\n.ab{position:fixed;top:12px;right:12px;z-index:2}.ap{display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;background:rgba(20,20,24,.78);border:1px solid rgba(255,255,255,.16);color:#eee;font-size:13px;text-decoration:none;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}.ap.on{border-color:rgba(52,211,153,.5);color:#6ee7b7}"
+        : "";
 
     return `<!doctype html>
 <html lang="en">
@@ -268,10 +279,10 @@ ${meta.join("\n")}
 html,body{margin:0;height:100%;background:#000;color:#ddd;font:15px -apple-system,system-ui,sans-serif}
 main{display:flex;align-items:center;justify-content:center;height:100%}
 video,img{max-width:100vw;max-height:100vh;display:block}
-a{color:#ddd}
+a{color:#ddd}${audioCss}
 </style>
 </head>
-<body><main>${body}</main></body>
+<body>${audioBar}<main>${body}</main></body>
 </html>
 `;
 }
@@ -305,6 +316,7 @@ const codecsOf = (raw: string | null): string | undefined => {
 // Public HDR alternates of this post (newest first), then the original with its codecs when the header
 // says, then a plain video/mp4 source so a browser that declines the codecs strings still plays it.
 // og:video stays the original; this list is only the <video> element.
+// Excludes `audio_level` alts so bare links never serve leveled audio.
 async function videoSources(d: ShareDeps, row: Found, fileUrl: string, type: string): Promise<PageSource[]> {
     const out: PageSource[] = [];
     const media = withSlash(d.mediaBaseUrl);
@@ -321,6 +333,7 @@ async function videoSources(d: ShareDeps, row: Found, fileUrl: string, type: str
                 .all<{ id: string; content_type: string | null; public_key: string | null; made_spec: string | null; visibility: string | null; bucket: string }>();
             for (const a of results) {
                 if (a.id === row.id || effectiveVisibility(a) !== "public" || !a.public_key) continue;
+                if (isAudioLevelSpec(a.made_spec)) continue;
                 if (!/^[A-Za-z0-9]{6,40}\.[A-Za-z0-9]{1,8}$/.test(a.public_key)) continue;
                 const mime = (a.content_type || "video/mp4").split(";")[0]!.trim().toLowerCase();
                 out.push({ url: `${media}${a.public_key}`, type: sourceType(mime, codecsOf(a.made_spec)) });
@@ -390,15 +403,42 @@ export async function sharePage(d: ShareDeps, request: Request): Promise<Respons
     if (!row) return NOT_FOUND();
 
     const key = (row.bucket === "media" ? row.r2_key : row.public_key)!;
-    const fileUrl = `${media}${key}`;
-    const pageUrl = `${withSlash(d.shareBaseUrl)}${m[1]}`;
+    const origFileUrl = `${media}${key}`;
+    const basePageUrl = `${withSlash(d.shareBaseUrl)}${m[1]}`;
     // a poster only from the public media domain (the column is written by this server, but be strict)
     const poster = row.poster && row.poster.startsWith(media) ? row.poster : null;
     const custom = (row.custom_title ?? "").trim() !== "";
-    const caption = custom ? null : await captionNow(d, row, fileUrl);
-    const type = typeOf(row, key);
-    const sources = type.startsWith("video/") ? await videoSources(d, row, fileUrl, type) : undefined;
-    const html = singlePageHtml({ row, type, fileUrl, poster, pageUrl, caption, sources });
+    const caption = custom ? null : await captionNow(d, row, origFileUrl);
+    const origType = typeOf(row, key);
+
+    let fileUrl = origFileUrl;
+    let type = origType;
+    let pageUrl = basePageUrl;
+    let sources: PageSource[] | undefined;
+    let audioToggle: ShareAudioToggle | null = null;
+
+    if (origType.startsWith("video/")) {
+        const wantsNormal = wantsNormalAudio(url);
+        const audioAlt = await findAudioAlt(d.db, row.id);
+        const altPublicKey =
+            audioAlt && effectiveVisibility(audioAlt) === "public" && audioAlt.public_key && /^[A-Za-z0-9]{6,40}\.[A-Za-z0-9]{1,8}$/.test(audioAlt.public_key)
+                ? audioAlt.public_key
+                : null;
+        if (wantsNormal && altPublicKey && audioAlt) {
+            fileUrl = `${media}${altPublicKey}`;
+            type = typeOf(audioAlt, altPublicKey);
+            pageUrl = withNormalAudioQuery(basePageUrl);
+            sources = [{ url: fileUrl, type: sourceType(type) }];
+            audioToggle = { active: "normal", toggleUrl: withoutAudioQuery(basePageUrl) };
+        } else {
+            sources = await videoSources(d, row, origFileUrl, origType);
+            if (altPublicKey) {
+                audioToggle = { active: "original", toggleUrl: withNormalAudioQuery(basePageUrl) };
+            }
+        }
+    }
+
+    const html = singlePageHtml({ row, type, fileUrl, poster, pageUrl, caption, sources, audioToggle });
     return new Response(request.method === "HEAD" ? null : html, {
         // short: a file made private stops having a page within a minute
         headers: pageHeaders(new URL(media).origin, "public, max-age=60"),

@@ -384,6 +384,17 @@ public protocol CobaltClient: Sendable {
     func swarmBoard(
         id: String, query: String?, agent: Int?, status: String?, group: String?, sort: BoardSort, offset: Int, limit: Int
     ) async throws -> SwarmBoard
+    // Audio loudness leveling (`features.audio_leveling`). Defaulted below (`.unsupported`) so older fakes compile.
+    /// `GET /audio/settings`: read loudness leveling mode, target LUFS, default link mode, and library counts.
+    func audioSettings() async throws -> AudioLevelSettings
+    /// `PUT /audio/settings`: update loudness leveling settings.
+    func updateAudioSettings(_ patch: AudioLevelSettingsPatch) async throws -> AudioLevelSettings
+    /// `POST /library/items/:id/audio/level`: queue EBU R128 2-pass leveling for a video item.
+    func levelItemAudio(id: String, target: AudioTargetLufs?) async throws -> AudioLevelQueued
+    /// `DELETE /library/items/:id/audio/level`: remove the leveled alternate for a video item.
+    func removeItemAudioLevel(id: String) async throws -> AudioLevelRemoval
+    /// `POST /audio/backfill`: queue a background backfill sweep of unmeasured/unleveled videos.
+    func backfillAudioLoudness(limit: Int?) async throws -> AudioBackfillResult
 }
 
 extension CobaltClient {
@@ -577,6 +588,11 @@ extension CobaltClient {
     ) async throws -> SwarmBoard { throw PipelineFailure.unsupported }
     /// Likewise: a client that predates titles says the server cannot do it.
     public func setTitle(anchor itemID: String, _ title: String?) async throws -> PostTitleResult { throw PipelineFailure.unsupported }
+    public func audioSettings() async throws -> AudioLevelSettings { throw PipelineFailure.unsupported }
+    public func updateAudioSettings(_ patch: AudioLevelSettingsPatch) async throws -> AudioLevelSettings { throw PipelineFailure.unsupported }
+    public func levelItemAudio(id: String, target: AudioTargetLufs?) async throws -> AudioLevelQueued { throw PipelineFailure.unsupported }
+    public func removeItemAudioLevel(id: String) async throws -> AudioLevelRemoval { throw PipelineFailure.unsupported }
+    public func backfillAudioLoudness(limit: Int?) async throws -> AudioBackfillResult { throw PipelineFailure.unsupported }
 }
 
 extension CobaltClient {

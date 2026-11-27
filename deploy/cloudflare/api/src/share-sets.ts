@@ -6,7 +6,8 @@
 import { background } from "./background";
 import { captionOf, captionState, fileOf, setSubject, writeCaption, type Caption, type Captioner, type RoastInput } from "./roast";
 import { ITEM_COLUMNS, effectiveVisibility, type MediaRow } from "./visibility";
-import { escapeHtml, pageHeaders } from "./share";
+import { escapeHtml, pageHeaders, type ShareAudioToggle } from "./share";
+import { findAudioAltsFor, wantsNormalAudio, withNormalAudioQuery, withoutAudioQuery } from "./audio-loudness";
 import { loopUrls } from "./loops";
 import {
     linkInsert,
@@ -437,7 +438,12 @@ export async function updateShareSet(d: ShareSetDeps, request: Request, id: stri
 // ---- the share host --------------------------------------------------------------------------------
 
 // `loop_url`: a video's moving preview (section 29), when it has one
-export type LiveSet = { set: SetRow; files: (SetItem & { url: string; loop_url?: string | null })[]; caption?: Caption | null };
+export type LiveSet = {
+    set: SetRow;
+    files: (SetItem & { url: string; loop_url?: string | null })[];
+    caption?: Caption | null;
+    hasAudioAlt?: boolean;
+};
 
 export async function liveSetRow(db: D1Database, id: string): Promise<SetRow | null> {
     if (!SET_ID_REGEX.test(id)) return null;
@@ -477,36 +483,69 @@ async function pageCaption(d: CaptionWait, set: SetRow): Promise<Caption | null>
 }
 
 // A public gallery link's page data: its public files. A link with a live private link (section 36) has none here.
-async function liveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "loops"> & CaptionWait, id: string): Promise<LiveSet | null> {
+async function liveSet(
+    d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "loops"> & CaptionWait,
+    id: string,
+    wantsNormal = false,
+): Promise<LiveSet | null> {
     const set = await liveSetRow(d.db, id);
     if (!set) return null;
     if (await setIsPrivate(d.db, id)) return null;
     const ids = parseItems(set.items);
     const files = itemsOf(ids, await rowsById(d.db, ids), d.mediaBaseUrl).filter((i): i is SetItem & { url: string } => i.url !== null);
     if (files.length === 0) return null;
+    const videoIds = files.filter((f) => kindOf(f.content_type) === "video").map((f) => f.id);
+    const media = withSlash(d.mediaBaseUrl);
+    const altUrls = new Map<string, string>();
+    if (videoIds.length > 0) {
+        const alts = await findAudioAltsFor(d.db, videoIds);
+        for (const [parentId, alt] of alts) {
+            if (effectiveVisibility(alt) === "public" && alt.public_key && /^[A-Za-z0-9]{6,40}\.[A-Za-z0-9]{1,8}$/.test(alt.public_key)) {
+                altUrls.set(parentId, `${media}${alt.public_key}`);
+            }
+        }
+    }
     // with moving previews off, every video is the real file (full quality, sound, tap to play)
     const loops =
         d.loops === false
             ? new Map<string, string>()
-            : await loopUrls(
-                  d.db,
-                  files.filter((f) => kindOf(f.content_type) === "video").map((f) => f.id),
-              );
+            : await loopUrls(d.db, videoIds);
     return {
         set,
-        files: files.map((f) => ({ ...f, loop_url: loops.get(f.id) ?? null })),
+        files: files.map((f) => ({
+            ...f,
+            url: wantsNormal && altUrls.has(f.id) ? altUrls.get(f.id)! : f.url,
+            loop_url: loops.get(f.id) ?? null,
+        })),
         caption: await pageCaption(d, set),
+        hasAudioAlt: altUrls.size > 0,
     };
 }
 
 // A private gallery link's page data (section 36): every live file, whatever its own state, at its address under
 // share.../p/<key>/ (files keep their place in the link, so file <n> never changes). No moving previews: they live on
 // the media domain. Null when no file is left.
-export async function privateLiveSet(d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "shareBaseUrl"> & CaptionWait, set: SetRow, key: string): Promise<LiveSet | null> {
+export async function privateLiveSet(
+    d: Pick<ShareSetDeps, "db" | "mediaBaseUrl" | "shareBaseUrl"> & CaptionWait,
+    set: SetRow,
+    key: string,
+    wantsNormal = false,
+): Promise<LiveSet | null> {
     const ids = parseItems(set.items);
     const files = privateItemsOf(d, ids, await rowsById(d.db, ids), key).filter((i): i is SetItem & { url: string } => i.url !== null);
     if (files.length === 0) return null;
-    return { set, files: files.map((f) => ({ ...f, loop_url: null })), caption: await pageCaption(d, set) };
+    const videoIds = files.filter((f) => kindOf(f.content_type) === "video").map((f) => f.id);
+    const alts = videoIds.length > 0 ? await findAudioAltsFor(d.db, videoIds) : new Map<string, MediaRow>();
+    return {
+        set,
+        files: files.map((f) => ({
+            ...f,
+            url: wantsNormal && alts.has(f.id) ? withNormalAudioQuery(f.url) : f.url,
+            loop_url: null,
+        })),
+        caption: await pageCaption(d, set),
+        hasAudioAlt: alts.size > 0,
+    };
 }
 
 // The roast model input for a live gallery link, or null when none of its files is public any more.
@@ -665,7 +704,13 @@ export function componentEmbed(s: LiveSet, pageUrl: string): string | null {
     return null;
 }
 
-export function pageHtml(d: Pick<ShareSetDeps, "shareBaseUrl">, s: LiveSet, discord: boolean, pageUrl = `${withSlash(d.shareBaseUrl)}g/${s.set.id}`): string {
+export function pageHtml(
+    d: Pick<ShareSetDeps, "shareBaseUrl">,
+    s: LiveSet,
+    discord: boolean,
+    pageUrl = `${withSlash(d.shareBaseUrl)}g/${s.set.id}`,
+    audioToggle: ShareAudioToggle | null = null,
+): string {
     const e = escapeHtml;
     const title = titleText(s);
     const meta: string[] = [
@@ -704,6 +749,12 @@ export function pageHtml(d: Pick<ShareSetDeps, "shareBaseUrl">, s: LiveSet, disc
                 : `<img src="${e(f.url)}" alt="" loading="lazy">`,
         )
         .join("\n");
+    const audioBar = audioToggle
+        ? `<nav class="ab"><a class="ap${audioToggle.active === "normal" ? " on" : ""}" href="${e(audioToggle.toggleUrl)}">${audioToggle.active === "normal" ? "Audio leveled · Hear original" : "Hear leveled audio"}</a></nav>`
+        : "";
+    const audioCss = audioToggle
+        ? "\n.ab{display:flex;justify-content:flex-end;padding:10px 12px 2px}.ap{display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;background:rgba(20,20,24,.78);border:1px solid rgba(255,255,255,.16);color:#eee;font-size:13px;text-decoration:none}.ap.on{border-color:rgba(52,211,153,.5);color:#6ee7b7}"
+        : "";
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -716,10 +767,10 @@ ${meta.join("\n")}
 <style>
 html,body{margin:0;background:#000;color:#ddd;font:15px -apple-system,system-ui,sans-serif}
 main{display:grid;gap:8px;padding:8px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:center}
-video,img{width:100%;max-height:90vh;object-fit:contain;display:block;background:#111}
+video,img{width:100%;max-height:90vh;object-fit:contain;display:block;background:#111}${audioCss}
 </style>
 </head>
-<body><main>
+<body>${audioBar}<main>
 ${body}
 </main></body>
 </html>
@@ -748,9 +799,10 @@ export async function shareSetRoute(d: ShareSetDeps, request: Request): Promise<
     if (request.method !== "GET" && request.method !== "HEAD") {
         return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
     }
+    const wantsNormal = wantsNormalAudio(url);
     let s: LiveSet | null;
     try {
-        s = id ? await liveSet(d, id) : null;
+        s = id ? await liveSet(d, id, wantsNormal) : null;
     } catch {
         return new Response("try again\n", { status: 503, headers: { "content-type": "text/plain", "retry-after": "5" } });
     }
@@ -767,7 +819,16 @@ export async function shareSetRoute(d: ShareSetDeps, request: Request): Promise<
         });
     }
     const discord = /discordbot/i.test(request.headers.get("user-agent") ?? "");
-    const html = pageHtml(d, s, discord);
+    const basePageUrl = `${withSlash(d.shareBaseUrl)}g/${s.set.id}`;
+    const useNormal = wantsNormal && Boolean(s.hasAudioAlt);
+    const pageUrl = useNormal ? withNormalAudioQuery(basePageUrl) : basePageUrl;
+    const audioToggle: ShareAudioToggle | null = s.hasAudioAlt
+        ? {
+              active: useNormal ? "normal" : "original",
+              toggleUrl: useNormal ? withoutAudioQuery(basePageUrl) : withNormalAudioQuery(basePageUrl),
+          }
+        : null;
+    const html = pageHtml(d, s, discord, pageUrl, audioToggle);
     const mediaOrigin = new URL(withSlash(d.mediaBaseUrl)).origin;
     return new Response(request.method === "HEAD" ? null : html, {
         headers: pageHeaders(mediaOrigin, "public, max-age=60", { vary: "user-agent" }),

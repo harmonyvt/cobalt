@@ -45,6 +45,7 @@ import { NOTIFY_MAX_BODY_BYTES, isEmptyLineBody, parseOptIn } from "./notify-off
 import { MAX_POSTER_BYTES, PosterService, POSTER_BATCH, type MediaStore } from "./poster";
 import { LOOP_KICK_MAX, LoopService, type ReadBucket } from "./loops";
 import { ABOUT_KICK_MAX, SAFETY_KICK_MAX, AboutProbeService } from "./about-probe";
+import { AUDIO_KICK_MAX, AudioLevelService, parseAudioTarget } from "./audio-loudness";
 import { publishStudio } from "./publish";
 import { atReady, sessionPostKey, type Gate } from "./hidden";
 import { hiddenRows } from "./hidden-store";
@@ -1150,6 +1151,8 @@ export class StudioService {
     // "what it's about" probes (section 34.2), counted like posterRuns
     private aboutRuns = 0;
     private about: AboutProbeService;
+    // audio loudness measurement & leveling (Cobalt v10.1); held() checks this.audio.isBusy()
+    private audio?: AudioLevelService;
 
     // Server-made posters (section 13); undefined when no public bucket is wired.
     private posters?: PosterService;
@@ -1171,6 +1174,7 @@ export class StudioService {
             scheduleSweep: () => this.scheduleSweep(),
             renew: d.renew,
             safetyCallMs: d.safetyCallMs,
+            onLoudness: (itemId, m) => this.audio?.onAboutLoudness(itemId, m) ?? Promise.resolve(),
         });
         if (d.media && d.mediaBaseUrl) {
             this.posters = new PosterService({
@@ -1204,6 +1208,21 @@ export class StudioService {
                 // like a poster: never cuts what waits (its own in-flight count excluded)
                 helperBusy: async () => (await this.held({ ignoreLoop: true })) !== null || (await this.line.size()) > 0,
                 scheduleSweep: () => this.scheduleSweep(),
+            });
+            this.audio = new AudioLevelService({
+                db: d.db,
+                storage: d.storage,
+                originals: d.originals,
+                media: d.media,
+                mediaBaseUrl: d.mediaBaseUrl,
+                now: d.now,
+                randomBytes: d.randomBytes,
+                ensureRunning: d.ensureRunning,
+                callHelper: (path, init, ms) => this.callHelper(path, init, ms),
+                helperBusy: async () => (await this.held({ ignoreAudio: true })) !== null || (await this.line.size()) > 0,
+                scheduleSweep: () => this.scheduleSweep(),
+                renew: d.renew,
+                purge: d.purge,
             });
         }
     }
@@ -1337,7 +1356,7 @@ export class StudioService {
     // SWEEP_RENDER_MS with no result yet (durable, unlike the in-memory `encodes`, which is still
     // consulted); a poster in flight; a render entry of the line whose upload is under way.
     // null = the helper is free.
-    private async held(opts: { ignorePoster?: boolean; ignoreLoop?: boolean; ignoreAbout?: boolean } = {}): Promise<Held | null> {
+    private async held(opts: { ignorePoster?: boolean; ignoreLoop?: boolean; ignoreAbout?: boolean; ignoreAudio?: boolean } = {}): Promise<Held | null> {
         const now = this.d.now();
         for (const key of (await this.d.storage.list<unknown>({ prefix: "save:" })).keys()) {
             return { kind: "save", sid: key.slice("save:".length) };
@@ -1361,6 +1380,8 @@ export class StudioService {
         if (!opts.ignoreLoop && this.loopRuns > 0) return { kind: "poster" };
         // a "what it's about" probe (section 34.2): background work, reported like a poster
         if (!opts.ignoreAbout && this.aboutRuns > 0) return { kind: "poster" };
+        // audio loudness measure / level (Cobalt v10.1): background work, reported like a poster
+        if (!opts.ignoreAudio && this.audio?.isBusy()) return { kind: "poster" };
         for (const { entry } of await this.line.list()) {
             if (await this.uploading(entry, now)) {
                 return { kind: "render", sid: entry.sid, job: entry.job ?? undefined, owner: entry.keyId };
@@ -2048,6 +2069,7 @@ export class StudioService {
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.about.idle(this.d.posterIdleMs);
+        if (this.audio?.isBusy()) await this.audio.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         // Free = the helper is not held and nobody waits ahead (section 17.2). Not free: a client that
         // did not ask to queue gets today's 429 (while anything waits too, so it never jumps the
@@ -3435,6 +3457,33 @@ export class StudioService {
         }
     }
 
+    // POST /audio/kick: queues EBU R128 loudness measurement & auto-leveling jobs (v10.1).
+    async kickAudio(limit?: number, opts: { backfill?: boolean; newSince?: number } = {}): Promise<StudioReply> {
+        if (!this.audio) return studioErr(503, "error.api.generic");
+        try {
+            const r = await this.audio.kick(limit ?? AUDIO_KICK_MAX, opts);
+            return { status: 200, body: { status: "success", ...r } };
+        } catch (e) {
+            console.error("[studio] audio kick failed", String(e));
+            return studioErr(503, "error.api.generic");
+        }
+    }
+
+    // POST /audio/level/<id>: manual Studio Deck trigger for leveling a video's audio (v10.1).
+    async levelAudio(itemId: string, rawTarget?: string | null): Promise<StudioReply> {
+        if (!this.audio) return studioErr(503, "error.api.generic");
+        const target = rawTarget ? parseAudioTarget(rawTarget) : null;
+        if (rawTarget && target === null) return studioErr(400, "error.audio.invalid_target");
+        try {
+            const r = await this.audio.requestLevel(itemId, target !== null ? { target } : {});
+            if (!r.ok) return studioErr(r.status, r.code);
+            return { status: 202, body: { status: "success", state: r.state, target_lufs: r.target_lufs, queued: r.queued } };
+        } catch (e) {
+            console.error("[studio] audio level failed", itemId, String(e));
+            return studioErr(503, "error.api.generic");
+        }
+    }
+
     // POST /posters/kick (the Worker's call: the library read, the cron, the backfill route):
     // queues the posters still missing. Never wakes the container (the sweep does the work).
     async kickPosters(limit?: number): Promise<StudioReply> {
@@ -3502,6 +3551,7 @@ export class StudioService {
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.about.idle(this.d.posterIdleMs);
+        if (this.audio?.isBusy()) await this.audio.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         // the free check, the row and the claim are one step (see claimSlot)
         const claim = await this.claimSlot({
@@ -3697,6 +3747,7 @@ export class StudioService {
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.about.idle(this.d.posterIdleMs);
+        if (this.audio?.isBusy()) await this.audio.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         // the helper is held (one job at a time), or somebody waits ahead of this render
         const free = await this.isFree(focused);
@@ -3986,6 +4037,7 @@ export class StudioService {
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.about.idle(this.d.posterIdleMs);
+        if (this.audio?.isBusy()) await this.audio.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         const free = await this.isFree(focused);
         if (!free && !queueFlag) return await this.refuse("error.webp.busy");
@@ -4628,6 +4680,7 @@ export class StudioService {
 
         await this.posters?.idle(this.d.posterIdleMs);
         await this.about.idle(this.d.posterIdleMs);
+        if (this.audio?.isBusy()) await this.audio.idle(this.d.posterIdleMs);
         await this.reapOrphans();
         const now = this.d.now();
         const extra = { items: missing, itemCount: row.item_count, retry: true };
@@ -4984,6 +5037,17 @@ export class StudioService {
             console.error("[studio] sweep: about probe failed", String(e));
             pending++;
         }
+        // EBU R128 audio loudness measurement & leveling (v10.1): one at a time, only while helper is free
+        if (this.audio) {
+            try {
+                const run = this.audio.sweep();
+                this.d.keep?.(run);
+                pending += await raceCeiling(run, itemMs, "sweep of audio loudness");
+            } catch (e) {
+                console.error("[studio] sweep: audio loudness failed", String(e));
+                pending++;
+            }
+        }
         return { pending };
     }
 
@@ -5010,6 +5074,8 @@ export const isStudioRoute = (pathname: string) =>
     pathname === "/loops/kick" ||
     pathname === "/about/kick" ||
     pathname === "/safety/kick" ||
+    pathname === "/audio/kick" ||
+    pathname.startsWith("/audio/level/") ||
     pathname === "/helper/caps";
 
 const toResponse = (r: StudioReply) =>
@@ -5129,6 +5195,24 @@ export async function handleStudioRoute(
         const hours = Number(url.searchParams.get("hours"));
         const newSince = Number.isFinite(hours) && hours > 0 ? Date.now() - hours * 60 * 60 * 1000 : undefined;
         return toResponse(await service.kickSafety(limit, { backfill: url.searchParams.get("backfill") === "1", newSince }));
+    }
+
+    // POST /audio/kick?limit=N&backfill=1&hours=N: cron + manual backfill kick (v10.1). Internal like /safety/kick.
+    if (request.method === "POST" && p === "/audio/kick") {
+        if (!request.headers.get(KEY_ID_HEADER)) return new Response(null, { status: 403 });
+        const raw = url.searchParams.get("limit");
+        const limit = raw !== null && /^\d{1,4}$/.test(raw) ? Number(raw) : undefined;
+        const hours = Number(url.searchParams.get("hours"));
+        const newSince = Number.isFinite(hours) && hours > 0 ? Date.now() - hours * 60 * 60 * 1000 : undefined;
+        return toResponse(await service.kickAudio(limit, { backfill: url.searchParams.get("backfill") === "1", newSince }));
+    }
+
+    // POST /audio/level/<id>[?target=-14|-16]: manual Studio Deck leveling trigger (v10.1). Internal.
+    if (request.method === "POST" && p.startsWith("/audio/level/")) {
+        if (!request.headers.get(KEY_ID_HEADER)) return new Response(null, { status: 403 });
+        const itemId = p.slice("/audio/level/".length);
+        if (!itemId || itemId.includes("/")) return toResponse(studioErr(404, "error.library.not_found"));
+        return toResponse(await service.levelAudio(itemId, url.searchParams.get("target")));
     }
 
     // POST /library/adopt: the web Worker's service call. The Worker only

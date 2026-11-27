@@ -446,7 +446,12 @@ struct HeroVideoBox: View {
             transport.attach(video.player)
             return
         }
-        if let lent {
+        // same hero swapping audio versions (e.g. Original <-> Leveled A/B audition): keep exact timestamp & sound state
+        let swappingTrack = video.player != nil && video.loadedURL != nil && video.loadedURL != url
+        let keepUnmuted = swappingTrack && !muted
+        if swappingTrack, let current = video.player?.currentTime(), current.isValid, current.isNumeric, current.seconds > 0 {
+            resume = current
+        } else if let lent {
             if lent.wholeClip {
                 // the planet's own player, already over the whole clip: the picture is on screen now
                 Breadcrumbs.add("video.adopt")
@@ -459,11 +464,15 @@ struct HeroVideoBox: View {
             bridge = lent.player
             resume = lent.player.currentTime()
         }
-        if poster == nil, bridge == nil, url.isFileURL { firstFrame = await Self.frame(of: url) }
+        if !swappingTrack, poster == nil, bridge == nil, url.isFileURL { firstFrame = await Self.frame(of: url) }
         guard !Task.isCancelled else { return }
-        Breadcrumbs.add("video.load", ["file": .bool(url.isFileURL), "bridged": .bool(bridge != nil)])
+        Breadcrumbs.add("video.load", ["file": .bool(url.isFileURL), "bridged": .bool(bridge != nil), "swap": .bool(swappingTrack)])
         await video.load(url, from: resume)
         guard !Task.isCancelled else { return }
+        if keepUnmuted {
+            muted = false
+            video.setMuted(false)
+        }
         transport.attach(video.player)
     }
 

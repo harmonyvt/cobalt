@@ -69,6 +69,8 @@ struct SettingsGroupPage: View {
                 LibrarySyncSettingsSection(model: model)
             case .media:
                 SettingsMakingSection(model: model)
+                // audio loudness leveling (v10.1): EBU R128 mode, target LUFS, default link, rule probe & backfill
+                AudioLevelingSettingsSection(model: model).id(hasKey)
                 // "post frame" on save, per site (APP-API-CONTRACT 52.6)
                 PostFrameSettingsSection(model: model)
                 // private links (APP-API-CONTRACT 36.6): what new gallery links start as, and rotating every key

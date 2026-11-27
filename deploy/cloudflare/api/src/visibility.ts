@@ -24,6 +24,7 @@ import type { OriginalsBucket, StudioReply } from "./studio";
 import { MEDIA_NAME_LENGTH } from "./webp";
 import { liveLinksFor, privateUrl, revokeLinkQuietly } from "./private-links";
 import { shareGate } from "./hidden-store";
+import { findAudioAlt } from "./audio-loudness";
 
 // ---- deps ---------------------------------------------------------------------------------------
 
@@ -472,6 +473,24 @@ async function reconcile(d: VisDeps, id: string, keyId: string): Promise<void> {
     }
 }
 
+// Cascades a parent video's public/private visibility change to its leveled `audio_level` alt so
+// `?audio=normal` public share links stay strictly in lockstep with the parent's privacy.
+async function cascadeAudioAltVisibility(d: VisDeps, parent: MediaRow, wantPublic: boolean, keyId: string): Promise<void> {
+    if (parent.role === "alt") return;
+    try {
+        const alt = await findAudioAlt(d.db, parent.id);
+        if (!alt) return;
+        if (wantPublic) {
+            await makePublic(d, alt, keyId);
+        } else {
+            await makePrivate(d, alt, keyId);
+        }
+        await reconcile(d, alt.id, keyId);
+    } catch (e) {
+        console.error("[visibility] audio alt cascade failed", parent.id, String(e));
+    }
+}
+
 // PATCH /library/items/<id>/visibility
 export async function setVisibility(
     d: VisDeps,
@@ -505,6 +524,7 @@ export async function setVisibility(
         cacheCleared = r.cleared ?? null;
     }
     await reconcile(d, row.id, keyId);
+    await cascadeAudioAltVisibility(d, row, wantPublic, keyId);
 
     let fresh: MediaRow | null;
     try {
@@ -530,6 +550,7 @@ export async function publishOriginal(d: VisDeps, row: MediaRow, keyId: string =
     const on = await makePublic(d, r, keyId);
     if (!on.ok) return on.reply;
     await reconcile(d, r.id, keyId);
+    await cascadeAudioAltVisibility(d, r, true, keyId);
     let fresh: MediaRow | null = null;
     try {
         fresh = await getRow(d.db, r.id);

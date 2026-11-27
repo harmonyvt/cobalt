@@ -2,6 +2,7 @@
 // routes the app retries honour Idempotency-Key and answer with the new change number. The log itself is maintained
 // by the triggers in migration 0038, so a 15-minute job that writes a title pays one indexed row and nothing else.
 import type { OpReply } from "./registry/op";
+import { buildAudioSummaries, type AudioJoinedRow } from "./audio-loudness";
 import { isMissingTable } from "./private-links";
 import { POST_READ_COUNT, postReadStatements, shapePosts, type PostRead } from "./posts";
 
@@ -173,6 +174,7 @@ export async function syncPage(d: SyncDeps, q: URLSearchParams): Promise<OpReply
         titles: at(6),
         hidden: at(7),
         links: at(8),
+        audioOf: buildAudioSummaries(at(9) as AudioJoinedRow[]),
     };
     const postKeys = kept("post").filter((r) => r.gone === 0).map((r) => r.id);
     const posts = shapePosts(d, postKeys, postRead, d.now());

@@ -51,6 +51,9 @@ struct AmbientCinemaPostStudio: View {
     @State private var insightStore = StudioDeckInsightStore()
     @State private var openedNeighbour: OpenedMedia?
     @State private var canvasWidth: CGFloat = 0
+    @State private var useLeveledAudio = false
+    @State private var holdingOriginalAudio = false
+    @State private var seededAudioKey: String?
     @FocusState private var editingTitle: Bool
 
     private var isWideCanvas: Bool {
@@ -147,6 +150,71 @@ struct AmbientCinemaPostStudio: View {
         return rendition.privateURL ?? rendition.hosted?.url ?? rendition.publicURL
     }
 
+    // MARK: - Audio Loudness Leveling (v10.1)
+
+    private var audioTargetRendition: Rendition? {
+        if let active = activeRendition, active.supportsAudioLeveling { return active }
+        return rendition.supportsAudioLeveling ? rendition : nil
+    }
+
+    private var activeAudioFileID: String? {
+        audioTargetRendition?.file?.id
+    }
+
+    private var activeAudio: AudioLoudnessInfo? {
+        audioTargetRendition?.audio
+    }
+
+    private var showAudioLevelingUI: Bool {
+        model.capabilities.audioLeveling && activeAudioFileID != nil && context.missingIndex == nil
+    }
+
+    private var audioIsLeveled: Bool {
+        activeAudio?.isLeveled == true
+    }
+
+    /// True when the user has Leveled selected on a leveled clip ("what you hear is what you copy" — never affected by momentary hold).
+    private var usingLeveledShareLink: Bool {
+        audioIsLeveled && useLeveledAudio
+    }
+
+    /// True when the video hero should actively stream the leveled audio alternate.
+    private var playingLeveledAudio: Bool {
+        audioIsLeveled && useLeveledAudio && !holdingOriginalAudio
+    }
+
+    /// Resolves the share or direct URL for the current Original / Leveled switch.
+    private func resolvedAudioURL(_ base: URL, form: LinkForm) -> URL {
+        if form == .direct {
+            if usingLeveledShareLink, let alt = activeAudio?.altURL {
+                return alt
+            }
+            return AudioShareURL.resolve(base: base, audio: activeAudio, useLeveled: usingLeveledShareLink)
+        }
+        let shareTarget = currentFileLink == .private ? base : model.capabilities.shareLink(for: base)
+        return AudioShareURL.resolve(base: shareTarget, audio: activeAudio, useLeveled: usingLeveledShareLink)
+    }
+
+    private func seedAudioState(force: Bool = false) {
+        if force || seededAudioKey != activeBackdropKey {
+            seededAudioKey = activeBackdropKey
+            useLeveledAudio = model.audioLeveling.prefersLeveledLink(for: activeAudio)
+            holdingOriginalAudio = false
+        } else if !audioIsLeveled {
+            useLeveledAudio = false
+            holdingOriginalAudio = false
+        }
+    }
+
+    private func openAudioToolsDeck(isWide: Bool) {
+        deckTab = .tools
+        if isWide {
+            wideDeckOpen = true
+        } else {
+            compactSheetOpen = true
+        }
+    }
+
     private var hasTranscript: Bool { subtitles?.available == true }
 
     private var captionsActive: Bool {
@@ -202,6 +270,7 @@ struct AmbientCinemaPostStudio: View {
                     ambientEnabled: ambientEnabled,
                     reserveRight: showDockedDeck ? deckWidth : 0
                 )
+                .environment(\.audioUseLeveledPlayback, playingLeveledAudio)
             }
             .environment(\.ambientVideoSampler, videoSampler)
         }
@@ -249,11 +318,17 @@ struct AmbientCinemaPostStudio: View {
         }
         .task(id: rendition.id) {
             await preloadPrivateLinks()
+            if model.capabilities.audioLeveling && !model.audioLeveling.loaded {
+                await model.audioLeveling.load()
+                seedAudioState(force: true)
+            }
         }
         .onAppear {
             videoSampler.setActive(shouldSampleLiveVideo)
+            seedAudioState()
         }
         .onDisappear {
+            holdingOriginalAudio = false
             videoSampler.tearDown()
         }
         .onChange(of: shouldSampleLiveVideo) { _, active in
@@ -262,6 +337,17 @@ struct AmbientCinemaPostStudio: View {
         .onChange(of: activeBackdropKey) { _, _ in
             videoSampler.resetForMediaChange()
             videoSampler.setActive(shouldSampleLiveVideo)
+            seedAudioState(force: true)
+        }
+        .onChange(of: audioIsLeveled) { _, leveled in
+            if leveled {
+                if model.audioLeveling.settings.defaultLink == .normal {
+                    useLeveledAudio = true
+                }
+            } else {
+                useLeveledAudio = false
+                holdingOriginalAudio = false
+            }
         }
         .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86), value: wideDeckOpen)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: toast)
@@ -565,6 +651,10 @@ struct AmbientCinemaPostStudio: View {
 
                 identityVisibilityPill
 
+                if showAudioLevelingUI, let audio = activeAudio, !audio.isSilent {
+                    loudnessHUDPill(audio: audio, isWide: isWide)
+                }
+
                 Spacer(minLength: 4)
 
                 #if os(macOS)
@@ -574,6 +664,54 @@ struct AmbientCinemaPostStudio: View {
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
+    }
+
+    /// Floating Clear Liquid Glass loudness pill in the top HUD showing live LUFS / leveled status.
+    /// Tapping opens Studio Deck › Tools directly to the Audio Loudness card.
+    private func loudnessHUDPill(audio: AudioLoudnessInfo, isWide: Bool) -> some View {
+        let tint: Color = holdingOriginalAudio && audio.isLeveled ? Color(hex: 0xfbbf24) : audio.statusTint
+        let text: String = {
+            if audio.isRendering { return "Leveling…" }
+            if holdingOriginalAudio && audio.isLeveled {
+                return "Orig \(AudioLoudnessInfo.formatLufs(audio.integratedLufs))"
+            }
+            if audio.isLeveled && useLeveledAudio {
+                let target = audio.targetLufs.map(AudioTargetLufs.init(clamped:)) ?? model.audioLeveling.settings.target
+                return "Leveled · \(target.shortLabel)"
+            }
+            if let lufs = audio.integratedLufs {
+                return AudioLoudnessInfo.formatLufs(lufs)
+            }
+            return audio.zone.label
+        }()
+
+        return Button {
+            openAudioToolsDeck(isWide: isWide)
+        } label: {
+            HStack(spacing: 5) {
+                if audio.isRendering {
+                    ProgressView().controlSize(.mini).tint(tint)
+                } else {
+                    Image(systemName: audio.isLeveled ? "waveform" : audio.zone.symbol)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+                Text(text)
+                    .font(Font.cobalt(11.5, .semibold, relativeTo: .caption))
+                    .foregroundStyle(.white)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .frame(minHeight: 36)
+            .mediaGlassCapsule()
+            .frame(minHeight: Metrics.hit)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Audio loudness: \(text)")
+        .accessibilityHint("Opens Audio Loudness controls in Studio Deck")
+        .accessibilityIdentifier("ambient.loudnessPill")
     }
 
     /// Unified status dot + filename + 4-state visibility / inline rename popover.
@@ -799,7 +937,39 @@ struct AmbientCinemaPostStudio: View {
         let copiedDirect = justCopied && controller.copiedForm == .direct
 
         return VStack(spacing: 8) {
-            HStack(spacing: 8) {
+            // Audio version bar ("what you hear is what you copy"): drives player, URL chip, and copy buttons together
+            if audioIsLeveled {
+                HStack(spacing: 6) {
+                    HStack(spacing: 2) {
+                        dockAudioTab(title: "Original", active: !useLeveledAudio) {
+                            useLeveledAudio = false
+                            holdingOriginalAudio = false
+                        }
+                        dockAudioTab(
+                            title: "Leveled",
+                            active: useLeveledAudio,
+                            tint: Color(hex: 0x34d399)
+                        ) {
+                            useLeveledAudio = true
+                        }
+                    }
+                    .padding(2)
+                    .background(Color.white.opacity(0.08), in: Capsule())
+
+                    Spacer(minLength: 4)
+
+                    if useLeveledAudio {
+                        dockHoldOriginalPill
+                    } else if let delta = activeAudio?.gainDelta(for: model.audioLeveling.settings.target) {
+                        Text(AudioLoudnessInfo.formatGain(delta))
+                            .font(Font.cobalt(11, .medium, relativeTo: .caption2))
+                            .foregroundStyle(.white.opacity(0.65))
+                            .monospacedDigit()
+                    }
+                }
+            }
+
+            HStack(spacing: 6) {
                 statusPill(visibilityState)
 
                 if let url {
@@ -812,6 +982,22 @@ struct AmbientCinemaPostStudio: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
+
+                    if usingLeveledShareLink {
+                        Text("?audio=normal")
+                            .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
+                            .foregroundStyle(Color(hex: 0x34d399))
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 6.5)
+                            .padding(.vertical, 2.5)
+                            .background(Color(hex: 0x34d399).opacity(0.16), in: Capsule())
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(Color(hex: 0x34d399).opacity(0.38), lineWidth: 0.75)
+                            )
+                            .accessibilityIdentifier("ambient.audioNormalChip")
+                    }
                 } else {
                     Text(isHidden ? Copy.Hidden.rowDetail : Copy.PrivateLinks.offDetail)
                         .font(Font.cobalt(12, .regular, relativeTo: .caption))
@@ -851,7 +1037,11 @@ struct AmbientCinemaPostStudio: View {
                         )
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(currentFileLink == .private ? "Copy Private Share Link" : "Copy Share Link")
+                    .accessibilityLabel(
+                        usingLeveledShareLink
+                            ? (currentFileLink == .private ? "Copy Leveled Private Share Link" : "Copy Leveled Share Link")
+                            : (currentFileLink == .private ? "Copy Private Share Link" : "Copy Share Link")
+                    )
 
                     if hasPair && currentFileLink != .private {
                         Button {
@@ -877,7 +1067,7 @@ struct AmbientCinemaPostStudio: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(Copy.LinkPair.copyDirectLink)
+                        .accessibilityLabel(usingLeveledShareLink ? "Copy Leveled Direct Link" : Copy.LinkPair.copyDirectLink)
                     }
 
                     shareSystemButton(url: url)
@@ -952,11 +1142,87 @@ struct AmbientCinemaPostStudio: View {
         .frame(maxWidth: 560)
     }
 
+    private func dockAudioTab(title: String, active: Bool, tint: Color = .white, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Font.cobalt(11, .semibold, relativeTo: .caption2))
+                .foregroundStyle(active ? .black : .white.opacity(0.76))
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .background(active ? tint : .clear, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Compact momentary hold-to-hear-original pill inside the dock (never alters the share link).
+    private var dockHoldOriginalPill: some View {
+        HStack(spacing: 4) {
+            Image(systemName: holdingOriginalAudio ? "ear.fill" : "ear")
+                .font(.system(size: 10.5, weight: .semibold))
+            Text(holdingOriginalAudio ? "Original" : "Hold orig")
+                .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
+                .lineLimit(1)
+        }
+        .foregroundStyle(holdingOriginalAudio ? .black : .white.opacity(0.84))
+        .padding(.horizontal, 9)
+        .frame(height: 26)
+        .background(
+            holdingOriginalAudio ? Color(hex: 0xfbbf24) : Color.white.opacity(0.1),
+            in: Capsule()
+        )
+        .overlay(
+            Capsule()
+                .strokeBorder(holdingOriginalAudio ? Color(hex: 0xfbbf24) : Color.white.opacity(0.16), lineWidth: 0.75)
+        )
+        .contentShape(Capsule())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !holdingOriginalAudio { holdingOriginalAudio = true }
+                }
+                .onEnded { _ in
+                    if holdingOriginalAudio { holdingOriginalAudio = false }
+                }
+        )
+        .accessibilityLabel("Hold to hear original audio")
+        .accessibilityHint("Temporarily listens to original audio without changing the copied link.")
+    }
+
     @ViewBuilder
     private func shareSystemButton(url: URL) -> some View {
         let targets = model.capabilities.shareTargets(for: rendition, file: rendition.isOnDevice)
         let localURL = rendition.isOnDevice ? rendition.local?.fileURL : nil
-        if targets.forms.count > 1 {
+        if usingLeveledShareLink {
+            let shareURL = resolvedAudioURL(url, form: .share)
+            let directURL = resolvedAudioURL(url, form: .direct)
+            if targets.forms.count > 1 {
+                Menu {
+                    ShareLink(item: shareURL) {
+                        Label("Share Link (Leveled)", systemImage: Symbol.Media.copyLink)
+                    }
+                    if currentFileLink != .private {
+                        ShareLink(item: directURL) {
+                            Label("Direct Link (Leveled)", systemImage: Symbol.LinkPair.direct)
+                        }
+                    }
+                    if let localURL {
+                        ShareLink(item: localURL) {
+                            Label("File", systemImage: Symbol.Media.share)
+                        }
+                    }
+                } label: {
+                    shareIconBox
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Copy.share)
+            } else {
+                ShareLink(item: shareURL) {
+                    shareIconBox
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Copy.share)
+            }
+        } else if targets.forms.count > 1 {
             Menu {
                 ShareChoiceMenuItems(targets: targets, fileURL: localURL)
             } label: {
@@ -1536,6 +1802,18 @@ struct AmbientCinemaPostStudio: View {
     private var toolsTabContent: some View {
         let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
         return VStack(alignment: .leading, spacing: 14) {
+            if showAudioLevelingUI, let fileID = activeAudioFileID {
+                StudioDeckAudioLoudnessCard(
+                    model: model,
+                    fileID: fileID,
+                    audio: activeAudio,
+                    useLeveled: $useLeveledAudio,
+                    holdingOriginal: $holdingOriginalAudio,
+                    offline: offline,
+                    onToast: { showToast($0) }
+                )
+            }
+
             VStack(alignment: .leading, spacing: 8) {
                 StudioDeckSectionLabel(text: "STUDIO ACTIONS")
 
@@ -1779,19 +2057,24 @@ struct AmbientCinemaPostStudio: View {
     // MARK: - Actions & Visibility Transitions
 
     private func copyLink(_ url: URL, form: LinkForm) {
+        let resolved = resolvedAudioURL(url, form: form)
         if currentFileLink == .private {
-            Pasteboard.copy(url.absoluteString)
+            Pasteboard.copy(resolved.absoluteString)
             controller.privateLinkCopied += 1
             copiedPrivate = true
             let token = controller.privateLinkCopied
-            showToast(Copy.PrivateLinks.copiedPrivate)
+            showToast(usingLeveledShareLink ? "Leveled private link copied" : Copy.PrivateLinks.copiedPrivate)
             Task {
                 try? await Task.sleep(for: .seconds(1.8))
                 if controller.privateLinkCopied == token { copiedPrivate = false }
             }
         } else {
-            controller.copy(url, for: rendition.id, form: form)
-            showToast(form == .direct ? "Direct link copied" : "Share link copied")
+            controller.copyExact(resolved, for: rendition.id, form: form)
+            if usingLeveledShareLink {
+                showToast(form == .direct ? "Leveled direct link copied" : "Leveled share link copied")
+            } else {
+                showToast(form == .direct ? "Direct link copied" : "Share link copied")
+            }
         }
     }
 

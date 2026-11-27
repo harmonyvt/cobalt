@@ -218,6 +218,8 @@ public struct PreviewClient: CobaltClient {
     let postFrameState = PreviewPostFrameState()
     /// The linked 7TV account, its channels and their sets (`PreviewSevenTv.swift`).
     let sevenTvState = PreviewSevenTvState()
+    /// Audio loudness leveling settings and per-item state (`PreviewAudio.swift`).
+    let audioState = PreviewAudioState()
 
     public var baseURL: URL { PreviewData.base }
 

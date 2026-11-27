@@ -2,6 +2,7 @@
 // objects are built by shapeLibraryPosts — the same function GET /library uses — so a synced post is that object,
 // including created_at and files. v=3 is what the current app asks GET /library for.
 import { FILE_COLUMNS, shapeLibraryPosts } from "./app-routes";
+import { AUDIO_JOIN_COLUMNS, type AudioSummary } from "./audio-loudness";
 import type { HiddenRow } from "./hidden-store";
 import { privateUrl } from "./private-links";
 
@@ -18,9 +19,10 @@ export type PostRead = {
     titles: { post_key: string; title: string }[];
     hidden: HiddenRow[];
     links: { key: string; target_id: string }[];
+    audioOf?: Map<string, AudioSummary>;
 };
 
-// Six statements, in this order. Each binds (since, take).
+// Seven statements, in this order. Each binds (since, take).
 export function postReadStatements(db: D1Database, since: number, take: number): D1PreparedStatement[] {
     const bind = (sql: string) => db.prepare(sql).bind(since, take);
     return [
@@ -46,10 +48,17 @@ export function postReadStatements(db: D1Database, since: number, take: number):
               WHERE kind = 'item' AND revoked_at IS NULL AND target_id IN (
                   SELECT m.id FROM media_items m WHERE m.deleted_at IS NULL AND m.post_key IN ${pagePosts})`,
         ),
+        bind(
+            `SELECT ${AUDIO_JOIN_COLUMNS}
+               FROM media_audio a
+               LEFT JOIN media_items alt ON alt.id = a.alt_item_id AND alt.deleted_at IS NULL
+              WHERE a.item_id IN (
+                  SELECT m.id FROM media_items m WHERE m.deleted_at IS NULL AND m.post_key IN ${pagePosts})`,
+        ),
     ];
 }
 
-export const POST_READ_COUNT = 6;
+export const POST_READ_COUNT = 7;
 
 // `keys` is the posts to return, in the order the caller wants (the change log's order). A key with no live file is
 // left out: the caller reports it as gone.
@@ -76,6 +85,7 @@ export function shapePosts(
             tombs: new Map(),
             priv,
             hiddenOf,
+            audioOf: read.audioOf,
         },
         { ...SYNC_POST_VERSION, now },
     );

@@ -24,6 +24,7 @@ import { raceCeiling } from "./ceiling";
 import { SAFETY_MAX_ATTEMPTS, SAFETY_PREP_REV, SAFETY_RETRY_MS, safetyKind, sanitizePrepError } from "./safety";
 import { markSafetyPrepFailed, markSafetyReady, syncSafetyRows } from "./safety-store";
 import { pilotPrepRetryIds, readPilotLabels, readPilotReport } from "./safety-pilot";
+import { parseLoudnessPayload, type LoudnessMeasurement } from "./audio-loudness";
 import type { KV } from "./webp";
 
 export const ABOUT_JOB_PREFIX = "about:";
@@ -72,6 +73,8 @@ export type AboutProbeDeps = {
     renew?: () => void;
     // Tests. Production uses SAFETY_CALL_MS for a clip and ABOUT_CALL_MS for a still.
     safetyCallMs?: number;
+    // Piggybacked EBU R128 loudness from POST /about (Cobalt v10.1): recorded without a second R2 read.
+    onLoudness?: (itemId: string, loudness: LoudnessMeasurement) => Promise<void>;
 };
 
 type AboutJob = { busy?: number; at: number; kind?: "clip" | "still" };
@@ -442,6 +445,17 @@ export class AboutProbeService {
                 .bind(itemId, answer.frames.length, answer.audio ? 1 : 0, this.d.now())
                 .run();
             await this.drop(itemId);
+            // Piggybacked EBU R128 loudness reading (Cobalt v10.1): best effort, never fails the about probe.
+            if (this.d.onLoudness) {
+                const loudness = parseLoudnessPayload((raw as { loudness?: unknown } | null)?.loudness);
+                if (loudness) {
+                    try {
+                        await this.d.onLoudness(itemId, loudness);
+                    } catch (e) {
+                        console.error("[about] recording loudness failed", itemId, String(e));
+                    }
+                }
+            }
             // The clip did not fit in the about budget. Frames and sound are kept. One safety job, not a second about probe.
             if (!safety && safetyDeferredReason(raw)) await this.queueSafetyClip(itemId);
         } catch (e) {

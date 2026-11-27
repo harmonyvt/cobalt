@@ -238,6 +238,30 @@ struct LibraryTile: View, Equatable {
                     .background(TileBadgeSurface.fill, in: Capsule())
                     .overlay(Capsule().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
             }
+        } else if isPlayableVideo, let audio = row.item.primaryAudio {
+            if audio.isLeveled {
+                Image(systemName: "waveform")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(Color(hex: 0x34d399))
+                    .frame(width: 18, height: 18)
+                    .background(TileBadgeSurface.fill, in: Circle())
+                    .overlay(Circle().strokeBorder(Color(hex: 0x34d399).opacity(0.45), lineWidth: 0.6))
+            } else if audio.isRendering {
+                Image(systemName: "waveform")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(Color(hex: 0xfbbf24))
+                    .frame(width: 18, height: 18)
+                    .background(TileBadgeSurface.fill, in: Circle())
+                    .overlay(Circle().strokeBorder(Color(hex: 0xfbbf24).opacity(0.45), lineWidth: 0.6))
+            } else if audio.needsAttention {
+                Circle()
+                    .fill(audio.statusTint)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: audio.statusTint.opacity(0.75), radius: 2.5)
+                    .frame(width: 16, height: 16)
+                    .background(TileBadgeSurface.fill, in: Circle())
+                    .overlay(Circle().strokeBorder(TileBadgeSurface.stroke, lineWidth: 0.5))
+            }
         }
     }
 

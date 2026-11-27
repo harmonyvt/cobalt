@@ -869,6 +869,166 @@ export function parseMeanVolume(stderr) {
     return Number.isFinite(v) ? v : null;
 }
 
+// ---- audio loudness measurement & leveling (Cobalt v10.1) ---------------------------------------------------------
+
+export const AUDIO_LEVEL_TARGETS = [-14, -16];
+export const AUDIO_TRUE_PEAK_CEILING = -1.5;
+export const AUDIO_LRA_TARGET = 11;
+export const AUDIO_SILENCE_LUFS = -60;
+export const AUDIO_MEASURE_TIMEOUT_MS = 90_000;
+export const AUDIO_LEVEL_TIMEOUT_MS = 180_000;
+
+/**
+ * Validated target LUFS (`-14` or `-16`, defaulting to `-14` when omitted; null on invalid input).
+ * @param {unknown} raw
+ * @returns {-14 | -16 | null}
+ */
+export function parseAudioTarget(raw) {
+    if (raw === undefined || raw === null || raw === "") return -14;
+    const n = Number(raw);
+    if (n === -14) return -14;
+    if (n === -16) return -16;
+    return null;
+}
+
+/**
+ * Pass 1 ffmpeg argv: measures EBU R128 integrated loudness, true peak, LRA, threshold, and target offset
+ * without writing an output file.
+ * @param {{ input: string, target?: number }} j
+ */
+export function buildLoudnormMeasureArgs(j) {
+    const target = j.target === -16 ? -16 : -14;
+    return [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel", "info",
+        "-protocol_whitelist", "file,pipe",
+        "-i", j.input,
+        "-vn", "-sn", "-dn",
+        "-map", "0:a:0",
+        "-af", `loudnorm=I=${target}:TP=${AUDIO_TRUE_PEAK_CEILING}:LRA=${AUDIO_LRA_TARGET}:print_format=json`,
+        "-f", "null",
+        "-",
+    ];
+}
+
+/**
+ * Pass 2 ffmpeg argv: non-destructive loudness leveling with `-c:v copy` (or `libx264` fallback when `reencodeVideo`
+ * is true for containers/codecs that cannot be stream-copied into MP4). When `measured` stats from Pass 1 are
+ * supplied, uses two-pass linear loudnorm; ffmpeg's built-in gentle dynamic limiter engages automatically when a
+ * quiet dynamic clip would otherwise exceed the `-1.5 dBTP` ceiling.
+ * @param {{
+ *   input: string,
+ *   output: string,
+ *   target?: number,
+ *   measured?: { integrated_lufs: number, true_peak_dbtp: number, lra_lu: number, threshold_lufs: number, offset_db: number } | null,
+ *   reencodeVideo?: boolean,
+ * }} j
+ */
+export function buildLoudnormLevelArgs(j) {
+    const target = j.target === -16 ? -16 : -14;
+    const m = j.measured;
+    const hasMeasured =
+        m &&
+        Number.isFinite(m.integrated_lufs) &&
+        m.integrated_lufs > AUDIO_SILENCE_LUFS &&
+        Number.isFinite(m.true_peak_dbtp) &&
+        Number.isFinite(m.lra_lu) &&
+        Number.isFinite(m.threshold_lufs) &&
+        Number.isFinite(m.offset_db);
+    const filter = hasMeasured
+        ? `loudnorm=I=${target}:TP=${AUDIO_TRUE_PEAK_CEILING}:LRA=${AUDIO_LRA_TARGET}:measured_I=${m.integrated_lufs.toFixed(2)}:measured_TP=${m.true_peak_dbtp.toFixed(2)}:measured_LRA=${m.lra_lu.toFixed(2)}:measured_thresh=${m.threshold_lufs.toFixed(2)}:offset=${m.offset_db.toFixed(2)}:linear=true:print_format=json`
+        : `loudnorm=I=${target}:TP=${AUDIO_TRUE_PEAK_CEILING}:LRA=${AUDIO_LRA_TARGET}:print_format=json`;
+    return [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel", "info",
+        "-protocol_whitelist", "file,pipe",
+        "-i", j.input,
+        "-map", "0:v:0?",
+        "-map", "0:a:0",
+        "-sn", "-dn",
+        ...(j.reencodeVideo
+            ? ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
+            : ["-c:v", "copy"]),
+        "-af", filter,
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ar", "48000",
+        "-movflags", "+faststart",
+        "-f", "mp4",
+        "-y",
+        j.output,
+    ];
+}
+
+/**
+ * Parses the JSON summary printed by ffmpeg's `loudnorm=...:print_format=json` filter on stderr.
+ * Silent tracks where ffmpeg reports `-inf` are normalized to `-99` LUFS / `-99` dBTP so they serialize cleanly.
+ * @param {string} stderr
+ * @returns {{
+ *   integrated_lufs: number,
+ *   true_peak_dbtp: number,
+ *   lra_lu: number,
+ *   threshold_lufs: number,
+ *   offset_db: number,
+ *   output_lufs: number | null,
+ *   output_true_peak: number | null,
+ *   normalization_type: string | null,
+ * } | null}
+ */
+export function parseLoudnormStats(stderr) {
+    if (typeof stderr !== "string" || !stderr.includes("input_i")) return null;
+    // Take the last JSON block containing input_i (ffmpeg prints other lines before it).
+    const matches = [...stderr.matchAll(/\{[^{}]*"input_i"[^{}]*\}/g)];
+    if (matches.length === 0) return null;
+    const raw = matches[matches.length - 1][0];
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return null;
+    }
+    const numOrFloor = (v, floor) => {
+        if (typeof v === "number") return Number.isFinite(v) ? v : floor;
+        if (typeof v !== "string") return null;
+        const s = v.trim().toLowerCase();
+        if (s === "-inf" || s === "inf" || s === "nan") return floor;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : null;
+    };
+    const integrated_lufs = numOrFloor(parsed.input_i, -99);
+    const true_peak_dbtp = numOrFloor(parsed.input_tp, -99);
+    const lra_lu = numOrFloor(parsed.input_lra, 0);
+    const threshold_lufs = numOrFloor(parsed.input_thresh, -99);
+    const offset_db = numOrFloor(parsed.target_offset, 0);
+    if (
+        integrated_lufs === null ||
+        true_peak_dbtp === null ||
+        lra_lu === null ||
+        threshold_lufs === null ||
+        offset_db === null
+    ) {
+        return null;
+    }
+    const optNum = (v) => {
+        if (v === undefined || v === null) return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? +n.toFixed(2) : null;
+    };
+    return {
+        integrated_lufs: +integrated_lufs.toFixed(2),
+        true_peak_dbtp: +true_peak_dbtp.toFixed(2),
+        lra_lu: +Math.max(0, lra_lu).toFixed(2),
+        threshold_lufs: +threshold_lufs.toFixed(2),
+        offset_db: +offset_db.toFixed(2),
+        output_lufs: optNum(parsed.output_i),
+        output_true_peak: optNum(parsed.output_tp),
+        normalization_type: typeof parsed.normalization_type === "string" ? parsed.normalization_type : null,
+    };
+}
+
+
 /** Longer side of the thumb the helper makes for a saved photo (APP-API-CONTRACT 18.7). */
 export const THUMB_MAX_SIDE = 480;
 

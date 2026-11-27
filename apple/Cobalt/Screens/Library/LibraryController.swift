@@ -188,6 +188,8 @@ final class LibraryController {
     var shownRows: [LibraryRow] = []
     /// The share chips: every post, not shared, shared, or one collection's.
     var shareFilter: LibraryShareFilter = .all
+    /// Audio loudness filter (`features.audio_leveling`): all, leveled, or needs a look.
+    var audioFilter: LibraryAudioFilter = .all
     /// The post a hold is showing full size (media only), while the finger stays down.
     var peek: LibraryRow?
     /// A hold just showed a peek: the tap the same touch ends with must not tick or untick.
@@ -936,6 +938,58 @@ final class LibraryController {
         Pasteboard.copy(model.capabilities.link(for: url, form).absoluteString)
         showStatus(Copy.Media.copied)
         doneTick += 1
+    }
+
+    /// Copies a video's link respecting `?audio=normal` (or the leveled alt URL for `.direct`) when leveled audio is selected.
+    func copyVideoLink(_ item: MediaItem, form: LinkForm = .share, useLeveled: Bool? = nil) {
+        guard let base = videoLink(item) else { return }
+        let audio = item.primaryAudio
+        let wantLeveled = (useLeveled ?? model.audioLeveling.prefersLeveledLink(for: audio)) && audio?.isLeveled == true
+        let resolved: URL
+        if form == .direct {
+            if wantLeveled, let alt = audio?.altURL {
+                resolved = alt
+            } else {
+                resolved = AudioShareURL.resolve(base: base, audio: audio, useLeveled: wantLeveled)
+            }
+        } else {
+            let shareBase = item.video?.privateURL != nil ? base : model.capabilities.link(for: base, .share)
+            resolved = AudioShareURL.resolve(base: shareBase, audio: audio, useLeveled: wantLeveled)
+        }
+        Pasteboard.copy(resolved.absoluteString)
+        showStatus(wantLeveled ? "Leveled link copied" : Copy.Media.copied)
+        doneTick += 1
+    }
+
+    /// Queues 2-pass EBU R128 loudness leveling for `item`'s primary video from the library context menu.
+    func levelItemAudio(_ item: MediaItem) {
+        guard model.capabilities.audioLeveling, let fileID = item.primaryAudioFileID else { return }
+        let target = model.audioLeveling.settings.target
+        showStatus("Leveling audio to \(target.label)…")
+        Task {
+            do {
+                _ = try await model.audioLeveling.levelItem(id: fileID, target: target)
+                doneTick += 1
+            } catch {
+                showStatus("Could not start leveling")
+                failTick += 1
+            }
+        }
+    }
+
+    /// Removes the leveled audio alternate for `item`'s primary video from the library context menu.
+    func removeItemAudioLevel(_ item: MediaItem) {
+        guard model.capabilities.audioLeveling, let fileID = item.primaryAudioFileID else { return }
+        Task {
+            do {
+                _ = try await model.audioLeveling.removeLevel(id: fileID)
+                showStatus("Leveled copy removed")
+                doneTick += 1
+            } catch {
+                showStatus("Could not remove leveled copy")
+                failTick += 1
+            }
+        }
     }
 
     /// The video's link on or off, said in the shell's status line. Off asks first (`makingPrivate`); the library's

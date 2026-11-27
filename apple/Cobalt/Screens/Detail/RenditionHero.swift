@@ -10,11 +10,32 @@ import UniformTypeIdentifiers
 /// video that is not on this device still has its picture), else the first frame of a public file;
 /// "not on this iphone" is only a small cloud badge in the corner. The file type sits on the other corner like
 /// the planet's.
+private struct AudioUseLeveledPlaybackKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// True when Post Studio is actively playing the leveled audio alternate (driven by Original/Leveled switch and momentary hold-to-hear-original).
+    var audioUseLeveledPlayback: Bool {
+        get { self[AudioUseLeveledPlaybackKey.self] }
+        set { self[AudioUseLeveledPlaybackKey.self] = newValue }
+    }
+}
+
 struct RenditionHero: View {
     let rendition: Rendition
     /// The media: a video with no picture of its own borrows the first frame of its newest public webp.
     var item: MediaItem?
     var maxHeight: CGFloat = 360
+
+    @Environment(\.audioUseLeveledPlayback) private var audioUseLeveledPlayback
+
+    private var leveledPlaybackURL: URL? {
+        guard audioUseLeveledPlayback, let audio = rendition.audio, audio.isLeveled else { return nil }
+        if let url = audio.altURL { return HeroSource.resolve(url) }
+        if let altID = audio.altID { return KeyedStream.url(itemID: altID, ext: "mp4") }
+        return nil
+    }
 
     private var remote: HeroRemote {
         let remote = HeroRemote(rendition, in: item)
@@ -40,12 +61,14 @@ struct RenditionHero: View {
                 // a photo, a crop, an older single photo: the viewer with zoom, not the player
                 PhotoHero(rendition: rendition, item: item, maxHeight: maxHeight)
             } else if let local = rendition.local {
-                DetailPlayer(video: local, maxHeight: maxHeight, aspect: rendition.knownAspect, remote: remote)
+                DetailPlayer(
+                    video: local, maxHeight: maxHeight, aspect: rendition.knownAspect, remote: remote,
+                    overrideVideoURL: leveledPlaybackURL)
             } else {
                 // the server's poster comes through `remote.still`, so a private video not on this device has its picture
                 RemoteHero(
                     poster: nil, remote: remote, aspect: rendition.knownAspect, maxHeight: maxHeight,
-                    label: rendition.typeLabel)
+                    label: rendition.typeLabel, overrideVideoURL: leveledPlaybackURL)
                     .accessibilityLabel(Copy.Media.heroA11y(rendition.local?.name ?? rendition.typeLabel, evicted: true))
             }
         }
@@ -241,11 +264,13 @@ private struct RemoteHero: View {
     let aspect: CGFloat?
     let maxHeight: CGFloat
     let label: String
+    /// Optional leveled-audio alternate URL that overrides original playback without losing `HeroVideoBox` identity.
+    var overrideVideoURL: URL? = nil
     @State private var fullScreen: HeroFullScreen?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if let video = remote.playableVideo, remote.animatedWebp == nil {
+        if let video = overrideVideoURL ?? remote.playableVideo, remote.animatedWebp == nil {
             HeroVideoBox(
                 url: HeroSource.resolve(video), name: label, label: label, recordedAspect: aspect, maxHeight: maxHeight,
                 poster: poster, remoteStill: remote.still, streamed: true)
@@ -282,6 +307,8 @@ struct DetailPlayer: View {
     var aspect: CGFloat?
     /// What the server's public files can show while this device has no file.
     var remote = HeroRemote()
+    /// Optional leveled-audio alternate URL that overrides original playback without losing `HeroVideoBox` identity.
+    var overrideVideoURL: URL? = nil
 
     @State private var onDisk = false
     /// The disk was looked at (until then a record that names a file shows its poster, not the remote picture).
@@ -351,8 +378,9 @@ struct DetailPlayer: View {
                     picture { StillImage(url: url) }
                 } else {
                     HeroVideoBox(
-                        url: url, name: video.name, label: label, recordedAspect: recorded, maxHeight: maxHeight,
-                        poster: video.posterURL, lent: lent?.id == video.id ? lent : nil)
+                        url: overrideVideoURL ?? url, name: video.name, label: label, recordedAspect: recorded, maxHeight: maxHeight,
+                        poster: video.posterURL, remoteStill: remote.still, streamed: overrideVideoURL != nil,
+                        lent: overrideVideoURL == nil && lent?.id == video.id ? lent : nil)
                 }
             } else if video.fileURL != nil, !diskChecked {
                 // a moment, while the disk is looked at: the poster in a frame the clip will most likely keep
@@ -362,7 +390,7 @@ struct DetailPlayer: View {
                     if let poster = video.posterURL { StillImage(url: poster) }
                 }
                 .heroFrame(aspect: shape, maxHeight: maxHeight, label: label)
-            } else if let hosted = remote.playableVideo, remote.animatedWebp == nil {
+            } else if let hosted = overrideVideoURL ?? remote.playableVideo, remote.animatedWebp == nil {
                 HeroVideoBox(
                     url: HeroSource.resolve(hosted), name: video.name, label: label, recordedAspect: recorded,
                     maxHeight: maxHeight, poster: video.posterURL, remoteStill: remote.still, streamed: true)

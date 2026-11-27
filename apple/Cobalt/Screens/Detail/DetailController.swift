@@ -179,7 +179,11 @@ final class DetailController {
 
     /// Copies a public file's link: its share page by default, or the file itself with `.direct`.
     func copy(_ url: URL, for id: String, form: LinkForm = .share) {
-        Pasteboard.copy(model.capabilities.link(for: url, form).absoluteString)
+        copyExact(model.capabilities.link(for: url, form), for: id, form: form)
+    }
+
+    func copyExact(_ url: URL, for id: String, form: LinkForm = .share) {
+        Pasteboard.copy(url.absoluteString)
         notice = nil
         copiedID = id
         copiedForm = form

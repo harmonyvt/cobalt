@@ -215,6 +215,9 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// can be framed in the post it came from (a render of kind `post` in the editor's containers). False when absent: no
     /// "post frame" button, no "post" tool, no switch on save.
     public var postFrame: Bool = false
+    /// `features.audio_leveling`: EBU R128 loudness measurement, 2-pass leveling (`?audio=normal` share links),
+    /// `/audio/settings`, `/library/items/<id>/audio/level`, and `/audio/backfill`. False when absent.
+    public var audioLeveling: Bool = false
     /// `posthog` (APP-API-CONTRACT 58): the PostHog project the app's SDK sends to (session replay on iPhone and iPad,
     /// events everywhere). Only answered to a valid key; nil when absent, and the SDK never starts.
     public var postHog: PostHogProject? = nil

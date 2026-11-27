@@ -299,10 +299,10 @@ describe("GET /library", () => {
         expect(past.n).toBe(1);
         expect(past.out.body).toMatchObject({ posts: [], counts: { posts: 6, files: 10, hidden: 1 }, next: null });
 
-        // without a batch: statement by statement, as it always was
+        // without a batch: statement by statement, as it always was (10 + 1 for media_audio; batch mode stays 2)
         const plain = world("plain");
         await libraryList(plain.d, q("v=3"));
-        expect((await trips(plain, () => libraryList(plain.d, q("v=3")))).n).toBe(10);
+        expect((await trips(plain, () => libraryList(plain.d, q("v=3")))).n).toBe(11);
     });
 
     it("a database without the private links table fails the batch as a whole: the reads go one by one and the links are null", async () => {

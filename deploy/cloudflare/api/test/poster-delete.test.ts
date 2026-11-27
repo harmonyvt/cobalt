@@ -216,6 +216,10 @@ describe("a poster can not be deleted by hand, and nothing on a lifetime path or
                 "about-store.ts:bucket.delete(",
                 "app-routes.ts:bucket.delete(", // post delete, one list per bucket (the file and its public mirror)
                 "app-routes.ts:media.delete(", // post delete (the file's mirror), poster release
+                // v10.1: deleting or replacing a leveled `audio_level` alt copy (`made/<altId>.mp4` in originals and its
+                // own public mirror `public_key` in media); never a poster or a parent video
+                "audio-loudness.ts:media.delete(",
+                "audio-loudness.ts:originals.delete(",
                 "cutout.ts:originals.delete(", // section 39.5: a cutout png whose library row was not written
                 // section 31.9 "Ending a render": the editor's half-made mp4 (`edits/<rid>.mp4`, originals) and a poster no library
                 // row names yet (media); the poster object is named only by the render until the record step files the row

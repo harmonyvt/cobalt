@@ -144,12 +144,19 @@ private struct LibraryContent: View {
 
     /// `rows` from rows and an index already in hand (the body builds both once per pass).
     private func rows(from unfiltered: [LibraryRow], index: ShareSetIndex) -> [LibraryRow] {
+        var result = unfiltered
         let filter = shareFilter
         // the share chips are not in the album: nothing hidden is in a link
-        guard filter != .all, !library.showingHidden else { return unfiltered }
-        var setCollections: Set<String> = []
-        if case .set(let id) = filter { setCollections = Set(model.shareSets.group(id)?.collectionIDs ?? []) }
-        return unfiltered.filter { filter.admits($0, index: index, setCollections: setCollections) }
+        if filter != .all, !library.showingHidden {
+            var setCollections: Set<String> = []
+            if case .set(let id) = filter { setCollections = Set(model.shareSets.group(id)?.collectionIDs ?? []) }
+            result = result.filter { filter.admits($0, index: index, setCollections: setCollections) }
+        }
+        if model.capabilities.audioLeveling, !library.showingHidden, controller.audioFilter != .all {
+            let af = controller.audioFilter
+            result = result.filter { af.admits($0) }
+        }
+        return result
     }
 
     /// The share chips' filter, back to `all` when its collection is gone.
@@ -487,7 +494,8 @@ private struct LibraryContent: View {
     private func filterRow(unfiltered: [LibraryRow], shareIndex: ShareSetIndex, hasRows: Bool, canSelect: Bool) -> some View {
         let kinds = model.capabilities.gallery || model.capabilities.hidden
         let links = model.capabilities.shareSets && !model.shareSets.sets.isEmpty && !library.showingHidden
-        let showsTrailing = links || hasRows
+        let audio = model.capabilities.audioLeveling && !library.showingHidden
+        let showsTrailing = links || audio || hasRows
         if kinds || showsTrailing {
             HStack(spacing: 0) {
                 if kinds {
@@ -501,6 +509,9 @@ private struct LibraryContent: View {
                 if showsTrailing {
                     GlassEffectContainer(spacing: 6) {
                         HStack(spacing: 6) {
+                            if audio {
+                                LibraryAudioFilterMenu(rows: unfiltered, filter: $controller.audioFilter)
+                            }
                             if links {
                                 LibraryShareMenu(model: model, rows: unfiltered, index: shareIndex, filter: $controller.shareFilter)
                             }

@@ -128,6 +128,8 @@ public final class AppModel {
     public let swarms: SwarmStore
     /// The auto-hide rules (APP-API-CONTRACT 37; settings › hidden). Idle until `load()`.
     public let hiddenRules: HiddenRulesModel
+    /// Audio loudness leveling settings, per-item leveling, and backfill (`features.audio_leveling`).
+    public let audioLeveling: AudioLevelStore
     /// Search names (APP-API-CONTRACT 48; library › names). Idle until `load()`.
     public let searchNames: SearchNamesModel
     /// Settings › account (APP-API-CONTRACT 42): who is signed in, the devices and the keys for tools. Idle until `refresh()`.
@@ -272,6 +274,7 @@ public final class AppModel {
         self.postFrames = PostFrameStore(context: context)
         self.skyMap = SkyMapModel(context: context)
         self.hiddenRules = HiddenRulesModel(context: context, library: library)
+        self.audioLeveling = AudioLevelStore(context: context, library: library)
         self.searchNames = SearchNamesModel(context: context, library: library)
         self.account = AccountStore(context: context)
         self.sevenTv = SevenTvStore(context: context)
@@ -494,6 +497,9 @@ public final class AppModel {
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
         editor.capabilitiesChanged()                  // `features.editor` went: close the editor
         if let editLive { Task { await editLive.capabilitiesChanged() } }
+        if caps.audioLeveling, caps.key == .valid, !audioLeveling.loaded {
+            Task { await audioLeveling.load() }
+        }
     }
 
     func markKeyInvalid() {
@@ -531,6 +537,7 @@ public final class AppModel {
         postFrames.reset()
         skyMap.reset()
         hiddenRules.reset()
+        audioLeveling.reset()
         searchNames.reset()
         account.reset()
         sevenTv.reset()

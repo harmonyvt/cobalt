@@ -238,6 +238,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var ytdlp: Bool?
                 var booru: Bool?
                 var postFrame: Bool?
+                var audioLeveling: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -351,6 +352,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.ytdlp = f?.ytdlp ?? false
         caps.booru = f?.booru ?? false
         caps.postFrame = f?.postFrame ?? false
+        caps.audioLeveling = f?.audioLeveling ?? false
         if let ph = w.posthog, let token = ph.token?.trimmingCharacters(in: .whitespaces), !token.isEmpty,
            let host = ph.host.flatMap(URL.init(string:)), host.scheme == "https" {
             caps.postHog = PostHogProject(token: token, host: host)

@@ -77,6 +77,7 @@ enum PreviewData {
         caps.deletePost = true
         caps.titles = true
         caps.publicDefault = true                  // a fork since section 13: `public` on a save
+        caps.audioLeveling = true
         switch scenario {
         case .plainCobalt:
             caps.kind = .plainCobalt
@@ -88,6 +89,7 @@ enum PreviewData {
             caps.deletePost = false
             caps.titles = false
             caps.publicDefault = false
+            caps.audioLeveling = false
             caps.key = .unknown; caps.keyName = nil
         case .legacyFork:
             caps.kind = .legacyFork
@@ -100,6 +102,7 @@ enum PreviewData {
             caps.deletePost = false
             caps.titles = false
             caps.publicDefault = false
+            caps.audioLeveling = false
             caps.key = .unknown; caps.keyName = nil
         case .renditionsLegacy:
             caps.deletePost = false

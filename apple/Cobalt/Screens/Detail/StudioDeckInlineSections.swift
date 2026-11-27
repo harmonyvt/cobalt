@@ -1368,3 +1368,327 @@ struct StudioDeckPostFrameCard: View {
         .accessibilityElement(children: .combine)
     }
 }
+
+// MARK: - Inline Audio Loudness Card (v10.1 · Studio Deck Tools Tab)
+
+/// Inline EBU R128 loudness card inside Studio Deck › Tools (`features.audio_leveling`):
+/// displays active-track LUFS / True Peak / Gain metrics, unified `LoudnessRulerView`,
+/// Original ↔ Leveled A/B switch ("what you hear is what you copy"), momentary
+/// "Hold to hear original" audition button, and Level / Re-level / Retry / Remove actions.
+struct StudioDeckAudioLoudnessCard: View {
+    let model: AppModel
+    let fileID: String
+    let audio: AudioLoudnessInfo?
+    @Binding var useLeveled: Bool
+    @Binding var holdingOriginal: Bool
+    let offline: Bool
+    let onToast: (String) -> Void
+
+    @State private var localError: String?
+
+    private var store: AudioLevelStore { model.audioLeveling }
+    private var activeTarget: AudioTargetLufs {
+        if let raw = audio?.targetLufs, audio?.isLeveled == true {
+            return AudioTargetLufs(clamped: raw)
+        }
+        return store.settings.target
+    }
+    private var isLeveled: Bool { audio?.isLeveled == true }
+    private var isRendering: Bool { audio?.isRendering == true || store.inFlightItems.contains(fileID) }
+    private var hearingLeveled: Bool { isLeveled && useLeveled && !holdingOriginal }
+
+    private var displayedLufs: Double? {
+        hearingLeveled ? (audio?.outputLufs ?? Double(activeTarget.rawValue)) : audio?.integratedLufs
+    }
+
+    private var displayedTruePeak: Double? {
+        hearingLeveled ? (audio?.outputTruePeak ?? -1.5) : audio?.truePeakDbtp
+    }
+
+    private var statusBadgeText: String {
+        if isRendering { return "Rendering…" }
+        if holdingOriginal && isLeveled { return "Holding Original" }
+        if isLeveled { return "Leveled · \(activeTarget.shortLabel)" }
+        if audio?.state == .failed { return "Failed" }
+        guard let audio else { return "Unmeasured" }
+        if audio.integratedLufs == nil && audio.zone == .pending { return "Pending" }
+        return audio.zone.label
+    }
+
+    private var statusBadgeTint: Color {
+        if holdingOriginal && isLeveled { return Color(hex: 0xfbbf24) }
+        return audio?.statusTint ?? Color(hex: 0x9ca3af)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Header
+            HStack(spacing: 8) {
+                StudioDeckSectionLabel(text: "AUDIO LOUDNESS")
+                Spacer(minLength: 4)
+                HStack(spacing: 5) {
+                    if isRendering {
+                        ProgressView().controlSize(.mini).tint(statusBadgeTint)
+                    } else {
+                        Circle()
+                            .fill(statusBadgeTint)
+                            .frame(width: 6, height: 6)
+                    }
+                    Text(statusBadgeText)
+                        .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
+                        .foregroundStyle(statusBadgeTint)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3.5)
+                .background(statusBadgeTint.opacity(0.14), in: Capsule())
+                .overlay(Capsule().strokeBorder(statusBadgeTint.opacity(0.32), lineWidth: 0.75))
+            }
+
+            // 3-cell live telemetry (follows what you are currently hearing)
+            if audio?.isSilent == true {
+                HStack(spacing: 8) {
+                    Image(systemName: "speaker.slash.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text("Silent audio track (≤ −60 LUFS) — skipped.")
+                        .font(Font.cobalt(12, .regular, relativeTo: .caption))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+            } else {
+                HStack(spacing: 6) {
+                    metricCell(
+                        label: hearingLeveled ? "LEVELED" : "ORIGINAL",
+                        value: AudioLoudnessInfo.formatLufs(displayedLufs),
+                        tint: hearingLeveled ? Color(hex: 0x34d399) : (audio?.zone.tint ?? .white)
+                    )
+                    metricCell(
+                        label: "TRUE PEAK",
+                        value: AudioLoudnessInfo.formatTruePeak(displayedTruePeak),
+                        tint: (!hearingLeveled && audio?.isClipping == true)
+                            ? Color(hex: 0xf87171)
+                            : (hearingLeveled ? Color(hex: 0x34d399) : .white)
+                    )
+                    if let delta = audio?.gainDelta(for: store.settings.target) {
+                        metricCell(
+                            label: isLeveled ? "GAIN" : "EST. GAIN",
+                            value: AudioLoudnessInfo.formatGain(delta),
+                            tint: isLeveled ? Color(hex: 0x34d399) : .white.opacity(0.9)
+                        )
+                    } else if let lra = audio?.lraLu {
+                        metricCell(
+                            label: "RANGE",
+                            value: String(format: "%.1f LU", lra),
+                            tint: .white.opacity(0.9)
+                        )
+                    }
+                }
+
+                // Unified LUFS ruler
+                LoudnessRulerView(
+                    measuredLufs: audio?.integratedLufs,
+                    measuredTruePeak: audio?.truePeakDbtp,
+                    outputLufs: isLeveled ? (audio?.outputLufs ?? Double(activeTarget.rawValue)) : nil,
+                    target: activeTarget,
+                    showsAxis: true,
+                    showsLegend: false
+                )
+            }
+
+            // A/B switch + Hold-to-hear-original when leveled copy is ready
+            if isLeveled {
+                StudioDeckHairline()
+
+                HStack(spacing: 4) {
+                    abSegment(title: "Original", active: !useLeveled) {
+                        useLeveled = false
+                    }
+                    abSegment(title: "Leveled · \(activeTarget.shortLabel)", active: useLeveled, tint: Color(hex: 0x34d399)) {
+                        useLeveled = true
+                    }
+                }
+                .padding(3)
+                .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                if useLeveled {
+                    holdForOriginalButton
+                }
+            }
+
+            // Error display
+            if let errorText = localError ?? audio?.error {
+                Text(errorText)
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(CobaltColor.errorText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Action buttons
+            if audio?.isSilent != true {
+                actionRow
+            }
+        }
+        .studioDeckCard(border: isLeveled ? Color(hex: 0x34d399).opacity(0.32) : Color.white.opacity(0.08))
+    }
+
+    private func metricCell(label: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(Font.cobalt(9.5, .semibold, relativeTo: .caption2))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+            Text(value)
+                .font(Font.cobalt(12, .semibold, relativeTo: .caption))
+                .foregroundStyle(tint)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private func abSegment(title: String, active: Bool, tint: Color = .white, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Font.cobalt(11.5, .semibold, relativeTo: .caption))
+                .foregroundStyle(active ? (tint == .white ? .black : .black) : .white.opacity(0.74))
+                .frame(maxWidth: .infinity)
+                .frame(height: 30)
+                .background(active ? tint : .clear, in: RoundedRectangle(cornerRadius: 7.5, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Momentary press-and-hold audition button: plays original audio only while held and never changes the share link.
+    private var holdForOriginalButton: some View {
+        HStack(spacing: 6) {
+            Image(systemName: holdingOriginal ? "ear.fill" : "ear")
+                .font(.system(size: 12, weight: .semibold))
+            Text(holdingOriginal ? "Listening to Original (link stays ?audio=normal)" : "Hold to hear Original")
+                .font(Font.cobalt(11.5, .medium, relativeTo: .caption))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
+        .foregroundStyle(holdingOriginal ? .black : .white.opacity(0.86))
+        .frame(maxWidth: .infinity)
+        .frame(height: 32)
+        .background(
+            holdingOriginal ? Color(hex: 0xfbbf24) : Color.white.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(holdingOriginal ? Color(hex: 0xfbbf24) : Color.white.opacity(0.14), lineWidth: 0.75)
+        )
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !holdingOriginal { holdingOriginal = true }
+                }
+                .onEnded { _ in
+                    if holdingOriginal { holdingOriginal = false }
+                }
+        )
+        .accessibilityLabel("Hold to hear original audio")
+        .accessibilityHint("Temporarily plays the original track without changing the share link.")
+    }
+
+    @ViewBuilder
+    private var actionRow: some View {
+        if isRendering {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small).tint(Color(hex: 0xfbbf24))
+                Text("Leveling 2-pass EBU R128 to \(store.settings.target.label)…")
+                    .font(Font.cobalt(11.5, .medium, relativeTo: .caption))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 2)
+        } else if isLeveled {
+            HStack(spacing: 8) {
+                if audio?.needsRelevel(for: store.settings.target) == true {
+                    Button {
+                        Task { await triggerLevel(target: store.settings.target) }
+                    } label: {
+                        Label("Re-level (\(store.settings.target.shortLabel))", systemImage: "arrow.triangle.2.circlepath")
+                            .font(Font.cobalt(12, .semibold, relativeTo: .caption))
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 34)
+                            .background(Color(hex: 0x34d399), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(offline)
+                }
+
+                Button(role: .destructive) {
+                    Task { await triggerRemove() }
+                } label: {
+                    Label("Remove Leveled Copy", systemImage: "trash")
+                        .font(Font.cobalt(12, .semibold, relativeTo: .caption))
+                        .foregroundStyle(CobaltColor.errorText)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 34)
+                        .background(CobaltColor.errorText.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(CobaltColor.errorText.opacity(0.28), lineWidth: 0.75)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(offline)
+            }
+        } else {
+            let label = audio?.state == .failed
+                ? "Retry Leveling (\(store.settings.target.label))"
+                : "Level Audio to \(store.settings.target.label)"
+            Button {
+                Task { await triggerLevel(target: store.settings.target) }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: audio?.state == .failed ? "arrow.clockwise" : "waveform")
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Text(label)
+                        .font(Font.cobalt(12.5, .semibold, relativeTo: .caption))
+                }
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(offline)
+        }
+    }
+
+    private func triggerLevel(target: AudioTargetLufs) async {
+        localError = nil
+        do {
+            _ = try await store.levelItem(id: fileID, target: target)
+            onToast("Leveling audio to \(target.label)…")
+        } catch {
+            localError = "Could not start leveling."
+            onToast("Leveling failed")
+        }
+    }
+
+    private func triggerRemove() async {
+        localError = nil
+        do {
+            _ = try await store.removeLevel(id: fileID)
+            useLeveled = false
+            holdingOriginal = false
+            onToast("Leveled copy removed")
+        } catch {
+            localError = "Could not remove leveled copy."
+            onToast("Remove failed")
+        }
+    }
+}
+

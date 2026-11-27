@@ -1,0 +1,2193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cobalt v10.1 — Audio Loudness Leveling (Unified UX/UI)</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: var(--background, #07070a);
+  --card-bg: var(--card, #121218);
+  --surface-2: #181820;
+  --fg: var(--foreground, #f5f5f7);
+  --fg-dim: var(--muted-foreground, #9a9aa6);
+  --fg-muted: #6c6c78;
+  --line: var(--border, rgba(255, 255, 255, 0.11));
+  --line-strong: rgba(255, 255, 255, 0.19);
+  --r: var(--radius, 14px);
+  --hot: #fb7185;
+  --hot-bg: rgba(251, 113, 133, 0.16);
+  --hot-border: rgba(251, 113, 133, 0.4);
+  --quiet: #60a5fa;
+  --quiet-bg: rgba(96, 165, 250, 0.16);
+  --quiet-border: rgba(96, 165, 250, 0.4);
+  --ok: #34d399;
+  --ok-bg: rgba(52, 211, 153, 0.15);
+  --ok-border: rgba(52, 211, 153, 0.38);
+  --warn: #fbbf24;
+  --warn-bg: rgba(251, 191, 36, 0.16);
+  --warn-border: rgba(251, 191, 36, 0.4);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "IBM Plex Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.45;
+}
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+}
+button:focus-visible, a:focus-visible, input:focus-visible {
+  outline: 2px solid var(--quiet);
+  outline-offset: 2px;
+}
+svg { display: block; flex: none; }
+.num { font-variant-numeric: tabular-nums; }
+
+.wrap {
+  container-type: inline-size;
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+/* Header & Tabs */
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.brand-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #38bdf8, #34d399);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+}
+.brand h1 {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+.badge-ver {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: rgba(52, 211, 153, 0.14);
+  color: #6ee7b7;
+  border: 1px solid rgba(52, 211, 153, 0.32);
+}
+.nav-tabs {
+  display: inline-flex;
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.nav-tab {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  color: var(--fg-dim);
+  transition: background 0.16s, color 0.16s;
+}
+.nav-tab:hover { color: var(--fg); }
+.nav-tab.active {
+  background: #fff;
+  color: #09090b;
+}
+
+.view-panel { display: none; }
+.view-panel.active { display: block; }
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--fg-muted);
+}
+.dot.loud { background: var(--hot); box-shadow: 0 0 7px rgba(251, 113, 133, 0.65); }
+.dot.quiet { background: var(--quiet); box-shadow: 0 0 7px rgba(96, 165, 250, 0.65); }
+.dot.balanced { background: var(--ok); box-shadow: 0 0 7px rgba(52, 211, 153, 0.6); }
+.dot.busy { background: var(--warn); box-shadow: 0 0 7px rgba(251, 191, 36, 0.7); }
+
+/* Scenario Strip */
+.scenario-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  margin-bottom: 10px;
+}
+.scenario-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-right: 2px;
+}
+.clip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3.5px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 10.5px;
+  font-weight: 550;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  transition: all 0.16s;
+}
+.clip-pill:hover { border-color: var(--line-strong); color: var(--fg); }
+.clip-pill.active {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(255, 255, 255, 0.34);
+  color: #fff;
+}
+.clip-lufs { font-family: var(--font-mono); font-size: 9.5px; opacity: 0.78; }
+
+/* Subbar */
+.subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.seg {
+  display: inline-flex;
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 3px;
+  gap: 2px;
+}
+.seg button {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 7px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  transition: all 0.14s;
+}
+.seg button.active, .seg button[aria-pressed="true"] {
+  background: #fff;
+  color: #09090b;
+}
+.audition-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  color: #fff;
+  transition: all 0.15s;
+}
+.audition-btn.playing {
+  background: rgba(52, 211, 153, 0.2);
+  border-color: var(--ok-border);
+  color: #a7f3d0;
+}
+
+/* ====== TAB 1: POST STUDIO ====== */
+.device-stage {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+.frame-shell {
+  width: 100%;
+  background: #070709;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 26px;
+  overflow: hidden;
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.52);
+  transition: max-width 0.22s ease;
+}
+.frame-shell.mode-iphone { max-width: 390px; border-radius: 42px; border: 5px solid #1f1f26; }
+.frame-shell.mode-duo-wide { max-width: 820px; border-radius: 26px; border: 4px solid #1f1f26; }
+.frame-shell.mode-duo-crease { max-width: 560px; border-radius: 26px; border: 4px solid #1f1f26; }
+.frame-shell.mode-mac { max-width: 960px; border-radius: 16px; border: 1px solid rgba(255, 255, 255, 0.18); }
+
+.mac-titlebar {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: #141419;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11.5px;
+  color: var(--fg-dim);
+}
+.frame-shell.mode-mac .mac-titlebar { display: flex; }
+.traffic { display: flex; gap: 6px; }
+.traffic i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+.traffic i:nth-child(1) { background: #ff5f57; }
+.traffic i:nth-child(2) { background: #febc2e; }
+.traffic i:nth-child(3) { background: #28c840; }
+
+.studio-layout {
+  display: flex;
+  flex-direction: row;
+  min-height: 540px;
+}
+.frame-shell.mode-iphone .studio-layout,
+.frame-shell.mode-duo-crease .studio-layout {
+  flex-direction: column;
+}
+@container (max-width: 630px) {
+  .studio-layout { flex-direction: column; }
+  .studio-deck { width: 100% !important; border-left: 0 !important; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+}
+
+.cinema-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 410px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  background: #070709;
+}
+.frame-shell.mode-duo-crease .cinema-stage { min-height: 300px; flex: none; }
+.ambient-glow {
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(circle at 30% 35%, rgba(251, 113, 133, 0.34), transparent 55%),
+    radial-gradient(circle at 75% 65%, rgba(56, 189, 248, 0.24), transparent 55%),
+    radial-gradient(circle at 50% 50%, rgba(167, 139, 250, 0.16), transparent 65%);
+  filter: blur(42px);
+  transition: background 0.4s ease;
+  pointer-events: none;
+}
+.ambient-glow.tone-quiet {
+  background:
+    radial-gradient(circle at 30% 35%, rgba(96, 165, 250, 0.36), transparent 55%),
+    radial-gradient(circle at 75% 65%, rgba(99, 102, 241, 0.25), transparent 55%);
+}
+.ambient-glow.tone-balanced, .ambient-glow.tone-leveled {
+  background:
+    radial-gradient(circle at 32% 35%, rgba(52, 211, 153, 0.3), transparent 55%),
+    radial-gradient(circle at 74% 65%, rgba(56, 189, 248, 0.25), transparent 55%);
+}
+.ambient-glow.tone-silent {
+  background: radial-gradient(circle at 45% 40%, rgba(120, 124, 140, 0.25), transparent 60%);
+}
+.vignette-top {
+  position: absolute; top: 0; left: 0; right: 0; height: 85px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.56), transparent);
+  pointer-events: none; z-index: 1;
+}
+.vignette-bot {
+  position: absolute; bottom: 0; left: 0; right: 0; height: 170px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.72), transparent);
+  pointer-events: none; z-index: 1;
+}
+
+.glass-pill {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+
+.cinema-top {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 12px 0;
+}
+.hud-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.icon-circle {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: #fff;
+  flex: none;
+}
+.identity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 600;
+  max-width: 195px;
+}
+.identity-pill span.name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.loudness-hud-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 650;
+  font-family: var(--font-mono);
+  transition: all 0.2s;
+}
+.loudness-hud-pill.state-hot { background: rgba(251, 113, 133, 0.22); border: 1px solid rgba(251, 113, 133, 0.45); color: #fecdd3; }
+.loudness-hud-pill.state-quiet { background: rgba(96, 165, 250, 0.22); border: 1px solid rgba(96, 165, 250, 0.45); color: #dbeafe; }
+.loudness-hud-pill.state-leveled { background: rgba(52, 211, 153, 0.22); border: 1px solid rgba(52, 211, 153, 0.45); color: #d1fae5; }
+.loudness-hud-pill.state-rendering { background: rgba(251, 191, 36, 0.22); border: 1px solid rgba(251, 191, 36, 0.45); color: #fef3c7; }
+.loudness-hud-pill.hidden { display: none; }
+
+.video-center {
+  position: relative;
+  z-index: 2;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  gap: 10px;
+}
+.video-frame-mock {
+  width: 100%;
+  max-width: 320px;
+  border-radius: 16px;
+  background: rgba(12, 12, 18, 0.64);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.vf-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: rgba(255, 255, 255, 0.72);
+}
+.vf-mode-tag {
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.vf-mode-tag.orig-hot { background: var(--hot-bg); color: #fda4af; }
+.vf-mode-tag.orig-quiet { background: var(--quiet-bg); color: #93c5fd; }
+.vf-mode-tag.orig-ok { background: rgba(255, 255, 255, 0.12); color: #e4e4e7; }
+.vf-mode-tag.leveled { background: var(--ok-bg); color: #6ee7b7; }
+
+.wave-box {
+  position: relative;
+  height: 70px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 0;
+}
+.wave-target-line {
+  position: absolute;
+  left: 0; right: 0; top: 30%;
+  border-top: 1px dashed rgba(52, 211, 153, 0.7);
+  pointer-events: none;
+  z-index: 2;
+}
+.wave-target-label {
+  position: absolute;
+  right: 2px;
+  top: calc(30% - 17px);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  color: #6ee7b7;
+  background: rgba(9, 10, 14, 0.88);
+  border: 1px solid rgba(52, 211, 153, 0.34);
+  padding: 1px 5px;
+  border-radius: 5px;
+  z-index: 3;
+}
+.wave-clip-line {
+  position: absolute;
+  left: 0; right: 0; top: 4px;
+  border-top: 1px dotted rgba(251, 113, 133, 0.45);
+  pointer-events: none;
+}
+.wave-bar {
+  flex: 1;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.5);
+  transition: height 0.28s ease, background 0.22s ease;
+  min-height: 4px;
+}
+.wave-bar.clip { background: var(--hot); box-shadow: 0 0 8px rgba(251, 113, 133, 0.55); }
+.wave-bar.quiet { background: var(--quiet); opacity: 0.75; }
+.wave-bar.leveled { background: var(--ok); }
+.wave-bar.normal { background: #a1a1aa; }
+.wave-bar.silent { background: rgba(255, 255, 255, 0.18); }
+
+.vf-meter-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+.vf-meter-row strong { color: #fff; font-weight: 650; }
+
+.hold-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.86);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  transition: background 0.12s, color 0.12s, transform 0.12s;
+}
+.hold-pill.down {
+  background: #fff;
+  color: #09090b;
+  transform: scale(0.97);
+}
+.hold-pill[disabled] { opacity: 0.4; cursor: default; }
+
+.cinema-bottom {
+  position: relative;
+  z-index: 3;
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.ab-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 99px;
+}
+.ab-btn {
+  padding: 5px 12px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.78);
+  transition: all 0.16s;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ab-btn.active { background: #fff; color: #09090b; }
+.ab-btn.active.is-leveled { background: #34d399; color: #052e16; }
+.ab-btn:disabled { opacity: 0.42; cursor: not-allowed; }
+
+.dual-dock {
+  width: 100%;
+  max-width: 470px;
+  border-radius: 18px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dock-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.status-chip {
+  font-size: 9.5px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 99px;
+  background: var(--ok-bg);
+  color: #6ee7b7;
+  border: 1px solid var(--ok-border);
+  flex: none;
+}
+.url-preview {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.88);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.url-preview .param-hl { color: #6ee7b7; font-weight: 700; }
+.param-chip-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 650;
+  font-family: var(--font-mono);
+  padding: 3px 8px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.82);
+  transition: all 0.16s;
+}
+.param-chip-toggle.on {
+  background: rgba(52, 211, 153, 0.22);
+  border-color: rgba(52, 211, 153, 0.5);
+  color: #a7f3d0;
+}
+.dock-actions { display: flex; gap: 7px; }
+.btn-copy-primary {
+  flex: 1;
+  height: 38px;
+  border-radius: 11px;
+  background: #fff;
+  color: #09090b;
+  font-size: 12.5px;
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.16s;
+}
+.btn-copy-primary.copied { background: #22c55e; color: #fff; }
+.btn-copy-sec {
+  height: 38px;
+  padding: 0 13px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition: all 0.16s;
+}
+.btn-copy-sec.copied { background: rgba(34, 197, 94, 0.82); border-color: transparent; }
+
+.crease-bar {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  background: linear-gradient(to bottom, #070709, #181820, #0c0c10);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.frame-shell.mode-duo-crease .crease-bar { display: flex; }
+
+/* Studio Deck */
+.studio-deck {
+  width: 274px;
+  flex: none;
+  background: rgba(15, 15, 20, 0.96);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 10px;
+}
+.frame-shell.mode-iphone .studio-deck,
+.frame-shell.mode-duo-crease .studio-deck {
+  width: 100%;
+  border-left: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+.deck-head { display: flex; align-items: center; justify-content: space-between; }
+.deck-head h3 { margin: 0; font-size: 13px; font-weight: 650; }
+.deck-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+}
+.deck-tab {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 4px;
+  border-radius: 7px;
+  color: var(--fg-dim);
+}
+.deck-tab.active { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.deck-card {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 13px;
+  padding: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.deck-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.status-tag {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 99px;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.status-tag.loud { background: var(--hot-bg); color: #fda4af; }
+.status-tag.quiet { background: var(--quiet-bg); color: #93c5fd; }
+.status-tag.balanced { background: var(--ok-bg); color: #6ee7b7; }
+.status-tag.busy { background: var(--warn-bg); color: #fde68a; }
+.status-tag.silent { background: rgba(255, 255, 255, 0.08); color: var(--fg-dim); }
+
+.meter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+.meter-cell {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 9px;
+  padding: 6px 7px;
+  min-width: 0;
+}
+.meter-cell .lbl {
+  font-size: 8.5px;
+  color: var(--fg-muted);
+  display: block;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.meter-cell .val {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 650;
+  color: #fff;
+  white-space: nowrap;
+  display: block;
+}
+.meter-cell .sub {
+  font-size: 9px;
+  color: var(--fg-muted);
+  display: block;
+  white-space: nowrap;
+}
+.meter-cell .val.loud { color: #fda4af; }
+.meter-cell .val.quiet { color: #93c5fd; }
+.meter-cell .val.balanced { color: #6ee7b7; }
+
+/* Unified LUFS Ruler (Studio Deck + Settings + Rule Probe) */
+.ruler { position: relative; padding: 20px 0 16px; color: #fff; }
+.ruler-track {
+  position: relative;
+  height: 9px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: rgba(127, 127, 127, 0.22);
+}
+.ruler-track i { position: absolute; top: 0; bottom: 0; }
+.ruler-track .zq { left: 0; width: 38.89%; background: var(--quiet); opacity: 0.52; }
+.ruler-track .zb { left: 38.89%; width: 31.94%; background: var(--ok); opacity: 0.48; }
+.ruler-track .zp { left: 66.67%; width: 4.16%; background: repeating-linear-gradient(-45deg, var(--hot) 0 2px, transparent 2px 5px); }
+.ruler-track .zl { left: 70.83%; right: 0; background: var(--hot); opacity: 0.58; }
+.ruler-tick {
+  position: absolute;
+  bottom: 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  transform: translateX(-50%);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.ruler-tick.l { transform: none; left: 0; }
+.ruler-tick.r { transform: translateX(-100%); left: 100%; }
+.ruler-tgt {
+  position: absolute;
+  top: 16px;
+  height: 17px;
+  width: 2px;
+  background: #fff;
+  transform: translateX(-1px);
+  border-radius: 1px;
+  transition: left 0.3s;
+}
+.ruler-pin {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  transition: left 0.4s cubic-bezier(0.3, 1.25, 0.5, 1), opacity 0.2s;
+  display: grid;
+  justify-items: center;
+  pointer-events: none;
+}
+.ruler-pin b {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 6px;
+  color: #fff;
+  background: #52525b;
+  white-space: nowrap;
+}
+.ruler-pin::after { content: ""; width: 2px; height: 17px; background: currentColor; border-radius: 1px; margin-top: 1px; }
+.ruler-pin.loud b { background: #e11d48; }
+.ruler-pin.quiet b { background: #2563eb; }
+.ruler-pin.balanced b { background: #16a34a; }
+.ruler-pin.dim { opacity: 0.4; }
+.ruler-pin.ea b { transform: translateX(35%); }
+.ruler-pin.eb b { transform: translateX(-35%); }
+.ruler-arrow {
+  position: absolute;
+  top: 24px;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, #fff 0 3px, transparent 3px 6px);
+  opacity: 0.72;
+  transition: left 0.38s, width 0.38s;
+}
+
+.deck-btn {
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.deck-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.deck-btn.primary { background: #fff; color: #09090b; border-color: transparent; }
+.deck-btn.danger { background: rgba(251, 113, 133, 0.12); border-color: rgba(251, 113, 133, 0.28); color: #fda4af; }
+.deck-btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+.progress-bar-wrap { width: 100%; height: 5px; border-radius: 99px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.progress-bar-fill { height: 100%; width: 42%; border-radius: 99px; background: var(--warn); animation: slideProg 1.1s ease-in-out infinite; }
+@keyframes slideProg { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+
+.info-kv { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--fg-dim); }
+.info-kv strong { font-family: var(--font-mono); font-weight: 550; color: #e4e4e7; text-align: right; }
+
+/* ====== SHARED FABLE-STYLE CARDS FOR SHARE / SETTINGS / LIBRARY ====== */
+.two-col {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.phone-col {
+  display: grid;
+  grid-template-columns: minmax(0, 344px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@container (max-width: 640px) {
+  .two-col, .phone-col { grid-template-columns: minmax(0, 1fr); }
+}
+.side-stack { display: grid; gap: 12px; min-width: 0; }
+.box {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 13px 14px;
+  min-width: 0;
+}
+.box h3 {
+  margin: 0 0 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.box p { margin: 0 0 8px; font-size: 12.5px; color: var(--fg-dim); }
+.box p:last-child { margin-bottom: 0; }
+.box b { color: var(--fg); font-weight: 600; }
+.box code, .code-block {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.code-block {
+  display: block;
+  white-space: pre-wrap;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #0a0a0f;
+  border: 1px solid var(--line);
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+.code-block em {
+  font-style: normal;
+  color: #6ee7b7;
+  font-weight: 700;
+  background: rgba(52, 211, 153, 0.16);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+/* Share Tab */
+.ctl-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.ctl-row label {
+  font-size: 10px;
+  color: var(--fg-dim);
+  display: grid;
+  gap: 4px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.url-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--card-bg);
+  margin-bottom: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.url-bar mark {
+  background: rgba(52, 211, 153, 0.22);
+  color: #6ee7b7;
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-weight: 700;
+}
+.dc-card { background: #313338; color: #dbdee1; border-radius: 11px; padding: 12px; font-size: 12.5px; }
+.dc-who { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-weight: 600; color: #fff; }
+.dc-who i { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #f0a35e, #c2314e); flex: none; }
+.dc-who small { color: #949ba4; font-weight: 400; font-size: 11px; }
+.dc-card a { color: #00a8fc; text-decoration: none; overflow-wrap: anywhere; font-size: 12px; }
+.dc-emb {
+  margin-top: 7px;
+  background: #2b2d31;
+  border-left: 4px solid #5865f2;
+  border-radius: 4px;
+  padding: 9px 11px;
+  display: grid;
+  gap: 5px;
+}
+.dc-emb small { font-size: 11px; color: #b5bac1; }
+.dc-emb b { color: #00a8fc; font-size: 13px; }
+.thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 7px;
+  overflow: hidden;
+  background:
+    radial-gradient(40% 55% at 28% 0, rgba(251, 113, 133, 0.85), transparent 70%),
+    radial-gradient(40% 55% at 74% 0, rgba(167, 139, 250, 0.8), transparent 70%),
+    linear-gradient(#1a0b1f, #06040a);
+}
+.thumb .p {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 14px;
+}
+.thumb .tag {
+  position: absolute;
+  left: 7px; bottom: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.68);
+  color: #6ee7b7;
+  font-size: 10px;
+  font-weight: 650;
+}
+.gal-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.gal-grid .thumb { aspect-ratio: 1; }
+.anno { font-size: 11.5px; color: var(--fg-dim); margin: 6px 2px 0; display: flex; gap: 6px; align-items: flex-start; }
+.anno .dot { margin-top: 5px; }
+.im-wrap { display: flex; justify-content: flex-end; margin-top: 12px; }
+.im-bubble { width: min(100%, 248px); border-radius: 16px; overflow: hidden; background: #e9e9eb; color: #000; }
+.im-bubble .thumb { border-radius: 0; }
+.im-bubble p { margin: 0; padding: 8px 11px; font-size: 12px; font-weight: 600; line-height: 1.3; }
+.im-bubble p small { display: block; font-weight: 400; color: #6b6b70; font-size: 10.5px; }
+.web-card { background: #000; color: #ddd; border-radius: 11px; overflow: hidden; border: 1px solid var(--line); }
+.web-chrome {
+  background: #1a1a20;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: #a1a1aa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.web-body { padding: 12px; display: grid; gap: 8px; }
+.web-body h4 { margin: 0; font-size: 13.5px; color: #fff; }
+.web-aud { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: #a1a1aa; }
+.web-aud b { color: #fff; }
+.web-aud a { color: #7dd3fc; font-weight: 600; }
+
+/* Settings & Library Phone Shell */
+.ios-phone {
+  position: relative;
+  width: 100%;
+  max-width: 344px;
+  border-radius: 32px;
+  background: #07080b;
+  color: #fff;
+  overflow: hidden;
+  border: 4px solid #1f1f26;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.5);
+  margin: 0 auto;
+}
+.ios-form { padding: 14px 12px 16px; display: grid; gap: 6px; }
+.ios-form h2 { font-size: 20px; font-weight: 700; margin: 2px 6px 6px; letter-spacing: -0.01em; }
+.ios-sect { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: rgba(255, 255, 255, 0.5); margin: 8px 12px 2px; text-transform: uppercase; }
+.ios-grp { background: rgba(255, 255, 255, 0.075); border-radius: 15px; overflow: hidden; }
+.ios-row { padding: 10px 12px; display: grid; gap: 7px; border-top: 0.5px solid rgba(255, 255, 255, 0.1); }
+.ios-row:first-child { border-top: 0; }
+.ios-row > span { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 550; }
+.ios-row > span em { margin-left: auto; font-style: normal; color: rgba(255, 255, 255, 0.58); font-size: 12px; }
+.ios-seg { display: flex; padding: 3px; border-radius: 10px; background: rgba(255, 255, 255, 0.08); gap: 2px; }
+.ios-seg button { flex: 1; padding: 6px 5px; border-radius: 8px; font-size: 11.5px; font-weight: 600; color: rgba(255, 255, 255, 0.72); white-space: nowrap; }
+.ios-seg button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.2); color: #fff; }
+.ios-foot { font-size: 11px; color: rgba(255, 255, 255, 0.55); margin: 1px 12px 4px; }
+.ios-leg { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 0 12px 10px; font-size: 10.5px; color: rgba(255, 255, 255, 0.72); }
+.ios-leg span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+
+.sl-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; font-size: 12px; margin-bottom: 8px; }
+.sl-row input { grid-column: 1 / -1; width: 100%; accent-color: var(--quiet); margin: 2px 0; }
+.verdict { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 650; margin: 4px 0 6px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+
+/* Library Tab */
+.lib-pad { padding: 12px 10px 14px; display: grid; gap: 10px; }
+.lib-toast {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border-radius: 15px;
+  font-size: 12px;
+}
+.lib-toast div { flex: 1; min-width: 0; }
+.lib-toast b { display: block; font-weight: 600; }
+.lib-toast small { color: rgba(255, 255, 255, 0.72); font-size: 11px; }
+.lib-toast button {
+  font-size: 11.5px;
+  font-weight: 650;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #fff;
+  color: #000;
+  white-space: nowrap;
+}
+.lib-filters { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.lib-filters button {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.09);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+.lib-filters button[aria-pressed="true"] { background: #fff; color: #000; }
+.lib-filters small { opacity: 0.6; font-size: 10.5px; }
+.lib-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.lib-tile {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: 10px;
+  overflow: hidden;
+  display: block;
+  width: 100%;
+}
+.lib-tile[aria-pressed="true"] { outline: 2px solid #fff; outline-offset: -2px; }
+.lib-tile .b {
+  position: absolute;
+  left: 5px; bottom: 5px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #fff;
+}
+.lib-tile .b .dot { width: 5.5px; height: 5.5px; }
+.lib-tile .d {
+  position: absolute;
+  right: 6px; top: 5px;
+  font-size: 9px;
+  font-weight: 650;
+  color: #fff;
+  text-shadow: 0 1px 3px #000;
+}
+.lib-menu { border-radius: 15px; padding: 5px; display: grid; }
+.lib-menu header { font-size: 10.5px; color: rgba(255, 255, 255, 0.6); padding: 5px 9px 4px; }
+.lib-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  text-align: left;
+}
+.lib-menu button:hover { background: rgba(255, 255, 255, 0.08); }
+.lib-menu button[disabled] { opacity: 0.4; cursor: default; }
+.lib-menu button small { margin-left: auto; color: rgba(255, 255, 255, 0.56); font-size: 10.5px; }
+
+.trace-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; counter-reset: tr; }
+.trace-list li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; font-size: 12px; counter-increment: tr; }
+.trace-list li::before {
+  content: counter(tr);
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  font-size: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--fg-dim);
+}
+.trace-list small { display: block; color: var(--fg-dim); font-size: 11px; }
+
+.toast-bar {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(18, 18, 26, 0.95);
+  border: 1px solid rgba(52, 211, 153, 0.48);
+  color: #d1fae5;
+  padding: 7px 14px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s;
+  z-index: 50;
+}
+.toast-bar.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <h1>Audio Loudness Leveling</h1>
+      <span class="badge-ver">v10.1 · ?audio=normal</span>
+    </div>
+    <div class="nav-tabs" role="tablist">
+      <button class="nav-tab active" data-tab="studio">Post Studio</button>
+      <button class="nav-tab" data-tab="share">Share Link</button>
+      <button class="nav-tab" data-tab="settings">Settings &amp; Probe</button>
+      <button class="nav-tab" data-tab="library">Library</button>
+    </div>
+  </div>
+
+  <!-- ====== TAB 1: POST STUDIO ====== -->
+  <section class="view-panel active" id="tab-studio">
+    <div class="scenario-bar" id="scen-bar"></div>
+    <div class="subbar">
+      <div class="seg" id="device-seg" role="group" aria-label="Device form factor">
+        <button data-device="duo-wide" class="active">iPhone Duo · Wide</button>
+        <button data-device="iphone">iPhone</button>
+        <button data-device="duo-crease">Duo · Crease</button>
+        <button data-device="mac">macOS</button>
+      </div>
+      <button class="audition-btn" id="btn-audition">
+        <span id="audition-icon">▶</span>
+        <span id="audition-txt">Audition Level (Web Audio)</span>
+      </button>
+    </div>
+
+    <div class="device-stage">
+      <div class="frame-shell mode-duo-wide" id="device-frame">
+        <div class="mac-titlebar">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <span id="mac-win-title">bass_boosted_capy.mp4 — Cobalt Studio</span>
+          <span style="font-family:var(--font-mono); font-size:10.5px;">Hold Space: Original · ⌘⇧C: Copy ?audio=normal</span>
+        </div>
+
+        <div class="studio-layout">
+          <div class="cinema-stage">
+            <div class="ambient-glow" id="ambient-glow"></div>
+            <div class="vignette-top"></div>
+            <div class="vignette-bot"></div>
+
+            <div class="cinema-top">
+              <div class="hud-left">
+                <div class="icon-circle glass-pill">‹</div>
+                <div class="identity-pill glass-pill">
+                  <span class="dot balanced"></span>
+                  <span class="name" id="hud-filename">bass_boosted_capy.mp4</span>
+                  <span style="opacity:0.6; font-size:10px;">▾</span>
+                </div>
+                <button class="loudness-hud-pill state-hot" id="hud-loudness-pill" title="Toggle Original ↔ Leveled">
+                  <span class="dot loud" id="hud-loud-dot"></span>
+                  <span id="hud-loud-text">−6.2 LUFS · Hot</span>
+                </button>
+              </div>
+              <div class="icon-circle glass-pill" title="Studio Deck">◫</div>
+            </div>
+
+            <div class="video-center">
+              <div class="video-frame-mock">
+                <div class="vf-top">
+                  <span id="vf-stream-label">LEVELED ALT · -c:v copy · AAC</span>
+                  <span class="vf-mode-tag leveled" id="vf-mode-tag">−7.8 dB LEVELED</span>
+                </div>
+                <div class="wave-box" id="wave-box">
+                  <div class="wave-clip-line"></div>
+                  <div class="wave-target-line"></div>
+                  <span class="wave-target-label" id="wave-target-lbl">−14 LUFS target</span>
+                </div>
+                <div class="vf-meter-row">
+                  <span>Integrated: <strong id="vf-lufs">−14.0 LUFS</strong></span>
+                  <span>True Peak: <strong id="vf-tp">−7.4 dBTP</strong></span>
+                </div>
+              </div>
+              <button class="hold-pill glass-pill" id="btn-hold" data-hold>
+                <span>Hold to hear original</span>
+              </button>
+            </div>
+
+            <div class="cinema-bottom">
+              <div class="ab-switch glass-pill" id="ab-switch">
+                <button class="ab-btn" id="ab-orig">Original</button>
+                <button class="ab-btn active is-leveled" id="ab-leveled">Leveled · <span id="ab-target-txt">−14 LUFS</span></button>
+              </div>
+
+              <div class="dual-dock glass-pill">
+                <div class="dock-meta">
+                  <span class="status-chip">PUBLIC</span>
+                  <div class="url-preview" id="dock-url-preview">share.capybaraharmony.com/aB3x9Kp<span class="param-hl">?audio=normal</span></div>
+                  <button class="param-chip-toggle on" id="dock-param-toggle" title="Toggle ?audio=normal on copied share link">
+                    <span id="dock-param-icon">◉</span>
+                    <span>?audio=normal</span>
+                  </button>
+                </div>
+                <div class="dock-actions">
+                  <button class="btn-copy-primary" id="btn-copy-share">
+                    <span>⧉</span>
+                    <span id="copy-share-label">Copy Share (Leveled)</span>
+                  </button>
+                  <button class="btn-copy-sec" id="btn-copy-direct">
+                    <span>🔗</span>
+                    <span id="copy-direct-label">Direct (Alt)</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="crease-bar">─── iPhone Duo Crease (ArrangementView .overlay) ───</div>
+
+          <aside class="studio-deck">
+            <div class="deck-head">
+              <h3>Studio Deck</h3>
+              <span style="font-size:10.5px; color:var(--fg-muted);">v10.1</span>
+            </div>
+            <div class="deck-tabs">
+              <button class="deck-tab">Access</button>
+              <button class="deck-tab active">Tools</button>
+              <button class="deck-tab">CC</button>
+            </div>
+
+            <div class="deck-card">
+              <div class="deck-card-title">
+                <span>AUDIO LOUDNESS</span>
+                <span class="status-tag loud" id="deck-status-tag">Hot · Leveled</span>
+              </div>
+
+              <div class="meter-grid" id="deck-meters"></div>
+              <div class="ruler" id="deck-ruler"></div>
+
+              <div id="deck-render-box" style="display:none;">
+                <div style="display:flex; justify-content:space-between; font-size:10.5px; margin-bottom:5px;">
+                  <span id="render-stage-txt" style="color:#fde68a;">Pass 2: -c:v copy + loudnorm…</span>
+                </div>
+                <div class="progress-bar-wrap"><div class="progress-bar-fill"></div></div>
+              </div>
+
+              <div id="deck-actions"></div>
+            </div>
+
+            <div class="deck-card">
+              <div class="deck-card-title">
+                <span>ASSET &amp; RENDITION</span>
+                <span style="font-family:var(--font-mono); font-size:9.5px; color:var(--fg-muted);">non-destructive</span>
+              </div>
+              <div class="info-kv"><span>Original</span><strong id="info-orig-size">14.2 MB · untouched</strong></div>
+              <div class="info-kv"><span>Leveled Alt</span><strong id="info-alt-state">role=alt · -c:v copy</strong></div>
+              <div class="info-kv"><span>Share Param</span><strong style="color:#6ee7b7;">?audio=normal</strong></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== TAB 2: SHARE LINK (Fable's design + ?audio=normal) ====== -->
+  <section class="view-panel" id="tab-share">
+    <div class="ctl-row">
+      <label>Link<div class="seg" id="sh-kind"></div></label>
+      <label>Audio Param<div class="seg" id="sh-param"></div></label>
+      <label>Leveled Copy<div class="seg" id="sh-alt"></div></label>
+    </div>
+    <div class="url-bar">
+      <span id="sh-url"></span>
+      <button class="btn-copy-sec" style="height:26px; padding:0 10px; font-size:11px;" id="sh-copy">Copy</button>
+    </div>
+
+    <div class="two-col">
+      <div style="min-width:0;">
+        <div class="dc-card">
+          <div class="dc-who"><i></i>harmony <small>Today at 9:41 PM</small></div>
+          <a id="dc-url" href="#"></a>
+          <div class="dc-emb">
+            <small>capystore</small>
+            <b id="dc-title"></b>
+            <span style="font-size:12px;">the last chorus, straight off the phone</span>
+            <div id="dc-media"></div>
+          </div>
+        </div>
+        <p class="anno" id="dc-anno"></p>
+        <div class="im-wrap">
+          <div class="im-bubble">
+            <div class="thumb"><span class="p">▶</span></div>
+            <p id="im-title"></p>
+          </div>
+        </div>
+        <p class="anno" id="im-anno"></p>
+      </div>
+
+      <div class="side-stack">
+        <div class="web-card">
+          <div class="web-chrome" id="web-chrome"></div>
+          <div class="web-body" id="web-body"></div>
+        </div>
+        <div class="box">
+          <h3>What the page's &lt;head&gt; emits</h3>
+          <pre class="code-block" id="sh-meta"></pre>
+          <p style="margin-top:8px;" id="sh-why"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== TAB 3: SETTINGS & RULE PROBE (Fable's design) ====== -->
+  <section class="view-panel" id="tab-settings">
+    <div class="phone-col">
+      <div class="ios-phone">
+        <div class="ios-form">
+          <h2>audio leveling</h2>
+          <div class="ios-grp">
+            <div class="ios-row">
+              <span>new saves <em id="set-mode-v"></em></span>
+              <div class="ios-seg" id="set-mode"></div>
+            </div>
+          </div>
+          <p class="ios-foot" id="set-mode-f"></p>
+
+          <div class="ios-grp">
+            <div class="ios-row">
+              <span>level to <em id="set-tgt-v"></em></span>
+              <div class="ios-seg" id="set-tgt"></div>
+            </div>
+            <div class="ios-row">
+              <span>links default to <em id="set-link-v"></em></span>
+              <div class="ios-seg" id="set-link"></div>
+            </div>
+          </div>
+          <p class="ios-foot" id="set-link-f"></p>
+
+          <p class="ios-sect">When it steps in</p>
+          <div class="ios-grp" style="padding:8px 12px 2px;">
+            <div class="ruler" id="set-ruler"></div>
+            <div class="ios-leg" style="padding:2px 0 8px;">
+              <span><i class="dot quiet"></i>too quiet · boost</span>
+              <span><i class="dot balanced"></i>balanced · skip</span>
+              <span><i class="dot loud"></i>too loud · tame</span>
+              <span>▨ loud if peak &gt; −0.3</span>
+            </div>
+          </div>
+          <p class="ios-foot">originals are never modified. leveled copies live as role='alt' and can be deleted anytime.</p>
+        </div>
+      </div>
+
+      <div class="side-stack">
+        <div class="box">
+          <h3>Try any file against the rule</h3>
+          <div class="chip-row" id="probe-presets"></div>
+          <div class="sl-row">
+            <span>Integrated loudness</span>
+            <b class="num" id="p-iv"></b>
+            <input type="range" id="p-i" min="-70" max="0" step="0.1" aria-label="Integrated loudness in LUFS">
+          </div>
+          <div class="sl-row">
+            <span>True peak</span>
+            <b class="num" id="p-tv"></b>
+            <input type="range" id="p-t" min="-30" max="2" step="0.1" aria-label="True peak in dBTP">
+          </div>
+          <div class="ruler" id="probe-ruler"></div>
+          <div class="verdict" id="p-verdict"></div>
+          <p id="p-why"></p>
+          <p id="p-do"></p>
+        </div>
+
+        <div class="box">
+          <h3>Decision rules (Worker TypeScript)</h3>
+<pre class="code-block">lufs &lt;= -60                 → silent, skip
+lufs &gt; -10.5                → too loud, auto-level
+lufs &gt; -12 &amp;&amp; peak &gt; -0.3   → too loud (clipping), auto-level
+lufs &lt; -22                  → too quiet, auto-level
+otherwise                   → balanced, skip (manual ok)</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== TAB 4: LIBRARY (Fable's design) ====== -->
+  <section class="view-panel" id="tab-library">
+    <div class="phone-col">
+      <div class="ios-phone">
+        <div class="lib-pad">
+          <div class="lib-toast glass-pill" id="lib-toast"></div>
+          <div class="lib-filters" id="lib-filters"></div>
+          <div class="lib-grid" id="lib-grid"></div>
+          <div class="lib-menu glass-pill" id="lib-menu"></div>
+        </div>
+      </div>
+
+      <div class="side-stack">
+        <div class="box">
+          <h3>Quiet grid, high signal</h3>
+          <p>A tile wears a badge only when there is something actionable: a <b>green wave</b> when a leveled alt is ready, or a <b>red/blue dot</b> when out of range and not leveled (measure-only mode or failed render). Balanced clips and photos wear nothing.</p>
+          <p>Tap any tile to inspect its long-press menu — <b>copy share</b> follows your Settings default and explicitly labels whether it appends <code>?audio=normal</code>.</p>
+        </div>
+        <div class="box">
+          <h3>Server pipeline trace (for selected Studio clip)</h3>
+          <ol class="trace-list" id="lib-trace"></ol>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="toast-bar" id="toast">Copied to clipboard</div>
+
+<script>
+const RULES = { silent: -60, loud: -10.5, loudPeakFrom: -12, peak: -0.3, quiet: -22, ceiling: -1.5 };
+const ZN = { loud: "too loud", quiet: "too quiet", balanced: "balanced", silent: "silent" };
+const ORIG_SLUG = "aB3x9Kp", ORIG_KEY = "aB3x9Kp.mp4", ALT_KEY = "k9Lm2Qp8Rx.mp4";
+
+function fmt(n, d = 1) {
+  const s = Math.abs(n).toFixed(d);
+  return (n < 0 ? "−" : "") + s;
+}
+function sgn(n) {
+  return (n < 0 ? "−" : "+") + Math.abs(n).toFixed(1);
+}
+function pos(I) {
+  return Math.max(0, Math.min(100, ((I + 36) / 36) * 100));
+}
+function classify(I, tp) {
+  if (I <= RULES.silent) return { zone: "silent", rule: "loudness ≤ −60 LUFS: silent, skip" };
+  if (I > RULES.loud) return { zone: "loud", rule: `${fmt(I)} LUFS is above −10.5 LUFS` };
+  if (I > RULES.loudPeakFrom && tp > RULES.peak) return { zone: "loud", rule: `${fmt(I)} LUFS > −12 and peak ${fmt(tp)} dBTP > −0.3` };
+  if (I < RULES.quiet) return { zone: "quiet", rule: `${fmt(I)} LUFS is below −22.0 LUFS` };
+  return {
+    zone: "balanced",
+    rule: `${fmt(I)} LUFS sits in [−22, −10.5]` + (I > RULES.loudPeakFrom ? ` and peak ${fmt(tp)} dBTP ≤ −0.3` : "")
+  };
+}
+function planGain(I, tp, target) {
+  const gain = target - I;
+  const rawPeak = tp + gain;
+  const held = rawPeak > RULES.ceiling;
+  return { gain, peak: held ? RULES.ceiling : rawPeak, held };
+}
+function autoLevels(zone, mode) {
+  return mode === "auto" && (zone === "loud" || zone === "quiet");
+}
+function resolveShare(kind, param, hasAlt) {
+  const path = kind === "public" ? "/" + ORIG_SLUG : kind === "private" ? "/p/k7Qm2xVd9LbTz4Rw" : "/g/Gx4Tn8";
+  const asked = param === "normal";
+  const served = asked && hasAlt ? "normal" : "orig";
+  return {
+    path,
+    url: "share.capybaraharmony.com" + path + (asked ? "?audio=normal" : ""),
+    served,
+    fellBack: asked && !hasAlt,
+    file: served === "normal" ? ALT_KEY : ORIG_KEY,
+    toggle: !hasAlt
+      ? null
+      : served === "normal"
+        ? { href: path, label: "Hear original" }
+        : { href: path + "?audio=normal", label: "Hear leveled" }
+  };
+}
+
+const SCEN = {
+  loud: { chip: "Too Loud", name: "bass_boosted_capy.mp4", I: -6.2, tp: 0.4, lra: 4.8, size: "14.2 MB", barsOrig: [88,96,92,100,95,84,98,100,91,86,99,94,97,89,100,93,85,97,92,96], barsNorm: [52,60,56,65,61,48,63,64,55,50,62,58,61,53,64,57,49,60,55,58] },
+  quiet: { chip: "Too Quiet", name: "whisper_mic_clip.mp4", I: -28.4, tp: -17.2, lra: 9.2, size: "9.6 MB", barsOrig: [12,18,10,22,16,8,20,24,14,11,19,15,21,13,17,9,16,20,12,14], barsNorm: [46,58,42,64,54,36,60,65,48,44,59,51,62,47,55,38,52,61,45,49] },
+  balanced: { chip: "Balanced", name: "lofi_rain_loop.mp4", I: -15.1, tp: -3.4, lra: 6.4, size: "18.8 MB", barsOrig: [48,56,52,60,54,46,58,61,50,49,57,53,59,51,56,47,54,58,50,52], barsNorm: [52,60,56,63,58,50,61,64,54,53,60,57,62,55,60,51,58,61,54,56] },
+  rendering: { chip: "Rendering", name: "festival_stage.mp4", I: -8.9, tp: -0.1, lra: 4.2, size: "11.0 MB", force: "rendering", barsOrig: [86,94,90,98,92,82,95,97,89,84,96,91,94,87,98,90,83,95,89,93], barsNorm: [54,61,57,64,59,49,62,63,56,51,61,58,60,54,63,57,50,60,55,58] },
+  failed: { chip: "Failed", name: "hallway_memo.mp4", I: -26.0, tp: -15.5, lra: 11.8, size: "5.2 MB", force: "failed", barsOrig: [16,22,14,26,18,12,24,28,16,14,22,19,25,17,21,13,19,24,16,18], barsNorm: [48,59,44,64,55,38,61,65,50,46,59,53,62,49,56,40,53,61,47,51] },
+  silent: { chip: "Silent", name: "sunset_timelapse.mp4", I: -70, tp: -70, lra: 0, size: "22.1 MB", barsOrig: [4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4], barsNorm: [4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4] }
+};
+
+const LIB = [
+  ["bass_boosted_capy", "0:42", -6.2, 0.4, "#c2314e,#6d2bd0"],
+  ["whisper_mic_clip", "1:18", -28.4, -17.2, "#1c4f8f,#0f6a66"],
+  ["lofi_rain_loop", "0:31", -15.1, -3.4, "#b0702a,#93355e"],
+  ["capy_onsen.jpg", null, null, null, "#4d7c3f,#1f4e3d"],
+  ["festival_stage", "2:04", -8.9, -0.1, "#d0782b,#7a1f5a"],
+  ["hallway_memo", "0:19", -26.0, -15.5, "#4a4f66,#23263a", "failed"],
+  ["street_drummer", "0:55", -11.2, -0.1, "#a33a2a,#3a1f4f"],
+  ["sky_map.png", null, null, null, "#27408f,#101a3a"],
+  ["cat_purring", "0:27", -31.5, -22.0, "#8f6a3a,#3a2a1f"]
+];
+
+const PROBE_PRE = [
+  ["Too loud", -6.2, 0.4],
+  ["Too quiet", -28.4, -17.2],
+  ["Balanced", -15.1, -3.4],
+  ["Edge: hot peak", -11.2, -0.1],
+  ["Edge: tame peak", -11.2, -2.0],
+  ["Silent", -70, -30]
+];
+
+const MODE_COPY = {
+  off: ["off", "Files are saved as-is. Nothing is measured or leveled."],
+  measure: ["measure only", "Every save is measured during /about and badged. You choose per post whether to render an alt."],
+  auto: ["automatic", "Saves outside [−22, −10.5] LUFS (or clipping > −0.3 dBTP) auto-render a leveled alt. Balanced clips stay single-file."]
+};
+
+const S = {
+  tab: "studio",
+  scen: "loud",
+  device: "duo-wide",
+  alt: "ready",
+  ab: "normal",
+  shareParam: true,
+  hold: false,
+  madeAt: -14,
+  set: { mode: "auto", target: -14, link: "normal" },
+  sh: { kind: "public", param: "normal", alt: "yes" },
+  lib: { f: "all", sel: 0 },
+  probe: { I: -11.2, tp: -0.1 },
+  auditioning: false
+};
+
+const $ = (id) => document.getElementById(id);
+const $$ = (sel) => [...document.querySelectorAll(sel)];
+let renderTimer = null;
+
+function toast(msg) {
+  const el = $("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove("show"), 1750);
+}
+
+function rulerHTML(target, pins, arrow, compact = false) {
+  let h =
+    '<div class="ruler-track"><i class="zq"></i><i class="zb"></i><i class="zp"></i><i class="zl"></i></div>' +
+    `<span class="ruler-tgt" style="left:${pos(target)}%"></span>` +
+    '<span class="ruler-tick l">−36</span>' +
+    '<span class="ruler-tick" style="left:38.89%">−22</span>' +
+    `<span class="ruler-tick" style="left:${pos(target)}%">${fmt(target, 0)}</span>` +
+    (compact ? "" : '<span class="ruler-tick" style="left:70.83%">−10.5</span>') +
+    '<span class="ruler-tick r">0</span>';
+  if (arrow) {
+    const a = pos(arrow[0]), b = pos(arrow[1]);
+    h += `<span class="ruler-arrow" style="left:${Math.min(a, b)}%; width:${Math.abs(a - b)}%"></span>`;
+  }
+  const near = pins.length === 2 && Math.abs(pos(pins[0].I) - pos(pins[1].I)) < 17;
+  pins.forEach((p, i) => {
+    const x = pos(p.I);
+    const o = near ? pos(pins[1 - i].I) : x;
+    const edge = x < 10 || (near && x > o && x <= 90) ? " ea" : x > 90 || (near && x < o) ? " eb" : "";
+    h += `<span class="ruler-pin ${p.zone}${p.dim ? " dim" : ""}${edge}" style="left:${x}%"><b>${p.label}</b></span>`;
+  });
+  return h;
+}
+
+function loadScenario(k) {
+  clearTimeout(renderTimer);
+  S.scen = k;
+  const c = SCEN[k];
+  const z = classify(c.I, c.tp).zone;
+  S.hold = false;
+  S.madeAt = S.set.target;
+  S.alt = z === "silent" ? "na" : autoLevels(z, S.set.mode) ? (c.force || "ready") : "none";
+  S.ab = S.alt === "ready" && S.set.link === "normal" ? "normal" : "orig";
+  S.shareParam = S.alt === "ready" && S.set.link === "normal";
+  renderStudio();
+  renderLibrary();
+}
+
+function triggerRender() {
+  clearTimeout(renderTimer);
+  S.alt = "rendering";
+  renderStudio();
+  renderTimer = setTimeout(() => {
+    S.alt = "ready";
+    S.madeAt = S.set.target;
+    S.ab = "normal";
+    S.shareParam = true;
+    toast(`Leveled alt ready (${fmt(S.set.target, 0)} LUFS · 1.4 s)`);
+    renderStudio();
+    renderLibrary();
+  }, 1500);
+}
+
+function renderWave(clip, useLeveled, zone) {
+  const box = $("wave-box");
+  box.querySelectorAll(".wave-bar").forEach((b) => b.remove());
+  const vals = useLeveled ? clip.barsNorm : clip.barsOrig;
+  vals.forEach((v) => {
+    const bar = document.createElement("div");
+    bar.className = "wave-bar";
+    if (zone === "silent") bar.classList.add("silent");
+    else if (useLeveled) bar.classList.add("leveled");
+    else if (zone === "loud" && v > 85) bar.classList.add("clip");
+    else if (zone === "quiet") bar.classList.add("quiet");
+    else bar.classList.add("normal");
+    bar.style.height = Math.max(5, Math.round(v * 0.58)) + "px";
+    box.appendChild(bar);
+  });
+}
+
+function renderStudio() {
+  const c = SCEN[S.scen];
+  const z = classify(c.I, c.tp);
+  const zone = z.zone;
+  const ready = S.alt === "ready";
+  const T = ready ? S.madeAt : S.set.target;
+  const p = planGain(c.I, c.tp, T);
+  const heardNorm = ready && S.ab === "normal" && !S.hold;
+
+  // Scenario bar
+  $("scen-bar").innerHTML =
+    '<span class="scenario-label">Test Clip</span>' +
+    Object.keys(SCEN).map((k) => {
+      const s = SCEN[k];
+      const zz = classify(s.I, s.tp).zone;
+      return `<button class="clip-pill${k === S.scen ? " active" : ""}" data-scen="${k}">` +
+        `<span class="dot ${s.force === "rendering" ? "busy" : zz}"></span>` +
+        `<span>${s.chip}</span>` +
+        (zz === "silent" ? "" : `<span class="clip-lufs">${fmt(s.I)}</span>`) +
+        `</button>`;
+    }).join("");
+
+  // Device frame
+  $("device-frame").className = "frame-shell mode-" + S.device;
+  $("mac-win-title").textContent = `${c.name} — Cobalt Studio`;
+
+  // Ambient glow
+  const glow = $("ambient-glow");
+  glow.className = "ambient-glow";
+  if (zone === "silent") glow.classList.add("tone-silent");
+  else if (heardNorm) glow.classList.add("tone-leveled");
+  else if (zone === "quiet") glow.classList.add("tone-quiet");
+  else if (zone === "balanced") glow.classList.add("tone-balanced");
+
+  // Top HUD
+  $("hud-filename").textContent = c.name;
+  const pill = $("hud-loudness-pill");
+  const dot = $("hud-loud-dot");
+  const txt = $("hud-loud-text");
+  pill.className = "loudness-hud-pill";
+  if (S.alt === "rendering") {
+    pill.classList.add("state-rendering"); dot.className = "dot busy"; txt.textContent = "Leveling audio…";
+  } else if (heardNorm) {
+    pill.classList.add("state-leveled"); dot.className = "dot balanced"; txt.textContent = `Leveled · ${fmt(T, 0)} LUFS`;
+  } else if (zone === "loud") {
+    pill.classList.add("state-hot"); dot.className = "dot loud"; txt.textContent = `${fmt(c.I)} LUFS · Hot`;
+  } else if (zone === "quiet") {
+    pill.classList.add("state-quiet"); dot.className = "dot quiet"; txt.textContent = `${fmt(c.I)} LUFS · Quiet`;
+  } else {
+    pill.classList.add("hidden");
+  }
+
+  // Video Preview Mock
+  $("vf-stream-label").textContent = zone === "silent"
+    ? "ORIGINAL · 1080p · NO AUDIO"
+    : heardNorm ? "LEVELED ALT · -c:v copy · AAC" : "ORIGINAL · 1080p · AAC";
+  const tag = $("vf-mode-tag");
+  tag.className = "vf-mode-tag";
+  if (zone === "silent") { tag.classList.add("orig-ok"); tag.textContent = "SILENT"; }
+  else if (S.hold) { tag.classList.add("orig-hot"); tag.textContent = "AUDITION ORIGINAL"; }
+  else if (heardNorm) { tag.classList.add("leveled"); tag.textContent = `${sgn(p.gain)} dB LEVELED`; }
+  else if (zone === "loud") { tag.classList.add("orig-hot"); tag.textContent = `${sgn(c.I - T)} dB HOT`; }
+  else if (zone === "quiet") { tag.classList.add("orig-quiet"); tag.textContent = `${sgn(c.I - T)} dB LOW`; }
+  else { tag.classList.add("orig-ok"); tag.textContent = "BALANCED"; }
+
+  $("vf-lufs").textContent = zone === "silent" ? "≤ −60 LUFS" : `${fmt(heardNorm ? T : c.I)} LUFS`;
+  $("vf-tp").textContent = zone === "silent" ? "—" : `${fmt(heardNorm ? p.peak : c.tp)} dBTP`;
+  $("wave-target-lbl").textContent = `${fmt(T, 0)} LUFS target`;
+  renderWave(c, heardNorm, zone);
+
+  // Hold to hear original
+  const holdBtn = $("btn-hold");
+  holdBtn.style.display = zone === "silent" ? "none" : "inline-flex";
+  holdBtn.disabled = !ready;
+  holdBtn.classList.toggle("down", S.hold);
+  holdBtn.innerHTML = S.hold ? "<span>Hearing original (release to return)</span>" : "<span>Hold to hear original</span>";
+
+  // A/B Switch
+  const abWrap = $("ab-switch");
+  abWrap.style.display = zone === "silent" ? "none" : "inline-flex";
+  $("ab-target-txt").textContent = `${fmt(T, 0)} LUFS`;
+  $("ab-orig").className = "ab-btn" + (!heardNorm ? " active" : "");
+  $("ab-leveled").className = "ab-btn" + (heardNorm ? " active is-leveled" : "");
+  $("ab-leveled").disabled = !ready;
+  abWrap.style.opacity = ready ? "1" : "0.55";
+
+  // Dual-URL Dock
+  const normEffective = ready && S.shareParam;
+  const paramToggle = $("dock-param-toggle");
+  paramToggle.style.display = ready ? "inline-flex" : "none";
+  paramToggle.classList.toggle("on", normEffective);
+  $("dock-param-icon").textContent = normEffective ? "◉" : "○";
+  $("dock-url-preview").innerHTML =
+    `share.capybaraharmony.com/${ORIG_SLUG}` + (normEffective ? `<span class="param-hl">?audio=normal</span>` : "");
+  $("copy-share-label").textContent = normEffective ? "Copy Share (Leveled)" : "Copy Share";
+  $("copy-direct-label").textContent = normEffective ? "Direct (Alt)" : "Direct";
+
+  // Studio Deck
+  const dTag = $("deck-status-tag");
+  dTag.className = "status-tag " + (S.alt === "rendering" ? "busy" : zone === "silent" ? "silent" : ready ? "balanced" : zone);
+  dTag.textContent = S.alt === "rendering" ? "Rendering…" : S.alt === "failed" ? "Render Failed" : zone === "silent" ? "Silent" : ready ? (zone === "loud" ? "Hot · Leveled" : zone === "quiet" ? "Quiet · Leveled" : "Manual Alt") : (zone === "loud" ? "Too Loud" : zone === "quiet" ? "Too Quiet" : "Balanced");
+
+  if (zone === "silent") {
+    $("deck-meters").innerHTML = '<div class="meter-cell" style="grid-column:1/-1;"><span class="lbl">Loudness</span><span class="val">Silent</span><span class="sub">≤ −60 LUFS · skipped</span></div>';
+    $("deck-ruler").innerHTML = rulerHTML(T, [], null, true);
+  } else {
+    const nowL = heardNorm ? T : c.I;
+    const nowTp = heardNorm ? p.peak : c.tp;
+    $("deck-meters").innerHTML =
+      `<div class="meter-cell"><span class="lbl">Loudness</span><span class="val num ${heardNorm ? "balanced" : zone}">${fmt(nowL)}</span><span class="sub">${heardNorm ? "was " + fmt(c.I) : "LUFS"}</span></div>` +
+      `<div class="meter-cell"><span class="lbl">True Peak</span><span class="val num ${nowTp > RULES.peak ? "loud" : ""}">${fmt(nowTp)}</span><span class="sub">${heardNorm ? (p.held ? "peak held" : "dBTP") : (c.tp > RULES.peak ? "clipping" : "dBTP")}</span></div>` +
+      `<div class="meter-cell"><span class="lbl">${heardNorm ? "Gain" : "Range"}</span><span class="val num ${heardNorm ? "balanced" : ""}">${heardNorm ? sgn(p.gain) + " dB" : fmt(c.lra) + " LU"}</span><span class="sub">${heardNorm ? "linear" : "LRA"}</span></div>`;
+    const showAfter = ready || S.alt === "rendering";
+    const pins = [{ I: c.I, zone, label: fmt(c.I), dim: heardNorm }];
+    if (showAfter) pins.push({ I: T, zone: "balanced", label: fmt(T), dim: !heardNorm });
+    $("deck-ruler").innerHTML = rulerHTML(T, pins, showAfter ? [c.I, T] : null, true);
+  }
+
+  $("deck-render-box").style.display = S.alt === "rendering" ? "block" : "none";
+  if (zone === "silent") {
+    $("deck-actions").innerHTML = '<div style="font-size:11px; color:var(--fg-muted);">Nothing to level on a silent track.</div>';
+  } else if (S.alt === "rendering") {
+    $("deck-actions").innerHTML = '<button class="deck-btn" id="btn-finish-now">Simulate Complete</button>';
+  } else if (S.alt === "failed") {
+    $("deck-actions").innerHTML = '<button class="deck-btn primary" id="btn-retry-level">Retry Level Audio</button>';
+  } else if (ready) {
+    const needRelevel = S.madeAt !== S.set.target;
+    $("deck-actions").innerHTML =
+      (needRelevel ? `<button class="deck-btn primary" id="btn-relevel" style="margin-bottom:6px;">Re-level to ${fmt(S.set.target, 0)} LUFS</button>` : "") +
+      `<div class="deck-btn-row"><button class="deck-btn" id="btn-deck-ab">${heardNorm ? "Hear Original" : "Hear Leveled"}</button><button class="deck-btn danger" id="btn-remove-alt">Remove Alt</button></div>`;
+  } else {
+    $("deck-actions").innerHTML = `<button class="deck-btn primary" id="btn-manual-level">Level Audio to ${fmt(S.set.target, 0)} LUFS</button>`;
+  }
+
+  $("info-orig-size").textContent = `${c.size} · untouched`;
+  $("info-alt-state").textContent = ready ? "role=alt · -c:v copy" : S.alt === "rendering" ? "rendering pass 2…" : S.alt === "failed" ? "failed (original safe)" : "not rendered";
+  updateAuditionGain();
+}
+
+function renderShare() {
+  const s = S.sh;
+  const hasAlt = s.alt === "yes";
+  const r = resolveShare(s.kind, s.param, hasAlt);
+  const T = S.set.target;
+
+  const mkSeg = (id, opts, val, key) => {
+    $(id).innerHTML = opts.map(([v, label]) =>
+      `<button data-sh-k="${key}" data-sh-v="${v}" aria-pressed="${v === val}">${label}</button>`
+    ).join("");
+  };
+  mkSeg("sh-kind", [["public", "public"], ["private", "private /p/"], ["gallery", "gallery /g/"]], s.kind, "kind");
+  mkSeg("sh-param", [["bare", "bare link"], ["normal", "?audio=normal"]], s.param, "param");
+  mkSeg("sh-alt", [["yes", "exists"], ["no", "none"]], s.alt, "alt");
+
+  const urlMark = r.url.replace("?audio=normal", "<mark>?audio=normal</mark>");
+  $("sh-url").innerHTML = "https://" + urlMark;
+  $("dc-url").textContent = "https://" + r.url;
+  const title = s.kind === "gallery" ? "bar night · 3 files" : "bass_boosted_capy";
+  $("dc-title").textContent = title;
+  $("im-title").innerHTML = `${title}<small>share.capybaraharmony.com</small>`;
+
+  const gal = [true, false, true];
+  $("dc-media").innerHTML = s.kind === "gallery"
+    ? `<div class="gal-grid">${gal.map(() => '<div class="thumb"><span class="p" style="width:28px;height:28px;font-size:11px;">▶</span></div>').join("")}</div>`
+    : '<div class="thumb"><span class="p">▶</span></div>';
+
+  const plays = r.served === "normal" ? `the leveled copy (${fmt(T, 0)} LUFS)` : "the untouched original";
+  $("dc-anno").innerHTML = `<i class="dot ${r.served === "normal" ? "balanced" : ""}"></i><span>Discord plays <b>${plays}</b> inline. The unfurl card stays clean and identical visually — only the audio stream swaps.${r.fellBack ? " Since no leveled copy exists, it gracefully falls back without 404." : ""}</span>`;
+  $("im-anno").innerHTML = `<i class="dot ${r.served === "normal" ? "balanced" : ""}"></i><span>iMessage: identical preview bubble, plays ${plays}.</span>`;
+
+  $("web-chrome").textContent = r.url;
+  const tag = (on) => on ? '<span class="tag">◉ leveled</span>' : "";
+  const media = s.kind === "gallery"
+    ? `<div class="gal-grid">${gal.map((g) => `<div class="thumb"><span class="p" style="width:28px;height:28px;font-size:11px;">▶</span>${tag(r.served === "normal" && g)}</div>`).join("")}</div>`
+    : `<div class="thumb"><span class="p">▶</span>${tag(r.served === "normal")}</div>`;
+  const aud = !hasAlt
+    ? ""
+    : `<div class="web-aud"><b>${r.served === "normal" ? `Leveled audio (${fmt(T, 0)} LUFS)` : "Original audio"}</b><span>·</span><a href="${r.toggle.href}" id="web-toggle-a">${r.toggle.label}</a></div>`;
+  const note = !hasAlt
+    ? (r.fellBack ? "Asked for ?audio=normal, none exists: serves original cleanly with no switch." : "No leveled alt rendered, so no switch is shown.")
+    : s.kind === "gallery"
+      ? "Each gallery video resolves its own leveled alt when available; the balanced middle clip plays as saved."
+      : "Zero-JS CSP safe (`script-src 'none'`): the toggle is a plain anchor link.";
+  $("web-body").innerHTML = `${media}<h4>${title}</h4>${aud}<p style="margin:0; font-size:11.5px; color:#8d8d96;">${note}</p>`;
+
+  const fileUrl = s.kind === "public"
+    ? `https://media.capybaraharmony.com/${r.file}`
+    : s.kind === "private"
+      ? `(cobalt-originals stream · ${r.served === "normal" ? "leveled alt" : "original"})`
+      : `(lead video · ${r.served === "normal" ? "leveled alt" : "original"})`;
+  $("sh-meta").innerHTML =
+    `&lt;meta property="og:url" content="https://${urlMark.replace("<mark>", "<em>").replace("</mark>", "</em>")}"&gt;\n` +
+    `&lt;meta property="og:video" content="<em>${fileUrl}</em>"&gt;\n` +
+    `&lt;video src="<em>${fileUrl}</em>" controls&gt;` +
+    (r.toggle ? `\n&lt;a href="<em>${r.toggle.href}</em>"&gt;${r.toggle.label}&lt;/a&gt;` : "");
+  $("sh-why").innerHTML = r.fellBack
+    ? "<b>Fallback:</b> <code>?audio=normal</code> was requested but no alt exists, so every tag resolves to the original. Existing links never break if you delete an alt."
+    : r.served === "normal"
+      ? "<b>Leveled:</b> Keeping <code>?audio=normal</code> in <code>og:url</code> ensures Discord/iMessage cache the leveled embed independently from the bare original URL."
+      : "<b>Original:</b> Bare links never change behavior — anything already shared keeps playing the original track.";
+}
+
+function renderSettings() {
+  const st = S.set;
+  const mkIos = (id, opts, val, key) => {
+    $(id).innerHTML = opts.map(([v, label]) =>
+      `<button data-set-k="${key}" data-set-v="${v}" aria-pressed="${String(v) === String(val)}">${label}</button>`
+    ).join("");
+  };
+  mkIos("set-mode", [["off", "Off"], ["measure", "Measure"], ["auto", "Auto"]], st.mode, "mode");
+  mkIos("set-tgt", [[-14, "−14 · fuller"], [-16, "−16 · softer"]], st.target, "target");
+  mkIos("set-link", [["orig", "Original"], ["normal", "Leveled"]], st.link, "link");
+
+  $("set-mode-v").textContent = MODE_COPY[st.mode][0];
+  $("set-mode-f").textContent = MODE_COPY[st.mode][1];
+  $("set-tgt-v").textContent = `${fmt(st.target, 0)} LUFS`;
+  $("set-link-v").textContent = st.link === "normal" ? "?audio=normal" : "original";
+  $("set-link-f").textContent = st.link === "normal"
+    ? "When a post has a leveled copy, Copy Share appends ?audio=normal automatically (one tap removes it)."
+    : "Copy Share copies the bare original URL unless you toggle ?audio=normal on the dock.";
+  $("set-ruler").innerHTML = rulerHTML(st.target, [], null);
+
+  // Rule probe
+  const pr = S.probe;
+  const z = classify(pr.I, pr.tp);
+  const p = planGain(pr.I, pr.tp, st.target);
+  $("probe-presets").innerHTML = PROBE_PRE.map((x, i) =>
+    `<button class="clip-pill${x[1] === pr.I && x[2] === pr.tp ? " active" : ""}" data-pre="${i}">${x[0]}</button>`
+  ).join("");
+  $("p-i").value = pr.I;
+  $("p-t").value = pr.tp;
+  $("p-iv").textContent = `${fmt(pr.I)} LUFS`;
+  $("p-tv").textContent = `${fmt(pr.tp)} dBTP`;
+  const showTo = autoLevels(z.zone, st.mode);
+  const pins = z.zone === "silent" ? [] : [{ I: pr.I, zone: z.zone, label: fmt(pr.I) }].concat(showTo ? [{ I: st.target, zone: "balanced", label: fmt(st.target), dim: true }] : []);
+  $("probe-ruler").innerHTML = rulerHTML(st.target, pins, showTo ? [pr.I, st.target] : null);
+  $("p-verdict").innerHTML = `<i class="dot ${z.zone}"></i><span>${ZN[z.zone]}</span>`;
+  $("p-why").innerHTML = `<b>Because:</b> ${z.rule}.`;
+  $("p-do").innerHTML = z.zone === "silent"
+    ? "<b>Action:</b> Skipped in every mode."
+    : st.mode === "off"
+      ? "<b>Action:</b> Off — not measured."
+      : showTo
+        ? `<b>Action:</b> Auto-renders alt: ${sgn(p.gain)} dB gain, peak at ${fmt(p.peak)} dBTP${p.held ? " (peak held at −1.5 ceiling)" : ""}.`
+        : z.zone === "balanced"
+          ? "<b>Action:</b> Skipped automatically; manual leveling still available in Studio Deck."
+          : `<b>Action:</b> Badged <b>${ZN[z.zone]}</b> in Library & Studio (measure-only mode).`;
+}
+
+function libState(it) {
+  if (it[2] == null) return { k: "none" };
+  if (it[5] === "forced_ok") return { k: "leveled", zone: classify(it[2], it[3]).zone };
+  if (S.set.mode === "off") return { k: "none", unmeasured: true };
+  const z = classify(it[2], it[3]).zone;
+  if (z === "balanced" || z === "silent") return { k: "none", zone: z };
+  if (it[5] === "removed") return { k: "flag", zone: z, failed: false };
+  if (S.set.mode === "auto" && it[5] !== "failed") return { k: "leveled", zone: z };
+  return { k: "flag", zone: z, failed: S.set.mode === "auto" };
+}
+
+function renderLibrary() {
+  const st = LIB.map(libState);
+  const count = (k) => st.filter((x) => x.k === k).length;
+
+  $("lib-toast").innerHTML = S.set.mode === "auto"
+    ? `<span style="font-size:15px; color:#6ee7b7;">◉</span><div><b>Saved · leveled copy ready</b><small class="num">too loud: −6.2 → ${fmt(S.set.target, 0)} LUFS</small></div><button id="btn-toast-listen">Listen</button>`
+    : S.set.mode === "measure"
+      ? `<span style="font-size:15px; color:#fda4af;">●</span><div><b>Saved · too loud</b><small class="num">−6.2 LUFS · not leveled</small></div><button id="btn-toast-listen">Level it</button>`
+      : `<span style="font-size:15px;">✓</span><div><b>Saved</b><small>audio leveling is off</small></div>`;
+
+  $("lib-filters").innerHTML = [
+    ["all", "all", LIB.length],
+    ["leveled", "leveled", count("leveled")],
+    ["flag", "needs a look", count("flag")]
+  ].map(([k, lbl, n]) =>
+    `<button data-lib-f="${k}" aria-pressed="${S.lib.f === k}">${lbl}<small>${n}</small></button>`
+  ).join("");
+
+  $("lib-grid").innerHTML = LIB.map((it, i) => {
+    const s = st[i];
+    if (S.lib.f !== "all" && s.k !== S.lib.f) return "";
+    const badge = s.k === "leveled"
+      ? '<span class="b" style="color:#6ee7b7;">≋</span>'
+      : s.k === "flag"
+        ? `<span class="b"><i class="dot ${s.zone}"></i>${s.zone === "loud" ? "loud" : "quiet"}</span>`
+        : "";
+    return `<button class="lib-tile" data-lib-sel="${i}" aria-pressed="${S.lib.sel === i}" style="background:linear-gradient(155deg,${it[4]});">${it[1] ? `<span class="d num">${it[1]}</span>` : ""}${badge}</button>`;
+  }).join("") || '<p style="grid-column:1/-1; text-align:center; font-size:11.5px; color:var(--fg-muted); padding:16px 0;">No items match this filter under the current mode.</p>';
+
+  const it = LIB[S.lib.sel], s = st[S.lib.sel], lv = s.k === "leveled", defNorm = lv && S.set.link === "normal";
+  $("lib-menu").innerHTML =
+    `<header>${it[0]}${it[2] != null && !s.unmeasured ? ` · ${fmt(it[2])} LUFS` : ""}${s.failed ? " · render failed" : ""}</header>` +
+    `<button data-lib-act="copy"><span>⧉</span><span>Copy Share</span><small>${defNorm ? "?audio=normal" : "original"}</small></button>` +
+    (lv ? `<button data-lib-act="copy-alt"><span>⧉</span><span>Copy Share (${defNorm ? "original" : "?audio=normal"})</span></button>` : "") +
+    `<button data-lib-act="direct"><span>🔗</span><span>Copy Direct</span><small>${defNorm ? "alt" : "orig"}</small></button>` +
+    (it[2] == null ? "" : lv
+      ? `<button data-lib-act="del" style="color:#fda4af;"><span>✕</span><span>Remove Leveled Alt</span></button>`
+      : `<button data-lib-act="lvl"><span>≋</span><span>${s.failed ? "Retry Level Audio" : "Level Audio"}</span></button>`);
+
+  // Pipeline trace for active studio clip
+  const c = SCEN[S.scen], z = classify(c.I, c.tp), p = planGain(c.I, c.tp, S.set.target);
+  const auto = autoLevels(z.zone, S.set.mode);
+  $("lib-trace").innerHTML = [
+    `<li><div><b>Measure (Pass 1)</b> <span class="num">${z.zone === "silent" ? "≤ −60 LUFS" : `${fmt(c.I)} LUFS · ${fmt(c.tp)} dBTP`}</span><small>Piggybacks inside helper <code>POST /about</code> → saved to D1 <code>media_audio</code></small></div></li>`,
+    `<li><div><b>Classify: ${ZN[z.zone]}</b><small>${z.rule}</small></div></li>`,
+    `<li><div><b>${z.zone === "silent" ? "Skip" : auto ? `Auto-render Pass 2 → ${fmt(S.set.target, 0)} LUFS` : "No auto-render"}</b><small><code>POST /audio/level</code> (<code>-c:v copy</code> + linear <code>loudnorm</code>) → <code>role='alt'</code> (${sgn(p.gain)} dB)</small></div></li>`,
+    `<li><div><b>Share resolve</b><small><code>share.ts</code> swaps <code>og:video</code> &amp; <code>&lt;video&gt;</code> on <code>?audio=normal</code>; bare link stays original</small></div></li>`
+  ].join("");
+}
+
+// Web Audio gentle audition
+let audioCtx = null, oscGain = null, oscNodes = [];
+function stopAudition() {
+  S.auditioning = false;
+  oscNodes.forEach((o) => { try { o.stop(); } catch {} });
+  oscNodes = [];
+  $("btn-audition").classList.remove("playing");
+  $("audition-icon").textContent = "▶";
+  $("audition-txt").textContent = "Audition Level (Web Audio)";
+}
+function updateAuditionGain() {
+  if (!S.auditioning || !oscGain || !audioCtx) return;
+  const c = SCEN[S.scen];
+  const z = classify(c.I, c.tp).zone;
+  if (z === "silent") { oscGain.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.06); return; }
+  const heardNorm = S.alt === "ready" && S.ab === "normal" && !S.hold;
+  const L = heardNorm ? S.madeAt : c.I;
+  const g = Math.min(0.36, Math.max(0.014, Math.pow(10, (L + 14) / 22) * 0.11));
+  oscGain.gain.setTargetAtTime(g, audioCtx.currentTime, 0.06);
+}
+$("btn-audition").addEventListener("click", () => {
+  if (S.auditioning) return stopAudition();
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    oscGain = audioCtx.createGain();
+    oscGain.gain.value = 0.001;
+    oscGain.connect(audioCtx.destination);
+    [220, 277.18, 329.63].forEach((f) => {
+      const o = audioCtx.createOscillator();
+      o.type = "triangle";
+      o.frequency.value = f;
+      o.connect(oscGain);
+      o.start();
+      oscNodes.push(o);
+    });
+    S.auditioning = true;
+    $("btn-audition").classList.add("playing");
+    $("audition-icon").textContent = "■";
+    $("audition-txt").textContent = "Stop Audition · Test A/B!";
+    updateAuditionGain();
+  } catch {
+    toast("Web Audio unavailable in this frame");
+  }
+});
+
+// Event delegation
+$("app").addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-tab]");
+  if (tab) {
+    S.tab = tab.dataset.tab;
+    $$(".nav-tab").forEach((b) => b.classList.toggle("active", b === tab));
+    $$(".view-panel").forEach((p) => p.classList.toggle("active", p.id === "tab-" + S.tab));
+    return;
+  }
+  const sc = e.target.closest("[data-scen]");
+  if (sc) return loadScenario(sc.dataset.scen);
+
+  const dev = e.target.closest("[data-device]");
+  if (dev) {
+    S.device = dev.dataset.device;
+    $$("#device-seg button").forEach((b) => b.classList.toggle("active", b === dev));
+    return renderStudio();
+  }
+
+  const shBtn = e.target.closest("[data-sh-k]");
+  if (shBtn) {
+    S.sh[shBtn.dataset.shK] = shBtn.dataset.shV;
+    return renderShare();
+  }
+
+  const setBtn = e.target.closest("[data-set-k]");
+  if (setBtn) {
+    const k = setBtn.dataset.setK;
+    S.set[k] = k === "target" ? Number(setBtn.dataset.setV) : setBtn.dataset.setV;
+    renderSettings();
+    renderShare();
+    renderLibrary();
+    if (k === "mode") {
+      loadScenario(S.scen);
+    } else if (k === "link") {
+      if (S.alt === "ready") S.shareParam = S.set.link === "normal";
+      renderStudio();
+    } else {
+      renderStudio();
+    }
+    return;
+  }
+
+  const pre = e.target.closest("[data-pre]");
+  if (pre) {
+    const row = PROBE_PRE[Number(pre.dataset.pre)];
+    S.probe = { I: row[1], tp: row[2] };
+    return renderSettings();
+  }
+
+  const lf = e.target.closest("[data-lib-f]");
+  if (lf) { S.lib.f = lf.dataset.libF; return renderLibrary(); }
+
+  const ls = e.target.closest("[data-lib-sel]");
+  if (ls) { S.lib.sel = Number(ls.dataset.libSel); return renderLibrary(); }
+
+  if (e.target.closest("#btn-toast-listen")) {
+    S.tab = "studio";
+    $$(".nav-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === "studio"));
+    $$(".view-panel").forEach((p) => p.classList.toggle("active", p.id === "tab-studio"));
+    return loadScenario("loud");
+  }
+
+  if (e.target.closest("#web-toggle-a")) {
+    e.preventDefault();
+    S.sh.param = S.sh.param === "normal" ? "bare" : "normal";
+    return renderShare();
+  }
+  if (e.target.closest("#dc-url")) { e.preventDefault(); return; }
+
+  const libAct = e.target.closest("[data-lib-act]");
+  if (libAct) {
+    const act = libAct.dataset.libAct;
+    const it = LIB[S.lib.sel];
+    const st = libState(it);
+    const lv = st.k === "leveled";
+    const defNorm = lv && S.set.link === "normal";
+    if (act === "copy") {
+      const u = `https://share.capybaraharmony.com/${ORIG_SLUG}${defNorm ? "?audio=normal" : ""}`;
+      navigator.clipboard?.writeText(u).catch(() => {});
+      toast(`Copied ${defNorm ? "?audio=normal" : "original"} share link for ${it[0]}`);
+    } else if (act === "copy-alt") {
+      const u = `https://share.capybaraharmony.com/${ORIG_SLUG}${defNorm ? "" : "?audio=normal"}`;
+      navigator.clipboard?.writeText(u).catch(() => {});
+      toast(`Copied ${defNorm ? "original" : "?audio=normal"} share link for ${it[0]}`);
+    } else if (act === "direct") {
+      const u = `https://media.capybaraharmony.com/${defNorm ? ALT_KEY : ORIG_KEY}`;
+      navigator.clipboard?.writeText(u).catch(() => {});
+      toast(`Copied direct ${defNorm ? "leveled alt" : "original"} URL`);
+    } else if (act === "lvl") {
+      it[5] = "forced_ok";
+      toast(`Leveled ${it[0]} to ${fmt(S.set.target, 0)} LUFS`);
+      renderLibrary();
+    } else if (act === "del") {
+      it[5] = "removed";
+      toast(`Removed leveled alt for ${it[0]}`);
+      renderLibrary();
+    }
+    return;
+  }
+
+  const id = e.target.closest("button")?.id;
+  if (id === "ab-orig") { S.ab = "orig"; renderStudio(); }
+  else if (id === "ab-leveled" && S.alt === "ready") { S.ab = "normal"; renderStudio(); }
+  else if (id === "hud-loudness-pill" || id === "btn-deck-ab") {
+    if (S.alt === "ready") { S.ab = S.ab === "orig" ? "normal" : "orig"; renderStudio(); }
+    else if (S.alt === "rendering") triggerRender();
+  } else if (id === "dock-param-toggle") { S.shareParam = !S.shareParam; renderStudio(); }
+  else if (id === "btn-manual-level" || id === "btn-relevel" || id === "btn-retry-level" || id === "btn-finish-now") triggerRender();
+  else if (id === "btn-remove-alt") { S.alt = "none"; S.ab = "orig"; S.shareParam = false; toast("Removed leveled alt (original untouched)"); renderStudio(); renderLibrary(); }
+  else if (id === "btn-copy-share") {
+    const norm = S.alt === "ready" && S.shareParam;
+    const u = `https://share.capybaraharmony.com/${ORIG_SLUG}${norm ? "?audio=normal" : ""}`;
+    navigator.clipboard?.writeText(u).catch(() => {});
+    const btn = $("btn-copy-share");
+    btn.classList.add("copied");
+    $("copy-share-label").textContent = "Copied!";
+    toast(`Copied ${norm ? "?audio=normal share" : "original share"} link`);
+    setTimeout(() => { btn.classList.remove("copied"); renderStudio(); }, 1200);
+  } else if (id === "btn-copy-direct") {
+    const norm = S.alt === "ready" && S.shareParam;
+    const u = `https://media.capybaraharmony.com/${norm ? ALT_KEY : ORIG_KEY}`;
+    navigator.clipboard?.writeText(u).catch(() => {});
+    const btn = $("btn-copy-direct");
+    btn.classList.add("copied");
+    toast(`Copied direct ${norm ? "leveled alt" : "original"} URL`);
+    setTimeout(() => { btn.classList.remove("copied"); renderStudio(); }, 1200);
+  } else if (id === "sh-copy") {
+    const r = resolveShare(S.sh.kind, S.sh.param, S.sh.alt === "yes");
+    navigator.clipboard?.writeText("https://" + r.url).catch(() => {});
+    toast("Copied " + r.url);
+  }
+});
+
+// Momentary Hold-to-hear-original
+function setHold(on) {
+  if (S.hold === on || S.alt !== "ready") return;
+  S.hold = on;
+  renderStudio();
+}
+$("app").addEventListener("pointerdown", (e) => {
+  if (e.target.closest("[data-hold]")) { e.preventDefault(); setHold(true); }
+});
+["pointerup", "pointercancel", "blur"].forEach((ev) => window.addEventListener(ev, () => setHold(false)));
+
+$("p-i").addEventListener("input", (e) => { S.probe.I = Number(e.target.value); renderSettings(); });
+$("p-t").addEventListener("input", (e) => { S.probe.tp = Number(e.target.value); renderSettings(); });
+
+loadScenario("loud");
+renderShare();
+renderSettings();
+renderLibrary();
+</script>
+</body>
+</html>

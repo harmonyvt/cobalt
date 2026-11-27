@@ -63,6 +63,8 @@ public struct LibraryFile: Sendable, Codable, Equatable, Identifiable {
     /// when it has none or the server does not send it. Read `Rendition.privateFileURL`, which checks it still belongs to
     /// `privateURL` (a rotate or a revoke here changes that one only).
     public var privateFileURL: URL? = nil
+    /// `audio`: EBU R128 loudness measurement and leveled alternate metadata for videos; nil when absent or not a video.
+    public var audio: AudioLoudnessInfo? = nil
 
     /// What a made file is (the key a remake replaces); nil for anything else.
     public var madeKind: MadeKind? { MadeKind(role: galleryRole, spec: madeSpec) }
@@ -93,6 +95,7 @@ extension LibraryFile {
         case itemIndex, madeFrom, madeSpec               // `item_index`, `made_from`, `made_spec`
         case privateURL = "privateUrl"                   // `private_url`
         case privateFileURL = "privateFileUrl"           // `private_file_url`
+        case audio
     }
 
     public init(from decoder: Decoder) throws {
@@ -121,6 +124,7 @@ extension LibraryFile {
         madeSpec = ((try? c.decodeIfPresent(JSONValue.self, forKey: .madeSpec)) ?? nil)?.object.flatMap(MadeSpec.init(object:))
         privateURL = (try? c.decodeIfPresent(URL.self, forKey: .privateURL)) ?? nil
         privateFileURL = (try? c.decodeIfPresent(URL.self, forKey: .privateFileURL)) ?? nil
+        audio = (try? c.decodeIfPresent(AudioLoudnessInfo.self, forKey: .audio)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -149,6 +153,7 @@ extension LibraryFile {
         }
         try c.encodeIfPresent(privateURL, forKey: .privateURL)
         try c.encodeIfPresent(privateFileURL, forKey: .privateFileURL)
+        try c.encodeIfPresent(audio, forKey: .audio)
     }
 }
 
