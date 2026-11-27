@@ -141,7 +141,10 @@ public actor TwitchDirectory {
         return TwitchStreamInfo(
             userID: s.userId, login: s.userLogin, displayName: s.userName ?? s.userLogin, title: s.title ?? "",
             game: s.gameName ?? "", viewers: s.viewerCount ?? 0,
-            startedAt: s.startedAt.flatMap { ISO8601DateFormatter().date(from: $0) },
+            startedAt: s.startedAt.flatMap {
+                (try? Date($0, strategy: .iso8601))
+                    ?? (try? Date($0, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+            },
             thumbnail: thumb.flatMap(URL.init(string:)))
     }
 

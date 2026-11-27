@@ -192,14 +192,15 @@ private struct TwitchChatLines: View {
                         Label(
                             newSincePause > 0 ? "\(Copy.Twitch.paused) · \(Copy.Twitch.newLines(newSincePause))" : Copy.Twitch.jumpDown,
                             systemImage: Symbol.Twitch.down)
-                            .font(Font.cobalt(12.5, .medium))
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 32)
+                            .font(Font.cobalt(12.5, .semibold).monospacedDigit())
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 34)
                             .foregroundStyle(.white)
-                            .background(TwitchChatPalette.twitch, in: Capsule())
+                            .mediaGlassCapsule(tint: TwitchChatPalette.twitch)
+                            .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
                     }
                     .buttonStyle(.plain)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 10)
                     .transition(.opacity)
                 }
             }
@@ -497,6 +498,7 @@ private struct TwitchDualChatFilterBar: View {
                     Circle()
                         .fill(tint)
                         .frame(width: 7, height: 7)
+                        .shadow(color: selected ? tint.opacity(0.65) : .clear, radius: 3)
                 }
                 Text(title)
                     .font(Font.cobalt(12.5, selected ? .semibold : .medium))
@@ -508,7 +510,9 @@ private struct TwitchDualChatFilterBar: View {
             .background(fill, in: Capsule())
             .overlay {
                 if selected, let tint {
-                    Capsule().strokeBorder(tint, lineWidth: 1.25)
+                    Capsule().strokeBorder(tint.opacity(0.85), lineWidth: 1.25)
+                } else if !selected {
+                    Capsule().strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
                 }
             }
             .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
@@ -603,14 +607,15 @@ private struct TwitchCombinedChatLines: View {
                         Label(
                             newSincePause > 0 ? "\(Copy.Twitch.paused) · \(Copy.Twitch.newLines(newSincePause))" : Copy.Twitch.jumpDown,
                             systemImage: Symbol.Twitch.down)
-                            .font(Font.cobalt(12.5, .medium))
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 32)
+                            .font(Font.cobalt(12.5, .semibold).monospacedDigit())
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 34)
                             .foregroundStyle(.white)
-                            .background(TwitchChatPalette.twitch, in: Capsule())
+                            .mediaGlassCapsule(tint: TwitchChatPalette.twitch)
+                            .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
                     }
                     .buttonStyle(.plain)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 10)
                     .transition(.opacity)
                 }
             }

@@ -580,8 +580,17 @@ public final class TwitchCombinedChatModel {
                 return copy
             }
         }
-        if channelSnapshots[ch] != normalizedSnapshot {
+        let previousSnapshot = channelSnapshots[ch]
+        if previousSnapshot != normalizedSnapshot {
             channelSnapshots[ch] = normalizedSnapshot
+        } else if knownIDsByChannel[ch] != nil {
+            // Identical snapshot already merged — zero main-thread churn.
+            return
+        }
+
+        // If only cosmetics/status/room changed while the channel's lines are identical, skip the O(N) line merge.
+        if let previousSnapshot, previousSnapshot.lines == normalizedSnapshot.lines, knownIDsByChannel[ch] != nil {
+            return
         }
 
         var known = knownIDsByChannel[ch] ?? []
@@ -593,6 +602,7 @@ public final class TwitchCombinedChatModel {
 
         var updated = allLines
         var linesChanged = false
+        var trimmed = false
 
         for line in normalizedSnapshot.lines {
             if let existingIdx = indexByID[line.id] {
@@ -611,12 +621,16 @@ public final class TwitchCombinedChatModel {
         if updated.count > Self.combinedLineLimit {
             updated.removeFirst(updated.count - Self.combinedLineLimit)
             linesChanged = true
+            trimmed = true
         }
 
         // Bound `known` to IDs still in either this channel's snapshot or the combined buffer so memory never grows unbounded.
-        let currentSnapIDs = Set(snapshot.lines.map(\.id))
-        let stillVisibleIDs = Set(updated.lazy.filter { $0.channel == ch }.map(\.id))
-        known = known.filter { currentSnapIDs.contains($0) || stillVisibleIDs.contains($0) }
+        // Only allocate pruning sets when trimming occurred or `known` exceeds the buffer budget.
+        if trimmed || known.count > Self.combinedLineLimit {
+            let currentSnapIDs = Set(normalizedSnapshot.lines.map(\.id))
+            let stillVisibleIDs = Set(updated.lazy.filter { $0.channel == ch }.map(\.id))
+            known = known.filter { currentSnapIDs.contains($0) || stillVisibleIDs.contains($0) }
+        }
         knownIDsByChannel[ch] = known
 
         if linesChanged {

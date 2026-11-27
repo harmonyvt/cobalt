@@ -171,6 +171,17 @@ struct TwitchDualStage: View {
                 slotTile(slot: pair.inset, isInset: true)
                     .frame(width: insetDims.width, height: insetDims.height)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(alignment: .topTrailing) {
+                        if hudVisible {
+                            Image(systemName: Symbol.Twitch.swapFocus)
+                                .font(.system(size: 9.5, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 22, height: 22)
+                                .mediaGlassCircle(interactive: false)
+                                .padding(6)
+                                .transition(.opacity)
+                        }
+                    }
                     .overlay {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .strokeBorder(accent(for: pair.inset).opacity(0.85), lineWidth: 1.5)
@@ -228,6 +239,7 @@ struct TwitchDualStage: View {
         let isLouder = mixer.louderSlot == slot && !host.isMuted
         let isSuspended = mixer.suspendedSlot == slot
         let isFocused = mixer.focusedSlot == slot
+        let heroAtBottomLeading = host.dualStageMode == .focusInset && !isInset
 
         return ZStack {
             Color.black
@@ -260,14 +272,20 @@ struct TwitchDualStage: View {
             }
 
             // Corner identity badge: speaker glyph ONLY on the louder stream (`dualMixer.louderSlot`).
+            // In Focus-Inset mode, anchor the hero badge bottom-leading above the bottom glass bar so the top edge
+            // stays completely clear for the compact `A · B` header pill.
             VStack {
+                if heroAtBottomLeading { Spacer(minLength: 0) }
                 HStack(spacing: 4) {
                     slotIdentityBadge(slot: slot, isInset: isInset, isLouder: isLouder, isFocused: isFocused)
                     Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                if !heroAtBottomLeading { Spacer(minLength: 0) }
             }
-            .padding(isInset ? 6 : (showsTopChrome && !isInset && host.dualStageMode == .focusInset ? 56 : 10))
+            .padding(.horizontal, isInset ? 6 : 10)
+            .padding(.top, heroAtBottomLeading ? 0 : (isInset ? 6 : (showsTopChrome ? 56 : 10)))
+            .padding(.bottom, heroAtBottomLeading ? (hudVisible ? (compactChrome ? 62 : 74) : 14) : 0)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: hudVisible)
             .allowsHitTesting(host.dualStageMode == .split5050 && !isInset)
         }
     }
@@ -278,6 +296,7 @@ struct TwitchDualStage: View {
             Circle()
                 .fill(accent(for: slot))
                 .frame(width: isInset ? 6 : 7, height: isInset ? 6 : 7)
+                .shadow(color: accent(for: slot).opacity(isFocused ? 0.7 : 0), radius: 3)
             Text(displayName(for: slot))
                 .font(Font.cobalt(isInset ? 10.5 : 12, .semibold))
                 .foregroundStyle(.white)
@@ -337,9 +356,7 @@ struct TwitchDualStage: View {
         ZStack {
             if !isSeparated && showControls {
                 VStack(spacing: 0) {
-                    if showsTopChrome {
-                        MediaEdgeVignette(edge: .top, height: compactChrome ? 72 : 92, intensity: 0.46)
-                    }
+                    MediaEdgeVignette(edge: .top, height: compactChrome ? 60 : 80, intensity: showsTopChrome ? 0.46 : 0.34)
                     Spacer(minLength: 0)
                     MediaEdgeVignette(edge: .bottom, height: compactChrome ? 72 : 92, intensity: 0.52)
                 }
@@ -352,6 +369,9 @@ struct TwitchDualStage: View {
                     topGlassHUD
                         .opacity(showControls ? 1 : 0)
                         .allowsHitTesting(showControls)
+                } else if !showsTopChrome && showControls && host.dualStageMode == .focusInset {
+                    compactDualStatusPill
+                        .transition(.opacity)
                 }
                 Spacer(minLength: 0)
                 if showControls {
@@ -361,6 +381,46 @@ struct TwitchDualStage: View {
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: showControls)
+    }
+
+    /// Lightweight Clear Liquid Glass `A · B` status pill shown in single-focus dual-stream mode when the system
+    /// toolbar owns Back/Stop so dual identity and thermal state remain legible without duplicating navigation buttons.
+    private var compactDualStatusPill: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(primaryAccent)
+                    .frame(width: 7, height: 7)
+                    .opacity(mixer.focusedSlot == .primary ? 1 : 0.5)
+                Text(primaryDisplayName)
+                    .font(Font.cobalt(12, mixer.focusedSlot == .primary ? .semibold : .medium, relativeTo: .subheadline))
+                    .foregroundStyle(mixer.focusedSlot == .primary ? .white : .white.opacity(0.72))
+                    .lineLimit(1)
+                Text("·")
+                    .foregroundStyle(.white.opacity(0.5))
+                Circle()
+                    .fill(secondaryAccent)
+                    .frame(width: 7, height: 7)
+                    .opacity(mixer.focusedSlot == .secondary ? 1 : 0.5)
+                Text(secondaryDisplayName)
+                    .font(Font.cobalt(12, mixer.focusedSlot == .secondary ? .semibold : .medium, relativeTo: .subheadline))
+                    .foregroundStyle(mixer.focusedSlot == .secondary ? .white : .white.opacity(0.72))
+                    .lineLimit(1)
+                if host.isThermalThrottled {
+                    Image(systemName: "thermometer.medium")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.yellow)
+                        .accessibilityLabel(Copy.Twitch.thermalSteppedDown)
+                }
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .mediaGlassCapsule(interactive: false)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, compactChrome ? 6 : 8)
+        .allowsHitTesting(false)
     }
 
     /// Top Clear Liquid Glass HUD in single-focus iOS/Duo mode.
@@ -669,11 +729,15 @@ struct TwitchDualAudioMixerControl: View {
             // Segmented + horizontal-scrubbable `A · Mix · B` pill
             ZStack(alignment: .leading) {
                 // Continuous equal-power position indicator thumb behind the 3 labels
-                let trackW = max(controlWidth - 8, 120)
-                let thumbW = max(trackW / 3.0, 40)
+                let trackW = max(controlWidth - 8, 114)
+                let thumbW = max(trackW / 3.0, 38)
                 let offsetX = CGFloat(mixer.balance) * (trackW - thumbW)
                 Capsule()
-                    .fill(thumbTint.opacity(isMuted ? 0.16 : 0.34))
+                    .fill(thumbTint.opacity(isMuted ? 0.16 : 0.36))
+                    .overlay {
+                        Capsule()
+                            .strokeBorder(thumbTint.opacity(isMuted ? 0.25 : 0.65), lineWidth: 0.75)
+                    }
                     .frame(width: thumbW, height: Metrics.hit - 8)
                     .offset(x: 4 + offsetX)
                     .allowsHitTesting(false)
@@ -710,7 +774,7 @@ struct TwitchDualAudioMixerControl: View {
                     }
                 }
             }
-            .frame(minWidth: 148, maxWidth: 184, minHeight: Metrics.hit)
+            .frame(minWidth: 136, maxWidth: 176, minHeight: Metrics.hit)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controlWidth = $0 }
             .mediaGlassCapsule(interactive: false)
             .highPriorityGesture(
@@ -745,7 +809,7 @@ struct TwitchDualAudioMixerControl: View {
                             .lineLimit(1)
                     }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 9)
                     .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
                     .contentShape(Capsule())
                 }

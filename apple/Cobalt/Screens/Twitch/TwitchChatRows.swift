@@ -64,42 +64,48 @@ struct TwitchChatRow: View, Equatable {
                 }
                 if !line.fragments.isEmpty { message }
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, 12)
+            .padding(.trailing, 10)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(TwitchChatPalette.twitch.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            .background(noticeWash, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(alignment: .leading) {
                 let stripe = channelAccent.map { TwitchChatPalette.accentColor($0) } ?? TwitchChatPalette.twitch
-                Rectangle().fill(stripe).frame(width: 3)
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [stripe, stripe.opacity(0.65)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 3)
+                    .padding(.leading, 3)
+                    .padding(.vertical, 5)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 10))
         case .message, .action:
+            let hasLeadingRail = line.mentionsMe || channelAccent != nil || line.mine
             VStack(alignment: .leading, spacing: 2) {
                 if let reply = line.replyTo {
-                    Label {
-                        Text("\(Copy.Twitch.replyingTo(reply.displayName)): \(reply.text)").lineLimit(1)
-                    } icon: {
+                    HStack(spacing: 4) {
                         Image(systemName: Symbol.Twitch.reply)
+                            .font(.system(size: 9.5, weight: .semibold))
+                        Text("\(Copy.Twitch.replyingTo(reply.displayName)): \(reply.text)")
+                            .lineLimit(1)
                     }
                     .font(.system(size: 11))
                     .foregroundStyle(CobaltColor.caption)
-                    .labelStyle(.titleAndIcon)
                 }
                 message
             }
-            .padding(.leading, channelAccent != nil ? 11 : 8)
+            .padding(.leading, hasLeadingRail ? 11 : 8)
             .padding(.trailing, 8)
-            .padding(.vertical, 3)
+            .padding(.vertical, line.mentionsMe ? 4 : 3)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(background, in: RoundedRectangle(cornerRadius: 8))
+            .background(rowWash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(alignment: .leading) {
-                if let accent = channelAccent {
-                    Rectangle().fill(TwitchChatPalette.accentColor(accent)).frame(width: 3)
-                } else if line.mentionsMe {
-                    Rectangle().fill(TwitchChatPalette.twitch).frame(width: 3)
-                }
+                leadingRail
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8))
             .opacity(line.deleted ? 0.45 : 1)
             .contentShape(Rectangle())
             .modifier(TapToReplyModifier(enabled: tapToReply && onReply != nil && !line.deleted) {
@@ -109,10 +115,65 @@ struct TwitchChatRow: View, Equatable {
         }
     }
 
-    private var background: Color {
-        if line.mentionsMe { return TwitchChatPalette.twitch.opacity(0.16) }
-        if line.mine { return CobaltColor.hairline }
-        return .clear
+    private var noticeWash: LinearGradient {
+        LinearGradient(
+            colors: [
+                TwitchChatPalette.twitch.opacity(scheme == .dark ? 0.22 : 0.16),
+                TwitchChatPalette.twitch.opacity(scheme == .dark ? 0.05 : 0.04),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    /// Option 1: directional left-to-right ambient wash that fades softly across the row (zero heavy box outline).
+    private var rowWash: LinearGradient {
+        if line.mentionsMe {
+            return LinearGradient(
+                colors: [
+                    TwitchChatPalette.twitch.opacity(scheme == .dark ? 0.24 : 0.18),
+                    TwitchChatPalette.twitch.opacity(scheme == .dark ? 0.04 : 0.03),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
+        if line.mine {
+            return LinearGradient(
+                colors: [
+                    Color.primary.opacity(scheme == .dark ? 0.085 : 0.06),
+                    Color.primary.opacity(scheme == .dark ? 0.015 : 0.01),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
+        return LinearGradient(colors: [.clear, .clear], startPoint: .leading, endPoint: .trailing)
+    }
+
+    /// Option 1: detached inset vertical Capsule rail (`2.5–3pt`) that never curves with corner clipping.
+    /// Mentions always take precedence (even in dual-stream mode; the channel `[C]`/`[T]` badge keeps attribution clear).
+    @ViewBuilder private var leadingRail: some View {
+        if line.mentionsMe {
+            Capsule()
+                .fill(TwitchChatPalette.twitch)
+                .frame(width: 3)
+                .shadow(color: TwitchChatPalette.twitch.opacity(scheme == .dark ? 0.65 : 0.35), radius: 4)
+                .padding(.leading, 3)
+                .padding(.vertical, 4)
+        } else if let accent = channelAccent {
+            Capsule()
+                .fill(TwitchChatPalette.accentColor(accent).opacity(0.85))
+                .frame(width: 2.5)
+                .padding(.leading, 3)
+                .padding(.vertical, 4)
+        } else if line.mine {
+            Capsule()
+                .fill(CobaltColor.caption.opacity(0.55))
+                .frame(width: 2.5)
+                .padding(.leading, 3)
+                .padding(.vertical, 4)
+        }
     }
 
     @ViewBuilder private var menu: some View {
@@ -162,6 +223,9 @@ struct TwitchChatRow: View, Equatable {
             if let accent = channelAccent {
                 channelMarkBadge(accent)
             }
+            if line.mentionsMe {
+                mentionMicroBadge
+            }
             ForEach(Array(line.badges.enumerated()), id: \.offset) { _, badge in
                 badgeView(badge)
             }
@@ -170,10 +234,23 @@ struct TwitchChatRow: View, Equatable {
             if line.kind == .message {
                 Text(":").font(TwitchChatMetrics.font).foregroundStyle(CobaltColor.caption).padding(.leading, -4)
             }
-            ForEach(Array(pieces.enumerated()), id: \.offset) { _, piece in
+            ForEach(Array(line.renderPieces.enumerated()), id: \.offset) { _, piece in
                 pieceView(piece)
             }
         }
+    }
+
+    private var mentionMicroBadge: some View {
+        Text("@")
+            .font(.system(size: 9.5, weight: .heavy, design: .rounded))
+            .foregroundStyle(TwitchChatPalette.twitch)
+            .frame(width: 16, height: 16)
+            .background(TwitchChatPalette.twitch.opacity(0.22), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(TwitchChatPalette.twitch.opacity(0.45), lineWidth: 0.75)
+            )
+            .accessibilityHidden(true)
     }
 
     private func channelMarkBadge(_ accent: TwitchChannelAccent) -> some View {
@@ -213,30 +290,7 @@ struct TwitchChatRow: View, Equatable {
             .help(badge.title)
     }
 
-    /// The fragments as wrap-able pieces: each word its own piece.
-    private enum Piece {
-        case word(String)
-        case emote(ChatEmote, [ChatEmote])
-        case mention(String)
-        case link(URL)
-    }
-
-    private var pieces: [Piece] {
-        var out: [Piece] = []
-        for f in line.fragments {
-            switch f {
-            case .text(let s):
-                for w in s.split(separator: " ", omittingEmptySubsequences: true) { out.append(.word(String(w))) }
-            case .emote(let e): out.append(.emote(e, []))
-            case .stack(let e, let more): out.append(.emote(e, more))
-            case .mention(let m): out.append(.mention(m))
-            case .link(let u): out.append(.link(u))
-            }
-        }
-        return out
-    }
-
-    @ViewBuilder private func pieceView(_ piece: Piece) -> some View {
+    @ViewBuilder private func pieceView(_ piece: ChatRenderPiece) -> some View {
         switch piece {
         case .word(let w):
             Text(w)
@@ -247,8 +301,11 @@ struct TwitchChatRow: View, Equatable {
             Text("@\(m)")
                 .font(TwitchChatMetrics.font.weight(.semibold))
                 .foregroundStyle(CobaltColor.text)
-                .padding(.horizontal, 3)
-                .background(CobaltColor.elevated, in: RoundedRectangle(cornerRadius: 4))
+                .padding(.horizontal, 4)
+                .background(
+                    line.mentionsMe ? TwitchChatPalette.twitch.opacity(0.24) : CobaltColor.elevated,
+                    in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                )
         case .link(let url):
             Link(url.host() ?? url.absoluteString, destination: url)
                 .font(TwitchChatMetrics.font)

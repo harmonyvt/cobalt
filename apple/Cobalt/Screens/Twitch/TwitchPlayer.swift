@@ -2310,8 +2310,14 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
     }
 
     private func recordDelay(_ d: Double) {
-        delay = d
-        bestDelay = min(bestDelay ?? d, d)
+        let quantized = (d * 10).rounded() / 10
+        if delay != quantized {
+            delay = quantized
+        }
+        let nextBest = min(bestDelay ?? quantized, quantized)
+        if bestDelay != nextBest {
+            bestDelay = nextBest
+        }
         if isCatchingUp, !isBehind {
             isCatchingUp = false
             jumpCheck?.cancel()
@@ -2397,7 +2403,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
             syncPiPAndNowPlaying()
             Breadcrumbs.add("twitch.native.offline")
         case .stats(let stats):
-            isLowLatencyStream = stats.isLowLatency
+            if isLowLatencyStream != stats.isLowLatency {
+                isLowLatencyStream = stats.isLowLatency
+            }
             // Self-heal if `.loading` ever raced past `.playing`: active synchronizer clock means playback is live.
             if stats.isClockStarted && isLoading {
                 isLoading = false
@@ -2409,7 +2417,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
                 lastLoggedBuffering = stats.isBuffering
                 Breadcrumbs.add("twitch.native.buffering", ["on": .bool(stats.isBuffering)])
             }
-            isBuffering = stats.isBuffering
+            if isBuffering != stats.isBuffering {
+                isBuffering = stats.isBuffering
+            }
             if let d = stats.delay, d > 0, isPlaying {
                 recordDelay(d)
             }
@@ -2488,9 +2498,14 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget {
                     secondaryIsPlaying = true
                 }
             }
-            secondaryIsBuffering = stats.isBuffering
+            if secondaryIsBuffering != stats.isBuffering {
+                secondaryIsBuffering = stats.isBuffering
+            }
             if let d = stats.delay, d > 0, secondaryIsPlaying {
-                secondaryDelay = d
+                let quantized = (d * 10).rounded() / 10
+                if secondaryDelay != quantized {
+                    secondaryDelay = quantized
+                }
             }
         case .failed(let reason):
             secondaryIsOffline = true
@@ -3005,6 +3020,12 @@ private struct TwitchNativeControlBar: View {
                 #endif
 
                 if !host.isAirPlayingVideo, !host.variants.isEmpty {
+                    Capsule()
+                        .fill(.white.opacity(0.22))
+                        .frame(width: 1, height: 18)
+                        .padding(.horizontal, 2)
+                        .accessibilityHidden(true)
+
                     Menu {
                         ForEach(host.variants) { variant in
                             Button {
@@ -3019,13 +3040,16 @@ private struct TwitchNativeControlBar: View {
                             }
                         }
                     } label: {
-                        Text(host.selectedVariant?.shortLabel ?? Copy.Twitch.quality)
-                            .font(Font.cobalt(11, .semibold))
-                            .padding(.horizontal, 10)
-                            .frame(minHeight: 32)
-                            .mediaGlassCapsule()
-                            .frame(minHeight: Metrics.hit)
-                            .contentShape(Rectangle())
+                        HStack(spacing: 3) {
+                            Text(host.selectedVariant?.shortLabel ?? Copy.Twitch.quality)
+                                .font(Font.cobalt(11.5, .semibold).monospacedDigit())
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 8.5, weight: .semibold))
+                                .opacity(0.75)
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: Metrics.hit)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(Copy.Twitch.quality)
