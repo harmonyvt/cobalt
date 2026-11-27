@@ -1,50 +1,6 @@
 import CobaltKit
 import SwiftUI
 
-// MARK: - Ambient Cinema Backlight Stage
-
-/// Edge-to-edge live ambient cinema glow rendered behind media in single-focus detail and full-screen studio views.
-/// Decodes only a tiny cached thumbnail off the main thread (`FacePicture(..., maxPixel: 160)`), blurs and saturates
-/// it on the GPU, and layers a dark theatrical scrim so both 9:16 portrait and 16:9 landscape frames pop cleanly.
-struct AmbientCinemaBackdrop: View {
-    let item: MediaItem?
-    var enabled: Bool = true
-
-    var body: some View {
-        ZStack {
-            Color(hex: 0x070709)
-
-            if enabled, let item {
-                FacePicture(item: item, maxPixel: 160, showsGlyph: false, contentMode: .fill)
-                    .scaleEffect(1.32)
-                    .blur(radius: 54)
-                    .saturation(1.65)
-                    .brightness(-0.08)
-                    .opacity(0.72)
-                    .drawingGroup()
-                    .clipped()
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-
-                // Soft theatrical depth scrim so glass pills and media edges stay crisp over bright frames.
-                RadialGradient(
-                    colors: [
-                        Color.black.opacity(0.14),
-                        Color.black.opacity(0.46),
-                        Color.black.opacity(0.78)
-                    ],
-                    center: .center,
-                    startRadius: 60,
-                    endRadius: 560
-                )
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-        }
-        .ignoresSafeArea()
-    }
-}
-
 // MARK: - Ambient Cinema Post Studio (Variation B · Adaptive Crease Studio)
 
 /// Primary single-focus Media Item studio implementing **Variation B (Adaptive Crease Studio)**:
@@ -71,8 +27,10 @@ struct AmbientCinemaPostStudio: View {
     @Environment(\.hapticsEnabled) private var haptics
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.lifecycle) private var lifecycle
 
     @State private var ambientEnabled = true
+    @State private var videoSampler = AmbientVideoSampler()
     /// Variation B default: Studio Deck docked open on wide displays, collapsed to sheet button on compact.
     @State private var wideDeckOpen = true
     @State private var compactSheetOpen = false
@@ -88,6 +46,34 @@ struct AmbientCinemaPostStudio: View {
 
     private var item: MediaItem { context.item }
     private var rendition: Rendition { context.rendition }
+    /// The exact visible rendition on screen (active carousel slide when paging a gallery, `nil` on a missing slide,
+    /// otherwise the selected rendition tab).
+    private var activeRendition: Rendition? {
+        if context.isGalleryLike, let page = context.page {
+            return page.rendition
+        }
+        return context.rendition
+    }
+    private var activeRenditionIsVideo: Bool {
+        guard let activeRendition else { return false }
+        if activeRendition.isStillPicture || activeRendition.isWebp || activeRendition.isAnimatedMade || activeRendition.isGifItem {
+            return false
+        }
+        if activeRendition.local?.fileURL?.pathExtension.lowercased() == "gif" {
+            return false
+        }
+        if activeRendition.file?.contentType?.lowercased() == "image/gif"
+            || activeRendition.hosted?.contentType?.lowercased() == "image/gif" {
+            return false
+        }
+        return true
+    }
+    private var activeBackdropKey: String {
+        "\(item.id)|\(activeRendition?.id ?? "missing:\(context.missingIndex ?? -1)")"
+    }
+    private var shouldSampleLiveVideo: Bool {
+        ambientEnabled && !reduceMotion && lifecycle.isForeground && activeRenditionIsVideo
+    }
     private var model: AppModel { context.model }
     private var controller: DetailController { context.controller }
 
@@ -165,12 +151,16 @@ struct AmbientCinemaPostStudio: View {
                     )
                 }
             } media: {
-                cinemaCanvas(
-                    size: geo.size,
-                    isWide: isWide,
+                AmbientCinemaCanvas(
+                    context: context,
+                    backdropItem: context.missingIndex == nil ? item : nil,
+                    activeRendition: activeRendition,
+                    livePalette: activeRenditionIsVideo ? videoSampler.livePalette : nil,
+                    ambientEnabled: ambientEnabled,
                     reserveRight: isWide && wideDeckOpen && !creaseHint ? deckWidth : 0
                 )
             }
+            .environment(\.ambientVideoSampler, videoSampler)
         }
         .background(Color(hex: 0x070709).ignoresSafeArea())
         .preferredColorScheme(.dark)
@@ -186,7 +176,7 @@ struct AmbientCinemaPostStudio: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .mediaGlassCapsule(interactive: false)
-                    .padding(.top, showsCloseButton ? 64 : 16)
+                    .padding(.top, 64)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .allowsHitTesting(false)
             }
@@ -204,45 +194,24 @@ struct AmbientCinemaPostStudio: View {
         .task(id: rendition.id) {
             await preloadPrivateLinks()
         }
+        .onAppear {
+            videoSampler.setActive(shouldSampleLiveVideo)
+        }
+        .onDisappear {
+            videoSampler.tearDown()
+        }
+        .onChange(of: shouldSampleLiveVideo) { _, active in
+            videoSampler.setActive(active)
+        }
+        .onChange(of: activeBackdropKey) { _, _ in
+            videoSampler.resetForMediaChange()
+            videoSampler.setActive(shouldSampleLiveVideo)
+        }
         .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86), value: wideDeckOpen)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: toast)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: ambientEnabled)
         .haptic(.success, trigger: controller.copiedID, enabled: haptics) { $0 != nil }
         .haptic(.success, trigger: controller.privateLinkCopied, enabled: haptics) { $0 > 0 }
-    }
-
-    // MARK: - Cinema Media Canvas (Secondary in DuoMediaOverlay)
-
-    private func cinemaCanvas(size: CGSize, isWide: Bool, reserveRight: CGFloat) -> some View {
-        let topPad: CGFloat = showsCloseButton ? 68 : 16
-        let bottomPad: CGFloat = (context.item.detailTabs.count > 1 ? 168 : 132)
-        let heroMaxH = max(220, size.height - topPad - bottomPad)
-
-        return HStack(spacing: 0) {
-            ZStack {
-                AmbientCinemaBackdrop(item: item, enabled: ambientEnabled)
-
-                VStack(spacing: 10) {
-                    DetailHero(c: context, maxHeight: heroMaxH)
-                        .shadow(color: .black.opacity(0.45), radius: 24, y: 10)
-
-                    SubtitleStrip()
-                }
-                .padding(.horizontal, isWide ? 24 : 12)
-                .padding(.top, topPad)
-                .padding(.bottom, bottomPad)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-
-            if reserveRight > 0 {
-                Color.clear
-                    .frame(width: reserveRight)
-                    .allowsHitTesting(false)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Flat Overlay HUD (Outer Folded, Unfolded Wide, iPad, Mac)
@@ -252,7 +221,7 @@ struct AmbientCinemaPostStudio: View {
             ZStack {
                 // Edge vignettes keep Clear Liquid Glass controls crisp over any bright or dark frame.
                 VStack(spacing: 0) {
-                    MediaEdgeVignette(edge: .top, height: showsCloseButton ? 116 : 64, intensity: 0.42)
+                    MediaEdgeVignette(edge: .top, height: 108, intensity: 0.42)
                     Spacer(minLength: 0)
                     MediaEdgeVignette(edge: .bottom, height: 184, intensity: 0.52)
                 }
@@ -1623,6 +1592,69 @@ struct AmbientCinemaPostStudio: View {
         Task {
             let result = await controller.setPostStatus(status, post: post, key: rendition.id)
             if result.changed { showToast(result.words(for: status)) }
+        }
+    }
+}
+
+// MARK: - Ambient Cinema Media Canvas (Secondary in DuoMediaOverlay)
+
+/// Secondary media slot inside `DuoMediaOverlay`. Reads `@Environment(\.duoOverlaySeparated)` and its own slot size
+/// so the hero centers cleanly in flat, Book (horizontal fold), and Tabletop (vertical fold) postures while the
+/// edge-to-edge `AmbientCinemaBackdrop` bleeds past all safe areas without clipping.
+private struct AmbientCinemaCanvas: View {
+    let context: DetailContext
+    let backdropItem: MediaItem?
+    let activeRendition: Rendition?
+    let livePalette: AmbientPalette?
+    let ambientEnabled: Bool
+    let reserveRight: CGFloat
+
+    @Environment(\.duoOverlaySeparated) private var isSeparated
+    @State private var slotSize: CGSize = .zero
+
+    private var isHorizontalSplit: Bool {
+        isSeparated && slotSize.width > 0 && slotSize.height > slotSize.width * 1.05
+    }
+
+    private var isVerticalSplit: Bool {
+        isSeparated && slotSize.height > 0 && slotSize.width >= slotSize.height * 1.05
+    }
+
+    var body: some View {
+        let effectiveReserveRight: CGFloat = isSeparated ? 0 : reserveRight
+        GeometryReader { slot in
+            let topPad: CGFloat = isSeparated ? 14 : 68
+            let bottomPad: CGFloat = isSeparated ? 14 : (context.item.detailTabs.count > 1 ? 156 : 112)
+            let heroMaxH = max(180, slot.size.height - topPad - bottomPad)
+
+            HStack(spacing: 0) {
+                ZStack {
+                    DetailHero(c: context, maxHeight: heroMaxH)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, topPad)
+                .padding(.bottom, bottomPad)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if effectiveReserveRight > 0 {
+                    Color.clear
+                        .frame(width: effectiveReserveRight)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { slotSize = $0 }
+        .background {
+            AmbientCinemaBackdrop(
+                item: backdropItem,
+                rendition: activeRendition,
+                livePalette: livePalette,
+                enabled: ambientEnabled,
+                featherTrailing: effectiveReserveRight > 0 || isHorizontalSplit,
+                featherBottom: isVerticalSplit
+            )
         }
     }
 }

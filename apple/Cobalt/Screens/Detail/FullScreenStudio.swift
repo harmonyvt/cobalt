@@ -62,12 +62,14 @@ struct FullScreenStudioVideo: View {
     @Environment(\.fullScreenStudio) private var studio
     @Environment(\.subtitles) private var subtitles
     @Environment(\.shell) private var shell
+    @Environment(\.lifecycle) private var lifecycle
     @Environment(\.hapticsEnabled) private var haptics
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
     @State private var player = AVPlayer()
     @State private var transport = HeroTransport()
+    @State private var videoSampler = AmbientVideoSampler()
     @State private var muted = false
     @State private var audioClaimID = "studio.\(UUID().uuidString)"
     @State private var audioReleased = false
@@ -75,6 +77,8 @@ struct FullScreenStudioVideo: View {
 
     @State private var viewingWebp = false
     @State private var ambientEnabled = true
+    @State private var isSeparated = false
+    @State private var stageSize: CGSize = .zero
     @State private var inspectorOpen = false
     @State private var inspectorTab: StudioInspectorTab = .access
     @State private var showIdentityPopover = false
@@ -93,6 +97,12 @@ struct FullScreenStudioVideo: View {
             .preferredColorScheme(.dark)
             .task { await startPlayback() }
             .onDisappear { teardownPlayback() }
+            .onChange(of: shouldSampleLiveVideo) { _, active in
+                videoSampler.setActive(active)
+            }
+            .onChange(of: viewingWebp) { _, isWebp in
+                if isWebp { videoSampler.resetForMediaChange() }
+            }
             .confirmationDialog(
                 visibilityDialogTitle(askingVisibility),
                 isPresented: Binding(get: { askingVisibility != nil }, set: { if !$0 { askingVisibility = nil } }),
@@ -103,6 +113,7 @@ struct FullScreenStudioVideo: View {
             } message: { ask in
                 Text(visibilityDialogMessage(ask))
             }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: ambientEnabled)
             .haptic(.impact(weight: .light), trigger: transport.endHits, enabled: haptics) { $0 > 0 }
             .haptic(.success, trigger: studio?.controller.copiedID, enabled: haptics) { $0 != nil }
             .haptic(.success, trigger: studio?.controller.privateLinkCopied ?? 0, enabled: haptics) { $0 > 0 }
@@ -196,6 +207,18 @@ struct FullScreenStudioVideo: View {
         voiceOver || transport.barShown || viewingWebp || inspectorOpen || showIdentityPopover || editingTitle
     }
 
+    private var shouldSampleLiveVideo: Bool {
+        ambientEnabled && !reduceMotion && lifecycle.isForeground && !viewingWebp
+    }
+
+    private var isHorizontalSplit: Bool {
+        isSeparated && stageSize.width > 0 && stageSize.height > stageSize.width * 1.05
+    }
+
+    private var isVerticalSplit: Bool {
+        isSeparated && stageSize.height > 0 && stageSize.width >= stageSize.height * 1.05
+    }
+
     // MARK: - Adaptive Root (iPhone Duo ArrangementView on 27.1+ / Fallback on 26)
 
     @ViewBuilder
@@ -206,13 +229,23 @@ struct FullScreenStudioVideo: View {
                 ArrangementView {
                     StudioOverlayHost(
                         isWide: isWide,
+                        onSeparatedChange: { separated in
+                            if isSeparated != separated {
+                                isSeparated = separated
+                            }
+                        },
                         floatingHUD: { floatingHUD(isWide: isWide, totalWidth: geo.size.width) },
                         separatedDeck: { separatedFoldDeck }
                     )
                     .overlayArrangementEdge(.bottom)
                     .overlayArrangementEdge(.trailing)
                 } secondary: {
-                    mediaStage(dockedInspector: isWide && inspectorOpen, inspectorWidth: inspectorWidth(for: geo.size.width))
+                    mediaStage(
+                        dockedInspector: isWide && inspectorOpen && !isSeparated,
+                        inspectorWidth: inspectorWidth(for: geo.size.width)
+                    )
+                    .overlayArrangementEdge(.top)
+                    .overlayArrangementEdge(.leading)
                 }
                 .arrangementViewStyle(.overlay)
             } else {
@@ -268,7 +301,6 @@ struct FullScreenStudioVideo: View {
     private func mediaStage(dockedInspector: Bool, inspectorWidth: CGFloat) -> some View {
         HStack(spacing: 0) {
             ZStack {
-                AmbientCinemaBackdrop(item: liveItem, enabled: ambientEnabled)
                 Group {
                     if viewingWebp, let source = webpSource {
                         AnimatedImageView(source: source)
@@ -295,6 +327,17 @@ struct FullScreenStudioVideo: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { stageSize = $0 }
+        .background {
+            AmbientCinemaBackdrop(
+                item: liveItem,
+                rendition: activeRendition,
+                livePalette: viewingWebp ? nil : videoSampler.livePalette,
+                enabled: ambientEnabled,
+                featherTrailing: dockedInspector || isHorizontalSplit,
+                featherBottom: isVerticalSplit
+            )
+        }
     }
 
     // MARK: - Floating Liquid Glass HUD (Layered State: Outer, Inner Flat, iPad, Mac)
@@ -1466,6 +1509,8 @@ struct FullScreenStudioVideo: View {
         }
         await item.seek(to: start.isValid ? start : .zero)
         transport.attach(player)
+        videoSampler.attach(player: player)
+        videoSampler.setActive(shouldSampleLiveVideo)
         subtitles?.adopt(transport)
         PlayerPool.shared.play(player, as: .hero)
     }
@@ -1475,6 +1520,7 @@ struct FullScreenStudioVideo: View {
             NotificationCenter.default.removeObserver(loopObserver)
             self.loopObserver = nil
         }
+        videoSampler.tearDown()
         subtitles?.release(transport)
         transport.detach()
         player.pause()
@@ -1739,16 +1785,23 @@ struct FullScreenStudioVideo: View {
 @available(iOS 27.1, macOS 27.1, *)
 private struct StudioOverlayHost<Floating: View, Separated: View>: View {
     let isWide: Bool
+    let onSeparatedChange: (Bool) -> Void
     @ViewBuilder let floatingHUD: () -> Floating
     @ViewBuilder let separatedDeck: () -> Separated
 
     @Environment(\.overlayArrangementZIndex) private var overlayZIndex
 
     var body: some View {
-        if overlayZIndex == 0 {
-            separatedDeck()
-        } else {
-            floatingHUD()
+        let isSeparated = overlayZIndex == 0
+        Group {
+            if isSeparated {
+                separatedDeck()
+            } else {
+                floatingHUD()
+            }
+        }
+        .onChange(of: isSeparated, initial: true) { _, separated in
+            onSeparatedChange(separated)
         }
     }
 }
