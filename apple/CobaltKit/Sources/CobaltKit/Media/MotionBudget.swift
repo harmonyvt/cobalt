@@ -29,9 +29,16 @@ public final class MotionBudget {
     }
 
     public let limit: Int
+    private var dynamicLimitOverride: Int?
     private var line: [WeakTicket] = []
     private var lowPower: Bool
     private var observer: NSObjectProtocol?
+
+    /// Active animated emote limit after accounting for concurrent multi-stream playback.
+    public var effectiveLimit: Int {
+        guard let override = dynamicLimitOverride else { return limit }
+        return min(limit, max(0, override))
+    }
 
     private struct WeakTicket {
         weak var ticket: MotionTicket?
@@ -50,9 +57,23 @@ public final class MotionBudget {
         }
     }
 
+    /// Tightens animated emote budget when 3+ live Twitch streams are decoding concurrently so busy multi-channel
+    /// chats stay at 60/120 fps on iPhone and iPad/Mac.
+    public func setActiveStreamCount(_ count: Int) {
+        let nextOverride: Int?
+        if count >= 3 {
+            nextOverride = limit <= 10 ? 6 : 10
+        } else {
+            nextOverride = nil
+        }
+        guard nextOverride != dynamicLimitOverride else { return }
+        dynamicLimitOverride = nextOverride
+        recompute()
+    }
+
     /// The ticket wants to move (on screen and animated) or not any more. Granting is the ticket's `granted`.
     public func want(_ ticket: MotionTicket, _ wants: Bool) {
-        let slots = lowPower ? 0 : limit
+        let slots = lowPower ? 0 : effectiveLimit
         if wants {
             var write = 0
             var compactedUnderSlots = false
@@ -105,7 +126,7 @@ public final class MotionBudget {
     private func recompute() {
         // a ticket whose view went away without saying so leaves the line here
         line.removeAll { $0.ticket == nil }
-        syncGrants(slots: lowPower ? 0 : limit)
+        syncGrants(slots: lowPower ? 0 : effectiveLimit)
     }
 
     private func syncGrants(slots: Int) {

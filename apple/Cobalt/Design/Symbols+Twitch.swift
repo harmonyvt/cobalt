@@ -52,5 +52,13 @@ extension Symbol {
         static let dropStream = "rectangle.badge.minus"
         static let pinFill = "pin.fill"
         static let floatingPanel = "macwindow.on.rectangle"
+        // multi stream (3-4)
+        static let quadGrid = "square.grid.2x2.fill"
+        static let mosaicGrid = "rectangle.grid.2x2.fill"
+        static let spotlightStrip = "rectangle.topthird.inset.filled"
+        static let audioMixer = "slider.horizontal.3"
+        static let cycleFocus = "arrow.trianglehead.2.clockwise"
+        static let addSlot = "plus"
+        static let streamCount = "square.stack.fill"
     }
 }

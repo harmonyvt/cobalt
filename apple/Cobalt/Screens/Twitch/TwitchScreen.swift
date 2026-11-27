@@ -27,13 +27,13 @@ struct TwitchScreen: View {
         return logins
     }
 
-    /// The primary channel currently active in the pane or bar, used for 1-tap "watch alongside" promotion.
-    private var currentPrimaryLogin: String? {
-        if let item = pane.item, pane.state != .hidden, let first = item.streamChannels.first {
-            return first
+    /// The stream item currently active in the pane or bar, used for 1-tap "watch alongside" promotion (1->2->3->4).
+    private var currentStreamItem: PaneItem? {
+        if let item = pane.item, pane.state != .hidden, item.isStream {
+            return item
         }
-        if let bar = pane.barItem, let first = bar.streamChannels.first {
-            return first
+        if let bar = pane.barItem, bar.isStream {
+            return bar
         }
         return nil
     }
@@ -42,7 +42,7 @@ struct TwitchScreen: View {
         TwitchChannelList(
             model: model,
             activeLogins: activeLogins,
-            currentPrimaryLogin: currentPrimaryLogin
+            currentStreamItem: currentStreamItem
         )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(CobaltColor.bg)
@@ -66,7 +66,7 @@ struct TwitchScreen: View {
 private struct TwitchChannelList: View {
     let model: AppModel
     var activeLogins: Set<String>
-    var currentPrimaryLogin: String?
+    var currentStreamItem: PaneItem?
 
     @Environment(Pane.self) private var pane
     @State private var query = ""
@@ -161,11 +161,18 @@ private struct TwitchChannelList: View {
         pane.open(.stream(login))
     }
 
-    /// Promotes an active stream into dual-stream with `name`, or asks for a 2nd stream if none is active yet.
+    /// Promotes an active stream session by adding `name` (1->2->3->4), or asks for a 2nd stream if none is active yet.
     private func watchAlongside(_ name: String) {
         guard let login = TwitchStore.login(from: name) else { return }
-        if let existing = currentPrimaryLogin, existing.caseInsensitiveCompare(login) != .orderedSame {
-            pane.open(.dualStream(primary: existing, secondary: login))
+        if let existing = currentStreamItem {
+            let channels = existing.streamChannels
+            if channels.contains(where: { $0.caseInsensitiveCompare(login) == .orderedSame }) {
+                pane.open(existing)
+            } else if channels.count < PaneItem.maxSimultaneousStreams {
+                if let next = existing.addingStream(login) { pane.open(next) }
+            } else if let next = existing.replacingStream(at: PaneItem.maxSimultaneousStreams - 1, with: login) {
+                pane.open(next)
+            }
         } else {
             pickingAlongsideFor = login
         }
@@ -178,10 +185,19 @@ private struct TwitchChannelList: View {
         } label: {
             Label(Copy.Twitch.open, systemImage: Symbol.Twitch.tab)
         }
-        Button {
-            watchAlongside(login)
-        } label: {
-            Label(Copy.Twitch.watchAlongside, systemImage: Symbol.Twitch.watchAlongside)
+        if !isWatching(login) {
+            let labelText: String = {
+                if let existing = currentStreamItem, existing.streamChannels.count >= 2,
+                   existing.streamChannels.count < PaneItem.maxSimultaneousStreams {
+                    return Copy.Twitch.addStreamTitle(current: existing.streamChannels.count, max: PaneItem.maxSimultaneousStreams)
+                }
+                return Copy.Twitch.watchAlongside
+            }()
+            Button {
+                watchAlongside(login)
+            } label: {
+                Label(labelText, systemImage: Symbol.Twitch.watchAlongside)
+            }
         }
     }
 

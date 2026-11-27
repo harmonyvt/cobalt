@@ -40,10 +40,15 @@ public enum PaneItem: Hashable, Codable, Sendable {
     case reward(String)
     /// A studio pool video id.
     case poolVideo(String)
+    /// Maximum simultaneous Twitch streams supported in a single pane.
+    public static let maxSimultaneousStreams = 4
+
     /// A Twitch channel login.
     case stream(TwitchChannel)
     /// Two simultaneous Twitch streams (primary + secondary channel logins).
     case dualStream(primary: TwitchChannel, secondary: TwitchChannel)
+    /// Three or four simultaneous Twitch streams (ordered, distinct channel logins).
+    case multiStream(channels: [TwitchChannel])
     /// A booru post id.
     case booruPost(Int)
     /// The booru filters page.
@@ -60,7 +65,7 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// runtime state its page reports (`Pane.setRunning`); this only says the kind can.
     public var keepsRunning: Bool {
         switch self {
-        case .stream, .dualStream, .save, .swarm, .job, .reward, .poolVideo: true
+        case .stream, .dualStream, .multiStream, .save, .swarm, .job, .reward, .poolVideo: true
         default: false
         }
     }
@@ -69,7 +74,7 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// outranks the rest (a job, a save, a swarm or the studio keep running wherever they run; only their bar goes).
     public var barRank: Int {
         switch self {
-        case .stream, .dualStream: 1
+        case .stream, .dualStream, .multiStream: 1
         default: 0
         }
     }
@@ -89,6 +94,7 @@ public enum PaneItem: Hashable, Codable, Sendable {
         case .poolVideo: "poolVideo"
         case .stream: "stream"
         case .dualStream: "dualStream"
+        case .multiStream: "multiStream"
         case .booruPost: "booruPost"
         case .booruFilters: "booruFilters"
         case .swarm: "swarm"
@@ -100,10 +106,10 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// True for the transient hold-to-peek item.
     public var isPeek: Bool { if case .peek = self { true } else { false } }
 
-    /// True for single or dual Twitch stream items.
+    /// True for single, dual, or multi Twitch stream items.
     public var isStream: Bool {
         switch self {
-        case .stream, .dualStream: true
+        case .stream, .dualStream, .multiStream: true
         default: false
         }
     }
@@ -113,7 +119,26 @@ public enum PaneItem: Hashable, Codable, Sendable {
         switch self {
         case .stream(let login): [login]
         case .dualStream(let primary, let secondary): [primary, secondary]
+        case .multiStream(let channels): channels
         default: []
+        }
+    }
+
+    /// Builds the canonical stream `PaneItem` for 1...4 distinct channels:
+    /// 1 -> `.stream`, 2 -> `.dualStream`, 3...4 -> `.multiStream`.
+    public static func streams(_ rawChannels: [TwitchChannel]) -> PaneItem? {
+        var normalized: [TwitchChannel] = []
+        for raw in rawChannels {
+            let clean = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !clean.isEmpty, !normalized.contains(clean) else { continue }
+            normalized.append(clean)
+            if normalized.count == maxSimultaneousStreams { break }
+        }
+        switch normalized.count {
+        case 0: return nil
+        case 1: return .stream(normalized[0])
+        case 2: return .dualStream(primary: normalized[0], secondary: normalized[1])
+        default: return .multiStream(channels: normalized)
         }
     }
 
@@ -136,20 +161,56 @@ public enum PaneItem: Hashable, Codable, Sendable {
         }
     }
 
-    /// Demotes a `.dualStream` item down to a single `.stream(keeping)`.
+    /// Appends a unique stream up to `maxSimultaneousStreams` (1 -> 2 -> 3 -> 4).
+    /// Returns `nil` when `self` is not a stream, `rawChannel` is empty/already active, or already at the 4-stream cap.
+    public func addingStream(_ rawChannel: TwitchChannel) -> PaneItem? {
+        guard isStream else { return nil }
+        let clean = rawChannel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !clean.isEmpty else { return nil }
+        let current = streamChannels.map { $0.lowercased() }
+        guard current.count < Self.maxSimultaneousStreams, !current.contains(clean) else { return nil }
+        return Self.streams(current + [clean])
+    }
+
+    /// Removes a stream from a dual/multi-stream item, demoting 4 -> 3 -> 2 -> 1 (or `nil` if not found / last stream).
+    public func removingStream(_ rawChannel: TwitchChannel) -> PaneItem? {
+        guard isStream else { return nil }
+        let clean = rawChannel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let current = streamChannels.map { $0.lowercased() }
+        guard current.contains(clean) else { return nil }
+        let remaining = current.filter { $0 != clean }
+        return Self.streams(remaining)
+    }
+
+    /// Replaces the channel at `index` with a distinct `rawChannel`, preserving slot order.
+    public func replacingStream(at index: Int, with rawChannel: TwitchChannel) -> PaneItem? {
+        guard isStream else { return nil }
+        let clean = rawChannel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !clean.isEmpty else { return nil }
+        var current = streamChannels.map { $0.lowercased() }
+        guard current.indices.contains(index) else { return nil }
+        if current[index] == clean { return nil }
+        guard !current.contains(clean) else { return nil }
+        current[index] = clean
+        return Self.streams(current)
+    }
+
+    /// Demotes a `.dualStream` or `.multiStream` item down to a single `.stream(keeping)`.
     public func demotedToSingle(keeping rawChannel: TwitchChannel) -> PaneItem? {
-        guard case .dualStream(let primary, let secondary) = self else { return nil }
+        let current = streamChannels.map { $0.lowercased() }
+        guard current.count >= 2 else { return nil }
         let keep = rawChannel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard keep == primary.lowercased() || keep == secondary.lowercased() else { return nil }
+        guard current.contains(keep) else { return nil }
         return .stream(keep)
     }
 
     // MARK: coding
 
-    // `{"kind":"post","id":"abc"}`, `{"kind":"dualStream","id":"a","secondary":"b"}`, `{"kind":"booruPost","n":7}`,
-    // `{"kind":"selection"}`: flat and readable, so a saved route from an older build decodes or fails cleanly (an
-    // unknown kind throws; `PaneRoute` then drops it).
-    private enum CodingKeys: String, CodingKey { case kind, id, secondary, n }
+    // `{"kind":"post","id":"abc"}`, `{"kind":"dualStream","id":"a","secondary":"b"}`,
+    // `{"kind":"multiStream","channels":["a","b","c"]}`, `{"kind":"booruPost","n":7}`, `{"kind":"selection"}`:
+    // flat and readable, so a saved route from an older build decodes or fails cleanly (an unknown kind throws;
+    // `PaneRoute` then drops it).
+    private enum CodingKeys: String, CodingKey { case kind, id, secondary, channels, n }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -174,6 +235,21 @@ public enum PaneItem: Hashable, Codable, Sendable {
                 throw DecodingError.dataCorruptedError(forKey: .secondary, in: c, debugDescription: "invalid dualStream pair")
             }
             self = .dualStream(primary: primary, secondary: secondary)
+        case "multiStream":
+            let raw = try c.decode([String].self, forKey: .channels)
+            let cleaned = raw.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            let uniqueCount = Set(cleaned.filter { !$0.isEmpty }).count
+            guard cleaned.count >= 2,
+                  cleaned.count <= Self.maxSimultaneousStreams,
+                  uniqueCount == cleaned.count
+            else {
+                throw DecodingError.dataCorruptedError(forKey: .channels, in: c, debugDescription: "invalid multiStream channels")
+            }
+            if cleaned.count == 2 {
+                self = .dualStream(primary: cleaned[0], secondary: cleaned[1])
+            } else {
+                self = .multiStream(channels: cleaned)
+            }
         case "booruPost": self = .booruPost(try c.decode(Int.self, forKey: .n))
         case "booruFilters": self = .booruFilters
         case "swarm": self = .swarm(try id())
@@ -195,6 +271,8 @@ public enum PaneItem: Hashable, Codable, Sendable {
         case .dualStream(let primary, let secondary):
             try c.encode(primary, forKey: .id)
             try c.encode(secondary, forKey: .secondary)
+        case .multiStream(let channels):
+            try c.encode(channels, forKey: .channels)
         case .booruPost(let n):
             try c.encode(n, forKey: .n)
         case .selection, .booruFilters:

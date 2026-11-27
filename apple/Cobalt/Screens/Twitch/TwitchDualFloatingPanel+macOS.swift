@@ -62,6 +62,11 @@ final class TwitchDualFloatingPanel: NSObject, NSWindowDelegate {
 
     func open(host: TwitchPlayerHost) {
         if let existing = panel {
+            if host.activeChannels.count >= 3 && aspect != .focus16x9 {
+                aspect = .focus16x9
+                existing.aspectRatio = aspect.ratio
+                existing.minSize = aspect.minSize
+            }
             existing.orderFrontRegardless()
             if !isOpen {
                 isOpen = true
@@ -70,7 +75,10 @@ final class TwitchDualFloatingPanel: NSObject, NSWindowDelegate {
             return
         }
 
-        let initialSize = aspect.defaultSize
+        if host.activeChannels.count >= 3 {
+            aspect = .focus16x9
+        }
+        let initialSize = host.activeChannels.count >= 3 ? NSSize(width: 688, height: 387) : aspect.defaultSize
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let origin = NSPoint(
             x: screenFrame.maxX - initialSize.width - 24,
@@ -138,6 +146,10 @@ final class TwitchDualFloatingPanel: NSObject, NSWindowDelegate {
     }
 
     func toggleAspect(host: TwitchPlayerHost) {
+        if host.activeChannels.count >= 3 {
+            host.toggleMultiStageMode()
+            return
+        }
         aspect = aspect.toggled
         guard let p = panel else { return }
         p.aspectRatio = aspect.ratio
@@ -187,13 +199,19 @@ private struct TwitchDualFloatingPanelContent: View {
 
     @State private var hovering = false
 
+    private var streamCount: Int { max(2, host.activeChannels.count) }
+    private var isMulti: Bool { streamCount >= 3 }
     private var focusedSlot: TwitchDualSlot { host.dualMixer.focusedSlot }
     private var louderSlot: TwitchDualSlot? { host.dualMixer.louderSlot }
 
     var body: some View {
         ZStack {
             Color.black
-            videoBody
+            if isMulti {
+                multiVideoBody
+            } else {
+                dualVideoBody
+            }
             if hovering || host.userPaused {
                 hoverOverlay
                     .transition(.opacity)
@@ -212,19 +230,109 @@ private struct TwitchDualFloatingPanelContent: View {
     }
 
     @ViewBuilder
-    private var videoBody: some View {
+    private var multiVideoBody: some View {
+        let activeSlots = TwitchStreamSlot.slots(forCount: streamCount)
+        let spotlight = host.multiMixer.spotlightSlot
+        let dockSlots = activeSlots.filter { $0 != spotlight }
+
+        if host.multiStageMode == .grid {
+            if streamCount == 3 {
+                HStack(spacing: 2) {
+                    multiTile(slot: spotlight)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 2) {
+                        ForEach(dockSlots) { slot in
+                            multiTile(slot: slot)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                VStack(spacing: 2) {
+                    HStack(spacing: 2) {
+                        multiTile(slot: .a)
+                        multiTile(slot: .b)
+                    }
+                    HStack(spacing: 2) {
+                        multiTile(slot: .c)
+                        multiTile(slot: .d)
+                    }
+                }
+            }
+        } else {
+            // Spotlight + right dock strip (3:1 ratio fits cleanly in 16:9 floating panel)
+            GeometryReader { geo in
+                let heroWidth = geo.size.width * 0.72
+                HStack(spacing: 2) {
+                    multiTile(slot: spotlight)
+                        .frame(width: heroWidth, height: geo.size.height)
+                    VStack(spacing: 2) {
+                        ForEach(dockSlots) { slot in
+                            multiTile(slot: slot)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func multiTile(slot: TwitchStreamSlot) -> some View {
+        let isAudible = !host.isMuted && host.multiMixer.gains.gain(for: slot) > 0.05
+        let isSpotlight = host.multiMixer.spotlightSlot == slot
+        let accent = Color(dualRGB: slot.darkRGB)
+        ZStack(alignment: .topLeading) {
+            TwitchDualPanelSurface(slot: slot)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .mediaMask()
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(accent)
+                    .frame(width: 6, height: 6)
+                Text(slot.label)
+                    .font(Font.cobalt(10, .semibold))
+                    .foregroundStyle(.white)
+                if isAudible {
+                    Image(systemName: Symbol.Twitch.unmuted)
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .mediaGlassCapsule(interactive: false)
+            .padding(6)
+        }
+        .overlay {
+            if isSpotlight {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(accent.opacity(0.85), lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            host.setSpotlight(slot)
+        }
+    }
+
+    @ViewBuilder
+    private var dualVideoBody: some View {
         switch aspect {
         case .focus16x9:
             GeometryReader { geo in
                 let roles = TwitchDualLayout.heroAndInset(focused: focusedSlot)
                 let insetSize = TwitchDualLayout.insetSize(for: geo.size, widthFraction: 0.32, minWidth: 120, maxWidth: 210)
                 ZStack(alignment: .bottomTrailing) {
-                    TwitchDualPanelSurface(slot: roles.hero)
+                    TwitchDualPanelSurface(slot: roles.hero.streamSlot)
                         .frame(width: geo.size.width, height: geo.size.height)
+                        .mediaMask()
 
                     ZStack(alignment: .topLeading) {
-                        TwitchDualPanelSurface(slot: roles.inset)
+                        TwitchDualPanelSurface(slot: roles.inset.streamSlot)
                             .frame(width: insetSize.width, height: insetSize.height)
+                            .mediaMask()
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay {
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -253,8 +361,9 @@ private struct TwitchDualFloatingPanelContent: View {
     @ViewBuilder
     private func tile(slot: TwitchDualSlot) -> some View {
         ZStack(alignment: .topLeading) {
-            TwitchDualPanelSurface(slot: slot)
+            TwitchDualPanelSurface(slot: slot.streamSlot)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .mediaMask()
             if louderSlot == slot {
                 speakerBadge
                     .padding(8)
@@ -309,7 +418,7 @@ private struct TwitchDualFloatingPanelContent: View {
 
             Spacer(minLength: 0)
 
-            // Bottom transport + audio + 16:9 / 32:9 toggle
+            // Bottom transport + audio + layout toggle
             MediaGlassGroup(spacing: 8) {
                 HStack(spacing: 8) {
                     Button {
@@ -325,9 +434,13 @@ private struct TwitchDualFloatingPanelContent: View {
                     .help(host.userPaused ? Copy.Twitch.play : Copy.Twitch.pause)
 
                     Button {
-                        host.swapDualFocus()
+                        if isMulti {
+                            host.cycleSpotlight(forward: true)
+                        } else {
+                            host.swapDualFocus()
+                        }
                     } label: {
-                        Image(systemName: Symbol.Twitch.swapFocus)
+                        Image(systemName: isMulti ? Symbol.Twitch.cycleFocus : Symbol.Twitch.swapFocus)
                             .font(.system(size: 13, weight: .semibold))
                             .frame(width: Metrics.hit, height: Metrics.hit)
                     }
@@ -336,25 +449,38 @@ private struct TwitchDualFloatingPanelContent: View {
                     .mediaGlassCircle()
                     .help(Copy.Twitch.swapFocus)
 
-                    // Compact A · Mix · B segmented audio toggle (>= 44 pt tall)
-                    HStack(spacing: 2) {
-                        audioButton(.primary, title: "A")
-                        audioButton(.mix, title: Copy.Twitch.audioMix)
-                        audioButton(.secondary, title: "B")
+                    if isMulti {
+                        multiAudioStrip
+                    } else {
+                        // Compact A · Mix · B segmented audio toggle (>= 44 pt tall)
+                        HStack(spacing: 2) {
+                            audioButton(.primary, title: "A")
+                            audioButton(.mix, title: Copy.Twitch.audioMix)
+                            audioButton(.secondary, title: "B")
+                        }
+                        .padding(.horizontal, 4)
+                        .frame(height: Metrics.hit)
+                        .mediaGlassCapsule(interactive: false)
                     }
-                    .padding(.horizontal, 4)
-                    .frame(height: Metrics.hit)
-                    .mediaGlassCapsule(interactive: false)
 
                     Button(action: onToggleAspect) {
-                        Image(systemName: aspect == .focus16x9 ? Symbol.Twitch.splitLayoutHorizontal : Symbol.Twitch.focusLayout)
+                        let icon: String = if isMulti {
+                            host.multiStageMode == .spotlight
+                                ? (streamCount == 4 ? Symbol.Twitch.quadGrid : Symbol.Twitch.mosaicGrid)
+                                : Symbol.Twitch.spotlightStrip
+                        } else {
+                            aspect == .focus16x9 ? Symbol.Twitch.splitLayoutHorizontal : Symbol.Twitch.focusLayout
+                        }
+                        Image(systemName: icon)
                             .font(.system(size: 13, weight: .semibold))
                             .frame(width: Metrics.hit, height: Metrics.hit)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.white)
                     .mediaGlassCircle()
-                    .help(aspect == .focus16x9 ? Copy.Twitch.dualSideBySide32x9 : Copy.Twitch.dualFocus16x9)
+                    .help(isMulti
+                          ? (host.multiStageMode == .spotlight ? Copy.Twitch.gridLayout : Copy.Twitch.spotlightLayout)
+                          : (aspect == .focus16x9 ? Copy.Twitch.dualSideBySide32x9 : Copy.Twitch.dualFocus16x9))
                 }
             }
             .padding(10)
@@ -362,6 +488,46 @@ private struct TwitchDualFloatingPanelContent: View {
                 MediaEdgeVignette(edge: .bottom, height: 76, intensity: 0.52)
             }
         }
+    }
+
+    private var multiAudioStrip: some View {
+        let slots = TwitchStreamSlot.slots(forCount: streamCount)
+        let isMixAll = host.multiMixer.activeAudioSlots.count == streamCount
+        return HStack(spacing: 2) {
+            ForEach(slots) { slot in
+                let active = !isMixAll && host.multiMixer.activeAudioSlots == [slot]
+                Button {
+                    host.multiMixer.solo(slot)
+                } label: {
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(Color(dualRGB: slot.darkRGB))
+                            .frame(width: 5, height: 5)
+                        Text(slot.label)
+                            .font(Font.cobalt(11, active ? .semibold : .medium))
+                            .foregroundStyle(active ? .white : .white.opacity(0.68))
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(minHeight: 36)
+                    .background(active ? Color.white.opacity(0.22) : Color.clear, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            Button {
+                host.multiMixer.mixAll()
+            } label: {
+                Text(Copy.Twitch.audioMix)
+                    .font(Font.cobalt(11, isMixAll ? .semibold : .medium))
+                    .foregroundStyle(isMixAll ? .white : .white.opacity(0.68))
+                    .padding(.horizontal, 8)
+                    .frame(minHeight: 36)
+                    .background(isMixAll ? Color.white.opacity(0.22) : Color.clear, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 4)
+        .frame(height: Metrics.hit)
+        .mediaGlassCapsule(interactive: false)
     }
 
     private func audioButton(_ preset: TwitchDualAudioPreset, title: String) -> some View {
@@ -380,9 +546,9 @@ private struct TwitchDualFloatingPanelContent: View {
     }
 }
 
-/// Adopts one of the two live `TwitchNativeVideoView`s directly inside the floating `NSPanel`.
+/// Adopts one of the live `TwitchNativeVideoView`s (Slots A–D) directly inside the floating `NSPanel`.
 private struct TwitchDualPanelSurface: NSViewRepresentable {
-    let slot: TwitchDualSlot
+    let slot: TwitchStreamSlot
 
     func makeNSView(context: Context) -> PanelSlotContainerView {
         let v = PanelSlotContainerView()

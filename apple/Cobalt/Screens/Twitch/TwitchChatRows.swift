@@ -258,7 +258,8 @@ struct TwitchChatRow: View, Equatable {
         return Text(accent.mark)
             .font(.system(size: 10, weight: .bold, design: .rounded))
             .foregroundStyle(tint)
-            .frame(width: 16, height: 16)
+            .padding(.horizontal, accent.mark.count > 1 ? 3 : 0)
+            .frame(minWidth: 16, minHeight: 16)
             .background(tint.opacity(0.18), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -461,6 +462,12 @@ enum TwitchChatPalette {
     static let secondaryChannel = Color(
         light: TwitchChannelAccent.secondaryLightRGB,
         dark: TwitchChannelAccent.secondaryDarkRGB)
+    static let tertiaryChannel = Color(
+        light: TwitchChannelAccent.tertiaryLightRGB,
+        dark: TwitchChannelAccent.tertiaryDarkRGB)
+    static let quaternaryChannel = Color(
+        light: TwitchChannelAccent.quaternaryLightRGB,
+        dark: TwitchChannelAccent.quaternaryDarkRGB)
 
     static func accentColor(_ accent: TwitchChannelAccent) -> Color {
         Color(light: accent.lightRGB, dark: accent.darkRGB)
@@ -469,7 +476,7 @@ enum TwitchChatPalette {
     static func dualAccentGradient(for accents: [TwitchChannelAccent]) -> LinearGradient {
         let colors: [Color]
         if accents.count >= 2 {
-            colors = [accentColor(accents[0]), accentColor(accents[1])]
+            colors = accents.map(accentColor)
         } else {
             colors = [primaryChannel, secondaryChannel]
         }
@@ -478,9 +485,15 @@ enum TwitchChatPalette {
 
     static func rgbaValues(_ rgb: UInt32?, login: String, dark: Bool, avoiding accentHues: [Double] = []) -> SevenTvRGBA {
         let raw = rgb ?? TwitchUsernameColorShifter.defaultTwitchColor(for: login)
+        let threshold: Double = accentHues.count >= 3 ? 18 : 24
+        let safeDistance: Double = accentHues.count >= 3 ? 24 : 32
         let value = accentHues.isEmpty
             ? raw
-            : TwitchUsernameColorShifter.shiftedIfColliding(raw, avoiding: accentHues)
+            : TwitchUsernameColorShifter.shiftedIfColliding(
+                raw,
+                avoiding: accentHues,
+                threshold: threshold,
+                safeDistance: safeDistance)
         var r = Double((value >> 16) & 0xFF) / 255
         var g = Double((value >> 8) & 0xFF) / 255
         var b = Double(value & 0xFF) / 255

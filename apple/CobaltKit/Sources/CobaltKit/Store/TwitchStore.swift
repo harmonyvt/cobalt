@@ -20,21 +20,30 @@ public final class TwitchStore {
     public private(set) var sessionLoaded = false
     public private(set) var following: [TwitchStreamInfo] = []
     public private(set) var followingLoaded = false
+    /// Ordered open channel logins (1 in single mode, 2...4 in dual/multi mode).
+    public private(set) var activeChannels: [String] = []
+    /// Channel profile metadata keyed by lowercased login for all active streams.
+    public private(set) var channelInfos: [String: TwitchChannelInfo] = [:]
+    /// Live stream metadata keyed by lowercased login for all active streams.
+    public private(set) var streamInfos: [String: TwitchStreamInfo] = [:]
+
     /// The primary channel open now (lowercased login), nil on the list.
-    public private(set) var channel: String?
-    public private(set) var channelInfo: TwitchChannelInfo?
+    public var channel: String? { activeChannels.first }
+    public var channelInfo: TwitchChannelInfo? { channel.flatMap { channelInfos[$0] } }
     /// Its stream while it is live.
-    public private(set) var stream: TwitchStreamInfo?
-    /// The secondary channel open in dual-stream mode (lowercased login), nil in single-stream mode.
-    public private(set) var secondaryChannel: String?
-    public private(set) var secondaryChannelInfo: TwitchChannelInfo?
+    public var stream: TwitchStreamInfo? { channel.flatMap { streamInfos[$0] } }
+    /// The secondary channel open in dual/multi-stream mode (lowercased login), nil in single-stream mode.
+    public var secondaryChannel: String? { activeChannels.count >= 2 ? activeChannels[1] : nil }
+    public var secondaryChannelInfo: TwitchChannelInfo? { secondaryChannel.flatMap { channelInfos[$0] } }
     /// The secondary stream while it is live.
-    public private(set) var secondaryStream: TwitchStreamInfo?
-    /// True when two distinct streams are open side-by-side.
-    public var isDualStream: Bool { channel != nil && secondaryChannel != nil }
-    /// Ordered open channel logins (1 in single mode, 2 in dual mode).
-    public var activeChannels: [String] { [channel, secondaryChannel].compactMap { $0 } }
-    /// Dual-stream combined chat coordinator (manages both chat sockets, accents, filters, and foolproof composer locking).
+    public var secondaryStream: TwitchStreamInfo? { secondaryChannel.flatMap { streamInfos[$0] } }
+    /// True when 2 or more distinct streams are open together.
+    public var isDualStream: Bool { activeChannels.count >= 2 }
+    /// Alias for `isDualStream` when 2...4 simultaneous streams are open.
+    public var isMultiStream: Bool { activeChannels.count >= 2 }
+    /// Number of currently open streams (`0...4`).
+    public var streamCount: Int { activeChannels.count }
+    /// Multi-stream combined chat coordinator (manages up to 4 chat sockets, accents, filters, and foolproof composer locking).
     public let combinedChat = TwitchCombinedChatModel()
     public private(set) var chat: TwitchChatSnapshot?
     public private(set) var emotes = TwitchEmoteList()
@@ -52,7 +61,7 @@ public final class TwitchStore {
     /// Signed in, but the studio's connection predates the chat scopes: connect twitch again in studio.
     public var needsChatScopes: Bool { session?.connected == true && session?.reconnect != true && session?.canChat != true }
     public var needsReconnect: Bool { session?.reconnect == true }
-    public var canClip: Bool { session?.canClip == true && (stream != nil || secondaryStream != nil) }
+    public var canClip: Bool { session?.canClip == true && activeChannels.contains(where: { streamInfos[$0] != nil }) }
 
     @ObservationIgnored private let ctx: PipelineContext
     @ObservationIgnored private var engine: TwitchChatEngine?
@@ -119,10 +128,11 @@ public final class TwitchStore {
     /// The open channel's chat was joined without chat scopes and the session has them now: join again, signed in.
     private func rejoinIfChatGained() {
         guard !engineCanChat, session?.credentials?.canChat == true else { return }
-        if let primary = channel, let secondary = secondaryChannel {
+        if activeChannels.count >= 2 {
+            let channelsToReopen = activeChannels
             let focused = combinedChat.focusedChannel
             combinedChat.stop()
-            openDual(primary: primary, secondary: secondary, focusedChannel: focused)
+            openMulti(channels: channelsToReopen, focusedChannel: focused)
             return
         }
         guard let login = channel, engine != nil else { return }
@@ -133,19 +143,19 @@ public final class TwitchStore {
     /// Opens `name` (a login, or a twitch.tv link): its stream and its chat.
     public func open(_ name: String) {
         guard let login = Self.login(from: name) else { return }
-        if channel == login, secondaryChannel == nil, engine != nil, engineCanChat || session?.credentials?.canChat != true { return }
-        // Preserve already-fetched metadata if demoting from dual-stream to one of the active channels.
-        let preservedInfo: TwitchChannelInfo? = (channel == login) ? channelInfo : ((secondaryChannel == login) ? secondaryChannelInfo : nil)
-        let preservedStream: TwitchStreamInfo? = (channel == login) ? stream : ((secondaryChannel == login) ? secondaryStream : nil)
+        if activeChannels == [login], engine != nil, engineCanChat || session?.credentials?.canChat != true { return }
+        // Preserve already-fetched metadata if demoting from dual/multi-stream to one of the active channels.
+        let preservedInfo = channelInfos[login]
+        let preservedStream = streamInfos[login]
         close()
-        channel = login
-        channelInfo = preservedInfo
-        stream = preservedStream
+        activeChannels = [login]
+        if let preservedInfo { channelInfos[login] = preservedInfo }
+        if let preservedStream { streamInfos[login] = preservedStream }
         remember(login)
         let gen = generation
         Task {
             await refreshSessionIfNeeded()
-            guard gen == generation, channel == login, secondaryChannel == nil else { return }
+            guard gen == generation, activeChannels == [login] else { return }
             let creds = session?.credentials
             let engine = TwitchChatEngine(channel: login, credentials: creds)
             self.engine = engine
@@ -167,9 +177,9 @@ public final class TwitchStore {
                 async let info = dir.channel(login: login)
                 async let live = dir.stream(login: login)
                 let (i, l) = await (info, live)
-                guard gen == generation else { return }
-                channelInfo = i
-                stream = l
+                guard gen == generation, activeChannels == [login] else { return }
+                if let i { channelInfos[login] = i } else { channelInfos.removeValue(forKey: login) }
+                if let l { streamInfos[login] = l } else { streamInfos.removeValue(forKey: login) }
             }
         }
     }
@@ -178,31 +188,35 @@ public final class TwitchStore {
     /// Keeps any already-fetched channel/stream metadata intact on 1 -> 2 promotion to avoid flicker.
     public func openDual(primary rawPrimary: String, secondary rawSecondary: String, focusedChannel rawFocused: String? = nil) {
         guard let primary = Self.login(from: rawPrimary), let secondary = Self.login(from: rawSecondary) else { return }
-        if primary == secondary {
-            open(primary)
+        openMulti(channels: [primary, secondary], focusedChannel: rawFocused)
+    }
+
+    /// Opens 1...4 simultaneous Twitch streams and wires `combinedChat` for all active channels.
+    /// Preserves already-fetched metadata and running chat sockets for channels that remain open across 1↔2↔3↔4 transitions.
+    public func openMulti(channels rawChannels: [String], focusedChannel rawFocused: String? = nil) {
+        var normalized: [String] = []
+        for raw in rawChannels {
+            guard let login = Self.login(from: raw), !normalized.contains(login) else { continue }
+            normalized.append(login)
+            if normalized.count == PaneItem.maxSimultaneousStreams { break }
+        }
+        guard !normalized.isEmpty else { return }
+        if normalized.count == 1 {
+            open(normalized[0])
             return
         }
-        let alreadyMatching = (channel == primary && secondaryChannel == secondary && combinedChat.channels == [primary, secondary])
+
+        let alreadyMatching = (activeChannels == normalized && combinedChat.channels == normalized)
         if alreadyMatching, engineCanChat || session?.credentials?.canChat != true {
             if let rawFocused { combinedChat.setFocusedChannel(rawFocused) }
             return
         }
 
-        // Preserve any known metadata across 1 -> 2 promotion or slot reordering.
-        let knownInfo: [String: TwitchChannelInfo] = [
-            channel: channelInfo,
-            secondaryChannel: secondaryChannelInfo,
-        ].reduce(into: [:]) { acc, pair in
-            if let k = pair.key, let v = pair.value { acc[k] = v }
-        }
-        let knownStream: [String: TwitchStreamInfo] = [
-            channel: stream,
-            secondaryChannel: secondaryStream,
-        ].reduce(into: [:]) { acc, pair in
-            if let k = pair.key, let v = pair.value { acc[k] = v }
-        }
+        // Preserve any known metadata across 1 -> 2 -> 3 -> 4 transitions or slot reordering.
+        let knownInfo = channelInfos
+        let knownStream = streamInfos
 
-        // Tear down standalone single-stream chat engine so we never run 3 chat sockets.
+        // Tear down standalone single-stream chat engine so we never run duplicate chat sockets.
         generation += 1
         listen?.cancel()
         listen = nil
@@ -214,57 +228,75 @@ public final class TwitchStore {
         replyTo = nil
         clipState = .idle
 
-        channel = primary
-        secondaryChannel = secondary
-        channelInfo = knownInfo[primary]
-        stream = knownStream[primary] ?? following.first(where: { $0.login.lowercased() == primary })
-        secondaryChannelInfo = knownInfo[secondary]
-        secondaryStream = knownStream[secondary] ?? following.first(where: { $0.login.lowercased() == secondary })
+        activeChannels = normalized
+        var nextChannelInfos: [String: TwitchChannelInfo] = [:]
+        var nextStreamInfos: [String: TwitchStreamInfo] = [:]
+        for login in normalized {
+            if let info = knownInfo[login] { nextChannelInfos[login] = info }
+            if let live = knownStream[login] ?? following.first(where: { $0.login.lowercased() == login }) {
+                nextStreamInfos[login] = live
+            }
+        }
+        channelInfos = nextChannelInfos
+        streamInfos = nextStreamInfos
 
-        remember(secondary)
-        remember(primary)
+        for login in normalized.reversed() {
+            remember(login)
+        }
 
         let gen = generation
-        let focused = rawFocused?.lowercased() ?? primary
-        let initialNames = displayNamesMap(for: [primary, secondary])
+        let focused = rawFocused?.lowercased() ?? normalized[0]
+        let initialNames = displayNamesMap(for: normalized)
         if session != nil {
             let creds = session?.credentials
             engineCanChat = creds?.canChat == true
             combinedChat.configure(
-                channels: [primary, secondary],
+                channels: normalized,
                 displayNames: initialNames,
                 credentials: creds,
                 focusedChannel: focused)
         } else {
             combinedChat.configureChannelsWithoutEngines(
-                [primary, secondary],
+                normalized,
                 displayNames: initialNames,
                 focusedChannel: focused)
         }
 
         Task {
             await refreshSessionIfNeeded()
-            guard gen == generation, channel == primary, secondaryChannel == secondary else { return }
+            guard gen == generation, activeChannels == normalized else { return }
             let creds = session?.credentials
             engineCanChat = creds?.canChat == true
             combinedChat.configure(
-                channels: [primary, secondary],
-                displayNames: self.displayNamesMap(for: [primary, secondary]),
+                channels: normalized,
+                displayNames: self.displayNamesMap(for: normalized),
                 credentials: creds,
                 focusedChannel: self.combinedChat.focusedChannel ?? focused)
             if let creds {
                 let dir = TwitchDirectory(credentials: creds)
-                async let pInfo = dir.channel(login: primary)
-                async let pLive = dir.stream(login: primary)
-                async let sInfo = dir.channel(login: secondary)
-                async let sLive = dir.stream(login: secondary)
-                let (pi, pl, si, sl) = await (pInfo, pLive, sInfo, sLive)
-                guard gen == generation, channel == primary, secondaryChannel == secondary else { return }
-                channelInfo = pi ?? channelInfo
-                stream = pl
-                secondaryChannelInfo = si ?? secondaryChannelInfo
-                secondaryStream = sl
-                combinedChat.updateDisplayNames(self.displayNamesMap(for: [primary, secondary]))
+                let results = await withTaskGroup(
+                    of: (String, TwitchChannelInfo?, TwitchStreamInfo?).self,
+                    returning: [(String, TwitchChannelInfo?, TwitchStreamInfo?)].self
+                ) { group in
+                    for login in normalized {
+                        group.addTask {
+                            async let info = dir.channel(login: login)
+                            async let live = dir.stream(login: login)
+                            return (login, await info, await live)
+                        }
+                    }
+                    var collected: [(String, TwitchChannelInfo?, TwitchStreamInfo?)] = []
+                    for await item in group {
+                        collected.append(item)
+                    }
+                    return collected
+                }
+                guard gen == generation, activeChannels == normalized else { return }
+                for (login, info, live) in results {
+                    if let info { channelInfos[login] = info }
+                    if let live { streamInfos[login] = live } else { streamInfos.removeValue(forKey: login) }
+                }
+                combinedChat.updateDisplayNames(self.displayNamesMap(for: normalized))
             }
         }
     }
@@ -275,20 +307,16 @@ public final class TwitchStore {
         combinedChat.setFocusedChannel(login)
     }
 
-    /// Live stream info for `login` (checks primary, secondary, and followed live directory).
+    /// Live stream info for `login` (checks active streams and followed live directory).
     public func streamInfo(for login: String) -> TwitchStreamInfo? {
         let lower = login.lowercased()
-        if channel == lower, let stream { return stream }
-        if secondaryChannel == lower, let secondaryStream { return secondaryStream }
+        if let live = streamInfos[lower] { return live }
         return following.first { $0.login.lowercased() == lower }
     }
 
     /// Channel profile info for `login`.
     public func channelInfo(for login: String) -> TwitchChannelInfo? {
-        let lower = login.lowercased()
-        if channel == lower { return channelInfo }
-        if secondaryChannel == lower { return secondaryChannelInfo }
-        return nil
+        channelInfos[login.lowercased()]
     }
 
     /// Best display name for `login` (falling back to the login itself).
@@ -317,12 +345,9 @@ public final class TwitchStore {
         engine = nil
         engineCanChat = false
         combinedChat.stop()
-        channel = nil
-        channelInfo = nil
-        stream = nil
-        secondaryChannel = nil
-        secondaryChannelInfo = nil
-        secondaryStream = nil
+        activeChannels = []
+        channelInfos = [:]
+        streamInfos = [:]
         chat = nil
         emotes = TwitchEmoteList()
         emotesVersion = -1

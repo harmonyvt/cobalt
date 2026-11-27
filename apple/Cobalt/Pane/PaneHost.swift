@@ -82,7 +82,7 @@ struct PaneHost<Content: View>: View {
         guard measured, pane.isVisible, let item = pane.item else { return false }
         if placement != .compact { return item != .selection }
         switch item {
-        case .post, .stream, .dualStream: return true
+        case .post, .stream, .dualStream, .multiStream: return true
         default: return false
         }
         #else

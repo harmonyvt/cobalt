@@ -16,5 +16,10 @@ extension Copy {
         static func notInFocus(_ name: String) -> String { "→ \(name) · not in focus" }
         static func fromChannel(_ name: String) -> String { "from \(name)" }
         static let tapToReplyHint = "tap to reply"
+        static func allChannels(_ count: Int) -> String { count == 2 ? bothChannels : "all \(count) chats" }
+        static func allShort(_ count: Int) -> String { count == 2 ? bothShort : "all \(count)" }
+        static func sendToAll(_ count: Int) -> String { "send to \(count)" }
+        static func composerPromptAll(_ count: Int) -> String { count == 2 ? composerPromptBoth : "message all \(count) chats" }
+        static func filterAllCount(_ count: Int) -> String { count > 2 ? "all (\(count))" : filterAll }
     }
 }
