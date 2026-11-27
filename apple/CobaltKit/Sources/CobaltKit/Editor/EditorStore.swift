@@ -190,6 +190,31 @@ public final class EditorStore {
         return left
     }
 
+    /// Creates a new Studio project directly from a pre-built v2 timeline (e.g. Twitch split-frame + chat handoff
+    /// without re-encoding video), registering any on-device copies in `EditSourceCache` so playback starts locally.
+    public func create(
+        title: String,
+        timeline: EditTimeline,
+        locals: [(String, URL)] = [],
+        openImmediately: Bool = true
+    ) async throws(EditError) -> EditProject {
+        guard isAvailable, let client = editorClient else { throw .off }
+        for (id, url) in locals { await cache.register(local: url, for: id) }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        var scalars = String.UnicodeScalarView()
+        for s in trimmed.unicodeScalars.prefix(Self.maxTitleCodePoints) { scalars.append(s) }
+        let cleanTitle = String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalTitle = cleanTitle.isEmpty ? "untitled edit" : cleanTitle
+
+        let created: EditProject
+        do { created = try await client.createEditProject(title: finalTitle, timeline: timeline) } catch { throw EditError.from(error) }
+        upsert(created)
+        if openImmediately {
+            try await open(created.id)
+        }
+        return created
+    }
+
     private typealias Measuring = Task<(duration: Double, display: PixelSize?), any Error>
 
     /// A video `create(from:)` puts on the timeline: its file, and its length and size when the library knows them.

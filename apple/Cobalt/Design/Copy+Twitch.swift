@@ -167,5 +167,77 @@ extension Copy {
         static let closeFloatingWindow = "return to window"
         static let suspendedOnLock = "paused while locked"
         static let thermalSteppedDown = "reduced quality (thermal)"
+
+        // MARK: clip, record & split-frame studio
+
+        static let clipShort = "clip"
+        static let clipTwitchServer = "clip on twitch"
+        static func clipLast(_ seconds: Int) -> String { "clip last \(seconds) s" }
+        static func durationChoice(_ seconds: Int) -> String { "\(seconds)s" }
+        static let record = "record"
+        static let recordPlusChat = "record (+ chat)"
+        static let stopRecording = "stop rec"
+        static let recordingPill = "rec"
+        static let savingDraft = "saving draft…"
+        static let drafts = "drafts"
+        static let draftsTitle = "stream drafts"
+        static let draftsEmptyTitle = "no stream drafts yet"
+        static let draftsEmptyBody = "tap clip to save the last 30 s or 60 s from the rolling buffer, or record to capture a longer segment with synced chat."
+        static let draftKindClip = "clip"
+        static let draftKindRecording = "recording"
+        static let editNow = "edit now"
+        static let openInEditor = "edit split-frame"
+        static let sendToStudio = "send to studio"
+        static let sendToStudioSub = "no render · opens live layers"
+        static let sendingToStudio = "sending to studio…"
+        static let sentToStudio = "opened in studio"
+        static let renderVideo = "render"
+        static let renderingVideo = "rendering…"
+        static let savedPrivate = "saved to library (private)"
+        static let draftNewBadge = "new"
+        static let chatIncluded = "+ chat"
+        static func chatLines(_ count: Int) -> String { count == 1 ? "1 chat line" : "\(count) chat lines" }
+        static func buffered(_ current: Int, _ max: Int) -> String { "\(current) / \(max) s buffered" }
+        static func partialBufferNote(_ actual: Int, requested: Int) -> String {
+            "only \(actual) s was buffered (requested \(requested) s)"
+        }
+        static func savedDraftToast(_ seconds: Int, chatCount: Int) -> String {
+            chatCount > 0 ? "saved \(seconds) s + \(chatCount) chat" : "saved \(seconds) s draft"
+        }
+        static func chatDroppedWarning(_ seconds: Int) -> String {
+            "chat dropped for \(seconds) s (reconnect). the video is whole."
+        }
+        static let embedBufferNote = "switch to low latency to clip or record on device"
+        static let waitingForBuffer = "buffering stream…"
+        static let regionA = "A"
+        static let regionB = "B"
+        static let regionALabel = "region A · facecam"
+        static let regionBLabel = "region B · gameplay"
+        static let layoutSplit5050 = "50/50"
+        static let layoutSplit4060 = "40/60"
+        static let layoutSplit3565 = "35/65"
+        static let layoutPiP = "pip"
+        static let layoutSingle = "single"
+        static let swapRegions = "swap A ⇅ B"
+        static let sourcePickerHint = "drag A & B on the 16:9 frame · corners resize aspect-locked"
+        static let seamHint = "drag seam (snaps to 35 / 40 / 50 / 60 / 65)"
+        static let chatLayer = "chat overlay"
+        static let chatPlacementBottom = "bottom"
+        static let chatPlacementSeam = "seam"
+        static let chatPlacementTop = "top"
+        static let chatPlacementBand = "band"
+        static let chatLookGlass = "liquid glass"
+        static let chatLookClear = "clear text"
+        static let chatSize = "size"
+        static let chatEmotes = "7tv emotes"
+        static let chatBadges = "badges"
+        static let chatPaints = "paints"
+        static let chatSyncNudge = "sync nudge"
+        static let chatDroppedHere = "chat dropped · reconnecting"
+        static let laneChat = "chat"
+        static let renameDraft = "rename draft…"
+        static let renameDraftTitle = "rename draft"
+        static let deleteDraft = "delete draft"
+        static let studioTag = "stream draft"
     }
 }
