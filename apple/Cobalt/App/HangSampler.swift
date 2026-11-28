@@ -5,16 +5,16 @@ import os
 import Synchronization
 
 /// What the main thread was doing when it stopped answering (owner, 2026-11-14: "butter smooth... telemetry first").
-/// 8.15's frame monitor showed 0.3 to 1.2 s stalls on tab switches and when a detail opens, but not where. A thread of
-/// its own pings the main queue every 50 ms; when a ping goes unanswered for 250 ms, it pauses the main thread for a
-/// moment and walks its stack (frame pointers, no allocation while paused), again at 700 ms and 1.5 s if the stall goes
-/// on. When the main thread answers, the samples go out as one `hang_stack` event: the stall's length, the screen, the
-/// breadcrumbs, and each sample's frames as `image+0xoffset` (with the symbol when the system has one). App frames are
-/// symbolicated on the Mac against the build's dSYM (`atos -o <dSYM> -l 0x100000000 <0x100000000 + offset>`).
+/// A `CFRunLoopObserver` on the main RunLoop flips an atomic busy flag when main starts processing sources and clears
+/// it at `.beforeWaiting` (when main goes to sleep). A `.utility` watcher thread sleeps on a condition variable with
+/// **zero wakeups** whenever the app is inactive/backgrounded/in PiP or the main thread is idle; only while main is
+/// actively busy does it check stall duration (without pinging `DispatchQueue.main.async`) and sample stack frames at
+/// 250 ms, 700 ms and 1.5 s. When main finishes, the samples go out as one `hang_stack` event: the stall's length, the
+/// screen, the breadcrumbs, and each sample's frames as `image+0xoffset`. App frames are symbolicated on the Mac
+/// against the build's dSYM (`atos -o <dSYM> -l 0x100000000 <0x100000000 + offset>`).
 ///
 /// Debug builds also raise an alarm for every stall of 100 ms or more once it ends (8.17: the main thread is
-/// display-only, apple/ARCHITECTURE.md rule 7), so a developer sees a slow main thread on the first run instead of in
-/// next week's `hang_stack` events. Release builds behave exactly as before.
+/// display-only, apple/ARCHITECTURE.md rule 7).
 final class HangSampler: @unchecked Sendable {
     static let shared = HangSampler()
 
@@ -29,17 +29,28 @@ final class HangSampler: @unchecked Sendable {
     private var stackLow: UInt = 0
     private var stackHigh: UInt = 0
     private let buffer = UnsafeMutablePointer<UInt>.allocate(capacity: HangSampler.maxFrames)
-    private let outstanding = Atomic<Bool>(false)
-    private let pongAt = Atomic<UInt64>(0)
+    private let appActive = Atomic<Bool>(true)
+    private let mainBusy = Atomic<Bool>(false)
+    private let busySinceNs = Atomic<UInt64>(0)
+    private let idleAtNs = Atomic<UInt64>(0)
+    private let samplerSleeping = Atomic<Bool>(false)
+    #if DEBUG
+    private let pendingAlarmMs = Atomic<Int>(0)
+    #endif
+    private let wakeCondition = NSCondition()
+    private var runLoopObserver: CFRunLoopObserver?
     private var onHang: (@Sendable (Report) -> Void)?
 
     private static let maxFrames = 48
-    private static let pollNs: UInt64 = 50_000_000
-    private static let sampleAtMs = [250, 700, 1500]
     #if DEBUG
+    private static let pollNs: UInt64 = 50_000_000
     private static let alarmMs = 100
     private static let alarmLog = Logger(subsystem: "com.capybaraharmony.cobalt", category: "main-thread")
+    #else
+    private static let pollNs: UInt64 = 100_000_000
     #endif
+    private static let idleGraceNs: UInt64 = 250_000_000
+    private static let sampleAtMs = [250, 700, 1500]
 
     #if os(iOS)
     /// iOS user addresses fit in 36 bits; anything above is a pointer-authentication signature on a saved return address.
@@ -58,59 +69,183 @@ final class HangSampler: @unchecked Sendable {
         }
         guard first else { return }
         self.onHang = onHang
+        appActive.store(AppLifecycle.shared.snapshot.isActive, ordering: .sequentiallyConsistent)
         mainThread = mach_thread_self()
         let me = pthread_self()
         stackHigh = UInt(bitPattern: pthread_get_stackaddr_np(me))
         stackLow = stackHigh - UInt(pthread_get_stacksize_np(me))
+        installRunLoopObserver()
         let thread = Thread { [self] in loop() }
         thread.name = "capystore.hang-sampler"
-        thread.qualityOfService = .userInitiated
+        thread.qualityOfService = .utility
         thread.start()
+    }
+
+    /// Pauses the watcher completely (0 wakeups/sec) while the app is inactive, hidden, in PiP, or in background.
+    @MainActor
+    func setActive(_ active: Bool) {
+        let prev = appActive.exchange(active, ordering: .sequentiallyConsistent)
+        guard prev != active else { return }
+        if !active {
+            mainBusy.store(false, ordering: .sequentiallyConsistent)
+        } else if samplerSleeping.exchange(false, ordering: .sequentiallyConsistent) {
+            wakeCondition.lock()
+            wakeCondition.signal()
+            wakeCondition.unlock()
+        }
+    }
+
+    // MARK: RunLoop observation (main thread, lock-free on the hot path)
+
+    @MainActor
+    private func installRunLoopObserver() {
+        let activities: CFRunLoopActivity = [.entry, .beforeSources, .afterWaiting, .beforeWaiting, .exit]
+        let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, activities.rawValue, true, 0) {
+            [weak self] _, activity in
+            guard let self else { return }
+            let now = DispatchTime.now().uptimeNanoseconds
+            if activity == .beforeWaiting || activity == .exit {
+                let wasBusy = self.mainBusy.exchange(false, ordering: .sequentiallyConsistent)
+                self.idleAtNs.store(now, ordering: .releasing)
+                #if DEBUG
+                if wasBusy, self.appActive.load(ordering: .relaxed) {
+                    let start = self.busySinceNs.load(ordering: .acquiring)
+                    if start > 0, now > start {
+                        let ms = Int((now - start) / 1_000_000)
+                        if ms >= HangSampler.alarmMs {
+                            self.pendingAlarmMs.store(ms, ordering: .releasing)
+                            if self.samplerSleeping.exchange(false, ordering: .sequentiallyConsistent) {
+                                self.wakeCondition.lock()
+                                self.wakeCondition.signal()
+                                self.wakeCondition.unlock()
+                            }
+                        }
+                    }
+                }
+                #else
+                _ = wasBusy
+                #endif
+            } else {
+                guard self.appActive.load(ordering: .relaxed) else { return }
+                let alreadyBusy = self.mainBusy.load(ordering: .relaxed)
+                if !alreadyBusy {
+                    self.busySinceNs.store(now, ordering: .releasing)
+                    self.mainBusy.store(true, ordering: .sequentiallyConsistent)
+                    if self.samplerSleeping.exchange(false, ordering: .sequentiallyConsistent) {
+                        self.wakeCondition.lock()
+                        self.wakeCondition.signal()
+                        self.wakeCondition.unlock()
+                    }
+                }
+            }
+        }
+        if let observer {
+            runLoopObserver = observer
+            CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        }
     }
 
     // MARK: the watch
 
     private func loop() {
-        var sentAt: UInt64 = 0
-        var lastTick = DispatchTime.now().uptimeNanoseconds
+        var trackedStartNs: UInt64 = 0
+        var lastActiveNs = DispatchTime.now().uptimeNanoseconds
+        var lastTick = lastActiveNs
         var samples: [(atMs: Int, frames: [UInt])] = []
+
         while true {
-            usleep(UInt32(HangSampler.pollNs / 1000))
-            let now = DispatchTime.now().uptimeNanoseconds
-            // the whole process was paused (the app went to the background): start over, nothing stalled
-            if now - lastTick > 1_000_000_000 {
+            let active = appActive.load(ordering: .sequentiallyConsistent)
+            let busy = mainBusy.load(ordering: .sequentiallyConsistent)
+
+            #if DEBUG
+            let alarm = pendingAlarmMs.exchange(0, ordering: .acquiring)
+            if alarm >= HangSampler.alarmMs {
+                HangSampler.alarm(stallMs: alarm)
+            }
+            #endif
+
+            if !active {
                 samples = []
-                sentAt = now
+                trackedStartNs = 0
+                sleepUntilWoken()
+                lastTick = DispatchTime.now().uptimeNanoseconds
+                lastActiveNs = lastTick
+                continue
+            }
+
+            let now = DispatchTime.now().uptimeNanoseconds
+            // If the whole process was suspended, discard any in-flight samples.
+            if now >= lastTick, now - lastTick > 1_000_000_000 {
+                samples = []
+                trackedStartNs = 0
             }
             lastTick = now
-            if !outstanding.load(ordering: .acquiring) {
-                #if DEBUG
-                // The main thread answered the last ping, so it is running again: logging (which allocates) is safe.
-                let pong = pongAt.load(ordering: .acquiring)
-                if sentAt > 0, pong > sentAt, Int((pong - sentAt) / 1_000_000) >= HangSampler.alarmMs {
-                    HangSampler.alarm(stallMs: Int((pong - sentAt) / 1_000_000))
+
+            if busy {
+                lastActiveNs = now
+                let start = busySinceNs.load(ordering: .acquiring)
+                if start > 0, start != trackedStartNs {
+                    if !samples.isEmpty {
+                        flushReport(startNs: trackedStartNs, samples: samples)
+                        samples = []
+                    }
+                    trackedStartNs = start
                 }
-                #endif
-                if !samples.isEmpty {
-                    let answered = pongAt.load(ordering: .acquiring)
-                    let stallMs = answered > sentAt ? Int((answered - sentAt) / 1_000_000) : samples.last?.atMs ?? 0
-                    report(stallMs: stallMs, samples: samples)
-                    samples = []
-                }
-                sentAt = now
-                outstanding.store(true, ordering: .releasing)
-                DispatchQueue.main.async { [self] in
-                    pongAt.store(DispatchTime.now().uptimeNanoseconds, ordering: .releasing)
-                    outstanding.store(false, ordering: .releasing)
+                if trackedStartNs > 0, now > trackedStartNs {
+                    let stallMs = Int((now - trackedStartNs) / 1_000_000)
+                    if samples.count < HangSampler.sampleAtMs.count, stallMs >= HangSampler.sampleAtMs[samples.count] {
+                        let frames = sample()
+                        if !frames.isEmpty { samples.append((stallMs, frames)) }
+                    }
                 }
             } else {
-                let stallMs = Int((now - sentAt) / 1_000_000)
-                if samples.count < HangSampler.sampleAtMs.count, stallMs >= HangSampler.sampleAtMs[samples.count] {
-                    let frames = sample()
-                    if !frames.isEmpty { samples.append((stallMs, frames)) }
+                if !samples.isEmpty {
+                    flushReport(startNs: trackedStartNs, samples: samples)
+                    samples = []
+                }
+                trackedStartNs = 0
+                if now >= lastActiveNs, now - lastActiveNs >= HangSampler.idleGraceNs {
+                    sleepUntilWoken()
+                    lastTick = DispatchTime.now().uptimeNanoseconds
+                    lastActiveNs = lastTick
+                    continue
                 }
             }
+
+            usleep(UInt32(HangSampler.pollNs / 1000))
         }
+    }
+
+    private func sleepUntilWoken() {
+        wakeCondition.lock()
+        samplerSleeping.store(true, ordering: .sequentiallyConsistent)
+        let shouldWakeNow: Bool
+        if appActive.load(ordering: .sequentiallyConsistent) {
+            #if DEBUG
+            let hasAlarm = pendingAlarmMs.load(ordering: .acquiring) >= HangSampler.alarmMs
+            #else
+            let hasAlarm = false
+            #endif
+            shouldWakeNow = mainBusy.load(ordering: .sequentiallyConsistent) || hasAlarm
+        } else {
+            shouldWakeNow = false
+        }
+        if shouldWakeNow {
+            samplerSleeping.store(false, ordering: .sequentiallyConsistent)
+            wakeCondition.unlock()
+            return
+        }
+        wakeCondition.wait()
+        samplerSleeping.store(false, ordering: .sequentiallyConsistent)
+        wakeCondition.unlock()
+    }
+
+    private func flushReport(startNs: UInt64, samples: [(atMs: Int, frames: [UInt])]) {
+        let ended = idleAtNs.load(ordering: .acquiring)
+        let stallMs = (startNs > 0 && ended > startNs)
+            ? Int((ended - startNs) / 1_000_000)
+            : (samples.last?.atMs ?? 0)
+        report(stallMs: stallMs, samples: samples)
     }
 
     // MARK: the sample

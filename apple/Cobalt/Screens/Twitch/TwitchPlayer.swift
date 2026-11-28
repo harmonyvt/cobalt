@@ -572,6 +572,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             self.isPiPActive = true
             let pipSlot: TwitchStreamSlot = self.activeChannels.count >= 3 ? self.multiMixer.spotlightSlot : .a
             self.notifyNativeViewReparented(for: pipSlot)
+            self.publishEnergyPlayback()
             Breadcrumbs.add("twitch.pip.start", ["multi_spotlight": .bool(self.activeChannels.count >= 3)])
         }
         pipController.onFailedToStart = { [weak self] _ in
@@ -583,6 +584,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             if self.activeChannels.count >= 3 {
                 self.setAllActiveVideoOutputs(enabled: true)
             }
+            self.publishEnergyPlayback()
             Breadcrumbs.add("twitch.pip.failed")
         }
         pipController.onDidStop = { [weak self] restoredUI in
@@ -599,6 +601,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                     self.setPaused(true)
                 }
             }
+            self.publishEnergyPlayback()
             if restoredUI || !self.claims.isEmpty {
                 self.setAllActiveVideoOutputs(enabled: true)
                 for slot in TwitchStreamSlot.slots(forCount: self.activeChannels.count) {
@@ -663,6 +666,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             }
             self.notifyNativeViewReparented(for: .a)
             self.notifyNativeViewReparented(for: .b)
+            self.publishEnergyPlayback()
             Breadcrumbs.add("twitch.dual.pip.start")
         }
         dualPiPController.onFailedToStart = { [weak self] _ in
@@ -671,6 +675,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             self.hasPiPClaim = false
             self.isPiPActive = false
             AudioSessionCoordinator.shared.release(Self.pipAudioClaimID)
+            self.publishEnergyPlayback()
             Breadcrumbs.add("twitch.dual.pip.failed")
         }
         dualPiPController.onDidStop = { [weak self] restoredUI in
@@ -726,6 +731,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             self.releaseTask?.cancel()
             self.releaseTask = nil
             AudioSessionCoordinator.shared.claim(Self.pipAudioClaimID, kind: .playback(allowsPiP: true))
+            self.publishEnergyPlayback()
             Breadcrumbs.add("twitch.dual.panel.open", ["streams": .int(self.activeChannels.count)])
         }
         dualFloatingPanel.onDidClose = { [weak self] restoredUI in
@@ -1074,7 +1080,32 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         syncNowPlaying()
     }
 
+    /// Publishes current playback workload (stream count, native vs embed backend, PiP, background audio) to
+    /// `EnergySampler`. Pass `backgrounding` from `AnalyticsLifecycle` so PiP/background-audio flags update before
+    /// `EnergySampler.setLifecycle(isForeground: false, ...)` evaluates session end.
+    func publishEnergyPlayback(backgrounding: Bool? = nil) {
+        let inBg = backgrounding ?? isInBackground
+        let activeCount: Int
+        if channel == nil || suspended || userPaused {
+            activeCount = 0
+        } else if inBg && !keepsAliveInBackground {
+            activeCount = 0
+        } else {
+            activeCount = max(1, activeChannels.count)
+        }
+        let mode: EnergyPlayerMode
+        if activeCount == 0 {
+            mode = .none
+        } else {
+            mode = activeMode == .lowLatency ? .native : .embed
+        }
+        let pip = activeCount > 0 && isPiPOwningViews
+        let bgAudio = inBg && activeCount > 0 && !pip && keepsAliveInBackground
+        EnergySampler.shared.setPlayback(streams: activeCount, mode: mode, pip: pip, bgAudio: bgAudio)
+    }
+
     private func syncNowPlaying() {
+        publishEnergyPlayback()
         guard let ch = channel, (activeMode == .lowLatency || isAirPlayingVideo) else {
             nowPlaying.onNextTrack = nil
             nowPlaying.onPreviousTrack = nil
@@ -3592,6 +3623,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 }
             }
             #endif
+            publishEnergyPlayback()
             return
         }
         suspended = true
@@ -3599,6 +3631,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         resumeSecondaryChannel = secondaryChannel
         resumeChannels = activeChannels
         if channel != nil { stop() }
+        publishEnergyPlayback()
     }
 
     private func setSlotSelectedVariantID(_ variantID: String, for slot: TwitchStreamSlot) {
@@ -3690,6 +3723,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             }
         }
 
+        publishEnergyPlayback()
         guard suspended else { return }
         suspended = false
         let channelsToRestore = resumeChannels

@@ -45,6 +45,7 @@ enum Analytics {
 
     /// Starts, stops or leaves the SDK as the server's answer and the settings say. Cheap; call it whenever either changes.
     static func sync(model: AppModel) {
+        ensureLifecycle()
         // Where the main thread was when it stalled (`hang_stack`). Started on the first call whatever the settings, so
         // the sampler's own debug stall alarm works with analytics off; the report is sent only while it is on. A second
         // start() is ignored.
@@ -70,7 +71,7 @@ enum Analytics {
                         replayWanted = model.settings.recordSessions
                         timedSetup(now, replay: replayWanted && !replayKilled)
                         configured = now
-                        watch()
+                        watchFeatureFlags()
                         sync(model: model)
                     }
                 }
@@ -85,14 +86,28 @@ enum Analytics {
             running = true
             live.store(true, ordering: .relaxed)
             if !screenSent { screen(currentScreen) }
-            // MetricKit's daily averages (scroll hitch ratio, launch, hangs), a day late at worst (`daily_metrics`)
+            // MetricKit's daily averages (scroll hitch ratio, launch, hangs, energy), a day late at worst (`daily_metrics`)
             Telemetry.metricsDelivered = { values in Analytics.event("daily_metrics", values: values) }
             // a minute of the engines' timings in one event (`engine_ops`); the screen rides along as a super property
             EngineClock.flush = { values in Analytics.event("engine_ops", values: values) }
             applyReplay()
+            // Public Mach energy slices, thermal transitions and true-session rollups (`energy_slice`, `thermal_state`,
+            // `session_energy`): zero timers when idle, coalesced 5-min checkpoint only while streaming.
+            let snap = AppLifecycle.shared.snapshot
+            let screenNow = currentScreen
+            let replayNow = replayRegistered ?? false
+            EnergySampler.shared.start { w in
+                w.isForeground = snap.isForeground
+                w.thermal = EnergyThermal(snap.thermal)
+                w.lpm = snap.isLowPowerMode
+                w.screen = screenNow
+                w.replay = replayNow
+            }
+            EnergySampler.shared.emit = { name, values in Analytics.event(name, values: values) }
             AnalyticsContext.setSessionProvider { PostHogSDK.shared.getSessionId() }
         } else if running {
             EngineClock.flush = nil
+            EnergySampler.shared.emit = nil
             PostHogSDK.shared.optOut()
             running = false
             live.store(false, ordering: .relaxed)
@@ -110,6 +125,10 @@ enum Analytics {
         config.captureApplicationLifecycleEvents = true
         // SwiftUI screens are named by hand (`screen`): UIKit's automatic names are the hosting controllers'
         config.captureScreenViews = false
+        // Relaxed batching (40 events / 3 min instead of default 20 / 30 s) avoids waking the cellular radio for
+        // short RRC tails just to ship telemetry; background transitions flush explicitly via `flushForBackground()`.
+        config.flushAt = 40
+        config.flushIntervalSeconds = 180
         #if os(iOS)
         config.sessionReplay = replay
         config.sessionReplayConfig.screenshotMode = true
@@ -122,8 +141,8 @@ enum Analytics {
         config.sessionReplayConfig.throttleDelay = 2
         config.sessionReplayConfig.maskAllImages = true
         config.sessionReplayConfig.maskAllTextInputs = true
-        // speeds, sizes and status codes of requests, never their bodies
-        config.sessionReplayConfig.captureNetworkTelemetry = true
+        // Off: swizzling URLSession intercepts ~120 HLS prefetch segment fetches/min during multi-stream playback.
+        config.sessionReplayConfig.captureNetworkTelemetry = false
         #endif
         PostHogSDK.shared.setup(config)
         PostHogSDK.shared.identify(
@@ -138,18 +157,21 @@ enum Analytics {
         try? await Task.sleep(for: .milliseconds(100))
     }
 
-    /// The feature flags (for the replay kill switch) and the background (to send the engines' timings before the app
-    /// may be ended). Once per launch.
-    private static func watch() {
+    /// Registers `AnalyticsLifecycle` once so `HangSampler` pauses in background/inactive even with analytics off.
+    private static func ensureLifecycle() {
+        guard lifecycle == nil else { return }
+        let subscriber = AnalyticsLifecycle()
+        lifecycle = subscriber
+        AppLifecycle.shared.register(subscriber, order: .telemetry)
+    }
+
+    /// Feature flags (for the replay kill switch). Once per launch after PostHog setup.
+    private static func watchFeatureFlags() {
         // Called on the main thread after the SDK loads its flags (cached ones at launch, then fresh); no request of our
         // own.
         PostHogSDK.shared.onFeatureFlags { _ in
             MainActor.assumeIsolated { Analytics.flagsLoaded() }
         }
-        // AppLifecycle is the one listener of the app's state (the lifecycle audit): this only subscribes.
-        let subscriber = AnalyticsLifecycle()
-        lifecycle = subscriber
-        AppLifecycle.shared.register(subscriber, order: .telemetry)
     }
 
     // MARK: replay
@@ -202,7 +224,48 @@ enum Analytics {
         #endif
         guard active != replayRegistered else { return }
         replayRegistered = active
+        EnergySampler.shared.setReplay(active)
         queue.async { PostHogSDK.shared.register(["replay": active]) }
+    }
+
+    /// Drains queued events and flushes PostHog cleanly before iOS suspends the process.
+    fileprivate static func flushForBackground() {
+        EngineClock.drain()
+        guard running else { return }
+        #if os(iOS)
+        let app = UIApplication.shared
+        let taskID = Mutex<UIBackgroundTaskIdentifier>(.invalid)
+        let id = app.beginBackgroundTask(withName: "cobalt.analytics.flush") {
+            let expired = taskID.withLock { slot -> UIBackgroundTaskIdentifier in
+                let prev = slot
+                slot = .invalid
+                return prev
+            }
+            if expired != .invalid {
+                Task { @MainActor in UIApplication.shared.endBackgroundTask(expired) }
+            }
+        }
+        taskID.withLock { $0 = id }
+        queue.async {
+            if live.load(ordering: .relaxed) {
+                PostHogSDK.shared.flush()
+            }
+            let finished = taskID.withLock { slot -> UIBackgroundTaskIdentifier in
+                let prev = slot
+                slot = .invalid
+                return prev
+            }
+            if finished != .invalid {
+                Task { @MainActor in UIApplication.shared.endBackgroundTask(finished) }
+            }
+        }
+        #else
+        queue.async {
+            if live.load(ordering: .relaxed) {
+                PostHogSDK.shared.flush()
+            }
+        }
+        #endif
     }
 
     // MARK: events
@@ -215,6 +278,7 @@ enum Analytics {
     static func screen(_ name: String) {
         guard name != currentScreen || !screenSent else { return }
         currentScreen = name
+        EnergySampler.shared.setScreen(name)
         guard running else { return }
         screenSent = true
         queue.async {
@@ -273,13 +337,20 @@ enum Analytics {
     }
 }
 
-/// Sends the engines' timings (`EngineClock.drain()`) as the app leaves the screen, before it may be ended: the background
-/// on iPhone and iPad, losing the front on the Mac (which has no background). Also pauses GPU session replay & ProMotion
+/// Sends the engines' timings (`EngineClock.drain()`), flushes PostHog cleanly, updates `EnergySampler` thermal/LPM/
+/// session state, pauses `HangSampler` whenever inactive/backgrounded, and pauses GPU session replay & ProMotion
 /// frame probing when Low Power Mode or thermal throttling activates.
 @MainActor
 private final class AnalyticsLifecycle: LifecycleAware {
     func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        HangSampler.shared.setActive(snapshot.isActive)
         Analytics.setPowerConservation(snapshot.shouldConservePower)
+        TwitchPlayerHost.shared.publishEnergyPlayback(backgrounding: !snapshot.isForeground)
+        EnergySampler.shared.setLifecycle(
+            isForeground: snapshot.isForeground,
+            thermal: snapshot.thermal,
+            lpm: snapshot.isLowPowerMode
+        )
         if snapshot.isLowPowerMode { FrameMonitor.appLeft() }
         // the frame timer never measures time away from the screen
         if event == .willResignActive || event == .didEnterBackground { FrameMonitor.appLeft() }
@@ -288,6 +359,6 @@ private final class AnalyticsLifecycle: LifecycleAware {
         #else
         guard event == .willResignActive else { return }
         #endif
-        EngineClock.drain()
+        Analytics.flushForBackground()
     }
 }

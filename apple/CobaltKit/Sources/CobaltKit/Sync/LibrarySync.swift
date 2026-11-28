@@ -519,6 +519,17 @@ final class SyncPathWatch: @unchecked Sendable {
         let down = wasDown
         monitor.pathUpdateHandler = { path in
             let up = path.status == .satisfied
+            let net: EnergyNetwork
+            if !up {
+                net = .none
+            } else if path.usesInterfaceType(.wifi) {
+                net = .wifi
+            } else if path.usesInterfaceType(.cellular) {
+                net = .cell
+            } else {
+                net = .other
+            }
+            EnergySampler.shared.setNetwork(net)
             onReachable(up)
             if !up {
                 down.flag.withLock { $0 = true }

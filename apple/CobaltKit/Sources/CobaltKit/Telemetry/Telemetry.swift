@@ -199,13 +199,17 @@ final class MetricKitSubscriber: NSObject, MXMetricManagerSubscriber, @unchecked
         super.init()
     }
 
-    /// The daily metrics (a day late at worst): one `ui` "daily metrics" log line per payload, and the same values to
-    /// `Telemetry.metricsDelivered`.
+    /// The daily metrics (a day late at worst): log lines kept under `TelemetryLimits.dataKeys`, and the full flat
+    /// dictionary handed to `Telemetry.metricsDelivered` for PostHog.
     func didReceive(_ payloads: [MXMetricPayload]) {
         for payload in payloads {
             let data = MetricSummary.values(payload)
             guard !data.isEmpty else { continue }
-            Telemetry.log(.info, .ui, "daily metrics", data: data)
+            let split = MetricSummary.splitForLog(data)
+            Telemetry.log(.info, .ui, "daily metrics", data: split.core)
+            if !split.energy.isEmpty {
+                Telemetry.log(.info, .ui, "daily energy", data: split.energy)
+            }
             Telemetry.metricsDelivered?(data)
         }
     }
