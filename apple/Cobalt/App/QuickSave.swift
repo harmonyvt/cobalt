@@ -32,6 +32,11 @@ enum QuickSave {
 
     static func save(_ items: [PastedContent], via: JobVia) {
         guard let model else { return }
+        if let stream = PasteRouter.liveStream(in: items) {
+            model.openStream(stream, mode: .open)
+            reveal()
+            return
+        }
         if case .needsAttention = PasteRouter.plan(for: items, model: model) {
             handOver(items)
             return
@@ -44,6 +49,8 @@ enum QuickSave {
             watch(ids, model: model)
         case .review:
             handOver(items)
+        case .openedStream:
+            reveal()
         }
     }
 

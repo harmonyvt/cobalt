@@ -30,8 +30,10 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
     private let openedAt = Date()
     /// Always the sheet: the overlay layout is never asked for (see the class comment).
     private let stage = ShareStage(overlay: false)
-    /// Whether this process is showing the full sheet or the failure card (the fitter only matters then).
+    /// Whether this process is showing the full sheet, stream chooser, or failure card (the fitter only matters then).
     private var showsContent = false
+    /// Currently hosted SwiftUI child controller, replaced when transitioning from stream chooser to normal save.
+    private var hostedController: UIViewController?
 
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
@@ -58,6 +60,14 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
         #if DEBUG
         if await startDebugScenario(items) { return }
         #endif
+        if let streamMatch = await InstantShare.detectSharedStream(inputItems: items) {
+            await handleStreamShare(streamMatch, items: items)
+            return
+        }
+        await continueNormalSave(items)
+    }
+
+    private func continueNormalSave(_ items: [NSExtensionItem]) async {
         // "show the full share sheet" keeps its sheet for a link or one video; photos and several files always upload
         if Settings.shared().shareFullSheet, !InstantShare.uploadsEvenWithFullSheet(items) { await showFullSheet(items); return }
         switch await InstantShare.start(inputItems: items) {
@@ -71,6 +81,59 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
         case .failed(let failure):
             showFailure(failure)
         }
+    }
+
+    // MARK: - Live stream hand-off
+
+    private func handleStreamShare(_ match: SharedStreamMatch, items: [NSExtensionItem]) async {
+        if match.shouldAutoOpen {
+            Telemetry.log(.info, .share, "share stream auto-open", data: [
+                "platform": .string(match.address.platform.rawValue),
+            ])
+            let opened = await openHostApp(match.watchURL(mode: .open))
+            if opened {
+                finish()
+                return
+            }
+            showStreamCard(match, items: items, openFailed: true)
+            return
+        }
+        Telemetry.log(.info, .share, "share stream chooser", data: [
+            "platform": .string(match.address.platform.rawValue),
+            "live": .bool(match.kind.isLive),
+            "canAdd": .bool(match.canAddToStream),
+        ])
+        showStreamCard(match, items: items, openFailed: false)
+    }
+
+    private func showStreamCard(_ match: SharedStreamMatch, items: [NSExtensionItem], openFailed: Bool) {
+        let watch: @MainActor (WatchDeepLinkMode) -> Void = { [weak self] mode in
+            Task { @MainActor in
+                guard let self else { return }
+                let opened = await self.openHostApp(match.watchURL(mode: mode))
+                if opened {
+                    self.finish()
+                } else {
+                    self.showStreamCard(match, items: items, openFailed: true)
+                }
+            }
+        }
+        let saveInstead: @MainActor () -> Void = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.clearHosted()
+                await self.continueNormalSave(items)
+            }
+        }
+        let close: @MainActor () -> Void = { [weak self] in self?.finish() }
+        host(ShareStreamCard(
+            match: match,
+            openFailed: openFailed,
+            onWatch: { watch($0) },
+            onSaveInstead: { saveInstead() },
+            close: { close() },
+            onFit: { [weak self] height in self?.fitter.update(contentHeight: height) }
+        ))
     }
 
     // MARK: - The gallery flow
@@ -173,6 +236,7 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
 
     /// Puts a SwiftUI view in the controller, pinned to every edge, and sizes the sheet to it.
     private func host<Content: View>(_ content: Content) {
+        clearHosted()
         let host = UIHostingController(rootView: content)
         host.view.backgroundColor = .clear
         addChild(host)
@@ -185,8 +249,19 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
             host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         host.didMove(toParent: self)
+        hostedController = host
         showsContent = true
         fitter.attach()
+    }
+
+    private func clearHosted() {
+        if let existing = hostedController {
+            existing.willMove(toParent: nil)
+            existing.view.removeFromSuperview()
+            existing.removeFromParent()
+            hostedController = nil
+        }
+        showsContent = false
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -250,7 +325,12 @@ final class ShareViewController: UIViewController, UIAdaptivePresentationControl
             if !flow.isSending { flow.cancel() }
             return
         }
-        guard !closed, let model else { return }
+        guard !closed else { return }
+        guard let model else {
+            // Stream chooser or failure card swiped away: complete the extension cleanly.
+            if showsContent { finish() }
+            return
+        }
         Telemetry.log(.info, .share, "share close requested")
         closed = true
         // The opt-in is a network call and the process goes soon after the sheet does: ask the

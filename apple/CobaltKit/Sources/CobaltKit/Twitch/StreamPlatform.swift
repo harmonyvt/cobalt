@@ -66,6 +66,27 @@ public enum YouTubeLiveTarget: Sendable, Hashable, Codable {
     case channelID(String)
 }
 
+/// Classification of a shared or pasted URL for live-stream handling vs normal media saving.
+public enum SharedStreamKind: Sendable, Hashable {
+    /// Unambiguous live stream URL (Twitch channel, Kick channel, YouTube `/live/...`, `/@handle/live`, `/channel/UC.../live`).
+    case live(StreamAddress)
+    /// YouTube URL that could be either a live stream or a regular video to save
+    /// (`youtube.com/watch?v=...`, `youtu.be/...`, `youtube.com/@handle`, `youtube.com/channel/UC...`).
+    case ambiguousYouTube(StreamAddress)
+
+    public var address: StreamAddress {
+        switch self {
+        case .live(let address), .ambiguousYouTube(let address):
+            return address
+        }
+    }
+
+    public var isLive: Bool {
+        if case .live = self { return true }
+        return false
+    }
+}
+
 /// Canonical, platform-aware live stream address parsed from user input, URLs, or stored keys.
 ///
 /// Canonical key format:
@@ -175,6 +196,43 @@ public struct StreamAddress: Sendable, Hashable {
         return StreamAddress(platform: .twitch, identifier: candidate)
     }
 
+    /// Classifies an HTTP/HTTPS URL as an unambiguous live stream, an ambiguous YouTube URL
+    /// (which may be a live stream or a regular video), or `nil` (non-stream URL, clip, VOD, Short, playlist).
+    public static func classifySharedURL(_ url: URL) -> SharedStreamKind? {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return nil }
+        return classifyURLComponents(comps)
+    }
+
+    /// Extracts the first shareable HTTP/HTTPS URL from text, including promotional share copy from
+    /// official mobile apps (e.g. `"Watch Gigguk with me on Twitch! https://www.twitch.tv/gigguk"`)
+    /// or scheme-less stream links (e.g. `"twitch.tv/gigguk"`).
+    public static func extractSharedURL(from text: String) -> URL? {
+        if let explicit = LinkInfo.firstLink(in: text) {
+            return explicit
+        }
+        return firstBareStreamURL(in: text)
+    }
+
+    /// Extracts and classifies a live-stream URL from freeform shared text (such as mobile app share sheets).
+    /// Returns `nil` when the text contains no stream URL or only VOD/clip/Short links.
+    public static func classifySharedText(_ text: String) -> (url: URL, kind: SharedStreamKind)? {
+        let links = LinkInfo.allLinks(in: text, limit: 10)
+        if !links.isEmpty {
+            for url in links {
+                if let kind = classifySharedURL(url) {
+                    return (url, kind)
+                }
+            }
+            return nil
+        }
+        if let bare = firstBareStreamURL(in: text), let kind = classifySharedURL(bare) {
+            return (bare, kind)
+        }
+        return nil
+    }
+
     /// Canonicalizes an arbitrary channel key string, preserving case for YouTube video/channel IDs
     /// while lowercasing Twitch logins, Kick slugs, and YouTube `@handle` keys.
     public static func canonicalKey(for raw: String) -> String {
@@ -203,88 +261,172 @@ public struct StreamAddress: Sendable, Hashable {
 
     // MARK: - Private helpers
 
+    private static let twitchLiveHosts: Set<String> = ["twitch.tv", "www.twitch.tv", "m.twitch.tv", "go.twitch.tv"]
+    private static let kickLiveHosts: Set<String> = ["kick.com", "www.kick.com", "m.kick.com"]
+    private static let youtubeShortHosts: Set<String> = ["youtu.be", "www.youtu.be"]
+    private static let youtubeLiveHosts: Set<String> = [
+        "youtube.com", "www.youtube.com", "m.youtube.com",
+        "youtube-nocookie.com", "www.youtube-nocookie.com",
+    ]
+
+    private static let twitchReservedPaths: Set<String> = [
+        "directory", "videos", "video", "downloads", "settings", "subscriptions",
+        "inventory", "wallet", "search", "popout", "collections", "clip", "clips",
+        "p", "u", "moderator", "jobs", "turbo", "prime", "drops", "friends",
+        "messages", "activity", "store", "login", "signup", "following", "team",
+        "teams", "squad", "stories", "embed",
+    ]
+
+    private static let kickReservedPaths: Set<String> = [
+        "browse", "categories", "following", "search", "video", "videos", "clip",
+        "clips", "popout", "dashboard", "transactions", "settings", "terms",
+        "privacy", "community-guidelines", "dmca", "auth", "login", "register",
+        "subcategories",
+    ]
+
+    private static let bareStreamLinkExpression: NSRegularExpression = {
+        // Matches scheme-less Twitch, Kick, or YouTube URLs not preceded by another domain label.
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(
+            pattern: "(?<![A-Za-z0-9.-])(?:(?:www|m|go)\\.)?(?:twitch\\.tv|kick\\.com|youtube\\.com|youtu\\.be)/[^\\s<>\"'`]+",
+            options: [.caseInsensitive]
+        )
+    }()
+
+    private static func firstBareStreamURL(in text: String) -> URL? {
+        guard !text.isEmpty else { return nil }
+        let limit = min(text.count, 16_384)
+        let prefix = String(text.prefix(limit))
+        let range = NSRange(prefix.startIndex..., in: prefix)
+        guard let match = bareStreamLinkExpression.firstMatch(in: prefix, options: [], range: range),
+              let swiftRange = Range(match.range, in: prefix)
+        else { return nil }
+        var found = String(prefix[swiftRange])
+        while let last = found.last, "),.;:!?]}".contains(last) { found.removeLast() }
+        guard let url = URL(string: "https://\(found)"), LinkInfo(url) != nil else { return nil }
+        return url
+    }
+
     private static func parseURL(_ raw: String) -> StreamAddress? {
         // Avoid interpreting bare logins with dots or invalid hosts as URLs unless a known host matches.
+        let lower = raw.lowercased()
         let candidateString: String
-        if raw.lowercased().hasPrefix("http://") || raw.lowercased().hasPrefix("https://") {
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
             candidateString = raw
-        } else if raw.contains("/") || raw.lowercased().contains(".tv") || raw.lowercased().contains(".com") || raw.lowercased().contains(".be") {
+        } else if raw.contains("/") || lower.contains(".tv") || lower.contains(".com") || lower.contains(".be") {
             candidateString = "https://\(raw)"
         } else {
             return nil
         }
 
-        guard let comps = URLComponents(string: candidateString),
-              let host = comps.host?.lowercased(),
-              !host.isEmpty
-        else { return nil }
+        guard let comps = URLComponents(string: candidateString) else { return nil }
+        return classifyURLComponents(comps)?.address
+    }
 
+    private static func classifyURLComponents(_ comps: URLComponents) -> SharedStreamKind? {
+        guard let host = comps.host?.lowercased(), !host.isEmpty else { return nil }
         let pathParts = comps.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
 
-        // Twitch URLs
-        if host == "twitch.tv" || host.hasSuffix(".twitch.tv") {
-            guard let first = pathParts.first?.lowercased(), isValidTwitchLogin(first) else { return nil }
-            // Ignore non-channel top-level paths
-            let reserved: Set<String> = ["directory", "videos", "downloads", "settings", "subscriptions", "inventory", "wallet", "search", "popout"]
-            if reserved.contains(first) {
-                if first == "popout", pathParts.count >= 2 {
-                    let ch = pathParts[1].lowercased()
-                    return isValidTwitchLogin(ch) ? StreamAddress(platform: .twitch, identifier: ch) : nil
-                }
-                return nil
-            }
-            return StreamAddress(platform: .twitch, identifier: first)
-        }
-
-        // Kick URLs
-        if host == "kick.com" || host.hasSuffix(".kick.com") {
+        // Twitch URLs (excludes clips.twitch.tv, VODs /videos/..., /<user>/clip/..., /<user>/videos, etc.)
+        if twitchLiveHosts.contains(host) {
             guard let first = pathParts.first?.lowercased() else { return nil }
-            let reserved: Set<String> = ["browse", "categories", "following", "search", "video", "clips", "popout"]
-            if reserved.contains(first) {
-                if first == "popout", pathParts.count >= 2 {
-                    let slug = pathParts[1].lowercased()
-                    return isValidKickSlug(slug) ? StreamAddress(platform: .kick, identifier: slug) : nil
+            if first == "popout" {
+                guard pathParts.count >= 2 else { return nil }
+                let ch = pathParts[1].lowercased()
+                guard isValidTwitchLogin(ch) else { return nil }
+                return .live(StreamAddress(platform: .twitch, identifier: ch))
+            }
+            guard !twitchReservedPaths.contains(first), isValidTwitchLogin(first) else { return nil }
+            // Only bare `/<channel>` or `/<channel>/home` are live channel pages; subpaths like
+            // `/<channel>/clip/...`, `/<channel>/videos`, `/<channel>/video/...`, `/<channel>/v/...`
+            // are VODs/clips/tabs that should not hijack normal media saving.
+            if pathParts.count > 1 {
+                guard pathParts.count == 2, pathParts[1].lowercased() == "home" else { return nil }
+            }
+            return .live(StreamAddress(platform: .twitch, identifier: first))
+        }
+
+        // Kick URLs (excludes clips.kick.com, `?clip=...`, /video/..., /videos/..., /<slug>/clips/...)
+        if kickLiveHosts.contains(host) {
+            if let clipParam = comps.queryItems?.first(where: { $0.name.lowercased() == "clip" })?.value,
+               !clipParam.isEmpty {
+                return nil
+            }
+            guard let first = pathParts.first?.lowercased() else { return nil }
+            if first == "popout" {
+                guard pathParts.count >= 2 else { return nil }
+                let slug = pathParts[1].lowercased()
+                guard isValidKickSlug(slug) else { return nil }
+                return .live(StreamAddress(platform: .kick, identifier: slug))
+            }
+            guard !kickReservedPaths.contains(first), isValidKickSlug(first) else { return nil }
+            guard pathParts.count == 1 else { return nil }
+            return .live(StreamAddress(platform: .kick, identifier: first))
+        }
+
+        // YouTube short URLs (`youtu.be/<videoId>`) — could be a live stream or a regular video
+        if youtubeShortHosts.contains(host) {
+            guard pathParts.count == 1, let vid = pathParts.first, isValidYouTubeVideoID(vid) else { return nil }
+            return .ambiguousYouTube(StreamAddress(platform: .youtube, identifier: vid, youtubeTarget: .videoID(vid)))
+        }
+
+        // YouTube standard/mobile URLs
+        if youtubeLiveHosts.contains(host) {
+            let first = pathParts.first
+            let firstLower = first?.lowercased()
+
+            // Explicitly exclude Shorts, playlists, clips, community posts, search, feeds
+            if let firstLower, ["shorts", "playlist", "clip", "post", "results", "feed", "redirect"].contains(firstLower) {
+                return nil
+            }
+
+            // /watch?v=<videoId> — ambiguous (could be a live stream or a normal video)
+            if firstLower == nil || firstLower == "watch" {
+                if let v = comps.queryItems?.first(where: { $0.name == "v" })?.value, isValidYouTubeVideoID(v) {
+                    return .ambiguousYouTube(StreamAddress(platform: .youtube, identifier: v, youtubeTarget: .videoID(v)))
                 }
                 return nil
             }
-            guard isValidKickSlug(first) else { return nil }
-            return StreamAddress(platform: .kick, identifier: first)
-        }
 
-        // YouTube short URLs (`youtu.be/<videoId>`)
-        if host == "youtu.be" || host == "www.youtu.be" {
-            guard let vid = pathParts.first, isValidYouTubeVideoID(vid) else { return nil }
-            return StreamAddress(platform: .youtube, identifier: vid, youtubeTarget: .videoID(vid))
-        }
+            guard let first, let firstLower else { return nil }
 
-        // YouTube standard/mobile/studio URLs
-        if host == "youtube.com" || host.hasSuffix(".youtube.com") || host == "youtube-nocookie.com" || host.hasSuffix(".youtube-nocookie.com") {
-            // /watch?v=<videoId>
-            if let v = comps.queryItems?.first(where: { $0.name == "v" })?.value, isValidYouTubeVideoID(v) {
-                return StreamAddress(platform: .youtube, identifier: v, youtubeTarget: .videoID(v))
-            }
-            guard let first = pathParts.first else { return nil }
-            let firstLower = first.lowercased()
-
-            // /live/<videoId> or /embed/<videoId> or /shorts/<videoId>
-            if (firstLower == "live" || firstLower == "embed" || firstLower == "shorts"),
-               pathParts.count >= 2,
-               isValidYouTubeVideoID(pathParts[1]) {
+            // /live/<videoId> — unambiguous live stream
+            if firstLower == "live", pathParts.count >= 2, isValidYouTubeVideoID(pathParts[1]) {
                 let vid = pathParts[1]
-                return StreamAddress(platform: .youtube, identifier: vid, youtubeTarget: .videoID(vid))
+                return .live(StreamAddress(platform: .youtube, identifier: vid, youtubeTarget: .videoID(vid)))
             }
 
-            // /@handle or /@handle/live
+            // /embed/<videoId> — ambiguous
+            if firstLower == "embed", pathParts.count >= 2, isValidYouTubeVideoID(pathParts[1]) {
+                let vid = pathParts[1]
+                return .ambiguousYouTube(StreamAddress(platform: .youtube, identifier: vid, youtubeTarget: .videoID(vid)))
+            }
+
+            // /@handle/live (unambiguous live) or /@handle (ambiguous channel link)
             if first.hasPrefix("@") {
                 let handle = String(first.dropFirst()).lowercased()
                 guard isValidYouTubeHandle(handle) else { return nil }
-                return StreamAddress(platform: .youtube, identifier: "@\(handle)", youtubeTarget: .handle(handle))
+                let address = StreamAddress(platform: .youtube, identifier: "@\(handle)", youtubeTarget: .handle(handle))
+                if pathParts.count == 2, pathParts[1].lowercased() == "live" {
+                    return .live(address)
+                }
+                if pathParts.count == 1 {
+                    return .ambiguousYouTube(address)
+                }
+                return nil
             }
 
-            // /channel/UC... or /channel/UC.../live
+            // /channel/UC.../live (unambiguous live) or /channel/UC... (ambiguous channel link)
             if firstLower == "channel", pathParts.count >= 2, isValidYouTubeChannelID(pathParts[1]) {
                 let cid = pathParts[1]
-                return StreamAddress(platform: .youtube, identifier: "channel/\(cid)", youtubeTarget: .channelID(cid))
+                let address = StreamAddress(platform: .youtube, identifier: "channel/\(cid)", youtubeTarget: .channelID(cid))
+                if pathParts.count == 3, pathParts[2].lowercased() == "live" {
+                    return .live(address)
+                }
+                if pathParts.count == 2 {
+                    return .ambiguousYouTube(address)
+                }
+                return nil
             }
         }
 

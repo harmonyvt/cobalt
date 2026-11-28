@@ -220,6 +220,11 @@ struct MenuBarPopover: View {
 
     private func pasteLink() {
         let items = Pasteboard.contents()
+        if let stream = PasteRouter.liveStream(in: items) {
+            model.openStream(stream, mode: .open)
+            reveal()
+            return
+        }
         switch PasteRouter.plan(for: items, model: model) {
         case .needsAttention:
             MenuBarHandoff.shared.stage(items: items)
@@ -235,6 +240,8 @@ struct MenuBarPopover: View {
             case .review:
                 // the plan and the perform disagreed: the window still owns the sheet
                 MenuBarHandoff.shared.stage(items: items)
+                reveal()
+            case .openedStream:
                 reveal()
             }
         }

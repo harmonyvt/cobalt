@@ -200,6 +200,10 @@ public final class AppModel {
     /// set with `openInPane(_:)` (Pane/AppModel+Pane.swift); the shell opens it and takes it back with `takePaneRequest()`.
     public internal(set) var paneRequest: PaneRequest?
 
+    /// A live stream watch deep link (`cobalt-apple://watch?...`) or macOS quick-open request for the window's pane:
+    /// set with `openWatchLink(_:)` / `openStream(_:mode:)`; the shell consumes it via `takeWatchRequest(currentPaneItem:)`.
+    public internal(set) var watchRequest: WatchRequest?
+
     /// Asks the save tab to open the tray fully; the view that shows it sets this back to false. `cobalt-apple://jobs`
     /// (the Hark summary, APP-API-CONTRACT 17.8) used to set it; it now opens the queue tab (apple/CONTRACT.md 12).
     public var requestedJobs = false
@@ -595,11 +599,13 @@ public final class AppModel {
     }
 
     /// `cobalt-apple://job/<uuid>`, `cobalt-apple://library` ("your webp is ready"), `cobalt-apple://stage` (the Twitch
-    /// sign-in's return), `cobalt-apple://chat/<thread>` (a chat reply's Live Activity) and `cobalt-apple://open`.
+    /// sign-in's return), `cobalt-apple://watch?...` (live streams), `cobalt-apple://chat/<thread>` (a chat reply's
+    /// Live Activity) and `cobalt-apple://open`.
     public func open(_ url: URL) {
         guard url.scheme?.lowercased() == "cobalt-apple" else { return }
         // the sign-in's return (APP-API-CONTRACT 42.3) belongs to the Access sheet, which keeps it; never move the screen for it
         if AccountAuth.isCallback(url) { return }
+        if openWatchLink(url) { return }
         queueShown = false                              // a link to somewhere else leaves the queue sheet behind
         selectedTab = .save
         if url.host(percentEncoded: false)?.lowercased() == "library" {

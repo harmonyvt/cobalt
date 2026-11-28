@@ -176,6 +176,20 @@ struct AppShell: View {
                 guard request != nil, let item = model.takePaneRequest() else { return }
                 pane.open(item)
             }
+            // live stream deep links (`cobalt-apple://watch?...`) and quick-open requests: open or add in the pane
+            .onChange(of: model.watchRequest, initial: true) { _, request in
+                guard request != nil else { return }
+                let activeStream: PaneItem? = if pane.item?.isStream == true {
+                    pane.item
+                } else if pane.barItem?.isStream == true {
+                    pane.barItem
+                } else {
+                    nil
+                }
+                if let item = model.takeWatchRequest(currentPaneItem: activeStream) {
+                    pane.open(item)
+                }
+            }
             .onAppear { consumeMenuBarHandoff() }
             .onChange(of: MenuBarHandoff.shared.token) { _, _ in consumeMenuBarHandoff() }
             .background { shortcuts }
@@ -257,6 +271,8 @@ struct AppShell: View {
             if let message { showStatus(message) }
         case .review(let request):
             review = request
+        case .openedStream:
+            break
         }
     }
 

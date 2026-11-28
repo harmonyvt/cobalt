@@ -23,12 +23,15 @@ extension ShareInbox {
         for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
             if let link = await loadURL(provider), LinkInfo(link) != nil { return .link(link) }
         }
-        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
-            if let string = await loadString(provider), let link = LinkInfo.firstLink(in: string) { return .link(link) }
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier)
+            || provider.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
+            if let string = await loadString(provider), let link = StreamAddress.extractSharedURL(from: string) {
+                return .link(link)
+            }
         }
         for item in items {
             for string in [item.attributedContentText?.string, item.attributedTitle?.string] {
-                if let string, let link = LinkInfo.firstLink(in: string) { return .link(link) }
+                if let string, let link = StreamAddress.extractSharedURL(from: string) { return .link(link) }
             }
         }
         if !mediaProviders(items).isEmpty { return .media }
@@ -36,7 +39,62 @@ extension ShareInbox {
     }
 }
 
+/// Live-stream classification for a link shared into the iOS Share Extension, paired with
+/// Capystore's currently playing streams so the sheet knows whether "Add to Stream" applies.
+public struct SharedStreamMatch: Sendable, Equatable {
+    public let url: URL
+    public let kind: SharedStreamKind
+    public let activeChannels: [String]
+
+    public init(url: URL, kind: SharedStreamKind, activeChannels: [String]) {
+        self.url = url
+        self.kind = kind
+        self.activeChannels = activeChannels
+    }
+
+    public var address: StreamAddress { kind.address }
+
+    /// True when 1...(maxSimultaneousStreams - 1) streams are playing in Capystore and don't already include this channel.
+    public var canAddToStream: Bool {
+        !activeChannels.isEmpty
+            && activeChannels.count < PaneItem.maxSimultaneousStreams
+            && !activeChannels.contains(address.canonicalKey)
+    }
+
+    /// Unambiguous live stream with no other stream available to add alongside -> open directly in Capystore.
+    public var shouldAutoOpen: Bool {
+        kind.isLive && !canAddToStream
+    }
+
+    /// Deep link opening or adding this stream in Capystore.
+    public func watchURL(mode: WatchDeepLinkMode) -> URL {
+        WatchDeepLink.url(for: address, mode: mode)
+    }
+}
+
 extension InstantShare {
+    /// Classifies `url` as a shared live stream (or ambiguous YouTube video/live link) against active stream presence.
+    public static func matchSharedStream(
+        url: URL,
+        defaults: UserDefaults? = nil,
+        now: Date = Date()
+    ) -> SharedStreamMatch? {
+        guard let kind = StreamAddress.classifySharedURL(url) else { return nil }
+        let active = ActiveStreamPresence.current(defaults: defaults, now: now)
+        return SharedStreamMatch(url: url, kind: kind, activeChannels: active)
+    }
+
+    /// Inspects Share Extension `inputItems` for a Twitch, Kick, or YouTube live-stream link before queueing a save.
+    /// Returns `nil` for non-stream URLs, clips, VODs, YouTube Shorts, playlists, and media files.
+    @MainActor
+    public static func detectSharedStream(
+        inputItems: [NSExtensionItem],
+        defaults: UserDefaults? = nil,
+        now: Date = Date()
+    ) async -> SharedStreamMatch? {
+        guard case .link(let url) = await ShareInbox.loadLinkOnly(inputItems) else { return nil }
+        return matchSharedStream(url: url, defaults: defaults, now: now)
+    }
     /// Whether a link could be a post of several items, decided by its shape alone (no network): the share sheet asks the
     /// server what a link is only when this is true. A reel, a video, a plain media file can never be a gallery, so they
     /// go straight to today's instant save: no resolve, no "checking" sheet, no 8 s wait, and the server resolves once.

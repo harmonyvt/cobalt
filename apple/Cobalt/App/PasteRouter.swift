@@ -10,6 +10,27 @@ enum PasteRouter {
         case status(String)
         case queued(message: String?, ids: [Job.ID])
         case review(PasteReviewRequest)
+        case openedStream(StreamAddress)
+    }
+
+    /// Returns an unambiguous live stream address when `items` contains no files and a single live-stream URL.
+    /// Never matches ambiguous YouTube URLs (`watch?v=...`, `youtu.be/...`), VODs, clips, Shorts, or multi-link pastes.
+    static func liveStream(in items: [PastedContent]) -> StreamAddress? {
+        guard items.allSatisfy({ $0.fileURL == nil }) else { return nil }
+        let raw = text(of: items)
+        let links = LinkInfo.allLinks(in: raw, limit: 2)
+        if links.count == 1 {
+            if case .live(let address) = StreamAddress.classifySharedURL(links[0]) {
+                return address
+            }
+            return nil
+        }
+        if links.isEmpty,
+           let bare = StreamAddress.extractSharedURL(from: raw),
+           case .live(let address) = StreamAddress.classifySharedURL(bare) {
+            return address
+        }
+        return nil
     }
 
     static func plan(for items: [PastedContent], model: AppModel) -> MenuBarPastePlan {
@@ -19,6 +40,10 @@ enum PasteRouter {
     }
 
     static func perform(_ items: [PastedContent], via: JobVia, dropped: Bool, model: AppModel) -> Effect {
+        if let stream = liveStream(in: items) {
+            model.openStream(stream, mode: .open)
+            return .openedStream(stream)
+        }
         let files = items.compactMap(\.fileURL)
         let source: PasteReviewRequest.Source = dropped ? .dropped : .clipboard
         switch plan(for: items, model: model) {

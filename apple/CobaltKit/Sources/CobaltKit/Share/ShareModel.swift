@@ -380,7 +380,8 @@ enum ShareInbox {
         let providers = items.flatMap { $0.attachments ?? [] }
         let movie = UTType.movie.identifier
         let url = UTType.url.identifier
-        let text = UTType.plainText.identifier
+        let plainText = UTType.plainText.identifier
+        let text = UTType.text.identifier
 
         for provider in providers where provider.hasItemConformingToTypeIdentifier(movie) {
             let dir = store.inboxURL(for: "shared").deletingLastPathComponent()
@@ -389,13 +390,16 @@ enum ShareInbox {
         for provider in providers where provider.hasItemConformingToTypeIdentifier(url) {
             if let link = await loadURL(provider), LinkInfo(link) != nil { return .link(link) }
         }
-        for provider in providers where provider.hasItemConformingToTypeIdentifier(text) {
-            if let string = await loadString(provider), let link = LinkInfo.firstLink(in: string) { return .link(link) }
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(plainText)
+            || provider.hasItemConformingToTypeIdentifier(text) {
+            if let string = await loadString(provider), let link = StreamAddress.extractSharedURL(from: string) {
+                return .link(link)
+            }
         }
         // Some apps put the link only in the item's own text fields.
         for item in items {
             for string in [item.attributedContentText?.string, item.attributedTitle?.string] {
-                if let string, let link = LinkInfo.firstLink(in: string) { return .link(link) }
+                if let string, let link = StreamAddress.extractSharedURL(from: string) { return .link(link) }
             }
         }
         return .none
@@ -431,14 +435,58 @@ enum ShareInbox {
     }
 
     static func loadURL(_ provider: NSItemProvider) async -> URL? {
-        await withCheckedContinuation { (continuation: CheckedContinuation<URL?, Never>) in
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
+        if provider.canLoadObject(ofClass: URL.self) {
+            let direct: URL? = await withCheckedContinuation { continuation in
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
+            }
+            if let direct { return direct }
+        }
+        guard provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) else { return nil }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<URL?, Never>) in
+            provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { item, _ in
+                if let url = item as? URL {
+                    continuation.resume(returning: url)
+                } else if let string = item as? String {
+                    continuation.resume(returning: URL(string: string) ?? StreamAddress.extractSharedURL(from: string))
+                } else if let data = item as? Data, let string = String(data: data, encoding: .utf8) {
+                    continuation.resume(returning: URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines))
+                        ?? StreamAddress.extractSharedURL(from: string))
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
         }
     }
 
     static func loadString(_ provider: NSItemProvider) async -> String? {
-        await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
-            _ = provider.loadObject(ofClass: String.self) { string, _ in continuation.resume(returning: string) }
+        if provider.canLoadObject(ofClass: String.self) {
+            let direct: String? = await withCheckedContinuation { continuation in
+                _ = provider.loadObject(ofClass: String.self) { string, _ in continuation.resume(returning: string) }
+            }
+            if let direct { return direct }
+        }
+        let typeID: String
+        if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
+            typeID = UTType.plainText.identifier
+        } else if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
+            typeID = UTType.text.identifier
+        } else {
+            return nil
+        }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            provider.loadItem(forTypeIdentifier: typeID, options: nil) { item, _ in
+                if let string = item as? String {
+                    continuation.resume(returning: string)
+                } else if let attributed = item as? NSAttributedString {
+                    continuation.resume(returning: attributed.string)
+                } else if let url = item as? URL {
+                    continuation.resume(returning: url.absoluteString)
+                } else if let data = item as? Data, let string = String(data: data, encoding: .utf8) {
+                    continuation.resume(returning: string)
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
         }
     }
 }

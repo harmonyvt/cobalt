@@ -68,6 +68,24 @@ enum ShareCopy {
         }
     }
 
+    // Live stream share card (Twitch / Kick / YouTube).
+    static let streamWatchNow = "Watch Now"
+    static let streamWatchLive = "Watch Live"
+    static let streamAddToStream = "Add to Stream"
+    static let streamSaveLinkInstead = "Save Link Instead"
+    static let streamSaveToLibrary = "Save to Library"
+    static let streamOpenRetry = "Tap below to open in Capystore"
+    static let streamYouTubeSubtitle = "Watch live or save to your library"
+
+    static func streamActiveSubtitle(platform: StreamPlatform, activeChannels: [String]) -> String {
+        guard !activeChannels.isEmpty else { return "Live on \(platform.displayName)" }
+        let names = activeChannels.prefix(2).map(StreamAddress.displayLabel(for:))
+        let summary = activeChannels.count > 2
+            ? "\(names.joined(separator: ", ")) +\(activeChannels.count - 2)"
+            : names.joined(separator: ", ")
+        return "\(platform.displayName) · watching \(summary)"
+    }
+
     /// Why a save to photos failed, in one line. A server-side miss reads like the rest of the app;
     /// anything else is most often the photos permission.
     static func photosFailure(_ failure: PipelineFailure) -> String {

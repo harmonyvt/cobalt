@@ -171,6 +171,7 @@ public final class TwitchStore {
         let preservedStream = streamInfos[login]
         close()
         activeChannels = [login]
+        syncActiveStreamPresence()
         if let preservedInfo { channelInfos[login] = preservedInfo }
         if let preservedStream { streamInfos[login] = preservedStream }
         remember(login)
@@ -268,6 +269,7 @@ public final class TwitchStore {
         clipState = .idle
 
         activeChannels = normalized
+        syncActiveStreamPresence()
         var nextChannelInfos: [String: TwitchChannelInfo] = [:]
         var nextStreamInfos: [String: TwitchStreamInfo] = [:]
         for login in normalized {
@@ -396,6 +398,7 @@ public final class TwitchStore {
         engineCanChat = false
         combinedChat.stop()
         activeChannels = []
+        syncActiveStreamPresence()
         channelInfos = [:]
         streamInfos = [:]
         chat = nil
@@ -465,6 +468,13 @@ public final class TwitchStore {
         followingLoaded = false
     }
 
+    private func syncActiveStreamPresence() {
+        ActiveStreamPresence.update(
+            channels: activeChannels,
+            defaults: ctx.settings.defaults,
+            now: ctx.clock.now())
+    }
+
     private func remember(_ login: String) {
         var list = recents.filter { $0 != login }
         list.insert(login, at: 0)
@@ -486,6 +496,12 @@ extension TwitchStore: LifecycleAware {
         switch event {
         case .lowPowerModeChanged, .thermalChanged:
             setLowPowerMode(snapshot.shouldConservePower)
+        case .becameActive:
+            if !activeChannels.isEmpty {
+                syncActiveStreamPresence()
+            }
+        case .willTerminate:
+            ActiveStreamPresence.clear(defaults: ctx.settings.defaults)
         default:
             break
         }

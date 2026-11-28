@@ -25,6 +25,8 @@ func handleAppLink(_ url: URL, model: AppModel) {
     if AccountAuth.isCallback(url) { return }
     // the 7TV bookmarklet (APP-API-CONTRACT 57.1): `7tv-link?token=` links the account; the studio tab's 7TV card says how it went
     if model.openSevenTvLink(url) { return }
+    // live streams (`cobalt-apple://watch?channel=...&mode=open|add` or `?url=...`): open or add in the stream pane
+    if model.openWatchLink(url) { return }
     if url.scheme?.lowercased() == "cobalt-apple", url.host(percentEncoded: false)?.lowercased() == "copy",
        let link = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
            .first(where: { $0.name == "url" })?.value,
