@@ -45,9 +45,10 @@ enum TwitchEmbed {
     }
 
     /// The player page for `channel`, to load with `baseURL: base` (`parent` must be the page's own domain).
-    static func html(channel: String, base: URL) -> String {
+    static func html(channel: String, base: URL, muted: Bool = false) -> String {
         let c = safe(channel)
         let parent = base.host() ?? "localhost"
+        let mutedLiteral = muted ? "true" : "false"
         return """
         <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
         <style>html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}
@@ -56,15 +57,21 @@ enum TwitchEmbed {
         <script src="https://player.twitch.tv/js/embed/v1.js"></script>
         <script>
         (function () {
-          var ch = "\(c)", player = null;
+          var ch = "\(c)", player = null, muted = \(mutedLiteral);
           function post(m) { try { window.webkit.messageHandlers.\(handler).postMessage(m); } catch (e) {} }
           function build() {
             document.getElementById("p").innerHTML = "";
             player = new Twitch.Player("p", { channel: ch, parent: ["\(parent)"], width: "100%", height: "100%",
-                                              autoplay: true, muted: false });
+                                              autoplay: true, muted: muted });
             var E = Twitch.Player;
-            player.addEventListener(E.READY, function () { post({ e: "ready" }); });
-            player.addEventListener(E.PLAYING, function () { post({ e: "playing" }); });
+            player.addEventListener(E.READY, function () {
+              try { player.setMuted(muted); } catch (e) {}
+              post({ e: "ready" });
+            });
+            player.addEventListener(E.PLAYING, function () {
+              try { player.setMuted(muted); } catch (e) {}
+              post({ e: "playing" });
+            });
             player.addEventListener(E.PAUSE, function () { post({ e: "paused" }); });
             player.addEventListener(E.OFFLINE, function () { post({ e: "offline" }); });
             player.addEventListener(E.ONLINE, function () { post({ e: "online" }); });
@@ -85,6 +92,10 @@ enum TwitchEmbed {
           };
           window.cobaltPause = function () { if (player) player.pause(); };
           window.cobaltPlay = function () { if (player) player.play(); };
+          window.cobaltSetMuted = function (m) {
+            muted = !!m;
+            if (player) { try { player.setMuted(muted); } catch (e) {} }
+          };
           window.cobaltRebuild = build;
           window.cobaltSetChannel = function (c) { ch = c; if (player) { player.setChannel(c); } else { build(); } };
           if (window.Twitch && Twitch.Player) { build(); } else { post({ e: "noembed" }); }
@@ -282,7 +293,13 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     private(set) var isBuffering = false
     private(set) var isOffline = false
     private(set) var hasPlaybackError = false
+    /// User's explicit mute toggle (preserved across temporary clip-editor audio suppression).
     private(set) var isMuted = false
+    /// True while a modal workflow (e.g. `TwitchClipEditorView`) temporarily suppresses live stream audio.
+    private(set) var isAudioSuppressed = false
+    /// Effective mute state applied to all active playback engines (`isMuted || isAudioSuppressed`).
+    var isEffectivelyMuted: Bool { isMuted || isAudioSuppressed }
+    @ObservationIgnored private var audioGate = TwitchAudioSuppressionGate()
     private(set) var isLowLatencyStream = false
     /// True from a jump to live until the delay settles.
     private(set) var isCatchingUp = false
@@ -1413,7 +1430,41 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     }
 
     func setMuted(_ muted: Bool) {
-        isMuted = muted
+        let effectiveChanged = audioGate.setUserMuted(muted)
+        isMuted = audioGate.userMuted
+        if effectiveChanged {
+            applyEffectiveAudioMute()
+        }
+    }
+
+    func toggleMute() {
+        setMuted(!isMuted)
+    }
+
+    /// Temporarily mutes all active live stream audio (single, dual, multi, AirPlay, and embed) without
+    /// altering the user's saved `isMuted` preference. Pair with `endAudioSuppression(token:)`.
+    @discardableResult
+    func beginAudioSuppression(token: UUID = UUID()) -> UUID {
+        let effectiveChanged = audioGate.beginSuppression(token: token)
+        isAudioSuppressed = audioGate.isSuppressed
+        if effectiveChanged {
+            applyEffectiveAudioMute()
+        }
+        return token
+    }
+
+    /// Releases a previously acquired audio suppression token and restores live stream audio strictly
+    /// according to the user's `isMuted` preference once no tokens remain.
+    func endAudioSuppression(token: UUID) {
+        let effectiveChanged = audioGate.endSuppression(token: token)
+        isAudioSuppressed = audioGate.isSuppressed
+        if effectiveChanged {
+            applyEffectiveAudioMute()
+        }
+    }
+
+    private func applyEffectiveAudioMute() {
+        let muted = isEffectivelyMuted
         #if os(iOS)
         if isAirPlayingVideo {
             airPlayPlayer?.isMuted = muted
@@ -1431,11 +1482,15 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         if activeMode == .lowLatency {
             let engine = nativeEngine
             Task { await engine?.setMuted(muted) }
+        } else {
+            applyEmbedMute(muted)
         }
     }
 
-    func toggleMute() {
-        setMuted(!isMuted)
+    private func applyEmbedMute(_ muted: Bool) {
+        guard activeMode == .embed, pageLoaded else { return }
+        let arg = muted ? "true" : "false"
+        made?.evaluateJavaScript("window.cobaltSetMuted && window.cobaltSetMuted(\(arg))")
     }
 
     private func syncSystemResourceBudgets(streamCount: Int) {
@@ -1973,7 +2028,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         } else {
             // Keep Slot A alive with zero black flash; simply ensure its gain matches the mixer.
             let engine = nativeEngine
-            let gain = isMuted ? Float(0) : dualMixer.gains.primary
+            let gain = isEffectivelyMuted ? Float(0) : dualMixer.gains.primary
             Task {
                 await engine?.rampVolume(to: gain, duration: .seconds(0.08), curve: .equalPower, updateMuteOnEndpoints: true)
             }
@@ -2047,9 +2102,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         #endif
 
         if self.channel == keep, nativeEngine != nil {
-            // Surviving stream stays live with zero flash; ramp audio back to full unmuted gain (unless user muted).
+            // Surviving stream stays live with zero flash; ramp audio back to full unmuted gain (unless user muted or suppressed).
             let engine = nativeEngine
-            let targetGain: Float = isMuted ? 0.0 : 1.0
+            let targetGain: Float = isEffectivelyMuted ? 0.0 : 1.0
             Task {
                 await engine?.setPaused(userPaused)
                 await engine?.setVideoOutputEnabled(true)
@@ -2192,8 +2247,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         updateMuteOnEndpoints: Bool
     ) {
         guard activeChannels.count <= 2 else { return }
-        let pGain: Float = isMuted ? 0.0 : primaryGain
-        let sGain: Float = isMuted ? 0.0 : secondaryGain
+        let pGain: Float = isEffectivelyMuted ? 0.0 : primaryGain
+        let sGain: Float = isEffectivelyMuted ? 0.0 : secondaryGain
         let rampDuration: Duration = .seconds(max(0, duration))
         let primaryEngine = nativeEngine
         let secondaryEngine = secondaryNativeEngine
@@ -2238,7 +2293,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         let rampDuration: Duration = .seconds(max(0, duration))
         let pairs: [(TwitchNativeEngine, Float)] = TwitchStreamSlot.slots(forCount: activeChannels.count).compactMap { slot in
             guard let eng = engine(for: slot) else { return nil }
-            let target: Float = isMuted ? 0.0 : (gains[slot] ?? 0.0)
+            let target: Float = isEffectivelyMuted ? 0.0 : (gains[slot] ?? 0.0)
             return (eng, target)
         }
         Task {
@@ -2603,16 +2658,6 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
         let rendererBox = TwitchVideoRendererBox(displayLayer.sampleBufferRenderer)
         let engine = ensureNativeEngine()
-        let initialGain: Float = if isMuted {
-            0.0
-        } else if activeChannels.count >= 3 {
-            multiMixer.gains.gain(for: .a)
-        } else if isDualStream {
-            dualMixer.gains.primary
-        } else {
-            1.0
-        }
-        let initialMuted = initialGain <= 0.0001
         let preferredQuality = activeChannels.count >= 3 ? nil : preferredQualityID
         let budgetHint = startupBudgetHint(for: .a)
 
@@ -2653,6 +2698,16 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                   self.activeMode == .lowLatency, self.channel == channel else { return }
             let videoEnabled = !self.isInBackground || self.isPiPActive || self.hasPiPClaim
             let lpm = self.isLowPowerModeActive
+            let initialGain: Float = if self.isEffectivelyMuted {
+                0.0
+            } else if self.activeChannels.count >= 3 {
+                self.multiMixer.gains.gain(for: .a)
+            } else if self.isDualStream {
+                self.dualMixer.gains.primary
+            } else {
+                1.0
+            }
+            let initialMuted = initialGain <= 0.0001
             let recorder = self.clipRecorder
             await recorder.reset(for: channel)
             await recorder.setLowPowerMode(lpm)
@@ -2683,14 +2738,6 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         let displayLayer = secondaryNativeView.displayLayer
         let rendererBox = TwitchVideoRendererBox(displayLayer.sampleBufferRenderer)
         let engine = ensureSecondaryNativeEngine()
-        let initialGain: Float = if isMuted {
-            0.0
-        } else if activeChannels.count >= 3 {
-            multiMixer.gains.gain(for: .b)
-        } else {
-            dualMixer.gains.secondary
-        }
-        let initialMuted = initialGain <= 0.0001
         let preferredQuality = activeChannels.count >= 3 ? nil : preferredQualityID
         let budgetHint = startupBudgetHint(for: .b)
 
@@ -2726,6 +2773,14 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                   self.activeMode == .lowLatency, self.secondaryChannel == channel else { return }
             let videoEnabled = !self.isInBackground || self.isPiPActive || self.hasPiPClaim
             let lpm = self.isLowPowerModeActive
+            let initialGain: Float = if self.isEffectivelyMuted {
+                0.0
+            } else if self.activeChannels.count >= 3 {
+                self.multiMixer.gains.gain(for: .b)
+            } else {
+                self.dualMixer.gains.secondary
+            }
+            let initialMuted = initialGain <= 0.0001
             await engine.setEventHandler { event in
                 continuation.yield(event)
             }
@@ -2752,8 +2807,6 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         let displayLayer = nativeView(for: slot).displayLayer
         let rendererBox = TwitchVideoRendererBox(displayLayer.sampleBufferRenderer)
         let engine = ensureExtraNativeEngine(slot: slot)
-        let initialGain: Float = isMuted ? 0.0 : multiMixer.gains.gain(for: slot)
-        let initialMuted = initialGain <= 0.0001
         let budgetHint = startupBudgetHint(for: slot)
 
         runtime.eventContinuation?.finish()
@@ -2792,6 +2845,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                   self.activeMode == .lowLatency, runtime.channel == channel else { return }
             let videoEnabled = !self.isInBackground || (self.isPiPActive && self.multiMixer.spotlightSlot == slot)
             let lpm = self.isLowPowerModeActive
+            let initialGain: Float = self.isEffectivelyMuted ? 0.0 : self.multiMixer.gains.gain(for: slot)
+            let initialMuted = initialGain <= 0.0001
             await engine.setEventHandler { event in
                 continuation.yield(event)
             }
@@ -2966,6 +3021,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     private func startEmbed(_ channel: String) {
         if pageLoaded {
             webView.evaluateJavaScript("window.cobaltSetChannel && window.cobaltSetChannel(\"\(channel)\")")
+            applyEmbedMute(isEffectivelyMuted)
         } else {
             pageLoaded = true
             loadEmbed(channel)
@@ -2978,7 +3034,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         embedReady = false
         readyCheck?.cancel()
         readyCheck = nil
-        webView.loadHTMLString(TwitchEmbed.html(channel: channel, base: base), baseURL: base)
+        webView.loadHTMLString(TwitchEmbed.html(channel: channel, base: base, muted: isEffectivelyMuted), baseURL: base)
         guard firstParty else { return }
         readyCheck = Task { [weak self] in
             try? await Task.sleep(for: TwitchEmbed.firstPartyWait)
@@ -3274,7 +3330,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         player.usesExternalPlaybackWhileExternalScreenIsActive = false
         player.preventsDisplaySleepDuringVideoPlayback = false
         // Keep muted while probing so native audio isn't doubled; unmuted as soon as external playback activates.
-        player.isMuted = !isAirPlayingVideo || isMuted
+        player.isMuted = !isAirPlayingVideo || isEffectivelyMuted
 
         airPlayPlayer = player
         airPlayView.playerLayer.player = player
@@ -3351,7 +3407,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             userPaused = false
             delay = nil
             bestDelay = nil
-            player.isMuted = isMuted
+            player.isMuted = isEffectivelyMuted
             AudioSessionCoordinator.shared.claim(Self.airPlayAudioClaimID, kind: .playback(allowsPiP: false))
             stopNative(keepAirPlay: true)
             syncPiPAndNowPlaying()
@@ -3379,7 +3435,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 let item = AVPlayerItem(url: resolved.masterURL)
                 self.observeAirPlayPlayer(player, item: item)
                 player.replaceCurrentItem(with: item)
-                player.isMuted = self.isMuted
+                player.isMuted = self.isEffectivelyMuted
                 player.play()
                 self.isLoading = false
             } catch TwitchHLSError.offline {
@@ -4112,8 +4168,14 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     fileprivate func receive(_ body: Any) {
         guard activeMode == .embed, let m = body as? [String: Any], let e = m["e"] as? String else { return }
         switch e {
-        case "ready": embedReady = true
-        case "playing": isPlaying = true; isOffline = false; embedReady = true
+        case "ready":
+            embedReady = true
+            applyEmbedMute(isEffectivelyMuted)
+        case "playing":
+            isPlaying = true
+            isOffline = false
+            embedReady = true
+            applyEmbedMute(isEffectivelyMuted)
         case "paused": isPlaying = false
         case "offline": isOffline = true; isPlaying = false; delay = nil
         case "online": isOffline = false

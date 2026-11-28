@@ -253,6 +253,12 @@ public final class TwitchClipDraftStore {
         persistSoon(immediate: false)
     }
 
+    /// Immediately flushes any pending debounced draft edit write to disk.
+    public func flushPendingSave() {
+        guard saveTask != nil else { return }
+        persistSoon(immediate: true)
+    }
+
     public func rename(draftID: String, to title: String) {
         let clean = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, let idx = drafts.firstIndex(where: { $0.id == draftID }) else { return }

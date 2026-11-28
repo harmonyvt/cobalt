@@ -20,11 +20,20 @@ struct TwitchClipEditorView: View {
     @State private var chatLog: RecordedChatLog?
     @State private var playhead: Double = 0
     @State private var isPlaying = false
+    private enum ActiveDrag {
+        case moveRegion(region: TwitchClipRegionID, startRect: NormalizedRect, preservingWidth: Double)
+        case resizeRegion(region: TwitchClipRegionID, corner: TwitchClipResizeCorner, startRect: NormalizedRect)
+        case panSlot(region: TwitchClipRegionID, startRect: NormalizedRect, preservingWidth: Double)
+        case movePiP(startBox: TwitchClipPiPBox)
+        case splitSeam
+    }
+
+    private static let sourceFrameSpace = "twitch.clip.sourceFrame"
+    private static let canvasPreviewSpace = "twitch.clip.canvasPreview"
+
     @State private var selectedRegion: TwitchClipRegionID = .a
-    @State private var draggingSeam = false
-    @State private var dragStartTarget: TwitchClipRegionTarget?
-    @State private var dragStartCrop: NormalizedRect?
-    @State private var dragStartPiP: TwitchClipPiPBox?
+    @State private var activeDrag: ActiveDrag?
+    @State private var activeZoom: (region: TwitchClipRegionID, startRect: NormalizedRect)?
     @State private var isScrubbing = false
     @State private var renaming = false
     @State private var renameText = ""
@@ -33,9 +42,27 @@ struct TwitchClipEditorView: View {
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var renderTask: Task<Void, Never>?
+    @State private var audioSuppressionToken: UUID?
+    @State private var audioSessionClaimID = "twitch.clip.editor.\(UUID().uuidString)"
 
     private var store: TwitchClipDraftStore { model.twitchClips }
     private var draft: TwitchClipDraft? { store.draft(id: draftID) }
+
+    private var isDraggingSeam: Bool {
+        if case .splitSeam = activeDrag { return true }
+        return false
+    }
+
+    private var isInteractingWithCanvas: Bool {
+        activeDrag != nil || activeZoom != nil
+    }
+
+    private func isActivelyEditingSlot(_ region: TwitchClipRegionID) -> Bool {
+        if case .panSlot(let activeRegion, _, _) = activeDrag, activeRegion == region {
+            return true
+        }
+        return activeZoom?.region == region
+    }
 
     var body: some View {
         Group {
@@ -52,13 +79,32 @@ struct TwitchClipEditorView: View {
                 .background(CobaltColor.bg)
             }
         }
+        .interactiveDismissDisabled(isInteractingWithCanvas || isScrubbing)
+        .onAppear {
+            if audioSuppressionToken == nil {
+                audioSuppressionToken = TwitchPlayerHost.shared.beginAudioSuppression()
+            }
+            AudioSessionCoordinator.shared.claim(audioSessionClaimID, kind: .playback(allowsPiP: false))
+        }
+        .onChange(of: draftID) { _, _ in
+            activeDrag = nil
+            activeZoom = nil
+        }
         .task(id: draftID) {
             await loadDraftMedia()
         }
         .onDisappear {
             renderTask?.cancel()
             renderTask = nil
+            activeDrag = nil
+            activeZoom = nil
             tearDownPlayer()
+            AudioSessionCoordinator.shared.release(audioSessionClaimID)
+            if let token = audioSuppressionToken {
+                audioSuppressionToken = nil
+                TwitchPlayerHost.shared.endAudioSuppression(token: token)
+            }
+            store.flushPendingSave()
         }
         .alert(Copy.Twitch.renameDraftTitle, isPresented: $renaming) {
             TextField(Copy.Editor.renamePlaceholder, text: $renameText)
@@ -96,6 +142,7 @@ struct TwitchClipEditorView: View {
                                 }
                                 .padding(14)
                             }
+                            .scrollDisabled(isInteractingWithCanvas)
                             .frame(maxWidth: .infinity)
                         } else {
                             ScrollView {
@@ -105,6 +152,7 @@ struct TwitchClipEditorView: View {
                                 }
                                 .padding(14)
                             }
+                            .scrollDisabled(isInteractingWithCanvas)
                             .frame(maxWidth: .infinity)
 
                             canvasPreviewColumn(draft, maxHeight: max(320, geo.size.height - 220))
@@ -128,10 +176,15 @@ struct TwitchClipEditorView: View {
                                 if draft.edit.layout != .single {
                                     sourceFrameSection(draft)
                                 }
+                            } else if geo.size.width < 520 {
+                                canvasPreviewColumn(draft, maxHeight: 330)
+                                    .frame(maxWidth: .infinity)
+                                sourceFrameSection(draft)
+                                presetStrip(draft)
                             } else {
                                 HStack(alignment: .top, spacing: 12) {
                                     canvasPreviewColumn(draft, maxHeight: 330)
-                                        .frame(width: min(190, geo.size.width * 0.45))
+                                        .frame(width: min(210, geo.size.width * 0.40))
                                     VStack(alignment: .leading, spacing: 10) {
                                         sourceFrameSection(draft)
                                     }
@@ -143,6 +196,7 @@ struct TwitchClipEditorView: View {
                         }
                         .padding(12)
                     }
+                    .scrollDisabled(isInteractingWithCanvas)
                 }
 
                 Divider().overlay(CobaltColor.border.opacity(0.6))
@@ -364,6 +418,9 @@ struct TwitchClipEditorView: View {
     private func sourceFrameSection(_ draft: TwitchClipDraft) -> some View {
         let srcAspect = max(0.5, draft.sourceAspect)
         let showsA = draft.edit.layout != .single
+        let effectiveSelected: TwitchClipRegionID = showsA ? selectedRegion : .b
+        let handleBleed: CGFloat = 14
+        let regions: [TwitchClipRegionID] = showsA ? [.b, .a] : [.b]
 
         return VStack(alignment: .leading, spacing: 6) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -375,42 +432,78 @@ struct TwitchClipEditorView: View {
                 }
             }
 
-            GeometryReader { geo in
-                let size = geo.size
-                ZStack(alignment: .topLeading) {
-                    if let player {
-                        EditorPlayerView(player: player)
-                            .allowsHitTesting(false)
-                    } else {
-                        TwitchClipDraftThumbnail(model: model, draft: draft, maxPixel: 720)
-                    }
-
-                    // Draw unselected box first, selected box on top for clean drag targeting.
-                    let order: [TwitchClipRegionID] = showsA
-                        ? (selectedRegion == .a ? [.b, .a] : [.a, .b])
-                        : [.b]
-                    ForEach(order, id: \.self) { region in
-                        let crop = TwitchClipTimelineBridge.cropRect(
-                            for: region,
+            Color.clear
+                .aspectRatio(srcAspect, contentMode: .fit)
+                .padding(handleBleed)
+                .overlay {
+                    GeometryReader { geo in
+                        let outerSize = geo.size
+                        let videoSize = CGSize(
+                            width: max(1, outerSize.width - handleBleed * 2),
+                            height: max(1, outerSize.height - handleBleed * 2)
+                        )
+                        let selectedCrop = TwitchClipTimelineBridge.cropRect(
+                            for: effectiveSelected,
                             config: draft.edit,
                             sourceAspect: srcAspect
                         )
-                        regionBox(
-                            region: region,
-                            crop: crop,
-                            frameSize: size,
-                            draft: draft,
-                            isSelected: selectedRegion == region
-                        )
+
+                        ZStack(alignment: .topLeading) {
+                            Group {
+                                if let player {
+                                    EditorPlayerView(player: player)
+                                } else {
+                                    TwitchClipDraftThumbnail(model: model, draft: draft, maxPixel: 720)
+                                }
+                            }
+                            .frame(width: videoSize.width, height: videoSize.height)
+                            .clipShape(.rect(cornerRadius: 10))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(CobaltColor.border.opacity(0.8), lineWidth: 1)
+                            )
+                            .offset(x: handleBleed, y: handleBleed)
+                            .allowsHitTesting(false)
+                            .zIndex(0)
+
+                            // Stable ForEach order keeps active drag gestures alive when selection switches;
+                            // zIndex raises the selected region cleanly above the unselected region.
+                            ForEach(regions, id: \.self) { region in
+                                let crop = TwitchClipTimelineBridge.cropRect(
+                                    for: region,
+                                    config: draft.edit,
+                                    sourceAspect: srcAspect
+                                )
+                                regionBox(
+                                    region: region,
+                                    crop: crop,
+                                    videoSize: videoSize,
+                                    handleBleed: handleBleed,
+                                    draft: draft,
+                                    isSelected: effectiveSelected == region
+                                )
+                                .zIndex(effectiveSelected == region ? 2 : 1)
+                            }
+
+                            // 4 unclipped 44pt aspect-locked corner handles on the selected region.
+                            ForEach(TwitchClipResizeCorner.allCases, id: \.self) { corner in
+                                cornerResizeHandle(
+                                    corner: corner,
+                                    region: effectiveSelected,
+                                    crop: selectedCrop,
+                                    videoSize: videoSize,
+                                    outerSize: outerSize,
+                                    handleBleed: handleBleed,
+                                    srcAspect: srcAspect,
+                                    draft: draft
+                                )
+                                .zIndex(4)
+                            }
+                        }
+                        .frame(width: outerSize.width, height: outerSize.height, alignment: .topLeading)
+                        .coordinateSpace(.named(Self.sourceFrameSpace))
                     }
                 }
-                .clipShape(.rect(cornerRadius: 10))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(CobaltColor.border.opacity(0.8), lineWidth: 1)
-                )
-            }
-            .aspectRatio(srcAspect, contentMode: .fit)
 
             Text(Copy.Twitch.sourcePickerHint)
                 .font(CobaltType.captionSmall)
@@ -445,19 +538,20 @@ struct TwitchClipEditorView: View {
     private func regionBox(
         region: TwitchClipRegionID,
         crop: NormalizedRect,
-        frameSize: CGSize,
+        videoSize: CGSize,
+        handleBleed: CGFloat,
         draft: TwitchClipDraft,
         isSelected: Bool
     ) -> some View {
         let color = region == .a ? TwitchClipPalette.regionA : TwitchClipPalette.regionB
-        let boxW = max(24, CGFloat(crop.w) * frameSize.width)
-        let boxH = max(24, CGFloat(crop.h) * frameSize.height)
-        let boxX = CGFloat(crop.x) * frameSize.width
-        let boxY = CGFloat(crop.y) * frameSize.height
+        let boxW = max(24, CGFloat(crop.w) * videoSize.width)
+        let boxH = max(24, CGFloat(crop.h) * videoSize.height)
+        let boxX = handleBleed + CGFloat(crop.x) * videoSize.width
+        let boxY = handleBleed + CGFloat(crop.y) * videoSize.height
 
         return ZStack(alignment: .topLeading) {
             Rectangle()
-                .fill(color.opacity(isSelected ? 0.16 : 0.08))
+                .fill(color.opacity(isSelected ? 0.18 : 0.08))
                 .overlay(
                     Rectangle()
                         .stroke(color, lineWidth: isSelected ? 2.5 : 1.5)
@@ -471,60 +565,114 @@ struct TwitchClipEditorView: View {
                 .padding(.vertical, 2)
                 .background(color, in: .rect(cornerRadius: 4))
                 .padding(4)
-
-            // Bottom-right aspect-locked resize handle
-            Circle()
-                .fill(color)
-                .overlay(Circle().stroke(.black.opacity(0.6), lineWidth: 1.5))
-                .frame(width: 16, height: 16)
-                .frame(width: 34, height: 34)
-                .contentShape(Rectangle())
-                .position(x: boxW - 2, y: boxH - 2)
-                .gesture(
-                    DragGesture(minimumDistance: 1)
-                        .onChanged { value in
-                            selectedRegion = region
-                            let startCrop = dragStartCrop ?? crop
-                            if dragStartCrop == nil { dragStartCrop = crop }
-                            let deltaW = Double(value.translation.width) / max(1, Double(frameSize.width))
-                            let nextTarget = TwitchClipTimelineBridge.resizedTarget(
-                                from: startCrop,
-                                deltaWidth: deltaW,
-                                region: region,
-                                config: draft.edit,
-                                sourceAspect: draft.sourceAspect
-                            )
-                            store.updateEdit(draftID: draft.id) { edit in
-                                edit.setTarget(nextTarget, for: region)
-                            }
-                        }
-                        .onEnded { _ in
-                            dragStartCrop = nil
-                        }
-                )
+                .allowsHitTesting(false)
         }
         .frame(width: boxW, height: boxH)
-        .offset(x: boxX, y: boxY)
         .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 1)
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.sourceFrameSpace))
                 .onChanged { value in
                     selectedRegion = region
-                    let start = dragStartTarget ?? draft.edit.target(for: region)
-                    if dragStartTarget == nil { dragStartTarget = start }
-                    let dx = Double(value.translation.width) / max(1, Double(frameSize.width))
-                    let dy = Double(value.translation.height) / max(1, Double(frameSize.height))
+                    let startRect: NormalizedRect
+                    let preservingWidth: Double
+                    if case .moveRegion(let activeRegion, let rect, let width) = activeDrag, activeRegion == region {
+                        startRect = rect
+                        preservingWidth = width
+                    } else {
+                        startRect = crop
+                        preservingWidth = draft.edit.target(for: region).w
+                        activeDrag = .moveRegion(region: region, startRect: crop, preservingWidth: preservingWidth)
+                    }
+                    guard value.translation.width != 0 || value.translation.height != 0 else { return }
+                    let dx = Double(value.translation.width) / max(1, Double(videoSize.width))
+                    let dy = Double(value.translation.height) / max(1, Double(videoSize.height))
+                    let nextTarget = TwitchClipTimelineBridge.movedTarget(
+                        from: startRect,
+                        preservingWidth: preservingWidth,
+                        deltaX: dx,
+                        deltaY: dy
+                    )
                     store.updateEdit(draftID: draft.id) { edit in
-                        var target = start
-                        target.cx = min(1, max(0, start.cx + dx))
-                        target.cy = min(1, max(0, start.cy + dy))
-                        edit.setTarget(target, for: region)
+                        edit.setTarget(nextTarget, for: region)
                     }
                 }
                 .onEnded { _ in
-                    dragStartTarget = nil
+                    activeDrag = nil
                 }
         )
+        .offset(x: boxX, y: boxY)
+    }
+
+    private func cornerResizeHandle(
+        corner: TwitchClipResizeCorner,
+        region: TwitchClipRegionID,
+        crop: NormalizedRect,
+        videoSize: CGSize,
+        outerSize: CGSize,
+        handleBleed: CGFloat,
+        srcAspect: Double,
+        draft: TwitchClipDraft
+    ) -> some View {
+        let color = region == .a ? TwitchClipPalette.regionA : TwitchClipPalette.regionB
+        let isRight = corner == .topRight || corner == .bottomRight
+        let isBottom = corner == .bottomLeft || corner == .bottomRight
+        let cornerX = handleBleed + CGFloat(isRight ? crop.maxX : crop.x) * videoSize.width
+        let cornerY = handleBleed + CGFloat(isBottom ? crop.maxY : crop.y) * videoSize.height
+        let biasX: CGFloat = isRight ? 8 : -8
+        let biasY: CGFloat = isBottom ? 8 : -8
+        let hitCenterX = min(max(22, cornerX + biasX), max(22, outerSize.width - 22))
+        let hitCenterY = min(max(22, cornerY + biasY), max(22, outerSize.height - 22))
+        let isActiveCorner: Bool = {
+            if case .resizeRegion(let activeRegion, let activeCorner, _) = activeDrag {
+                return activeRegion == region && activeCorner == corner
+            }
+            return false
+        }()
+
+        return ZStack {
+            Circle()
+                .fill(color)
+                .overlay(Circle().stroke(.black.opacity(0.75), lineWidth: 1.5))
+                .frame(width: isActiveCorner ? 18 : 14, height: isActiveCorner ? 18 : 14)
+                .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                .offset(x: cornerX - hitCenterX, y: cornerY - hitCenterY)
+                .allowsHitTesting(false)
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.sourceFrameSpace))
+                .onChanged { value in
+                    selectedRegion = region
+                    let startRect: NormalizedRect
+                    if case .resizeRegion(let activeRegion, let activeCorner, let rect) = activeDrag,
+                       activeRegion == region, activeCorner == corner {
+                        startRect = rect
+                    } else {
+                        startRect = crop
+                        activeDrag = .resizeRegion(region: region, corner: corner, startRect: crop)
+                    }
+                    guard value.translation.width != 0 || value.translation.height != 0 else { return }
+                    let dx = Double(value.translation.width) / max(1, Double(videoSize.width))
+                    let dy = Double(value.translation.height) / max(1, Double(videoSize.height))
+                    let nextTarget = TwitchClipTimelineBridge.resizedTarget(
+                        from: startRect,
+                        corner: corner,
+                        deltaX: dx,
+                        deltaY: dy,
+                        region: region,
+                        config: draft.edit,
+                        sourceAspect: srcAspect
+                    )
+                    store.updateEdit(draftID: draft.id) { edit in
+                        edit.setTarget(nextTarget, for: region)
+                    }
+                }
+                .onEnded { _ in
+                    activeDrag = nil
+                }
+        )
+        .offset(x: hitCenterX - 22, y: hitCenterY - 22)
     }
 
     // MARK: - Orientation + Layout Preset Strip + Remove Split / Swap A ⇅ B
@@ -721,27 +869,105 @@ struct TwitchClipEditorView: View {
                         .overlay {
                             if slot.isPiP {
                                 RoundedRectangle(cornerRadius: 10)
-                                    .stroke(TwitchClipPalette.regionA, lineWidth: 2)
+                                    .stroke(TwitchClipPalette.regionA, lineWidth: selectedRegion == .a ? 2.5 : 1.5)
+                                    .allowsHitTesting(false)
+                            } else if isActivelyEditingSlot(slot.region) {
+                                let color = slot.region == .a ? TwitchClipPalette.regionA : TwitchClipPalette.regionB
+                                Rectangle()
+                                    .stroke(color.opacity(0.9), lineWidth: 2)
+                                    .allowsHitTesting(false)
                             }
                         }
-                        .offset(x: slotX, y: slotY)
-                        .gesture(
-                            DragGesture(minimumDistance: 1)
+                        .highPriorityGesture(
+                            DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.canvasPreviewSpace))
                                 .onChanged { value in
-                                    guard slot.isPiP else { return }
-                                    let start = dragStartPiP ?? edit.pip
-                                    if dragStartPiP == nil { dragStartPiP = start }
-                                    let dx = Double(value.translation.width) / max(1, Double(size.width))
-                                    let dy = Double(value.translation.height) / max(1, Double(size.height))
-                                    store.updateEdit(draftID: draft.id) { cfg in
-                                        cfg.pip.x = min(0.98 - cfg.pip.w, max(0.02, start.x + dx))
-                                        cfg.pip.y = min(0.85, max(0.02, start.y + dy))
+                                    if slot.isPiP {
+                                        selectedRegion = .a
+                                        let startBox: TwitchClipPiPBox
+                                        if case .movePiP(let box) = activeDrag {
+                                            startBox = box
+                                        } else {
+                                            startBox = edit.pip
+                                            activeDrag = .movePiP(startBox: edit.pip)
+                                        }
+                                        guard value.translation.width != 0 || value.translation.height != 0 else { return }
+                                        let dx = Double(value.translation.width) / max(1, Double(size.width))
+                                        let dy = Double(value.translation.height) / max(1, Double(size.height))
+                                        let nextPiP = TwitchClipTimelineBridge.movedPiPBox(
+                                            from: startBox,
+                                            deltaX: dx,
+                                            deltaY: dy,
+                                            config: edit
+                                        )
+                                        store.updateEdit(draftID: draft.id) { cfg in
+                                            cfg.pip = nextPiP
+                                        }
+                                    } else {
+                                        guard activeZoom == nil else { return }
+                                        selectedRegion = slot.region
+                                        let startRect: NormalizedRect
+                                        let preservingWidth: Double
+                                        if case .panSlot(let activeRegion, let rect, let width) = activeDrag,
+                                           activeRegion == slot.region {
+                                            startRect = rect
+                                            preservingWidth = width
+                                        } else {
+                                            startRect = crop
+                                            preservingWidth = edit.target(for: slot.region).w
+                                            activeDrag = .panSlot(
+                                                region: slot.region,
+                                                startRect: crop,
+                                                preservingWidth: preservingWidth
+                                            )
+                                        }
+                                        guard value.translation.width != 0 || value.translation.height != 0 else { return }
+                                        let nextTarget = TwitchClipTimelineBridge.pannedSlotTarget(
+                                            from: startRect,
+                                            preservingWidth: preservingWidth,
+                                            translationX: Double(value.translation.width),
+                                            translationY: Double(value.translation.height),
+                                            slotWidth: Double(slotW),
+                                            slotHeight: Double(slotH)
+                                        )
+                                        store.updateEdit(draftID: draft.id) { cfg in
+                                            cfg.setTarget(nextTarget, for: slot.region)
+                                        }
                                     }
                                 }
                                 .onEnded { _ in
-                                    dragStartPiP = nil
+                                    activeDrag = nil
                                 }
                         )
+                        .simultaneousGesture(
+                            MagnifyGesture()
+                                .onChanged { value in
+                                    guard !slot.isPiP else { return }
+                                    selectedRegion = slot.region
+                                    let startRect: NormalizedRect
+                                    if let zoom = activeZoom, zoom.region == slot.region {
+                                        startRect = zoom.startRect
+                                    } else {
+                                        startRect = crop
+                                        activeZoom = (region: slot.region, startRect: crop)
+                                        activeDrag = nil
+                                    }
+                                    let nextTarget = TwitchClipTimelineBridge.zoomedTarget(
+                                        from: startRect,
+                                        scale: Double(value.magnification),
+                                        region: slot.region,
+                                        config: edit,
+                                        sourceAspect: draft.sourceAspect
+                                    )
+                                    store.updateEdit(draftID: draft.id) { cfg in
+                                        cfg.setTarget(nextTarget, for: slot.region)
+                                    }
+                                }
+                                .onEnded { _ in
+                                    activeZoom = nil
+                                }
+                        )
+                        .offset(x: slotX, y: slotY)
+                        .zIndex(slot.isPiP ? 3 : 1)
                     }
 
                     // Dedicated bottom chat band (portrait) or right chat sidebar (landscape)
@@ -751,12 +977,14 @@ struct TwitchClipEditorView: View {
                             .frame(width: size.width, height: size.height - videoAreaH)
                             .offset(y: videoAreaH)
                             .allowsHitTesting(false)
+                            .zIndex(2)
                     } else if bandW > 0 {
                         Rectangle()
                             .fill(Color(white: 0.08))
                             .frame(width: size.width - videoAreaW, height: size.height)
                             .offset(x: videoAreaW)
                             .allowsHitTesting(false)
+                            .zIndex(2)
                     }
 
                     // Interactive Split Seam (horizontal in portrait, vertical in landscape)
@@ -765,8 +993,8 @@ struct TwitchClipEditorView: View {
                             let seamX = videoAreaW * CGFloat(edit.splitRatio)
                             ZStack {
                                 Rectangle()
-                                    .fill(.white.opacity(draggingSeam ? 0.95 : 0.45))
-                                    .frame(width: draggingSeam ? 2.5 : 1.5, height: size.height)
+                                    .fill(.white.opacity(isDraggingSeam ? 0.95 : 0.45))
+                                    .frame(width: isDraggingSeam ? 2.5 : 1.5, height: size.height)
                                 Image(systemName: "line.3.horizontal")
                                     .rotationEffect(.degrees(90))
                                     .font(.system(size: 9, weight: .bold))
@@ -775,32 +1003,33 @@ struct TwitchClipEditorView: View {
                                     .padding(.vertical, 8)
                                     .background(.black.opacity(0.72), in: Capsule())
                             }
-                            .frame(width: 28, height: size.height)
+                            .frame(width: 44, height: size.height)
                             .contentShape(Rectangle())
-                            .offset(x: seamX - 14)
-                            .gesture(
-                                DragGesture(minimumDistance: 1)
+                            .highPriorityGesture(
+                                DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.canvasPreviewSpace))
                                     .onChanged { value in
-                                        draggingSeam = true
+                                        activeDrag = .splitSeam
                                         let raw = Double(value.location.x) / max(1, Double(videoAreaW))
                                         let snapped = TwitchClipTimelineBridge.snapSplitRatio(raw)
                                         store.updateEdit(draftID: draft.id) { $0.splitRatio = snapped }
                                     }
                                     .onEnded { _ in
-                                        draggingSeam = false
+                                        activeDrag = nil
                                     }
                             )
+                            .offset(x: seamX - 22)
+                            .zIndex(5)
                         } else {
                             let seamY = videoAreaH * CGFloat(edit.splitRatio)
                             ZStack {
                                 Rectangle()
-                                    .fill(.white.opacity(draggingSeam ? 0.95 : 0.45))
-                                    .frame(width: size.width, height: draggingSeam ? 2.5 : 1.5)
+                                    .fill(.white.opacity(isDraggingSeam ? 0.95 : 0.45))
+                                    .frame(width: size.width, height: isDraggingSeam ? 2.5 : 1.5)
 
                                 HStack(spacing: 4) {
                                     Image(systemName: "line.3.horizontal")
                                         .font(.system(size: 9, weight: .bold))
-                                    if draggingSeam {
+                                    if isDraggingSeam {
                                         let pct = Int((edit.splitRatio * 100).rounded())
                                         Text("\(pct)/\(100 - pct)")
                                             .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -811,21 +1040,22 @@ struct TwitchClipEditorView: View {
                                 .padding(.vertical, 3)
                                 .background(.black.opacity(0.72), in: Capsule())
                             }
-                            .frame(width: size.width, height: 28)
+                            .frame(width: size.width, height: 44)
                             .contentShape(Rectangle())
-                            .offset(y: seamY - 14)
-                            .gesture(
-                                DragGesture(minimumDistance: 1)
+                            .highPriorityGesture(
+                                DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.canvasPreviewSpace))
                                     .onChanged { value in
-                                        draggingSeam = true
+                                        activeDrag = .splitSeam
                                         let raw = Double(value.location.y) / max(1, Double(videoAreaH))
                                         let snapped = TwitchClipTimelineBridge.snapSplitRatio(raw)
                                         store.updateEdit(draftID: draft.id) { $0.splitRatio = snapped }
                                     }
                                     .onEnded { _ in
-                                        draggingSeam = false
+                                        activeDrag = nil
                                     }
                             )
+                            .offset(y: seamY - 22)
+                            .zIndex(5)
                         }
                     }
 
@@ -843,8 +1073,11 @@ struct TwitchClipEditorView: View {
                                 y: CGFloat(chatRect.y) * size.height
                             )
                             .allowsHitTesting(false)
+                            .zIndex(6)
                     }
                 }
+                .frame(width: size.width, height: size.height, alignment: .topLeading)
+                .coordinateSpace(.named(Self.canvasPreviewSpace))
                 .clipShape(.rect(cornerRadius: 16))
                 .contentShape(.rect(cornerRadius: 16))
                 .overlay(
@@ -1308,7 +1541,7 @@ struct TwitchClipEditorView: View {
                             .offset(x: CGFloat(frac) * (w - 2))
                     }
                     .contentShape(Rectangle())
-                    .gesture(
+                    .highPriorityGesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
                                 isScrubbing = true
@@ -1333,6 +1566,9 @@ struct TwitchClipEditorView: View {
     private func loadDraftMedia() async {
         await store.boot()
         guard let draft = store.draft(id: draftID) else { return }
+        if draft.edit.layout == .single {
+            selectedRegion = .b
+        }
         store.markSeen(draftID: draft.id)
         chatLog = await store.loadChatLog(for: draft)
 

@@ -643,3 +643,47 @@ public final class TwitchMultiAudioMixer {
         )
     }
 }
+
+/// Refcounted non-destructive audio suppression gate shared by `TwitchPlayerHost`.
+///
+/// Allows modal workflows (such as `TwitchClipEditorView`) to mute live stream audio cleanly while open
+/// without overwriting the user's saved `userMuted` preference. Releasing the last token restores audio
+/// strictly according to `userMuted`.
+public struct TwitchAudioSuppressionGate: Sendable, Equatable {
+    public private(set) var userMuted: Bool
+    private var tokens: Set<UUID> = []
+
+    public init(userMuted: Bool = false) {
+        self.userMuted = userMuted
+    }
+
+    public var isSuppressed: Bool { !tokens.isEmpty }
+    public var suppressionCount: Int { tokens.count }
+    public var isEffectivelyMuted: Bool { userMuted || !tokens.isEmpty }
+
+    /// Updates the user's own mute preference. Returns `true` when `isEffectivelyMuted` changed.
+    @discardableResult
+    public mutating func setUserMuted(_ muted: Bool) -> Bool {
+        let before = isEffectivelyMuted
+        userMuted = muted
+        return isEffectivelyMuted != before
+    }
+
+    /// Acquires a suppression token. Returns `true` when `isEffectivelyMuted` changed.
+    @discardableResult
+    public mutating func beginSuppression(token: UUID) -> Bool {
+        let before = isEffectivelyMuted
+        tokens.insert(token)
+        return isEffectivelyMuted != before
+    }
+
+    /// Releases a previously acquired suppression token. Safe and idempotent on unknown tokens.
+    /// Returns `true` when `isEffectivelyMuted` changed.
+    @discardableResult
+    public mutating func endSuppression(token: UUID) -> Bool {
+        let before = isEffectivelyMuted
+        tokens.remove(token)
+        return isEffectivelyMuted != before
+    }
+}
+

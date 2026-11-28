@@ -836,4 +836,280 @@ struct TwitchClipTests {
         #expect(recorded.fragments.first == .emote(RecordedChatEmote(resolvedEmote)))
         #expect(recorded.plainText == "rcdMadge why block ceo man")
     }
+
+    // MARK: - Interactive Region Reframing (Move, 4-Corner Resize, Slot Pan, Zoom, PiP)
+
+    @Test func movedTargetClampsWithoutEdgeDeadZone() {
+        let config = TwitchClipEditConfig(
+            layout: .split,
+            splitRatio: 0.40,
+            regionA: TwitchClipRegionTarget(cx: 0.99, cy: 0.01, w: 0.30)
+        )
+        let startCrop = TwitchClipTimelineBridge.cropRect(for: .a, config: config, sourceAspect: 16.0 / 9.0)
+        // Resolved crop is clamped to the right/top edges (maxX == 1.0, y == 0.0)
+        #expect(abs(startCrop.maxX - 1.0) < 0.0001)
+        #expect(abs(startCrop.y - 0.0) < 0.0001)
+
+        // Dragging slightly left/down from an edge responds immediately (zero dead zone)
+        let moved = TwitchClipTimelineBridge.movedTarget(
+            from: startCrop,
+            preservingWidth: config.regionA.w,
+            deltaX: -0.05,
+            deltaY: 0.06
+        )
+        var updated = config
+        updated.regionA = moved
+        let movedCrop = TwitchClipTimelineBridge.cropRect(for: .a, config: updated, sourceAspect: 16.0 / 9.0)
+        #expect(abs(movedCrop.maxX - 0.95) < 0.0001)
+        #expect(abs(movedCrop.y - 0.06) < 0.0001)
+        #expect(abs(moved.w - 0.30) < 0.0001)
+
+        // Overshooting past edges clamps cleanly inside [0, 1]
+        let clamped = TwitchClipTimelineBridge.movedTarget(
+            from: startCrop,
+            preservingWidth: config.regionA.w,
+            deltaX: -2.0,
+            deltaY: 2.0
+        )
+        updated.regionA = clamped
+        let clampedCrop = TwitchClipTimelineBridge.cropRect(for: .a, config: updated, sourceAspect: 16.0 / 9.0)
+        #expect(abs(clampedCrop.x - 0.0) < 0.0001)
+        #expect(abs(clampedCrop.maxY - 1.0) < 0.0001)
+    }
+
+    @Test func pannedSlotTargetTracksFingerNaturalDirectionOneToOne() {
+        let config = TwitchClipEditConfig(
+            layout: .split,
+            splitRatio: 0.40,
+            regionB: TwitchClipRegionTarget(cx: 0.50, cy: 0.50, w: 0.40)
+        )
+        let startCrop = TwitchClipTimelineBridge.cropRect(for: .b, config: config, sourceAspect: 16.0 / 9.0)
+        // Dragging content right (+25% of slot width) and down (+10% of slot height) shifts source crop left & up 1:1
+        let next = TwitchClipTimelineBridge.pannedSlotTarget(
+            from: startCrop,
+            preservingWidth: config.regionB.w,
+            translationX: 50,
+            translationY: 20,
+            slotWidth: 200,
+            slotHeight: 200
+        )
+        let expectedCX = startCrop.midX - 0.25 * startCrop.w
+        let expectedCY = startCrop.midY - 0.10 * startCrop.h
+        #expect(abs(next.cx - expectedCX) < 0.0001)
+        #expect(abs(next.cy - expectedCY) < 0.0001)
+        #expect(abs(next.w - config.regionB.w) < 0.0001)
+    }
+
+    @Test func zoomedTargetScalesAroundCenterAndLocksAspect() {
+        let sourceAspect = 16.0 / 9.0
+        let config = TwitchClipEditConfig(
+            layout: .split,
+            splitRatio: 0.50,
+            regionB: TwitchClipRegionTarget(cx: 0.50, cy: 0.50, w: 0.50)
+        )
+        let startCrop = TwitchClipTimelineBridge.cropRect(for: .b, config: config, sourceAspect: sourceAspect)
+        let expectedAspect = TwitchClipTimelineBridge.slotAspect(for: .b, config: config)
+
+        // Zoom in 2x -> half the source width, centered at same point
+        let zoomedIn = TwitchClipTimelineBridge.zoomedTarget(
+            from: startCrop,
+            scale: 2.0,
+            region: .b,
+            config: config,
+            sourceAspect: sourceAspect
+        )
+        var inConfig = config
+        inConfig.regionB = zoomedIn
+        let inCrop = TwitchClipTimelineBridge.cropRect(for: .b, config: inConfig, sourceAspect: sourceAspect)
+        #expect(abs(inCrop.w - startCrop.w / 2.0) < 0.001)
+        #expect(abs(inCrop.midX - startCrop.midX) < 0.001)
+        #expect(abs(inCrop.midY - startCrop.midY) < 0.001)
+        #expect(abs((inCrop.w * sourceAspect) / inCrop.h - expectedAspect) < 0.01)
+
+        // Extreme zoom in respects minRegionWidth; extreme zoom out respects frame bounds
+        let maxZoomIn = TwitchClipTimelineBridge.zoomedTarget(
+            from: startCrop,
+            scale: 20.0,
+            region: .b,
+            config: config,
+            sourceAspect: sourceAspect
+        )
+        #expect(maxZoomIn.w >= TwitchClipTimelineBridge.minRegionWidth - 0.0001)
+
+        let maxZoomOut = TwitchClipTimelineBridge.zoomedTarget(
+            from: startCrop,
+            scale: 0.1,
+            region: .b,
+            config: config,
+            sourceAspect: sourceAspect
+        )
+        var outConfig = config
+        outConfig.regionB = maxZoomOut
+        let outCrop = TwitchClipTimelineBridge.cropRect(for: .b, config: outConfig, sourceAspect: sourceAspect)
+        #expect(outCrop.x >= -0.0001 && outCrop.y >= -0.0001)
+        #expect(outCrop.maxX <= 1.0001 && outCrop.maxY <= 1.0001)
+        #expect(abs((outCrop.w * sourceAspect) / outCrop.h - expectedAspect) < 0.01)
+    }
+
+    @Test func resizedTargetSupportsAllFourCornersWithOppositeCornerAnchored() {
+        let sourceAspect = 16.0 / 9.0
+        let config = TwitchClipEditConfig(
+            layout: .split,
+            splitRatio: 0.40,
+            regionA: TwitchClipRegionTarget(cx: 0.50, cy: 0.50, w: 0.30)
+        )
+        let startCrop = TwitchClipTimelineBridge.cropRect(for: .a, config: config, sourceAspect: sourceAspect)
+        let expectedAspect = TwitchClipTimelineBridge.slotAspect(for: .a, config: config)
+
+        let cases: [(TwitchClipResizeCorner, Double, Double, Double, Double)] = [
+            // (corner, deltaX, deltaY, expectedAnchoredX, expectedAnchoredY)
+            (.bottomRight, 0.10, 0.02, startCrop.x, startCrop.y),
+            (.bottomLeft, -0.10, 0.02, startCrop.maxX, startCrop.y),
+            (.topRight, 0.10, -0.02, startCrop.x, startCrop.maxY),
+            (.topLeft, -0.10, -0.02, startCrop.maxX, startCrop.maxY),
+        ]
+
+        for (corner, dx, dy, anchorX, anchorY) in cases {
+            let next = TwitchClipTimelineBridge.resizedTarget(
+                from: startCrop,
+                corner: corner,
+                deltaX: dx,
+                deltaY: dy,
+                region: .a,
+                config: config,
+                sourceAspect: sourceAspect
+            )
+            var updated = config
+            updated.regionA = next
+            let nextCrop = TwitchClipTimelineBridge.cropRect(for: .a, config: updated, sourceAspect: sourceAspect)
+            #expect(nextCrop.w > startCrop.w + 0.05, "corner=\(corner) should grow")
+            #expect(abs((nextCrop.w * sourceAspect) / nextCrop.h - expectedAspect) < 0.01)
+
+            // Verify opposite corner remained anchored
+            switch corner {
+            case .bottomRight:
+                #expect(abs(nextCrop.x - anchorX) < 0.001)
+                #expect(abs(nextCrop.y - anchorY) < 0.001)
+            case .bottomLeft:
+                #expect(abs(nextCrop.maxX - anchorX) < 0.001)
+                #expect(abs(nextCrop.y - anchorY) < 0.001)
+            case .topRight:
+                #expect(abs(nextCrop.x - anchorX) < 0.001)
+                #expect(abs(nextCrop.maxY - anchorY) < 0.001)
+            case .topLeft:
+                #expect(abs(nextCrop.maxX - anchorX) < 0.001)
+                #expect(abs(nextCrop.maxY - anchorY) < 0.001)
+            }
+        }
+
+        // Pure vertical drag on bottomRight also resizes smoothly via dominant axis
+        let verticalGrow = TwitchClipTimelineBridge.resizedTarget(
+            from: startCrop,
+            corner: .bottomRight,
+            deltaX: 0,
+            deltaY: 0.15,
+            region: .a,
+            config: config,
+            sourceAspect: sourceAspect
+        )
+        #expect(verticalGrow.w > startCrop.w + 0.05)
+
+        // Shrinking beyond minRegionWidth clamps cleanly
+        let tiny = TwitchClipTimelineBridge.resizedTarget(
+            from: startCrop,
+            corner: .topLeft,
+            deltaX: 0.9,
+            deltaY: 0.9,
+            region: .a,
+            config: config,
+            sourceAspect: sourceAspect
+        )
+        #expect(abs(tiny.w - TwitchClipTimelineBridge.minRegionWidth) < 0.001)
+    }
+
+    @Test func movedPiPBoxClampsWithinVideoAreaAcrossOrientationsAndChatBands() {
+        // Portrait with bottom chat band (vh = 0.80)
+        var portraitBand = TwitchClipEditConfig(orientation: .portrait, layout: .pip)
+        portraitBand.chat.enabled = true
+        portraitBand.chat.placement = .band
+        let movedDown = TwitchClipTimelineBridge.movedPiPBox(
+            from: portraitBand.pip,
+            deltaX: 0.9,
+            deltaY: 0.9,
+            config: portraitBand
+        )
+        var updatedPortrait = portraitBand
+        updatedPortrait.pip = movedDown
+        let portraitPiPSlot = TwitchClipTimelineBridge.slots(for: updatedPortrait).first(where: { $0.isPiP })
+        #expect(portraitPiPSlot != nil)
+        #expect((portraitPiPSlot?.rect.maxY ?? 1.0) <= 0.80 - 0.019)
+        #expect((portraitPiPSlot?.rect.maxX ?? 1.0) <= 0.981)
+
+        // Landscape with right chat sidebar (vw = 0.74)
+        var landscapeBand = TwitchClipEditConfig(orientation: .landscape, layout: .pip)
+        landscapeBand.chat.enabled = true
+        landscapeBand.chat.placement = .band
+        let movedRight = TwitchClipTimelineBridge.movedPiPBox(
+            from: landscapeBand.pip,
+            deltaX: 0.9,
+            deltaY: 0.9,
+            config: landscapeBand
+        )
+        var updatedLandscape = landscapeBand
+        updatedLandscape.pip = movedRight
+        let landscapePiPSlot = TwitchClipTimelineBridge.slots(for: updatedLandscape).first(where: { $0.isPiP })
+        #expect(landscapePiPSlot != nil)
+        #expect((landscapePiPSlot?.rect.maxX ?? 1.0) <= 0.74 - 0.019)
+    }
+
+    // MARK: - Live Stream Audio Suppression Gate (Clip Editor Muting)
+
+    @Test func audioSuppressionGatePreservesUserMuteAndRefcountsTokens() {
+        var gate = TwitchAudioSuppressionGate(userMuted: false)
+        #expect(gate.isEffectivelyMuted == false)
+        #expect(gate.isSuppressed == false)
+
+        // Opening clip editor mutes live stream without flipping userMuted
+        let token1 = UUID()
+        #expect(gate.beginSuppression(token: token1) == true)
+        #expect(gate.userMuted == false)
+        #expect(gate.isSuppressed == true)
+        #expect(gate.isEffectivelyMuted == true)
+
+        // Nested / overlapping suppression keeps effective mute unchanged
+        let token2 = UUID()
+        #expect(gate.beginSuppression(token: token2) == false)
+        #expect(gate.suppressionCount == 2)
+
+        // Releasing first token keeps audio suppressed until all tokens release
+        #expect(gate.endSuppression(token: token1) == false)
+        #expect(gate.isEffectivelyMuted == true)
+
+        // Unknown token release is safe and idempotent
+        #expect(gate.endSuppression(token: UUID()) == false)
+        #expect(gate.isEffectivelyMuted == true)
+
+        // Releasing final token restores unmuted audio
+        #expect(gate.endSuppression(token: token2) == true)
+        #expect(gate.isSuppressed == false)
+        #expect(gate.isEffectivelyMuted == false)
+
+        // If user had already muted stream before editing, closing editor keeps stream muted
+        #expect(gate.setUserMuted(true) == true)
+        let token3 = UUID()
+        #expect(gate.beginSuppression(token: token3) == false)
+        #expect(gate.isEffectivelyMuted == true)
+        #expect(gate.endSuppression(token: token3) == false)
+        #expect(gate.userMuted == true)
+        #expect(gate.isEffectivelyMuted == true)
+
+        // User toggling mute off while suppressed updates userMuted but waits until suppression ends to unmute
+        let token4 = UUID()
+        #expect(gate.beginSuppression(token: token4) == false)
+        #expect(gate.setUserMuted(false) == false)
+        #expect(gate.userMuted == false)
+        #expect(gate.isEffectivelyMuted == true)
+        #expect(gate.endSuppression(token: token4) == true)
+        #expect(gate.isEffectivelyMuted == false)
+    }
 }

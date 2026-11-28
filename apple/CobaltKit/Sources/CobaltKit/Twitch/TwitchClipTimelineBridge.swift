@@ -40,6 +40,13 @@ public struct TwitchClipCanvasSlot: Sendable, Equatable {
     }
 }
 
+public enum TwitchClipResizeCorner: String, Sendable, Equatable, CaseIterable {
+    case topLeft
+    case topRight
+    case bottomLeft
+    case bottomRight
+}
+
 public enum TwitchClipTimelineBridge {
     /// Dedicated bottom chat band fraction of the 9:16 canvas height.
     public static let chatBandFraction: Double = 0.20
@@ -195,6 +202,68 @@ public enum TwitchClipTimelineBridge {
         return NormalizedRect(x: cx - w / 2.0, y: cy - h / 2.0, w: w, h: h)
     }
 
+    /// Moves a region on the source frame starting from its resolved (clamped) crop rect so dragging
+    /// back away from an edge responds immediately with zero dead zone.
+    public static func movedTarget(
+        from startRect: NormalizedRect,
+        preservingWidth: Double? = nil,
+        deltaX: Double,
+        deltaY: Double
+    ) -> TwitchClipRegionTarget {
+        let halfW = clamp(startRect.w, 0, 1.0) / 2.0
+        let halfH = clamp(startRect.h, 0, 1.0) / 2.0
+        let cx = clamp(startRect.midX + deltaX, halfW, 1.0 - halfW)
+        let cy = clamp(startRect.midY + deltaY, halfH, 1.0 - halfH)
+        let storedW = clamp(preservingWidth ?? startRect.w, minRegionWidth, 1.0)
+        return TwitchClipRegionTarget(cx: cx, cy: cy, w: storedW)
+    }
+
+    /// Pans a region's source crop directly from a drag gesture inside its preview canvas slot.
+    /// Dragging the video content right/down shifts the source crop window left/up 1:1 with the touch.
+    public static func pannedSlotTarget(
+        from startRect: NormalizedRect,
+        preservingWidth: Double? = nil,
+        translationX: Double,
+        translationY: Double,
+        slotWidth: Double,
+        slotHeight: Double
+    ) -> TwitchClipRegionTarget {
+        let safeW = max(1.0, slotWidth)
+        let safeH = max(1.0, slotHeight)
+        let deltaCropX = -(translationX / safeW) * startRect.w
+        let deltaCropY = -(translationY / safeH) * startRect.h
+        return movedTarget(
+            from: startRect,
+            preservingWidth: preservingWidth,
+            deltaX: deltaCropX,
+            deltaY: deltaCropY
+        )
+    }
+
+    /// Zooms a region's source crop around its current center while preserving exact slot aspect lock.
+    /// `scale > 1` zooms in (smaller source crop); `scale < 1` zooms out (larger source crop).
+    public static func zoomedTarget(
+        from startRect: NormalizedRect,
+        scale: Double,
+        region: TwitchClipRegionID,
+        config: TwitchClipEditConfig,
+        sourceAspect: Double = 16.0 / 9.0,
+        canvasAspect: Double? = nil
+    ) -> TwitchClipRegionTarget {
+        let resolvedCanvasAspect = canvasAspect ?? self.canvasAspect(for: config)
+        let asp = max(0.1, slotAspect(for: region, config: config, canvasAspect: resolvedCanvasAspect))
+        let srcAsp = sourceAspect > 0 ? sourceAspect : (16.0 / 9.0)
+        let ratio = srcAsp / asp
+        let maxW = min(1.0, 1.0 / ratio)
+        let effectiveMinW = min(minRegionWidth, maxW)
+        let safeScale = clamp(scale, 0.25, 8.0)
+        let nw = clamp(startRect.w / safeScale, effectiveMinW, maxW)
+        let nh = nw * ratio
+        let cx = clamp(startRect.midX, nw / 2.0, 1.0 - nw / 2.0)
+        let cy = clamp(startRect.midY, nh / 2.0, 1.0 - nh / 2.0)
+        return TwitchClipRegionTarget(cx: cx, cy: cy, w: nw)
+    }
+
     /// Resizes a region from its bottom-right corner handle while keeping the top-left corner anchored
     /// and maintaining exact slot aspect lock.
     public static func resizedTarget(
@@ -205,15 +274,131 @@ public enum TwitchClipTimelineBridge {
         sourceAspect: Double = 16.0 / 9.0,
         canvasAspect: Double? = nil
     ) -> TwitchClipRegionTarget {
+        resizedTarget(
+            from: startRect,
+            corner: .bottomRight,
+            deltaX: deltaWidth,
+            deltaY: 0,
+            region: region,
+            config: config,
+            sourceAspect: sourceAspect,
+            canvasAspect: canvasAspect
+        )
+    }
+
+    /// Resizes a region from any corner handle while keeping the opposite corner anchored
+    /// and maintaining exact slot aspect lock across horizontal, vertical, and diagonal drags.
+    public static func resizedTarget(
+        from startRect: NormalizedRect,
+        corner: TwitchClipResizeCorner,
+        deltaX: Double,
+        deltaY: Double,
+        region: TwitchClipRegionID,
+        config: TwitchClipEditConfig,
+        sourceAspect: Double = 16.0 / 9.0,
+        canvasAspect: Double? = nil
+    ) -> TwitchClipRegionTarget {
         let resolvedCanvasAspect = canvasAspect ?? self.canvasAspect(for: config)
         let asp = max(0.1, slotAspect(for: region, config: config, canvasAspect: resolvedCanvasAspect))
         let srcAsp = sourceAspect > 0 ? sourceAspect : (16.0 / 9.0)
-        let maxWByRight = max(minRegionWidth, 1.0 - startRect.x)
-        let maxWByBottom = max(minRegionWidth, (1.0 - startRect.y) * asp / srcAsp)
-        let maxW = min(maxWByRight, maxWByBottom)
-        let nw = clamp(startRect.w + deltaWidth, minRegionWidth, maxW)
-        let nh = nw * srcAsp / asp
-        return TwitchClipRegionTarget(cx: startRect.x + nw / 2.0, cy: startRect.y + nh / 2.0, w: nw)
+        let ratio = srcAsp / asp
+
+        let signedDX: Double
+        let signedDY: Double
+        let anchorX: Double
+        let anchorY: Double
+        let maxWByX: Double
+        let maxWByY: Double
+
+        switch corner {
+        case .bottomRight:
+            signedDX = deltaX
+            signedDY = deltaY
+            anchorX = startRect.x
+            anchorY = startRect.y
+            maxWByX = max(0.0, 1.0 - anchorX)
+            maxWByY = max(0.0, (1.0 - anchorY) / ratio)
+        case .bottomLeft:
+            signedDX = -deltaX
+            signedDY = deltaY
+            anchorX = startRect.maxX
+            anchorY = startRect.y
+            maxWByX = max(0.0, anchorX)
+            maxWByY = max(0.0, (1.0 - anchorY) / ratio)
+        case .topRight:
+            signedDX = deltaX
+            signedDY = -deltaY
+            anchorX = startRect.x
+            anchorY = startRect.maxY
+            maxWByX = max(0.0, 1.0 - anchorX)
+            maxWByY = max(0.0, anchorY / ratio)
+        case .topLeft:
+            signedDX = -deltaX
+            signedDY = -deltaY
+            anchorX = startRect.maxX
+            anchorY = startRect.maxY
+            maxWByX = max(0.0, anchorX)
+            maxWByY = max(0.0, anchorY / ratio)
+        }
+
+        let deltaWFromY = signedDY / ratio
+        let effectiveDeltaW = abs(signedDX) >= abs(deltaWFromY) ? signedDX : deltaWFromY
+        let maxW = min(1.0, min(maxWByX, maxWByY))
+        let effectiveMinW = min(minRegionWidth, maxW)
+        let nw = clamp(startRect.w + effectiveDeltaW, effectiveMinW, maxW)
+        let nh = nw * ratio
+
+        let cx: Double
+        let cy: Double
+        switch corner {
+        case .bottomRight:
+            cx = anchorX + nw / 2.0
+            cy = anchorY + nh / 2.0
+        case .bottomLeft:
+            cx = anchorX - nw / 2.0
+            cy = anchorY + nh / 2.0
+        case .topRight:
+            cx = anchorX + nw / 2.0
+            cy = anchorY - nh / 2.0
+        case .topLeft:
+            cx = anchorX - nw / 2.0
+            cy = anchorY - nh / 2.0
+        }
+
+        return TwitchClipRegionTarget(
+            cx: clamp(cx, nw / 2.0, 1.0 - nw / 2.0),
+            cy: clamp(cy, nh / 2.0, 1.0 - nh / 2.0),
+            w: nw
+        )
+    }
+
+    /// Moves a floating PiP box on the canvas and clamps it within the visible video area
+    /// (respecting portrait bottom chat bands and landscape right chat sidebars).
+    public static func movedPiPBox(
+        from startBox: TwitchClipPiPBox,
+        deltaX: Double,
+        deltaY: Double,
+        config: TwitchClipEditConfig
+    ) -> TwitchClipPiPBox {
+        var box = startBox
+        switch config.orientation {
+        case .portrait:
+            let vh = 1.0 - bandHeight(for: config)
+            let pw = clamp(box.w, 0.20, 0.65)
+            let ph = min(vh - 0.04, pw * 0.5)
+            box.x = clamp(startBox.x + deltaX, 0.02, max(0.02, 0.98 - pw))
+            box.y = clamp(startBox.y + deltaY, 0.02, max(0.02, vh - 0.02 - ph))
+        case .landscape:
+            let vw = max(0.1, 1.0 - bandWidth(for: config))
+            let vh = bandWidth(for: config) > 0 ? vw : 1.0
+            let pwNorm = clamp(box.w, 0.16, 0.45)
+            let phNorm = min(1.0 - 0.06 / max(0.1, vh), pwNorm * vw / max(0.1, vh))
+            let maxX = max(0.02 / vw, 1.0 - 0.02 / vw - pwNorm)
+            let maxY = max(0.02 / vh, 1.0 - 0.02 / vh - phNorm)
+            box.x = clamp(startBox.x + deltaX / vw, 0.02 / vw, maxX)
+            box.y = clamp(startBox.y + deltaY / vh, 0.02 / vh, maxY)
+        }
+        return box
     }
 
     /// Normalized rectangle on the canvas where the chat layer sits.
