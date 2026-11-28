@@ -53,7 +53,6 @@ struct TwitchStreamPage: View {
     @Environment(\.paneReservedRegions) private var reservedRegions
     @Environment(\.paneHostSize) private var hostSize
     @Environment(\.paneSafeAreaInsets) private var paneSafeAreaInsets
-    @Environment(\.duoStatusAdjacentBarForcePreview) private var forceStatusBarPreview
     @Environment(\.paneOffline) private var offline
     @Environment(\.openURL) private var openURL
     @Environment(\.lifecycle) private var lifecycle
@@ -97,28 +96,30 @@ struct TwitchStreamPage: View {
     /// True in single-focus iOS/Duo mode when this page owns its full-bleed Clear Liquid Glass watch stage + system toolbar.
     private var ownsGlassHUD: Bool { !pane.sitsBesideTab && shape != .bar }
 
-    /// Resolved top status-adjacent bar metrics for iPhone Duo portrait postures (beside `9:41` + trailing status orb).
-    private var statusBarMetrics: DuoStatusAdjacentBarMetrics {
-        guard ownsGlassHUD else { return .inactive }
+    /// True on iOS when the native `UINavigationBar` runs horizontally across the top with enough width for
+    /// inline dual-stream focus chips (iPhone Duo inner portrait `669 pt`, iPad) rather than on the trailing
+    /// Vertical Controls side rail or a narrow compact phone bar.
+    ///
+    /// Note: On real iPhone Duo hardware (iOS 27.3), interactive buttons in the top status-bar band MUST be
+    /// hosted by native `.toolbar` (`UINavigationBar` -> `_UIButtonBarButton` / `UIKitBarItemHost`) rather than
+    /// custom SwiftUI views pushed into `y < safeArea.top` via `.ignoresSafeArea(.top)` (which iOS 27.3 drops).
+    private var showsHorizontalDualToolbar: Bool {
+        #if os(iOS)
+        guard ownsGlassHUD, isDualStream else { return false }
         let resolvedSize = hostSize.width > 0 ? hostSize : containerSize
-        return DuoStatusAdjacentBarMetrics.resolve(
-            hostSize: resolvedSize,
-            safeArea: paneSafeAreaInsets,
-            reserved: reservedRegions,
-            typeSize: typeSize,
-            forcePreview: forceStatusBarPreview
-        )
+        let hasVerticalRail = paneSafeAreaInsets.trailing >= DuoStatusAdjacentBarLayout.verticalRailSafeAreaThreshold
+        return !hasVerticalRail && resolvedSize.width >= 500
+        #else
+        return false
+        #endif
     }
 
-    /// True when the top status-adjacent bar owns leading chrome instead of the system navigation toolbar.
-    private var usesStatusAdjacentBar: Bool { statusBarMetrics.isActive }
-
-    /// True on iOS when the system toolbar (e.g. iPhone Duo's trailing Vertical Controls rail in landscape)
-    /// already presents Play/Pause, Clip, Record, PiP, Add Stream, Drafts, and More, so we avoid rendering
-    /// a duplicate bottom-left `TwitchStreamBar` or floating control pill beneath the video.
+    /// True on iOS when the system toolbar (horizontal `UINavigationBar` in portrait or iPhone Duo's trailing
+    /// Vertical Controls rail in landscape) already presents Play/Pause, Clip, Record, PiP, Add Stream, Drafts,
+    /// and More, so we avoid rendering a duplicate bottom-left `TwitchStreamBar` or floating control pill.
     private var toolbarOwnsWatchControls: Bool {
         #if os(iOS)
-        return ownsGlassHUD && !usesStatusAdjacentBar
+        return ownsGlassHUD
         #else
         return false
         #endif
@@ -159,23 +160,15 @@ struct TwitchStreamPage: View {
             case .bar:
                 bar
             case .split, .tall, .wide:
-                // Single structural VStack preserves `adaptiveWatch`, live video layers, and chat identity across
-                // portrait <-> landscape posture switches with zero black flash.
-                VStack(spacing: 0) {
-                    if usesStatusAdjacentBar {
-                        twitchStatusAdjacentBar
-                    }
-                    adaptiveWatch
-                }
-                .ignoresSafeArea(.container, edges: usesStatusAdjacentBar ? .top : [])
+                adaptiveWatch
             }
         }
         .preference(key: PaneMoreKey.self, value: moreActions)
         .preference(key: PaneFloatingHeaderKey.self, value: false)
         .preference(key: PaneHidesChromeHeaderKey.self, value: ownsGlassHUD)
-        .preference(key: PaneShowsSystemToolbarKey.self, value: ownsGlassHUD && !usesStatusAdjacentBar)
+        .preference(key: PaneShowsSystemToolbarKey.self, value: ownsGlassHUD)
         .toolbar {
-            if ownsGlassHUD && !usesStatusAdjacentBar {
+            if ownsGlassHUD {
                 watchToolbar
             }
         }
@@ -303,18 +296,97 @@ struct TwitchStreamPage: View {
             pane.close()
         }
 
-        ToolbarItem(placement: .primaryAction) {
-            DuoToolbarButton(
-                title: showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play,
-                systemImage: showsPauseGlyph ? "pause.fill" : "play.fill"
-            ) {
-                host.setPaused(showsPauseGlyph)
+        #if os(iOS)
+        if showsHorizontalDualToolbar, secondaryLogin != nil {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 4) {
+                    dualToolbarFocusButton(
+                        slot: .primary,
+                        name: primaryDisplayName,
+                        accent: Color(dualRGB: TwitchChannelAccent.primaryDarkRGB),
+                        accessibilityID: "twitch.dual.statusFocusPrimary"
+                    )
+                    dualToolbarFocusButton(
+                        slot: .secondary,
+                        name: secondaryDisplayName,
+                        accent: Color(dualRGB: TwitchChannelAccent.secondaryDarkRGB),
+                        accessibilityID: "twitch.dual.statusFocusSecondary"
+                    )
+                    if host.isThermalThrottled {
+                        Image(systemName: "thermometer.medium")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.yellow)
+                            .padding(.trailing, 4)
+                            .accessibilityLabel(Copy.Twitch.thermalSteppedDown)
+                    }
+                }
+                .padding(3)
+                .fixedSize(horizontal: true, vertical: false)
+                .glassEffect(.regular.interactive(), in: .capsule)
             }
-            .accessibilityIdentifier("twitch.toolbar.playpause")
         }
-        .duoVisibilityPriority(.high)
+        #endif
 
-        if !isDualStream {
+        if isDualStream {
+            ToolbarItem(placement: .primaryAction) {
+                DuoToolbarButton(
+                    title: Copy.Twitch.swapFocus,
+                    systemImage: isMultiStream ? Symbol.Twitch.cycleFocus : Symbol.Twitch.swapFocus
+                ) {
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
+                        if isMultiStream {
+                            host.cycleSpotlight(forward: true)
+                        } else {
+                            host.swapDualFocus()
+                        }
+                    }
+                }
+                .accessibilityIdentifier("twitch.dual.statusSwap")
+            }
+            .duoVisibilityPriority(.high)
+
+            ToolbarItem(placement: .primaryAction) {
+                let nextIsSplit = isMultiStream ? (host.multiStageMode == .spotlight) : (host.dualStageMode == .focusInset)
+                DuoToolbarButton(
+                    title: isMultiStream
+                        ? (host.multiStageMode == .spotlight ? Copy.Twitch.gridLayout : Copy.Twitch.spotlightLayout)
+                        : (nextIsSplit ? Copy.Twitch.dualSplit5050 : Copy.Twitch.dualFocusInset),
+                    systemImage: nextIsSplit ? Symbol.Twitch.splitLayoutHorizontal : Symbol.Twitch.focusLayout
+                ) {
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
+                        if isMultiStream {
+                            host.toggleMultiStageMode()
+                        } else {
+                            host.toggleDualStageMode()
+                        }
+                    }
+                }
+                .accessibilityIdentifier("twitch.dual.statusLayout")
+            }
+            .duoVisibilityPriority(.high)
+
+            ToolbarItem(placement: .automatic) {
+                DuoToolbarButton(
+                    title: showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play,
+                    systemImage: showsPauseGlyph ? "pause.fill" : "play.fill"
+                ) {
+                    host.setPaused(showsPauseGlyph)
+                }
+                .accessibilityIdentifier("twitch.toolbar.playpause")
+            }
+            .duoVisibilityPriority(.automatic)
+        } else {
+            ToolbarItem(placement: .primaryAction) {
+                DuoToolbarButton(
+                    title: showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play,
+                    systemImage: showsPauseGlyph ? "pause.fill" : "play.fill"
+                ) {
+                    host.setPaused(showsPauseGlyph)
+                }
+                .accessibilityIdentifier("twitch.toolbar.playpause")
+            }
+            .duoVisibilityPriority(.high)
+
             ToolbarItem(placement: .automatic) {
                 DuoToolbarButton(
                     title: Copy.Twitch.clipLast(clipStore.selectedClipDuration),
@@ -352,7 +424,7 @@ struct TwitchStreamPage: View {
                 }
                 .accessibilityIdentifier("twitch.toolbar.pip")
             }
-            .duoVisibilityPriority(.automatic)
+            .duoVisibilityPriority(isDualStream ? .low : .automatic)
         }
 
         if canAddMoreStreams {
@@ -367,7 +439,7 @@ struct TwitchStreamPage: View {
                 }
                 .accessibilityIdentifier("twitch.toolbar.addSecondStream")
             }
-            .duoVisibilityPriority(.automatic)
+            .duoVisibilityPriority(isDualStream ? .low : .automatic)
         }
 
         ToolbarItem(placement: .automatic) {
@@ -487,238 +559,11 @@ struct TwitchStreamPage: View {
         }
     }
 
-    // MARK: - iPhone Duo Top Status-Adjacent Bar (Single + Dual Stream)
-
-    /// Pure `#000000` bezel-matched top strip occupying the leading status-adjacent area beside `9:41` + status orb
-    /// on iPhone Duo portrait postures, placing channel identity (or 1-tap `A · B` focus pills in dual mode) and
-    /// compact quick actions directly above full-bleed 16:9 video.
-    private var twitchStatusAdjacentBar: some View {
-        DuoStatusAdjacentBar(surface: .bezelMatte, metrics: statusBarMetrics) {
-            DuoStatusBarBackButton(surface: .bezelMatte) {
-                pane.close()
-            }
-
-            if let secondaryLogin {
-                dualStreamStatusBarContent(secondaryLogin: secondaryLogin)
-            } else {
-                singleStreamStatusBarContent
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var singleStreamStatusBarContent: some View {
-        singleStreamAvatar
-
-        VStack(alignment: .leading, spacing: 1) {
-            Text(title)
-                .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-
-            if let clipText {
-                Text(clipText)
-                    .font(Font.cobalt(10.5, .medium, relativeTo: .caption2))
-                    .foregroundStyle(store.clipState == .failed ? CobaltColor.errorText : CobaltColor.success)
-                    .lineLimit(1)
-            } else if holdsChannel, let stream = store.stream {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 5, height: 5)
-                    Text(Copy.Twitch.viewers(stream.viewers))
-                        .font(Font.cobalt(10.5, .medium, relativeTo: .caption2))
-                        .foregroundStyle(.white.opacity(0.76))
-                        .lineLimit(1)
-                    if statusBarMetrics.isWideLeadingSlot, !stream.game.isEmpty {
-                        Text("· \(stream.game)")
-                            .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
-                            .foregroundStyle(.white.opacity(0.56))
-                            .lineLimit(1)
-                    }
-                }
-            } else if holdsChannel && store.channelInfo != nil {
-                Text(Copy.Twitch.offline)
-                    .font(Font.cobalt(10.5, .regular, relativeTo: .caption2))
-                    .foregroundStyle(.white.opacity(0.58))
-                    .lineLimit(1)
-            }
-        }
-        .frame(minWidth: 48, alignment: .leading)
-        .layoutPriority(0.8)
-
-        Spacer(minLength: 2)
-
-        if statusBarMetrics.isWideLeadingSlot {
-            Button {
-                host.setPaused(showsPauseGlyph)
-            } label: {
-                DuoStatusBarIconVisual(
-                    systemImage: showsPauseGlyph ? "pause.fill" : "play.fill",
-                    surface: .bezelMatte
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play)
-            .accessibilityIdentifier("twitch.toolbar.playpause")
-        }
-
-        Button {
-            streamPickerMode = .add
-        } label: {
-            DuoStatusBarPillVisual(
-                title: Copy.Twitch.addSecondShort,
-                systemImage: Symbol.Twitch.addStream,
-                surface: .bezelMatte,
-                emphasized: true
-            )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(Copy.Twitch.addSecondStream)
-        .accessibilityIdentifier("twitch.toolbar.addSecondStream")
-
-        if statusBarMetrics.isWideLeadingSlot {
-            if store.canClip {
-                Button(action: makeClip) {
-                    DuoStatusBarPillVisual(
-                        title: Copy.Twitch.clipShort,
-                        systemImage: Symbol.Twitch.clip,
-                        surface: .bezelMatte
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(offline || store.clipState == .making)
-                .opacity((offline || store.clipState == .making) ? 0.45 : 1)
-                .accessibilityLabel(Copy.Twitch.clip)
-                .accessibilityIdentifier("twitch.toolbar.clip")
-            }
-
-            if host.canTogglePiP {
-                Button {
-                    host.togglePiP()
-                } label: {
-                    DuoStatusBarIconVisual(
-                        systemImage: host.isPiPActive ? Symbol.Twitch.pipExit : Symbol.Twitch.pipEnter,
-                        surface: .bezelMatte
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(host.isPiPActive ? Copy.Twitch.pipExit : Copy.Twitch.pipEnter)
-                .accessibilityIdentifier("twitch.toolbar.pip")
-            }
-        }
-
-        twitchStatusOverflowMenu(secondaryLogin: nil)
-    }
-
-    private var singleStreamAvatar: some View {
-        let initial = String(title.first(where: { $0.isLetter || $0.isNumber }) ?? "T").uppercased()
-        return ZStack {
-            if holdsChannel, let avatarURL = store.channelInfo?.avatar {
-                StillImage(url: avatarURL)
-                    .frame(width: 28, height: 28)
-                    .clipShape(Circle())
-            } else {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color(dualRGB: TwitchChannelAccent.primaryDarkRGB), Color(hex: 0x5b21b6)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 28, height: 28)
-                    .overlay {
-                        Text(initial)
-                            .font(Font.cobalt(12, .semibold, relativeTo: .caption))
-                            .foregroundStyle(.white)
-                    }
-            }
-        }
-        .padding(2)
-        .overlay {
-            if isLive {
-                Circle()
-                    .strokeBorder(Color.red.opacity(0.92), lineWidth: 1.5)
-            }
-        }
-        .accessibilityHidden(true)
-    }
-
-    @ViewBuilder
-    private func dualStreamStatusBarContent(secondaryLogin: String) -> some View {
-        dualFocusChip(
-            slot: .primary,
-            name: primaryDisplayName,
-            accent: Color(dualRGB: TwitchChannelAccent.primaryDarkRGB),
-            accessibilityID: "twitch.dual.statusFocusPrimary"
-        )
-
-        dualFocusChip(
-            slot: .secondary,
-            name: secondaryDisplayName,
-            accent: Color(dualRGB: TwitchChannelAccent.secondaryDarkRGB),
-            accessibilityID: "twitch.dual.statusFocusSecondary"
-        )
-
-        if host.isThermalThrottled {
-            Image(systemName: "thermometer.medium")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.yellow)
-                .accessibilityLabel(Copy.Twitch.thermalSteppedDown)
-        }
-
-        Spacer(minLength: 2)
-
-        if statusBarMetrics.isWideLeadingSlot {
-            Button {
-                withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
-                    if isMultiStream {
-                        host.cycleSpotlight(forward: true)
-                    } else {
-                        host.swapDualFocus()
-                    }
-                }
-            } label: {
-                DuoStatusBarPillVisual(
-                    title: Copy.Twitch.swapShort,
-                    systemImage: isMultiStream ? Symbol.Twitch.cycleFocus : Symbol.Twitch.swapFocus,
-                    surface: .bezelMatte
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Copy.Twitch.swapFocus)
-            .accessibilityIdentifier("twitch.dual.statusSwap")
-
-            Button {
-                withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
-                    if isMultiStream {
-                        host.toggleMultiStageMode()
-                    } else {
-                        host.toggleDualStageMode()
-                    }
-                }
-            } label: {
-                let nextIsSplit = isMultiStream ? (host.multiStageMode == .spotlight) : (host.dualStageMode == .focusInset)
-                DuoStatusBarPillVisual(
-                    title: isMultiStream
-                        ? (host.multiStageMode == .spotlight ? Copy.Twitch.gridLayout : Copy.Twitch.spotlightLayout)
-                        : (nextIsSplit ? Copy.Twitch.dualSplit5050 : Copy.Twitch.dualFocusInset),
-                    systemImage: nextIsSplit ? Symbol.Twitch.splitLayoutHorizontal : Symbol.Twitch.focusLayout,
-                    surface: .bezelMatte
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(host.dualStageMode == .focusInset ? Copy.Twitch.dualSplit5050 : Copy.Twitch.dualFocusInset)
-            .accessibilityIdentifier("twitch.dual.statusLayout")
-        }
-
-        twitchStatusOverflowMenu(secondaryLogin: secondaryLogin)
-    }
-
-    /// 1-tap dual-stream channel switcher chip showing accent dot, channel name, and speaker glyph strictly
-    /// on `dualMixer.louderSlot` when unmuted.
-    private func dualFocusChip(
+    #if os(iOS)
+    /// Native `UINavigationBar` 1-tap dual-stream focus button rendered inside `ToolbarItem(placement: .principal)`
+    /// so iOS 27's `UINavigationBar` hosts it cleanly between `<` and trailing actions and routes touches reliably
+    /// on real iPhone Duo hardware.
+    private func dualToolbarFocusButton(
         slot: TwitchDualSlot,
         name: String,
         accent: Color,
@@ -731,167 +576,42 @@ struct TwitchStreamPage: View {
                 host.setDualFocus(slot)
             }
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Circle()
                     .fill(accent)
-                    .frame(width: 7.5, height: 7.5)
+                    .frame(width: 7, height: 7)
                 Text(name)
                     .font(Font.cobalt(13, isFocused ? .semibold : .medium, relativeTo: .caption))
-                    .foregroundStyle(isFocused ? .white : .white.opacity(0.84))
+                    .foregroundStyle(isFocused ? Color.primary : Color.secondary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 96)
                 if isLouder {
                     Image(systemName: "speaker.wave.2.fill")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(accent)
                 }
             }
-            .padding(.horizontal, 11)
-            .frame(height: 36)
-            .background(
-                isFocused ? accent.opacity(0.28) : Color.white.opacity(0.15),
-                in: Capsule()
-            )
-            .overlay {
-                Capsule()
-                    .strokeBorder(isFocused ? accent.opacity(0.92) : Color.white.opacity(0.24), lineWidth: 1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background {
+                if isFocused {
+                    Capsule()
+                        .fill(accent.opacity(0.18))
+                        .overlay {
+                            Capsule()
+                                .strokeBorder(accent.opacity(0.45), lineWidth: 0.75)
+                        }
+                }
             }
-            .frame(minHeight: Metrics.hit)
-            .contentShape(Rectangle())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(isFocused ? "\(name), \(Copy.Twitch.watchingNow)" : "\(name), \(Copy.Twitch.tapToFocus)")
         .accessibilityAddTraits(isFocused ? .isSelected : [])
         .accessibilityIdentifier(accessibilityID)
     }
-
-    private func twitchStatusOverflowMenu(secondaryLogin: String?) -> some View {
-        Menu {
-            if secondaryLogin != nil {
-                Button(
-                    showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play,
-                    systemImage: showsPauseGlyph ? "pause.fill" : "play.fill"
-                ) {
-                    host.setPaused(showsPauseGlyph)
-                }
-                Button(Copy.Twitch.swapFocus, systemImage: isMultiStream ? Symbol.Twitch.cycleFocus : Symbol.Twitch.swapFocus) {
-                    if isMultiStream {
-                        host.cycleSpotlight(forward: true)
-                    } else {
-                        host.swapDualFocus()
-                    }
-                }
-                if isMultiStream {
-                    Button(
-                        host.multiStageMode == .spotlight ? Copy.Twitch.gridLayout : Copy.Twitch.spotlightLayout,
-                        systemImage: host.multiStageMode == .spotlight
-                            ? (channels.count == 4 ? Symbol.Twitch.quadGrid : Symbol.Twitch.mosaicGrid)
-                            : Symbol.Twitch.spotlightStrip
-                    ) {
-                        host.toggleMultiStageMode()
-                    }
-                } else {
-                    Button(
-                        host.dualStageMode == .focusInset ? Copy.Twitch.dualSplit5050 : Copy.Twitch.dualFocusInset,
-                        systemImage: host.dualStageMode == .focusInset ? Symbol.Twitch.splitLayoutHorizontal : Symbol.Twitch.focusLayout
-                    ) {
-                        host.toggleDualStageMode()
-                    }
-                    Button(Copy.Twitch.swapSecondStream, systemImage: Symbol.Twitch.addStream) {
-                        streamPickerMode = .replaceSecond
-                    }
-                }
-                if canAddMoreStreams {
-                    Button(
-                        Copy.Twitch.addStreamTitle(current: channels.count, max: PaneItem.maxSimultaneousStreams),
-                        systemImage: Symbol.Twitch.addStream
-                    ) {
-                        streamPickerMode = .add
-                    }
-                }
-                if host.canTogglePiP {
-                    Button(
-                        host.isPiPActive
-                            ? Copy.Twitch.pipExit
-                            : (isMultiStream ? Copy.Twitch.spotlightPiP : Copy.Twitch.dualPiP),
-                        systemImage: host.isPiPActive ? Symbol.Twitch.pipExit : Symbol.Twitch.pipEnter
-                    ) {
-                        host.togglePiP()
-                    }
-                }
-                Divider()
-                if isMultiStream {
-                    ForEach(channels, id: \.self) { ch in
-                        Button(Copy.Twitch.dropStream(store.displayName(for: ch)), systemImage: Symbol.Twitch.dropStream) {
-                            removeStream(ch)
-                        }
-                    }
-                    Divider()
-                }
-                ForEach(channels, id: \.self) { ch in
-                    Button(Copy.Twitch.keepOnly(store.displayName(for: ch)), systemImage: Symbol.Twitch.focusLayout) {
-                        keepOnly(ch)
-                    }
-                }
-                Divider()
-                ForEach(channels, id: \.self) { ch in
-                    let openLabel = Copy.Twitch.openOnPlatform(StreamAddress.platform(for: ch).lowercaseName)
-                    Button("\(openLabel) (\(store.displayName(for: ch)))", systemImage: Symbol.Twitch.open) {
-                        openChannelOnTwitch(ch)
-                    }
-                }
-            } else {
-                if !statusBarMetrics.isWideLeadingSlot {
-                    Button(
-                        showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play,
-                        systemImage: showsPauseGlyph ? "pause.fill" : "play.fill"
-                    ) {
-                        host.setPaused(showsPauseGlyph)
-                    }
-                    if store.canClip {
-                        Button(Copy.Twitch.clip, systemImage: Symbol.Twitch.clip) {
-                            makeClip()
-                        }
-                        .disabled(offline || store.clipState == .making)
-                    }
-                    if host.canTogglePiP {
-                        Button(
-                            host.isPiPActive ? Copy.Twitch.pipExit : Copy.Twitch.pipEnter,
-                            systemImage: host.isPiPActive ? Symbol.Twitch.pipExit : Symbol.Twitch.pipEnter
-                        ) {
-                            host.togglePiP()
-                        }
-                    }
-                    Divider()
-                }
-                #if os(iOS)
-                Button(Copy.Twitch.watchOnTV, systemImage: Symbol.Twitch.tv) {
-                    choosingTV = true
-                }
-                #endif
-                if StreamAddress.platform(for: login).supportsEmbedFallback {
-                    Button(
-                        host.activeMode == .lowLatency ? Copy.Twitch.playerEmbed : Copy.Twitch.playerLowLatency,
-                        systemImage: host.activeMode == .lowLatency ? Symbol.Twitch.embed : Symbol.Twitch.lowLatency
-                    ) {
-                        host.setMode(host.activeMode == .lowLatency ? .embed : .lowLatency)
-                    }
-                }
-                TwitchJumpToLiveMenuButton(host: host)
-                Button(Copy.Twitch.openOnPlatform(StreamAddress.platform(for: login).lowercaseName), systemImage: Symbol.Twitch.open) {
-                    openChannelOnTwitch(login)
-                }
-            }
-            Divider()
-            Button(Copy.Twitch.stop, systemImage: "stop.fill", role: .destructive) {
-                stop()
-            }
-        } label: {
-            DuoStatusBarIconVisual(systemImage: "ellipsis", surface: .bezelMatte)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(Copy.Media.more)
-        .accessibilityIdentifier("twitch.toolbar.more")
-    }
+    #endif
 
     // MARK: layouts
 
@@ -1087,9 +807,7 @@ struct TwitchStreamPage: View {
 
                 if ownsGlassHUD {
                     VStack(spacing: 0) {
-                        if !usesStatusAdjacentBar {
-                            MediaEdgeVignette(edge: .top, height: compactControls ? 54 : 70, intensity: 0.36)
-                        }
+                        MediaEdgeVignette(edge: .top, height: compactControls ? 54 : 70, intensity: 0.36)
                         Spacer(minLength: 0)
                         if showFloatingButtons {
                             MediaEdgeVignette(edge: .bottom, height: 64, intensity: 0.48)
@@ -1098,17 +816,7 @@ struct TwitchStreamPage: View {
                     .allowsHitTesting(false)
 
                     VStack(spacing: 0) {
-                        if !usesStatusAdjacentBar {
-                            singleStreamChannelPill(compact: compactControls)
-                        } else if host.clipCapture.isRecording {
-                            HStack {
-                                recordingLiveBadge
-                                Spacer(minLength: 64)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.top, 8)
-                            .allowsHitTesting(false)
-                        }
+                        singleStreamChannelPill(compact: compactControls)
                         Spacer(minLength: 0)
                         if let toast = clipStore.toast {
                             clipSaveToast(toast)

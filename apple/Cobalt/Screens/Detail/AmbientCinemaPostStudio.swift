@@ -227,15 +227,10 @@ struct AmbientCinemaPostStudio: View {
     }
 
     private func resolvedStatusBarMetrics(containerSize: CGSize) -> DuoStatusAdjacentBarMetrics {
-        guard showsCloseButton else { return .inactive }
-        let resolvedSize = hostSize.width > 0 ? hostSize : containerSize
-        return DuoStatusAdjacentBarMetrics.resolve(
-            hostSize: resolvedSize,
-            safeArea: paneSafeAreaInsets,
-            reserved: reservedRegions,
-            typeSize: typeSize,
-            forcePreview: forceStatusBarPreview
-        )
+        // Real iPhone Duo hardware (iOS 27.3) drops SwiftUI button taps placed inside `y < safeArea.top`
+        // via `.ignoresSafeArea(.top)`. Keep interactive chrome in native `studioToolbar` (`UINavigationBar`)
+        // which iOS 27 positions beside the clock/status orb and routes touches to reliably.
+        .inactive
     }
 
     var body: some View {

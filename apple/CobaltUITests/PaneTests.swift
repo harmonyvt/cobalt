@@ -89,6 +89,177 @@ final class PaneTests: XCTestCase {
         }
     }
 
+    /// Regression test for PostHog sessions 01a22020-b4a8-79a0-b712-196e850707d8 & 01a21f43-7123-78f4-906e-e8979dc0990e:
+    /// Twitch watch top-bar buttons must live in the native `UINavigationBar` toolbar (never in a custom SwiftUI
+    /// `.ignoresSafeArea(.top)` `DuoStatusAdjacentBar`, whose touches iOS 27.3 drops on real iPhone Duo hardware)
+    /// and respond reliably to taps in portrait.
+    func testTwitchPortraitNativeToolbarRespondsToTaps() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = launch([
+            "-previewScenario", "happy",
+            "-previewTab", "twitch",
+            "-paneReset", "YES",
+            "-previewDuoStatusBar", "YES",
+        ])
+        defer { app.terminate() }
+
+        let field = find(app, "twitch.search")
+        XCTAssertTrue(field.waitForExistence(timeout: wait), "twitch search never appeared")
+        field.tap()
+        field.typeText("gigguk\n")
+
+        let pane = find(app, "pane")
+        XCTAssertTrue(pane.waitForExistence(timeout: wait), "stream pane never appeared")
+        settle(1.0)
+
+        XCTAssertFalse(
+            find(app, "duo.statusAdjacentBar").exists,
+            "Twitch must use native UINavigationBar toolbar instead of custom DuoStatusAdjacentBar inside safeArea.top")
+
+        // Tap `+ 2nd` in the native navigation bar and add a second stream (`cdawgva`)
+        let addSecond = find(app, "twitch.toolbar.addSecondStream")
+        XCTAssertTrue(addSecond.waitForExistence(timeout: wait), "addSecondStream button missing in native toolbar")
+        addSecond.tap()
+
+        let pickerSearch = find(app, "twitch.dual.picker.search")
+        XCTAssertTrue(
+            pickerSearch.waitForExistence(timeout: 8),
+            "tapping + 2nd in native toolbar did not open TwitchAddSecondStreamSheet (button frame: \(addSecond.frame))")
+        pickerSearch.tap()
+        pickerSearch.typeText("cdawgva\n")
+        settle(1.0)
+
+        save(XCUIScreen.main.screenshot().image, area: "twitch", step: "native-toolbar-dual-portrait")
+
+        // Verify Swap and Focus/50-50 buttons in the native toolbar respond
+        let swapButton = find(app, "twitch.dual.statusSwap")
+        let layoutButton = find(app, "twitch.dual.statusLayout")
+        XCTAssertTrue(swapButton.waitForExistence(timeout: wait), "swap button missing in native dual toolbar")
+        XCTAssertTrue(layoutButton.waitForExistence(timeout: wait), "layout toggle missing in native dual toolbar")
+
+        let beforeLayoutLabel = layoutButton.label
+        layoutButton.tap()
+        let labelChanged = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label != %@", beforeLayoutLabel),
+            object: layoutButton)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [labelChanged], timeout: 5),
+            .completed,
+            "tapping layout toggle in native toolbar did not toggle stage mode (frame: \(layoutButton.frame))")
+
+        // On wide horizontal bars (iPad portrait / iPhone Duo inner portrait >= 500 pt), verify 1-tap focus chips too
+        if isPad {
+            let primaryChip = find(app, "twitch.dual.statusFocusPrimary")
+            let secondaryChip = find(app, "twitch.dual.statusFocusSecondary")
+            XCTAssertTrue(primaryChip.waitForExistence(timeout: wait), "primary dual focus chip missing in wide native toolbar")
+            XCTAssertTrue(secondaryChip.waitForExistence(timeout: wait), "secondary dual focus chip missing in wide native toolbar")
+            XCTAssertTrue(primaryChip.isSelected, "primary chip should start selected")
+
+            secondaryChip.tap()
+            let becameSecondary = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "selected == true"),
+                object: secondaryChip)
+            XCTAssertEqual(
+                XCTWaiter().wait(for: [becameSecondary], timeout: 5),
+                .completed,
+                "tapping secondary chip in native toolbar did not switch focus (frame: \(secondaryChip.frame))")
+
+            swapButton.tap()
+            let swappedBack = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "selected == true"),
+                object: primaryChip)
+            XCTAssertEqual(
+                XCTWaiter().wait(for: [swappedBack], timeout: 5),
+                .completed,
+                "tapping swap in native toolbar did not swap dual focus (frame: \(swapButton.frame))")
+        } else {
+            swapButton.tap()
+            settle(0.4)
+        }
+
+        // Verify the leading `<` back button closes the pane
+        let closeButton = find(app, "pane.close")
+        XCTAssertTrue(closeButton.exists, "pane.close missing in native toolbar")
+        closeButton.tap()
+        XCTAssertTrue(
+            waitGone(pane),
+            "tapping back in native toolbar did not close the stream pane (frame: \(closeButton.frame))")
+    }
+
+    /// Exact rotation sequence from PostHog session 01a22020-b4a8-79a0-b712-196e850707d8:
+    /// open single stream in landscape, add second stream in landscape, then rotate to portrait and verify
+    /// every top-bar dual-stream button remains in the native toolbar and responds to taps.
+    func testTwitchLandscapeToPortraitNativeToolbar() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = launch([
+            "-previewScenario", "happy",
+            "-previewTab", "twitch",
+            "-paneReset", "YES",
+            "-previewDuoStatusBar", "YES",
+        ])
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate()
+        }
+
+        let field = find(app, "twitch.search")
+        XCTAssertTrue(field.waitForExistence(timeout: wait), "twitch search never appeared")
+        field.tap()
+        field.typeText("gigguk\n")
+        XCTAssertTrue(find(app, "pane").waitForExistence(timeout: wait), "pane never appeared in landscape")
+        settle(1.0)
+
+        // Add second stream while in landscape
+        let addSecond = find(app, "twitch.toolbar.addSecondStream")
+        XCTAssertTrue(addSecond.waitForExistence(timeout: wait), "addSecondStream missing in landscape toolbar")
+        addSecond.tap()
+        let pickerSearch = find(app, "twitch.dual.picker.search")
+        XCTAssertTrue(pickerSearch.waitForExistence(timeout: 8), "picker did not open in landscape")
+        pickerSearch.tap()
+        pickerSearch.typeText("cdawgva\n")
+        settle(1.0)
+
+        // Rotate landscape -> portrait
+        XCUIDevice.shared.orientation = .portrait
+        settle(1.5)
+
+        XCTAssertFalse(
+            find(app, "duo.statusAdjacentBar").exists,
+            "custom DuoStatusAdjacentBar must not activate after rotating to portrait")
+
+        let swapButton = find(app, "twitch.dual.statusSwap")
+        let layoutButton = find(app, "twitch.dual.statusLayout")
+        XCTAssertTrue(swapButton.waitForExistence(timeout: wait), "swap button missing after rotation")
+        XCTAssertTrue(layoutButton.waitForExistence(timeout: wait), "layout toggle missing after rotation")
+
+        let beforeLabel = layoutButton.label
+        layoutButton.tap()
+        let labelChanged = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label != %@", beforeLabel),
+            object: layoutButton)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [labelChanged], timeout: 5),
+            .completed,
+            "tapping layout toggle after landscape->portrait rotation did not respond (frame: \(layoutButton.frame))")
+
+        if isPad {
+            let primaryChip = find(app, "twitch.dual.statusFocusPrimary")
+            let secondaryChip = find(app, "twitch.dual.statusFocusSecondary")
+            XCTAssertTrue(primaryChip.waitForExistence(timeout: wait), "primary chip missing after rotation")
+            XCTAssertTrue(secondaryChip.waitForExistence(timeout: wait), "secondary chip missing after rotation")
+            XCTAssertTrue(primaryChip.isSelected, "primary chip should start selected")
+
+            swapButton.tap()
+            let becameSecondary = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "selected == true"),
+                object: secondaryChip)
+            XCTAssertEqual(
+                XCTWaiter().wait(for: [becameSecondary], timeout: 5),
+                .completed,
+                "tapping swap after landscape->portrait rotation did not respond (frame: \(swapButton.frame))")
+        }
+    }
+
     // MARK: the fix pass (PR #232 review)
 
     /// An iPhone on its side is one screen: the pane is the sheet, never split down the middle (item 4).
