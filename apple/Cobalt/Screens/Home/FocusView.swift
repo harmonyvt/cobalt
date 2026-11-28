@@ -1275,7 +1275,9 @@ struct HeroPlanet: View, @preconcurrency Animatable {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
-    @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @Environment(\.lifecycle) private var lifecycle
+
+    private var lowPower: Bool { lifecycle.shouldConservePower }
 
     private var breathing: Bool {
         if reduceMotion || lowPower { return false }
@@ -1414,9 +1416,6 @@ struct HeroPlanet: View, @preconcurrency Animatable {
             .modifier(Breathing(active: breathing))
             .scaleEffect(1 - min(0.12, drag / 1200), anchor: .center)
             .position(x: pose.cx, y: pose.cy + Double(drag))
-            .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange).receive(on: RunLoop.main)) { _ in
-                lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-            }
     }
 }
 

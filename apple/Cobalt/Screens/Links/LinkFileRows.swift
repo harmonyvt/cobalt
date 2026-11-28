@@ -246,6 +246,8 @@ struct LinkFileRow: View {
     private var newOutline: some View {
         if entry.isNew {
             RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(CobaltColor.focus.opacity(0.7), lineWidth: 1)
+        } else {
+            RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(CobaltColor.hairline, lineWidth: 0.65)
         }
     }
 
@@ -373,21 +375,48 @@ struct LinkHeaderTags: View {
     let link: ShareSet
     let controller: LinksController
 
+    @Environment(Pane.self) private var pane: Pane?
+
     var body: some View {
-        let names = controller.collectionsEnabled ? controller.store.collections(containing: link.id).map(\.name) : []
-        if controller.privateLinksEnabled || !names.isEmpty {
-            HStack(spacing: 6) {
-                if controller.privateLinksEnabled { LinkPrivacyBadge(isPrivate: link.isPrivate) }
-                if !names.isEmpty {
-                    Label(names.joined(separator: " · "), systemImage: Symbol.collection)
-                        .labelStyle(CollectionLineLabel())
-                        .font(CobaltType.captionSmall)
-                        .foregroundStyle(CobaltColor.collection)
-                        .lineLimit(1)
-                        .accessibilityLabel(Copy.LinkEdit.inCollections(names))
+        let collections = controller.collectionsEnabled ? controller.store.collections(containing: link.id) : []
+        if controller.privateLinksEnabled || !collections.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    if controller.privateLinksEnabled {
+                        LinkPrivacyBadge(isPrivate: link.isPrivate)
+                    }
+                    ForEach(collections) { collection in
+                        if let pane {
+                            Button { pane.open(.collection(collection.id)) } label: {
+                                collectionTag(collection.name)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            collectionTag(collection.name)
+                        }
+                    }
                 }
+                .padding(.vertical, 1)
             }
+            .scrollClipDisabled()
         }
+    }
+
+    private func collectionTag(_ name: String) -> some View {
+        Label(name, systemImage: Symbol.collection)
+            .labelStyle(CollectionLineLabel())
+            .font(Font.cobalt(11, .semibold, relativeTo: .caption2))
+            .foregroundStyle(CobaltColor.collection)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(CobaltColor.collectionBack.opacity(0.82), in: Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(CobaltColor.collection.opacity(0.28), lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            )
+            .fixedSize()
     }
 }
 

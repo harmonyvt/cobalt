@@ -92,9 +92,9 @@ struct ErrorMapTests {
         #expect(map("error.studio.save_lost", .rendering) == .renderLost)
         #expect(map("error.studio.save_lost", .saving) == .server(code: "error.studio.save_lost"))
         #expect(map("error.studio.expired") == .expired)
-        #expect(map("error.library.too_large") == .tooLarge(limit: 100_000_000))
-        #expect(map("error.studio.too_large") == .tooLarge(limit: 209_715_200))
-        #expect(map("error.webp.too_large") == .tooLarge(limit: 209_715_200))
+        #expect(map("error.library.too_large") == .tooLarge(limit: 1_073_741_824))
+        #expect(map("error.studio.too_large") == .tooLarge(limit: 1_073_741_824))
+        #expect(map("error.webp.too_large") == .tooLarge(limit: 1_073_741_824))
         #expect(map("error.webp.unsupported") == .unsupported)
         #expect(map("error.library.unsupported") == .unsupported)
         #expect(map("error.studio.not_video") == .unsupported)
@@ -364,7 +364,7 @@ struct AppAndLibraryTests {
                 #expect(p.state == .failed(.noLink), "\(scenario)")
             case .tooBig:
                 p.start(file: try makeTempFile("big.mov"))
-                #expect(p.state == .failed(.tooLarge(limit: 100_000_000)), "\(scenario)")
+                #expect(p.state == .failed(.tooLarge(limit: 1_073_741_824)), "\(scenario)")
             case .image:
                 p.start(file: try makeTempFile("photo.png"))
                 await h.driveToSettled()

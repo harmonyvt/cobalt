@@ -196,4 +196,88 @@ struct ClientNetworkTests {
         _ = try await c.library(cursor: nil, limit: 500)
         #expect(server.requests.last?.query == "limit=50")
     }
+
+    @Test func multipartUploadStreamsPartsAndReassemblesBytes() async throws {
+        let payload = Data((0..<2_600_000).map { UInt8(truncatingIfNeeded: ($0 &* 17) ^ ($0 >> 8)) })
+        let file = try makeTempDirectory().appendingPathComponent("long_clip.mp4")
+        try payload.write(to: file)
+
+        let partsByNumber = Mutex<[Int: Data]>([:])
+        let completedParts = Mutex<Int>(0)
+
+        let server = try await LoopbackServer.start { request in
+            switch (request.method, request.path) {
+            case ("POST", "/studio/upload/multipart"):
+                return .json(#"{"status":"success","upload_id":"tok.sig","part_size":1048576,"max_part_size":67108864,"max_bytes":1073741824,"expires_at":1800000000000}"#, status: 201)
+            case ("PUT", "/studio/upload/multipart/part"):
+                let partNum = Int(request.query.replacingOccurrences(of: "part=", with: "")) ?? 0
+                partsByNumber.withLock { $0[partNum] = request.body }
+                return .json(#"{"status":"success","part_number":\#(partNum),"etag":"etag-\#(partNum)"}"#)
+            case ("POST", "/studio/upload/multipart/complete"):
+                let json = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
+                let list = (json["parts"] as? [[String: Any]]) ?? []
+                completedParts.withLock { $0 = list.count }
+                return .json(#"{"status":"success","id":"sid-mp","url":"https://c/studio/sid-mp","item":{"id":"MpItem0000000001","kind":"private","source":"upload","name":"long_clip.mp4","url":null,"content_type":"video/mp4","bytes":2600000,"width":null,"height":null,"duration":null,"link":null,"session_id":null,"created_at":1790000000000},"studio_error":null}"#, status: 201)
+            default:
+                return .init(status: 404)
+            }
+        }
+        defer { server.stop() }
+
+        let c = HTTPCobaltClient(baseURL: server.base, apiKey: { self.key }, multipartThresholdBytes: 500_000)
+        let seen = Mutex<[TransferProgress]>([])
+        let result = try await c.upload(
+            file: file, name: "long_clip.mp4", contentType: "video/mp4",
+            public: false, queue: true, title: "Stream Highlight",
+            progress: { p in seen.withLock { $0.append(p) } }
+        )
+
+        #expect(result.sessionID == "sid-mp")
+        #expect(result.item.id == "MpItem0000000001")
+        #expect(completedParts.withLock { $0 } == 3)
+
+        let reassembled = partsByNumber.withLock { dict -> Data in
+            var out = Data()
+            for idx in dict.keys.sorted() { out.append(dict[idx]!) }
+            return out
+        }
+        #expect(reassembled == payload)
+
+        let progress = seen.withLock { $0 }
+        #expect(progress.map(\.bytes) == progress.map(\.bytes).sorted())
+        #expect(progress.last == TransferProgress(bytes: 2_600_000, total: 2_600_000))
+    }
+
+    @Test func multipartUploadAbortsWhenPartFails() async throws {
+        let payload = Data(repeating: 0xAB, count: 1_500_000)
+        let file = try makeTempDirectory().appendingPathComponent("fail_clip.mp4")
+        try payload.write(to: file)
+
+        let aborted = Mutex<Bool>(false)
+        let server = try await LoopbackServer.start { request in
+            switch (request.method, request.path) {
+            case ("POST", "/studio/upload/multipart"):
+                return .json(#"{"status":"success","upload_id":"tok.abort","part_size":1048576,"max_part_size":67108864,"max_bytes":1073741824,"expires_at":1800000000000}"#, status: 201)
+            case ("PUT", "/studio/upload/multipart/part"):
+                if request.query == "part=2" {
+                    return .json(#"{"status":"error","error":{"code":"error.library.storage"}}"#, status: 502)
+                }
+                return .json(#"{"status":"success","part_number":1,"etag":"etag-1"}"#)
+            case ("DELETE", "/studio/upload/multipart"):
+                if request.headers["x-upload-id"] == "tok.abort" {
+                    aborted.withLock { $0 = true }
+                }
+                return .json(#"{"status":"success","aborted":true}"#)
+            default:
+                return .init(status: 404)
+            }
+        }
+        defer { server.stop() }
+
+        let c = HTTPCobaltClient(baseURL: server.base, apiKey: { self.key }, multipartThresholdBytes: 500_000)
+        await #expect(throws: CobaltError.self) {
+            _ = try await c.upload(file: file, name: "fail_clip.mp4", contentType: "video/mp4", progress: { _ in })
+        }
+        #expect(aborted.withLock { $0 } == true)
+    }
 }

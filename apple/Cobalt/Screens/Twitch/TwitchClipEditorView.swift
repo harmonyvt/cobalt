@@ -32,6 +32,7 @@ struct TwitchClipEditorView: View {
     @State private var localError: String?
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
+    @State private var renderTask: Task<Void, Never>?
 
     private var store: TwitchClipDraftStore { model.twitchClips }
     private var draft: TwitchClipDraft? { store.draft(id: draftID) }
@@ -55,6 +56,8 @@ struct TwitchClipEditorView: View {
             await loadDraftMedia()
         }
         .onDisappear {
+            renderTask?.cancel()
+            renderTask = nil
             tearDownPlayer()
         }
         .alert(Copy.Twitch.renameDraftTitle, isPresented: $renaming) {
@@ -71,26 +74,43 @@ struct TwitchClipEditorView: View {
     private func editorContent(_ draft: TwitchClipDraft) -> some View {
         GeometryReader { geo in
             let isWide = geo.size.width >= 820
+            let isLandscape = draft.edit.orientation == .landscape
             VStack(spacing: 0) {
                 topBar(draft)
+                    .zIndex(10)
                 Divider().overlay(CobaltColor.border.opacity(0.6))
 
                 statusBanner(for: draft)
+                    .zIndex(9)
 
                 if isWide {
                     HStack(alignment: .top, spacing: 16) {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 14) {
-                                sourceFrameSection(draft)
-                                presetStrip(draft)
+                        if isLandscape {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 14) {
+                                    canvasPreviewColumn(draft, maxHeight: max(280, geo.size.height - 280))
+                                    presetStrip(draft)
+                                    if draft.edit.layout != .single {
+                                        sourceFrameSection(draft)
+                                    }
+                                }
+                                .padding(14)
                             }
-                            .padding(14)
-                        }
-                        .frame(maxWidth: .infinity)
+                            .frame(maxWidth: .infinity)
+                        } else {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 14) {
+                                    sourceFrameSection(draft)
+                                    presetStrip(draft)
+                                }
+                                .padding(14)
+                            }
+                            .frame(maxWidth: .infinity)
 
-                        verticalPreviewColumn(draft, maxHeight: max(320, geo.size.height - 220))
-                            .frame(width: min(300, max(230, geo.size.width * 0.28)))
-                            .padding(.vertical, 12)
+                            canvasPreviewColumn(draft, maxHeight: max(320, geo.size.height - 220))
+                                .frame(width: min(300, max(230, geo.size.width * 0.28)))
+                                .padding(.vertical, 12)
+                        }
 
                         ScrollView {
                             chatInspector(draft)
@@ -102,14 +122,22 @@ struct TwitchClipEditorView: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
-                            HStack(alignment: .top, spacing: 12) {
-                                verticalPreviewColumn(draft, maxHeight: 330)
-                                    .frame(width: min(190, geo.size.width * 0.45))
-                                VStack(alignment: .leading, spacing: 10) {
+                            if isLandscape {
+                                canvasPreviewColumn(draft, maxHeight: 240)
+                                presetStrip(draft)
+                                if draft.edit.layout != .single {
                                     sourceFrameSection(draft)
-                                    presetStrip(draft)
                                 }
-                                .frame(maxWidth: .infinity)
+                            } else {
+                                HStack(alignment: .top, spacing: 12) {
+                                    canvasPreviewColumn(draft, maxHeight: 330)
+                                        .frame(width: min(190, geo.size.width * 0.45))
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        sourceFrameSection(draft)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                }
+                                presetStrip(draft)
                             }
                             chatInspector(draft)
                         }
@@ -119,6 +147,7 @@ struct TwitchClipEditorView: View {
 
                 Divider().overlay(CobaltColor.border.opacity(0.6))
                 timelineDock(draft)
+                    .zIndex(8)
             }
             .background(CobaltColor.bg)
         }
@@ -254,6 +283,13 @@ struct TwitchClipEditorView: View {
                     Text("\(Int((progress * 100).rounded()))%")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(CobaltColor.linkBlue)
+                    Button(Copy.Editor.cancel) {
+                        renderTask?.cancel()
+                        renderTask = nil
+                    }
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(CobaltColor.caption)
+                    .buttonStyle(.plain)
                 }
                 ProgressView(value: progress)
                     .tint(CobaltColor.linkBlue)
@@ -491,22 +527,61 @@ struct TwitchClipEditorView: View {
         )
     }
 
-    // MARK: - Layout Preset Strip + Swap A ⇅ B
+    // MARK: - Orientation + Layout Preset Strip + Remove Split / Swap A ⇅ B
 
     private func presetStrip(_ draft: TwitchClipDraft) -> some View {
         let edit = draft.edit
+        let isLandscape = edit.orientation == .landscape
         return VStack(alignment: .leading, spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    presetChip(
-                        Copy.Twitch.layoutSplit5050,
-                        active: edit.layout == .split && abs(edit.splitRatio - 0.50) < 0.01
-                    ) {
-                        store.updateEdit(draftID: draft.id) {
-                            $0.layout = .split
-                            $0.splitRatio = 0.50
+            // Canvas Orientation: 9:16 Portrait vs 16:9 Landscape
+            HStack(spacing: 6) {
+                orientationChip(
+                    Copy.Twitch.orientationPortrait,
+                    icon: "rectangle.portrait",
+                    active: !isLandscape
+                ) {
+                    store.updateEdit(draftID: draft.id) { cfg in
+                        cfg.orientation = .portrait
+                    }
+                }
+                orientationChip(
+                    Copy.Twitch.orientationLandscape,
+                    icon: "rectangle",
+                    active: isLandscape
+                ) {
+                    store.updateEdit(draftID: draft.id) { cfg in
+                        cfg.orientation = .landscape
+                        cfg.layout = .single
+                        cfg.regionB = TwitchClipRegionTarget(cx: 0.5, cy: 0.5, w: 1.0)
+                    }
+                    selectedRegion = .b
+                }
+            }
+
+            // Wrapped layout chips so Single / Remove Split are always visible without horizontal clipping.
+            TwitchFlow(spacing: 6, lineSpacing: 6) {
+                presetChip(
+                    isLandscape ? Copy.Twitch.layoutFullFrame : Copy.Twitch.layoutSingle,
+                    active: edit.layout == .single
+                ) {
+                    store.updateEdit(draftID: draft.id) { cfg in
+                        cfg.layout = .single
+                        if cfg.orientation == .landscape {
+                            cfg.regionB = TwitchClipRegionTarget(cx: 0.5, cy: 0.5, w: 1.0)
                         }
                     }
+                    selectedRegion = .b
+                }
+                presetChip(
+                    Copy.Twitch.layoutSplit5050,
+                    active: edit.layout == .split && abs(edit.splitRatio - 0.50) < 0.01
+                ) {
+                    store.updateEdit(draftID: draft.id) {
+                        $0.layout = .split
+                        $0.splitRatio = 0.50
+                    }
+                }
+                if !isLandscape {
                     presetChip(
                         Copy.Twitch.layoutSplit4060,
                         active: edit.layout == .split && abs(edit.splitRatio - 0.40) < 0.01
@@ -525,39 +600,69 @@ struct TwitchClipEditorView: View {
                             $0.splitRatio = 0.35
                         }
                     }
-                    presetChip(
-                        Copy.Twitch.layoutPiP,
-                        active: edit.layout == .pip
-                    ) {
-                        store.updateEdit(draftID: draft.id) { $0.layout = .pip }
+                }
+                presetChip(
+                    Copy.Twitch.layoutPiP,
+                    active: edit.layout == .pip
+                ) {
+                    store.updateEdit(draftID: draft.id) { $0.layout = .pip }
+                }
+
+                if edit.layout == .split {
+                    Button {
+                        store.updateEdit(draftID: draft.id) { $0.topRegion = $0.topRegion.other }
+                    } label: {
+                        Label(Copy.Twitch.swapRegions, systemImage: Symbol.Twitch.swapVertical)
+                            .font(CobaltType.captionSmall)
+                            .fontWeight(.semibold)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(CobaltColor.elevated, in: Capsule())
+                            .foregroundStyle(CobaltColor.text)
                     }
-                    presetChip(
-                        Copy.Twitch.layoutSingle,
-                        active: edit.layout == .single
-                    ) {
+                    .buttonStyle(.plain)
+
+                    Button {
                         store.updateEdit(draftID: draft.id) { $0.layout = .single }
                         selectedRegion = .b
+                    } label: {
+                        Label(Copy.Twitch.removeSplit, systemImage: "xmark")
+                            .font(CobaltType.captionSmall)
+                            .fontWeight(.semibold)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(CobaltColor.elevated, in: Capsule())
+                            .foregroundStyle(CobaltColor.caption)
                     }
-
-                    if edit.layout == .split {
-                        Button {
-                            store.updateEdit(draftID: draft.id) { $0.topRegion = $0.topRegion.other }
-                        } label: {
-                            Label(Copy.Twitch.swapRegions, systemImage: Symbol.Twitch.swapVertical)
-                                .font(CobaltType.captionSmall)
-                                .fontWeight(.semibold)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(CobaltColor.elevated, in: Capsule())
-                                .foregroundStyle(CobaltColor.text)
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("twitch.clip.removeSplit")
                 }
             }
         }
+    }
+
+    private func orientationChip(_ title: String, icon: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(title)
+                    .font(CobaltType.captionSmall)
+                    .fontWeight(active ? .semibold : .regular)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(active ? CobaltColor.linkBlue.opacity(0.22) : CobaltColor.elevated, in: .rect(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(active ? CobaltColor.linkBlue : .clear, lineWidth: 1))
+            .foregroundStyle(active ? CobaltColor.linkBlue : CobaltColor.text)
+        }
+        .buttonStyle(.plain)
     }
 
     private func presetChip(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
@@ -576,16 +681,21 @@ struct TwitchClipEditorView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Live 9:16 Vertical Preview (Split Seam + PiP Drag + Synced Chat Overlay)
+    // MARK: - Live Canvas Preview (9:16 Portrait or 16:9 Landscape + Synced Chat)
 
-    private func verticalPreviewColumn(_ draft: TwitchClipDraft, maxHeight: CGFloat) -> some View {
-        VStack(spacing: 6) {
+    private func canvasPreviewColumn(_ draft: TwitchClipDraft, maxHeight: CGFloat) -> some View {
+        let isLandscape = draft.edit.orientation == .landscape
+        let aspect = CGFloat(TwitchClipTimelineBridge.canvasAspect(for: draft.edit))
+
+        return VStack(spacing: 6) {
             GeometryReader { geo in
                 let size = geo.size
                 let edit = draft.edit
                 let slots = TwitchClipTimelineBridge.slots(for: edit)
                 let bandH = TwitchClipTimelineBridge.bandHeight(for: edit)
+                let bandW = TwitchClipTimelineBridge.bandWidth(for: edit)
                 let videoAreaH = size.height * CGFloat(1.0 - bandH)
+                let videoAreaW = size.width * CGFloat(1.0 - bandW)
 
                 ZStack(alignment: .topLeading) {
                     Color.black
@@ -634,51 +744,89 @@ struct TwitchClipEditorView: View {
                         )
                     }
 
-                    // Dedicated bottom chat band background
+                    // Dedicated bottom chat band (portrait) or right chat sidebar (landscape)
                     if bandH > 0 {
                         Rectangle()
                             .fill(Color(white: 0.08))
                             .frame(width: size.width, height: size.height - videoAreaH)
                             .offset(y: videoAreaH)
+                            .allowsHitTesting(false)
+                    } else if bandW > 0 {
+                        Rectangle()
+                            .fill(Color(white: 0.08))
+                            .frame(width: size.width - videoAreaW, height: size.height)
+                            .offset(x: videoAreaW)
+                            .allowsHitTesting(false)
                     }
 
-                    // Interactive Split Seam (snaps to 35 / 40 / 50 / 60 / 65%)
+                    // Interactive Split Seam (horizontal in portrait, vertical in landscape)
                     if edit.layout == .split {
-                        let seamY = videoAreaH * CGFloat(edit.splitRatio)
-                        ZStack {
-                            Rectangle()
-                                .fill(.white.opacity(draggingSeam ? 0.95 : 0.45))
-                                .frame(width: size.width, height: draggingSeam ? 2.5 : 1.5)
-
-                            HStack(spacing: 4) {
+                        if isLandscape {
+                            let seamX = videoAreaW * CGFloat(edit.splitRatio)
+                            ZStack {
+                                Rectangle()
+                                    .fill(.white.opacity(draggingSeam ? 0.95 : 0.45))
+                                    .frame(width: draggingSeam ? 2.5 : 1.5, height: size.height)
                                 Image(systemName: "line.3.horizontal")
+                                    .rotationEffect(.degrees(90))
                                     .font(.system(size: 9, weight: .bold))
-                                if draggingSeam {
-                                    let pct = Int((edit.splitRatio * 100).rounded())
-                                    Text("\(pct)/\(100 - pct)")
-                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                }
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 8)
+                                    .background(.black.opacity(0.72), in: Capsule())
                             }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(.black.opacity(0.72), in: Capsule())
+                            .frame(width: 28, height: size.height)
+                            .contentShape(Rectangle())
+                            .offset(x: seamX - 14)
+                            .gesture(
+                                DragGesture(minimumDistance: 1)
+                                    .onChanged { value in
+                                        draggingSeam = true
+                                        let raw = Double(value.location.x) / max(1, Double(videoAreaW))
+                                        let snapped = TwitchClipTimelineBridge.snapSplitRatio(raw)
+                                        store.updateEdit(draftID: draft.id) { $0.splitRatio = snapped }
+                                    }
+                                    .onEnded { _ in
+                                        draggingSeam = false
+                                    }
+                            )
+                        } else {
+                            let seamY = videoAreaH * CGFloat(edit.splitRatio)
+                            ZStack {
+                                Rectangle()
+                                    .fill(.white.opacity(draggingSeam ? 0.95 : 0.45))
+                                    .frame(width: size.width, height: draggingSeam ? 2.5 : 1.5)
+
+                                HStack(spacing: 4) {
+                                    Image(systemName: "line.3.horizontal")
+                                        .font(.system(size: 9, weight: .bold))
+                                    if draggingSeam {
+                                        let pct = Int((edit.splitRatio * 100).rounded())
+                                        Text("\(pct)/\(100 - pct)")
+                                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                    }
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(.black.opacity(0.72), in: Capsule())
+                            }
+                            .frame(width: size.width, height: 28)
+                            .contentShape(Rectangle())
+                            .offset(y: seamY - 14)
+                            .gesture(
+                                DragGesture(minimumDistance: 1)
+                                    .onChanged { value in
+                                        draggingSeam = true
+                                        let raw = Double(value.location.y) / max(1, Double(videoAreaH))
+                                        let snapped = TwitchClipTimelineBridge.snapSplitRatio(raw)
+                                        store.updateEdit(draftID: draft.id) { $0.splitRatio = snapped }
+                                    }
+                                    .onEnded { _ in
+                                        draggingSeam = false
+                                    }
+                            )
                         }
-                        .frame(width: size.width, height: 28)
-                        .contentShape(Rectangle())
-                        .offset(y: seamY - 14)
-                        .gesture(
-                            DragGesture(minimumDistance: 1)
-                                .onChanged { value in
-                                    draggingSeam = true
-                                    let raw = Double(value.location.y) / max(1, Double(videoAreaH))
-                                    let snapped = TwitchClipTimelineBridge.snapSplitRatio(raw)
-                                    store.updateEdit(draftID: draft.id) { $0.splitRatio = snapped }
-                                }
-                                .onEnded { _ in
-                                    draggingSeam = false
-                                }
-                        )
                     }
 
                     // Live Synced Chat Overlay
@@ -698,12 +846,14 @@ struct TwitchClipEditorView: View {
                     }
                 }
                 .clipShape(.rect(cornerRadius: 16))
+                .contentShape(.rect(cornerRadius: 16))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16)
                         .stroke(CobaltColor.border.opacity(0.9), lineWidth: 1)
+                        .allowsHitTesting(false)
                 )
             }
-            .aspectRatio(9.0 / 16.0, contentMode: .fit)
+            .aspectRatio(aspect, contentMode: .fit)
             .frame(maxHeight: maxHeight)
 
             if draft.edit.layout == .split {
@@ -727,16 +877,19 @@ struct TwitchClipEditorView: View {
         ZStack(alignment: .topLeading) {
             if let player {
                 EditorPlayerView(player: player)
+                    .allowsHitTesting(false)
                     .frame(width: fullW, height: fullH)
                     .offset(x: offsetX, y: offsetY)
             } else {
                 TwitchClipDraftThumbnail(model: model, draft: draft, maxPixel: 720)
+                    .allowsHitTesting(false)
                     .frame(width: fullW, height: fullH)
                     .offset(x: offsetX, y: offsetY)
             }
         }
         .frame(width: max(1, slotSize.width), height: max(1, slotSize.height), alignment: .topLeading)
         .clipped()
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -744,9 +897,9 @@ struct TwitchClipEditorView: View {
         let log = chatLog ?? RecordedChatLog(channel: draft.channel, duration: draft.duration, entries: [])
         let tt = playhead - config.syncOffset
         let inGap = log.isInGap(at: tt)
-        let maxLines = config.placement == .band ? 4 : 5
+        let maxLines = TwitchClipTimelineBridge.maxVisibleChatLines(for: draft.edit)
         let entries = inGap ? [] : log.visibleEntries(at: playhead, syncOffset: config.syncOffset, maxLines: maxLines)
-        let fontSize = CGFloat(10.5 * config.scale)
+        let fontSize = CGFloat((draft.edit.orientation == .landscape ? 9.5 : 10.5) * config.scale)
 
         VStack(alignment: .leading, spacing: 3) {
             Spacer(minLength: 0)
@@ -900,11 +1053,12 @@ struct TwitchClipEditorView: View {
                     Text("placement")
                         .font(CobaltType.captionSmall)
                         .foregroundStyle(CobaltColor.caption)
+                    let isLandscape = draft.edit.orientation == .landscape
                     HStack(spacing: 5) {
                         placementChip(draft, .bottom, Copy.Twitch.chatPlacementBottom)
-                        placementChip(draft, .seam, Copy.Twitch.chatPlacementSeam)
+                        placementChip(draft, .seam, isLandscape ? Copy.Twitch.chatPlacementRightOverlay : Copy.Twitch.chatPlacementSeam)
                         placementChip(draft, .top, Copy.Twitch.chatPlacementTop)
-                        placementChip(draft, .band, Copy.Twitch.chatPlacementBand)
+                        placementChip(draft, .band, isLandscape ? Copy.Twitch.chatPlacementSidebar : Copy.Twitch.chatPlacementBand)
                     }
                 }
 
@@ -1285,11 +1439,14 @@ struct TwitchClipEditorView: View {
         player?.pause()
         isPlaying = false
         let edit = draft.edit
-        Task {
+        renderTask?.cancel()
+        renderTask = Task {
+            defer { renderTask = nil }
             do {
                 _ = try await store.renderAndUpload(draft: draft)
                 var values: [String: TelemetryValue] = [
                     "ok": .bool(true),
+                    "orientation": .string(edit.orientation.rawValue),
                     "layout": .string(edit.layout.rawValue),
                     "chat_enabled": .bool(edit.chat.enabled),
                     "chat_placement": .string(edit.chat.placement.rawValue),
@@ -1309,9 +1466,12 @@ struct TwitchClipEditorView: View {
                 Analytics.event("twitch_clip_render", values: values)
                 await model.library.refresh()
                 localNotice = Copy.Twitch.savedPrivate
+            } catch is CancellationError {
+                // User cancelled render cleanly; store resets its own state.
             } catch {
                 Analytics.event("twitch_clip_render", values: [
                     "ok": .bool(false),
+                    "orientation": .string(edit.orientation.rawValue),
                     "layout": .string(edit.layout.rawValue),
                     "chat_enabled": .bool(edit.chat.enabled),
                     "show_emotes": .bool(edit.chat.showEmotes),

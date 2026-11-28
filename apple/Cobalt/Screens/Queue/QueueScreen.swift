@@ -352,6 +352,30 @@ struct QueueRowFacts: Equatable {
                 // the status holds the render's fraction (none while it waits in the line)
                 fraction = JobStatus(edit: render, now: now)?.fraction
             }
+        case .audioLevel(let job):
+            symbol = "waveform"
+            title = job.title
+            switch job.state {
+            case .rendering:
+                headline = "leveling audio"
+                if let target = job.targetLufs {
+                    detail = "target \(Int(target.rounded())) LUFS"
+                }
+                showsBar = true
+            case .ready:
+                let when = Format.when(job.updatedAt, now: now)
+                if let out = job.outputLufs {
+                    headline = "leveled to \(String(format: "%.1f", out)) LUFS · \(when)"
+                } else if let target = job.targetLufs {
+                    headline = "leveled to \(Int(target.rounded())) LUFS · \(when)"
+                } else {
+                    headline = "audio leveled · \(when)"
+                }
+            case .failed:
+                headline = "audio leveling failed"
+                detail = job.error
+                isError = true
+            }
         case .job:
             break
         }

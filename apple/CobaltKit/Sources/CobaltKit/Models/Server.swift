@@ -46,7 +46,7 @@ public struct Capabilities: Sendable, Codable, Equatable {
 
         public static let fork = Limits(
             maxWebpSeconds: 10, minWebpSeconds: 0.5, webpWidths: [320, 480], renderFPS: 15,
-            maxUploadBytes: 100_000_000, maxSourceBytes: 209_715_200, sessionTTL: 604_800)
+            maxUploadBytes: 1_073_741_824, maxSourceBytes: 1_073_741_824, sessionTTL: 604_800)
     }
 
     public var kind: ServerKind
@@ -218,6 +218,8 @@ public struct Capabilities: Sendable, Codable, Equatable {
     /// `features.audio_leveling`: EBU R128 loudness measurement, 2-pass leveling (`?audio=normal` share links),
     /// `/audio/settings`, `/library/items/<id>/audio/level`, and `/audio/backfill`. False when absent.
     public var audioLeveling: Bool = false
+    /// `features.multipart_upload`: R2 multipart upload for files over 90 MB up to 1 GiB. False when absent.
+    public var multipartUpload: Bool = false
     /// `posthog` (APP-API-CONTRACT 58): the PostHog project the app's SDK sends to (session replay on iPhone and iPad,
     /// events everywhere). Only answered to a valid key; nil when absent, and the SDK never starts.
     public var postHog: PostHogProject? = nil

@@ -1,0 +1,2717 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cobalt — Collections & Share Link Redesign (4 Variations)</title>
+<style>
+:root {
+  --ui-mono: var(--font-mono, "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace);
+  --ui-sans: var(--font-sans, -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif);
+  --shell-card: var(--card, rgba(22, 22, 28, 0.92));
+  --shell-fg: var(--foreground, #f2f2f5);
+  --shell-muted: var(--muted-foreground, #92929e);
+  --shell-border: var(--border, rgba(255, 255, 255, 0.12));
+  --shell-radius: var(--radius, 14px);
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--ui-sans);
+  color: var(--shell-fg);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.38;
+}
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+button:focus-visible {
+  outline: 2px solid #2f8af9;
+  outline-offset: 2px;
+}
+svg { display: block; flex: none; }
+.mono { font-family: var(--ui-mono); font-variant-numeric: tabular-nums; }
+
+.wrap {
+  container-type: inline-size;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ====== SHOWCASE TOOLBAR ====== */
+.showcase-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 11px;
+  background: var(--shell-card);
+  border: 1px solid var(--shell-border);
+  border-radius: var(--shell-radius);
+}
+.bar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.brand-gem {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, #f0b44c, #2f8af9 55%, #b69cff);
+  box-shadow: 0 0 10px rgba(47, 138, 249, 0.55);
+}
+.brand-name {
+  font-family: var(--ui-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.brand-tag {
+  font-family: var(--ui-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 99px;
+  background: rgba(240, 180, 76, 0.16);
+  border: 1px solid rgba(240, 180, 76, 0.36);
+  color: #f0b44c;
+}
+
+.seg-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2.5px;
+  border-radius: 10px;
+  background: rgba(128, 128, 145, 0.13);
+  border: 1px solid var(--shell-border);
+}
+.seg-btn {
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4.5px 7.5px;
+  border-radius: 7.5px;
+  color: var(--shell-muted);
+  transition: background 0.14s, color 0.14s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.seg-btn:hover { color: var(--shell-fg); }
+.seg-btn.active {
+  background: var(--shell-fg);
+  color: var(--background, #09090b);
+}
+.seg-btn.cmp-active {
+  background: linear-gradient(135deg, #f0b44c, #34d399);
+  color: #09090b;
+}
+
+/* ====== DIRECTION BRIEF BANNER ====== */
+.brief-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--shell-card);
+  border: 1px solid var(--shell-border);
+}
+.brief-main { flex: 1; min-width: 240px; }
+.brief-title {
+  margin: 0 0 2px;
+  font-family: var(--ui-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.rec-pill {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1.5px 6px;
+  border-radius: 99px;
+  background: rgba(52, 211, 153, 0.18);
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  color: #34d399;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.brief-desc {
+  margin: 0;
+  font-size: 11px;
+  color: var(--shell-muted);
+}
+.brief-chips {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.fix-chip {
+  font-family: var(--ui-mono);
+  font-size: 9.5px;
+  padding: 3px 7px;
+  border-radius: 99px;
+  background: rgba(128, 128, 145, 0.14);
+  border: 1px solid var(--shell-border);
+  color: var(--shell-fg);
+  white-space: nowrap;
+}
+
+/* ====== STAGE ====== */
+.stage-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+.stage-grid.side-by-side-portrait {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+@container (max-width: 640px) {
+  .stage-grid.side-by-side-portrait {
+    grid-template-columns: 1fr;
+  }
+}
+
+.screen-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.screen-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  color: var(--shell-muted);
+  padding: 0 2px;
+}
+.screen-meta strong { color: var(--shell-fg); }
+
+/* ====== COBALT DESIGN TOKENS (LIGHT + DARK, AUTHENTIC Tokens.swift) ====== */
+.duo-device {
+  --bg: #000000;
+  --surface: #18181b;
+  --surface-2: #1f1f24;
+  --elevated: #28282e;
+  --text: #e8e8ec;
+  --on-text: #09090b;
+  --caption: #8f8f99;
+  --border: rgba(255, 255, 255, 0.12);
+  --hairline: rgba(255, 255, 255, 0.075);
+  --glass-bg: rgba(28, 28, 34, 0.72);
+  --glass-hi: rgba(255, 255, 255, 0.14);
+  --glass-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --amber: #f0b44c;
+  --amber-bg: rgba(240, 180, 76, 0.16);
+  --amber-bd: rgba(240, 180, 76, 0.36);
+  --set: #b69cff;
+  --set-bg: rgba(182, 156, 255, 0.16);
+  --set-bd: rgba(182, 156, 255, 0.38);
+  --blue: #2f8af9;
+  --blue-bg: rgba(47, 138, 249, 0.16);
+  --blue-bd: rgba(47, 138, 249, 0.38);
+  --emerald: #34d399;
+  --emerald-bg: rgba(52, 211, 153, 0.16);
+  --emerald-bd: rgba(52, 211, 153, 0.42);
+  --loud: #f87171;
+  --loud-bg: rgba(248, 113, 113, 0.15);
+  --quiet: #38bdf8;
+  --quiet-bg: rgba(56, 189, 248, 0.15);
+  --warn: #fbbf24;
+  --warn-bg: rgba(251, 191, 36, 0.16);
+  --red: #ff5c6c;
+  --red-bg: rgba(255, 92, 108, 0.16);
+  --red-bd: rgba(255, 92, 108, 0.34);
+  --rail-bg: #000000;
+  --rail-pill: rgba(255, 255, 255, 0.09);
+  --rail-pill-bd: rgba(255, 255, 255, 0.14);
+  --rail-active: rgba(255, 255, 255, 0.22);
+  --bezel: #24242a;
+
+  position: relative;
+  background: var(--bg);
+  color: var(--text);
+  border: 2px solid var(--bezel);
+  border-radius: 26px;
+  overflow: hidden;
+  font-family: var(--ui-mono);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38);
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.duo-device.theme-light {
+  --bg: #ffffff;
+  --surface: #f4f4f6;
+  --surface-2: #ececf0;
+  --elevated: #e4e4e9;
+  --text: #09090b;
+  --on-text: #ffffff;
+  --caption: #676771;
+  --border: rgba(0, 0, 0, 0.11);
+  --hairline: rgba(0, 0, 0, 0.07);
+  --glass-bg: rgba(248, 248, 251, 0.78);
+  --glass-hi: rgba(255, 255, 255, 0.85);
+  --glass-shadow: 0 8px 22px rgba(0, 0, 0, 0.10);
+  --amber: #8a5a00;
+  --amber-bg: #fbefd6;
+  --amber-bd: rgba(138, 90, 0, 0.28);
+  --set: #5b3fb0;
+  --set-bg: #eee7fb;
+  --set-bd: rgba(91, 63, 176, 0.3);
+  --blue: #196bd4;
+  --blue-bg: rgba(25, 107, 212, 0.12);
+  --blue-bd: rgba(25, 107, 212, 0.3);
+  --emerald: #0d8a5c;
+  --emerald-bg: rgba(13, 138, 92, 0.12);
+  --emerald-bd: rgba(13, 138, 92, 0.34);
+  --loud: #c92a38;
+  --loud-bg: rgba(201, 42, 56, 0.11);
+  --quiet: #0273a8;
+  --quiet-bg: rgba(2, 115, 168, 0.11);
+  --warn: #a16207;
+  --warn-bg: rgba(161, 98, 7, 0.13);
+  --red: #c4142a;
+  --red-bg: rgba(196, 20, 42, 0.11);
+  --red-bd: rgba(196, 20, 42, 0.28);
+  --rail-bg: #ffffff;
+  --rail-pill: rgba(0, 0, 0, 0.045);
+  --rail-pill-bd: rgba(0, 0, 0, 0.10);
+  --rail-active: rgba(0, 0, 0, 0.10);
+  --bezel: #d4d4dc;
+}
+
+.duo-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  min-height: 448px;
+}
+.duo-device.pose-portrait .duo-shell {
+  grid-template-columns: minmax(0, 1fr) 46px;
+  min-height: 472px;
+}
+@container (max-width: 440px) {
+  .duo-shell { grid-template-columns: minmax(0, 1fr) 40px; }
+}
+
+.duo-content {
+  min-width: 0;
+  padding: 12px 10px 12px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  position: relative;
+}
+
+/* ====== IPHONE DUO VERTICAL CONTROLS RAIL (IMG_0661 & IMG_0648) ====== */
+.duo-rail {
+  background: var(--rail-bg);
+  border-left: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 4px 11px;
+  user-select: none;
+}
+.rail-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.rail-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-family: var(--ui-sans);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.rail-ring {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--text);
+  border-bottom-color: var(--border);
+  display: grid;
+  place-items: center;
+  font-size: 8px;
+  font-weight: 800;
+}
+.rail-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--rail-pill);
+  border: 1px solid var(--rail-pill-bd);
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  transition: transform 0.12s, background 0.15s;
+}
+.rail-circle:hover { background: var(--rail-active); }
+.rail-circle:active { transform: scale(0.92); }
+.rail-circle.on {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+}
+.rail-capsule {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 4px;
+  border-radius: 99px;
+  background: var(--rail-pill);
+  border: 1px solid var(--rail-pill-bd);
+  color: var(--text);
+}
+.rail-capsule button {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  transition: background 0.14s;
+}
+.rail-capsule button:hover { background: var(--rail-active); }
+.rail-capsule button.active-tab {
+  background: var(--rail-active);
+}
+.rail-capsule button.sel-on {
+  background: var(--blue);
+  color: #fff;
+}
+
+/* ====== SYNTHETIC REALISTIC MEDIA ARTWORK ====== */
+.art {
+  position: relative;
+  overflow: hidden;
+  display: block;
+}
+.art-a { background: linear-gradient(155deg, #62564e 0%, #312c30 55%, #17161b 100%); }
+.art-b { background: linear-gradient(150deg, #9c8269 0%, #5c493b 54%, #251d18 100%); }
+.art-c { background: linear-gradient(145deg, #4b5d78 0%, #263147 52%, #131824 100%); }
+.art-d { background: radial-gradient(circle at 60% 35%, #695e45 0%, #24252d 50%, #0b0b0e 100%); }
+.art-e { background: linear-gradient(160deg, #3c6259 0%, #1d3531 55%, #0d1917 100%); }
+.art-f { background: linear-gradient(150deg, #6b4c7a 0%, #342442 54%, #16101f 100%); }
+.art-g { background: linear-gradient(155deg, #8a4a55 0%, #44212a 55%, #190d11 100%); }
+.art-h { background: linear-gradient(145deg, #4f6f8f 0%, #2a3e54 55%, #131c28 100%); }
+.art-i { background: linear-gradient(160deg, #7d6846 0%, #3e3424 55%, #1a1610 100%); }
+
+/* Subtle visual texture / subject silhouette inside thumbs */
+.art::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.16), transparent 56%);
+  pointer-events: none;
+}
+.art-cap {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  right: 5px;
+  font-family: var(--ui-sans);
+  font-size: 7px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  line-height: 1.15;
+  text-align: center;
+  pointer-events: none;
+}
+.play-pip {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.56);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+.play-pip.sm { width: 18px; height: 18px; }
+.play-pip.lg { width: 34px; height: 34px; }
+.dur-pip {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  padding: 1px 4px;
+  border-radius: 5px;
+  font-size: 8px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.68);
+  color: #f4f4f6;
+}
+.count-pip {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.54);
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #fff;
+}
+
+/* ====== ADAPTIVE COVER ENGINE (1 / 2 / 3 / 4+ items — ZERO EMPTY BOXES!) ====== */
+.acover {
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--elevated);
+  display: grid;
+  gap: 2px;
+  flex: none;
+}
+.acover.n1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.acover.n2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+.acover.n3 { grid-template-columns: 1.35fr 1fr; grid-template-rows: 1fr 1fr; }
+.acover.n3 > :first-child { grid-row: 1 / 3; }
+.acover.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.acover .acell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ====== SHARED TYPOGRAPHY & CHIPS ====== */
+.nav-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.nav-title {
+  font-family: var(--ui-sans);
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: -0.025em;
+  color: var(--text);
+  margin: 0;
+}
+.sec-lbl {
+  font-size: 10px;
+  color: var(--caption);
+  letter-spacing: 0.01em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.chip-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 1px;
+}
+.chip-row::-webkit-scrollbar { display: none; }
+
+.set-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 4.5px 9px;
+  border-radius: 99px;
+  background: var(--elevated);
+  color: var(--set);
+  white-space: nowrap;
+  transition: all 0.14s;
+  flex: none;
+}
+.set-chip.all-chip { color: var(--text); }
+.set-chip.on {
+  background: var(--set);
+  color: #fff;
+}
+.set-chip.all-chip.on {
+  background: var(--text);
+  color: var(--on-text);
+}
+.set-chip.dashed {
+  background: transparent;
+  color: var(--caption);
+  border: 1.2px dashed var(--border);
+}
+.set-chip.dashed:hover {
+  border-color: var(--text);
+  color: var(--text);
+}
+
+.set-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 11px;
+  background: var(--set-bg);
+  border: 1px solid var(--set-bd);
+  color: var(--set);
+  font-size: 10px;
+}
+.set-action-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.mini-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9.5px;
+  font-weight: 650;
+  padding: 3.5px 7.5px;
+  border-radius: 99px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  transition: all 0.14s;
+  white-space: nowrap;
+}
+.mini-pill-btn:hover { border-color: var(--text); }
+.mini-pill-btn.set-tint {
+  background: var(--set);
+  border-color: transparent;
+  color: #fff;
+}
+.mini-pill-btn.em-tint {
+  background: var(--emerald);
+  border-color: transparent;
+  color: #041d14;
+}
+.mini-pill-btn.amber-tint {
+  background: var(--amber-bg);
+  border-color: var(--amber-bd);
+  color: var(--amber);
+}
+.mini-pill-btn.red-tint {
+  background: var(--red-bg);
+  border-color: var(--red-bd);
+  color: var(--red);
+}
+
+.icon-copy-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--text);
+  color: var(--on-text);
+  display: grid;
+  place-items: center;
+  flex: none;
+  transition: transform 0.12s, background 0.15s;
+}
+.icon-copy-btn:active { transform: scale(0.9); }
+.icon-copy-btn.copied {
+  background: var(--emerald);
+  color: #041e14;
+}
+.icon-soft-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  flex: none;
+  transition: all 0.14s;
+}
+.icon-soft-btn.blue { background: var(--blue-bg); border-color: var(--blue-bd); color: var(--blue); }
+.icon-soft-btn.em { background: var(--emerald-bg); border-color: var(--emerald-bd); color: var(--emerald); }
+.icon-soft-btn.red { background: var(--red-bg); border-color: var(--red-bd); color: var(--red); }
+
+.select-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: 11px;
+  background: var(--blue-bg);
+  border: 1px solid var(--blue-bd);
+  color: var(--blue);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* ====== VARIATION A: ADAPTIVE BENTO & UNIFIED SHARE DECK ====== */
+.va-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.duo-device.pose-portrait .va-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@container (max-width: 580px) {
+  .va-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.va-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  text-align: left;
+  transition: transform 0.12s, border-color 0.15s;
+}
+.va-card:hover { border-color: var(--border); }
+.va-card.selected {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 1.5px var(--blue);
+}
+.va-card .acover {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: 9px;
+}
+.va-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+.va-card-meta { min-width: 0; }
+.va-card-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--amber);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.va-card-sub {
+  font-size: 9.5px;
+  color: var(--caption);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.va-new-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: 14px;
+  border: 1.4px dashed var(--border);
+  color: var(--caption);
+  min-height: 112px;
+  font-size: 10.5px;
+  font-weight: 600;
+  transition: all 0.14s;
+}
+.va-new-card:hover { border-color: var(--text); color: var(--text); }
+
+/* Link Rows (compact preview in LinksScreen) */
+.link-row-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: 13px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  transition: border-color 0.14s;
+}
+.link-row-card:hover { border-color: var(--border); }
+.link-row-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.link-row-title {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.link-row-sub {
+  font-size: 9.5px;
+  color: var(--caption);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+/* ====== VARIATION B: EDITORIAL MEDIA CARDS & LIQUID GLASS STAGE ====== */
+.vb-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.duo-device.pose-portrait .vb-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@container (max-width: 580px) {
+  .vb-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.vb-poster {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  aspect-ratio: 4 / 3.4;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  cursor: pointer;
+}
+.vb-poster.selected {
+  box-shadow: 0 0 0 2px var(--blue);
+}
+.vb-poster .acover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+.vb-top-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.vb-pill {
+  font-size: 8.5px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 99px;
+  background: rgba(0, 0, 0, 0.56);
+  backdrop-filter: blur(10px);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.vb-glass-foot {
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  bottom: 5px;
+  padding: 6px 7px;
+  border-radius: 12px;
+  background: rgba(16, 16, 22, 0.72);
+  backdrop-filter: blur(16px) saturate(170%);
+  -webkit-backdrop-filter: blur(16px) saturate(170%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+}
+.vb-glass-name {
+  font-size: 10px;
+  font-weight: 700;
+  color: #f6c76d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.vb-glass-sub {
+  font-size: 8.5px;
+  color: rgba(255, 255, 255, 0.72);
+}
+.vb-glass-copy {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.vb-glass-copy.copied { background: #34d399; color: #052016; border-color: transparent; }
+
+/* ====== VARIATION C: COMPACT SERIES STACKS & COMMAND INSPECTOR ====== */
+.vc-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  font-size: 10px;
+  color: var(--caption);
+}
+.vc-series-stack {
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--amber-bd);
+  overflow: hidden;
+}
+.vc-series-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  text-align: left;
+  background: linear-gradient(90deg, var(--amber-bg), transparent 72%);
+}
+.vc-fan {
+  position: relative;
+  width: 52px;
+  height: 38px;
+  flex: none;
+}
+.vc-fan-tile {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  border: 1.5px solid var(--surface);
+  overflow: hidden;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
+}
+.vc-fan-tile.f1 { left: 0; top: 2px; z-index: 3; }
+.vc-fan-tile.f2 { left: 9px; top: 1px; z-index: 2; transform: rotate(4deg); opacity: 0.92; }
+.vc-fan-tile.f3 { left: 17px; top: 3px; z-index: 1; transform: rotate(9deg); opacity: 0.78; }
+.vc-series-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--hairline);
+}
+.vc-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6.5px 10px;
+  border-bottom: 1px solid var(--hairline);
+  transition: background 0.12s;
+}
+.vc-row:last-child { border-bottom: 0; }
+.vc-row:hover { background: var(--surface-2); }
+.vc-row.selected { background: var(--blue-bg); }
+.vc-list-box {
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+}
+
+/* ====== VARIATION D: SPLIT SHELF & TACTILE FLOATING DOCK ====== */
+.vd-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.duo-device.pose-portrait .vd-grid {
+  grid-template-columns: 1fr;
+}
+@container (max-width: 520px) {
+  .vd-grid { grid-template-columns: 1fr; }
+}
+.vd-tile {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px 6px 6px;
+  border-radius: 13px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  text-align: left;
+  transition: border-color 0.14s;
+}
+.vd-tile:hover { border-color: var(--border); }
+.vd-tile.selected { border-color: var(--blue); box-shadow: 0 0 0 1.5px var(--blue); }
+.vd-tile .acover {
+  width: 50px;
+  height: 50px;
+  border-radius: 9px;
+}
+
+/* ====== SHARE LINK DETAIL (LinkPanePage) LAYOUTS ====== */
+.link-two-col {
+  display: grid;
+  grid-template-columns: 0.78fr 1.22fr;
+  gap: 12px;
+  align-items: start;
+}
+.duo-device.pose-portrait .link-two-col {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+@container (max-width: 560px) {
+  .link-two-col { grid-template-columns: 1fr; gap: 10px; }
+}
+
+.hero-mosaic {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  width: 100%;
+}
+.duo-device.pose-portrait .hero-mosaic {
+  grid-template-columns: repeat(4, 1fr);
+}
+.hero-cell {
+  position: relative;
+  aspect-ratio: 1 / 1.05;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+}
+.hero-lufs {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  padding: 1.5px 4.5px;
+  border-radius: 5px;
+  font-size: 8px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+}
+.hero-lufs.ok { color: #6ee7b7; }
+.hero-lufs.loud { color: #fca5a5; }
+.hero-lufs.quiet { color: #7dd3fc; }
+.hero-lufs.work { color: #fde68a; }
+
+/* Unified Share Deck (Var A) */
+.share-deck {
+  padding: 9px 10px;
+  border-radius: 15px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.share-deck.normal-on {
+  border-color: var(--emerald-bd);
+}
+.primary-copy-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cta-primary {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--text);
+  color: var(--on-text);
+  font-size: 11px;
+  font-weight: 700;
+  transition: transform 0.12s, background 0.16s;
+}
+.cta-primary:active { transform: scale(0.97); }
+.cta-primary.em { background: var(--emerald); color: #042016; }
+
+/* Audio Segmented Switch */
+.audio-seg {
+  display: grid;
+  grid-template-columns: 0.9fr 1.3fr;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+}
+.audio-seg button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 9.5px;
+  font-weight: 650;
+  padding: 4.5px 6px;
+  border-radius: 6.5px;
+  color: var(--caption);
+  transition: all 0.14s;
+  white-space: nowrap;
+}
+.audio-seg button.on {
+  background: var(--elevated);
+  color: var(--text);
+}
+.audio-seg button.on.em {
+  background: var(--emerald);
+  color: #041e14;
+}
+.audio-seg button.locked {
+  opacity: 0.62;
+}
+
+.url-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 9px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  font-size: 9.5px;
+  color: var(--caption);
+}
+.url-path {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.url-q { color: var(--emerald); font-weight: 700; }
+
+/* Action Pill Strip (replaces bulky 2x2 tiles!) */
+.action-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+.act-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 7px 4px;
+  border-radius: 11px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--text);
+  transition: all 0.14s;
+}
+.act-chip:hover { border-color: var(--border); }
+.act-chip.active { background: var(--blue-bg); border-color: var(--blue-bd); color: var(--blue); }
+.act-chip.priv { background: var(--set-bg); border-color: var(--set-bd); color: var(--set); }
+.act-chip.danger { background: var(--red-bg); border-color: var(--red-bd); color: var(--red); }
+
+/* Loudness Bar */
+.dist-track {
+  height: 5px;
+  border-radius: 99px;
+  background: var(--elevated);
+  overflow: hidden;
+  display: flex;
+  gap: 1.5px;
+}
+.dist-track > span { height: 100%; transition: width 0.3s ease; }
+.ds-ok { background: var(--emerald); }
+.ds-work { background: var(--warn); }
+.ds-loud { background: var(--loud); }
+.ds-quiet { background: var(--quiet); }
+
+/* Badges */
+.badge-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.vis-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9.5px;
+  font-weight: 650;
+  padding: 2.5px 7px;
+  border-radius: 99px;
+  background: var(--elevated);
+  color: var(--caption);
+}
+.vis-badge.is-priv {
+  background: var(--set-bg);
+  color: var(--set);
+  border: 1px solid var(--set-bd);
+}
+.coll-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9.5px;
+  font-weight: 650;
+  padding: 2.5px 7.5px;
+  border-radius: 99px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  border: 1px solid var(--amber-bd);
+}
+.coll-tag.off {
+  background: transparent;
+  color: var(--caption);
+  border-color: var(--hairline);
+}
+
+/* File Rows */
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+}
+.file-num {
+  width: 14px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--caption);
+  flex: none;
+}
+.file-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex: none;
+}
+.file-meta {
+  flex: 1;
+  min-width: 0;
+}
+.file-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-sub {
+  font-size: 9px;
+  color: var(--caption);
+}
+.lufs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 3px 6.5px;
+  border-radius: 99px;
+  white-space: nowrap;
+  flex: none;
+}
+.lufs-pill.ok { background: var(--emerald-bg); color: var(--emerald); border: 1px solid var(--emerald-bd); }
+.lufs-pill.loud { background: var(--loud-bg); color: var(--loud); border: 1px solid rgba(248, 113, 113, 0.35); }
+.lufs-pill.quiet { background: var(--quiet-bg); color: var(--quiet); border: 1px solid rgba(56, 189, 248, 0.35); }
+.lufs-pill.work { background: var(--warn-bg); color: var(--warn); border: 1px solid rgba(251, 191, 36, 0.35); }
+.lufs-pill.img { background: var(--elevated); color: var(--caption); }
+
+/* Discord Mini Preview */
+.discord-box {
+  padding: 8px 9px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--blue);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* Variation B Link Stage Overlays */
+.vb-hero-stage {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+}
+.vb-hero-hud {
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  bottom: 7px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: rgba(14, 14, 18, 0.72);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  color: #fff;
+}
+
+/* Variation C Command Bar + LUFS Ruler */
+.vc-cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.vc-ruler {
+  position: relative;
+  height: 7px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, rgba(56,189,248,0.45) 0 32%, rgba(52,211,153,0.45) 32% 62%, rgba(251,191,36,0.55) 62% 68%, rgba(248,113,113,0.5) 68% 100%);
+  margin: 4px 0 2px;
+}
+.vc-ruler-target {
+  position: absolute;
+  left: 56%;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--text);
+  border-radius: 1px;
+}
+.vc-ruler-dot {
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid #fff;
+}
+
+/* Variation D Floating Bottom Dock */
+.vd-dock-wrap {
+  margin-top: auto;
+  padding: 7px 8px;
+  border-radius: 15px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px) saturate(170%);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  border: 1px solid var(--border);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-hi);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Edit Mode Bar */
+.edit-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 12px;
+  background: var(--blue-bg);
+  border: 1px solid var(--blue-bd);
+}
+.edit-title-input {
+  width: 100%;
+  font-family: var(--ui-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--elevated);
+  border: 1px solid var(--blue-bd);
+  border-radius: 9px;
+  padding: 6px 9px;
+}
+
+/* ====== COMPARE ALL GRID ====== */
+.cmp-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+@container (max-width: 600px) {
+  .cmp-grid { grid-template-columns: 1fr; }
+}
+.cmp-card {
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: var(--shell-card);
+  border: 1px solid var(--shell-border);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.cmp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.cmp-head h3 {
+  margin: 0;
+  font-family: var(--ui-mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+.cmp-bullets {
+  margin: 0;
+  padding-left: 15px;
+  font-size: 11px;
+  color: var(--shell-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cmp-bullets strong { color: var(--shell-fg); }
+.cmp-jump {
+  align-self: flex-start;
+  margin-top: auto;
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4.5px 9px;
+  border-radius: 8px;
+  background: rgba(128, 128, 145, 0.16);
+  border: 1px solid var(--shell-border);
+  color: var(--shell-fg);
+}
+.cmp-jump:hover { background: var(--shell-fg); color: var(--background, #09090b); }
+
+/* Shake + Toast */
+@keyframes shakeX {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  45% { transform: translateX(4px); }
+  70% { transform: translateX(-3px); }
+}
+.shaking { animation: shakeX 0.3s ease; }
+
+.toast-float {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%) translateY(16px);
+  padding: 7px 13px;
+  border-radius: 99px;
+  background: rgba(20, 20, 26, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #f4f4f6;
+  font-family: var(--ui-mono);
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.48);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s, transform 0.18s;
+  z-index: 999;
+  max-width: 92vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toast-float.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.toast-float.ok { border-color: rgba(52, 211, 153, 0.55); color: #6ee7b7; }
+.toast-float.err { border-color: rgba(248, 113, 113, 0.55); color: #fca5a5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="showcase-bar">
+    <div class="bar-row">
+      <div class="brand">
+        <span class="brand-gem"></span>
+        <span class="brand-name">cobalt · collections &amp; share link</span>
+        <span class="brand-tag">4 redesigns</span>
+      </div>
+      <div class="seg-group" id="varTabs"></div>
+    </div>
+    <div class="bar-row">
+      <div class="seg-group" id="surfaceTabs"></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <div class="seg-group" id="poseTabs"></div>
+        <div class="seg-group" id="themeTabs"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="briefHost"></div>
+  <div id="stageHost"></div>
+</div>
+
+<div class="toast-float" id="toastEl"></div>
+
+<script>
+// ====== SVG ICONS ======
+const IC = {
+  folder: `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z"/></svg>`,
+  set: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 20h12a2 2 0 0 0 2-2V8"/></svg>`,
+  plus: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+  copy: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2.5"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`,
+  check: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`,
+  edit: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`,
+  lock: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`,
+  globe: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>`,
+  revoke: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>`,
+  share: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>`,
+  wave: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 12v0M8 8v8M12 5v14M16 8v8M20 12v0"/></svg>`,
+  play: `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5l13 7.5-13 7.5z"/></svg>`,
+  back: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>`,
+  refresh: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3L21 8"/><path d="M21 3v5h-5"/></svg>`,
+  checkCircle: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>`,
+  more: `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18" cy="12" r="1.8"/></svg>`,
+  chevRight: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>`,
+  chevDown: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>`,
+  search: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>`,
+  grip: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 9h14M5 15h14"/></svg>`,
+  minus: `<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/><rect x="7" y="11" width="10" height="2" rx="1" fill="#fff"/></svg>`,
+  downTab: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8.5 12.5L12 16l3.5-3.5"/></svg>`,
+  libTab: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M4 15l4.5-4.5L13 15l3-3 4 4"/></svg>`,
+  liveTab: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M7.5 8.5a6.5 6.5 0 0 0 0 7M16.5 8.5a6.5 6.5 0 0 1 0 7"/></svg>`,
+  linksTab: `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg>`,
+  key: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2.5 2.5"/></svg>`,
+  eye: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.8"/></svg>`
+};
+
+// ====== REALISTIC DATASET (Grounded in IMG_0661 & IMG_0648) ======
+const SETS = [
+  { id: "all", name: "all", count: 32 },
+  { id: "lia", name: "Lia Shares", count: 18 },
+  { id: "discord", name: "Discord", count: 9 },
+  { id: "private", name: "Private Vault", count: 5 }
+];
+
+const COLLECTIONS = [
+  { id: "c1", name: "Lia Share 37", links: 1, set: "lia", series: "Lia Share", updated: "today", priv: false,
+    thumbs: [{ cls: "art-a", cap: "", dur: "0:21" }] },
+  { id: "c2", name: "Lia Share 35", links: 1, set: "lia", series: "Lia Share", updated: "yesterday", priv: false,
+    thumbs: [{ cls: "art-b", cap: "", dur: "0:17" }] },
+  { id: "c3", name: "Lia Share 34", links: 1, set: "lia", series: "Lia Share", updated: "2d ago", priv: true,
+    thumbs: [{ cls: "art-f", cap: "", dur: "0:34" }] },
+  { id: "c5", name: "Discord Drops", links: 6, set: "discord", series: null, updated: "today", priv: false,
+    thumbs: [{ cls: "art-c" }, { cls: "art-e" }, { cls: "art-g" }, { cls: "art-h" }], extra: 2 },
+  { id: "c6", name: "Weekend Clips", links: 2, set: "discord", series: null, updated: "3d ago", priv: false,
+    thumbs: [{ cls: "art-e" }, { cls: "art-i" }] },
+  { id: "c7", name: "Design Refs", links: 3, set: "private", series: null, updated: "5d ago", priv: true,
+    thumbs: [{ cls: "art-h" }, { cls: "art-f" }, { cls: "art-c" }] }
+];
+
+const INDIVIDUAL_LINKS = [
+  { id: "l40", title: "6 files", files: 6, when: "today 23:50", priv: false, coll: "Lia Share 40", url: "share.capybaraharmony.com/g/8962396074701362336",
+    thumbs: [{ cls: "art-a" }, { cls: "art-b" }, { cls: "art-d" }, { cls: "art-c" }], audioReady: false },
+  { id: "l39", title: "Friday night edits", files: 3, when: "yesterday", priv: true, coll: "Discord Drops", url: "share.capybaraharmony.com/p/k9x2…m41q",
+    thumbs: [{ cls: "art-e" }, { cls: "art-g" }, { cls: "art-h" }], audioReady: true },
+  { id: "l38", title: "Cat purifier loop", files: 2, when: "3d ago", priv: false, coll: "Weekend Clips", url: "share.capybaraharmony.com/g/7410294810294812",
+    thumbs: [{ cls: "art-d" }, { cls: "art-i" }], audioReady: true }
+];
+
+const INITIAL_LINK_FILES = [
+  { id: "f1", title: "instagram · DgCRjOJx9xI", kind: "video", dur: "0:21", cls: "art-a", cap: "", audio: "ok", lufs: -14.0 },
+  { id: "f2", title: "Two men demonstrate two-factor…", kind: "video", dur: "0:17", cls: "art-b", cap: "2FA login skit", audio: "loud", lufs: -7.4 },
+  { id: "f3", title: "Two cats lounge around a glowi…", kind: "video", dur: "0:29", cls: "art-d", cap: "", audio: "ok", lufs: -14.1 },
+  { id: "f4", title: "Phone screen midnight scroll", kind: "video", dur: "0:14", cls: "art-c", cap: "", audio: "quiet", lufs: -21.8 },
+  { id: "f5", title: "Harbour rain timelapse", kind: "video", dur: "0:42", cls: "art-e", cap: "", audio: "ok", lufs: -13.9 },
+  { id: "f6", title: "Cover frame still", kind: "image", dur: "", cls: "art-h", cap: "", audio: "img", lufs: null }
+];
+
+const VARIATIONS = {
+  A: {
+    short: "A · Adaptive Bento",
+    title: "Variation A — Adaptive Bento & Unified Share Deck",
+    rec: true,
+    desc: "Direct Cobalt evolution: kills the dead header gap, adapts collection covers to 1 / 2 / 3 / 4-up with zero gray placeholders, and replaces bulky 2×2 action tiles with a single Liquid Glass Share Deck + inline ?audio=normal gate.",
+    fixes: ["Zero dead gap", "1/2/3/4-up covers", "Unified Share Deck", "Inline ?audio=normal"]
+  },
+  B: {
+    short: "B · Media Glass",
+    title: "Variation B — Editorial Media Posters & Liquid Glass Stage",
+    rec: false,
+    desc: "Photos-style full-bleed poster cards with translucent Liquid Glass footers and 1-tap copy right on every collection. Share Link detail becomes a cinematic media stage with floating HUD pills and a calm inspector.",
+    fixes: ["Full-bleed posters", "Liquid Glass HUD", "1-tap card copy", "Visual recognition"]
+  },
+  C: {
+    short: "C · Series Command",
+    title: "Variation C — Collapsible Series Stacks & Command Inspector",
+    rec: false,
+    desc: "Built for 30–100+ numbered collections: automatically groups `Lia Share 37…33` into a fanned collapsible stack with quick search + batch select, paired with a dense Studio Command header and live LUFS ruler.",
+    fixes: ["Auto-groups Lia Share", "Search & batch", "Live LUFS ruler", "High density"]
+  },
+  D: {
+    short: "D · Split & Dock",
+    title: "Variation D — Compact Tile Grid & Floating Thumb Dock",
+    rec: false,
+    desc: "iPhone Duo ergonomics: horizontal compact collection tiles (adaptive square thumb + metadata + instant copy) eliminate vertical bloat, while Share Link anchors primary actions & ?audio=normal in a thumb-reach floating glass dock.",
+    fixes: ["Compact horizontal tiles", "Thumb-reach dock", "Collections / Links tab", "Duo split ready"]
+  },
+  CMP: {
+    short: "Compare All",
+    title: "Side-by-Side Comparison — Pick a Direction or Mix & Match",
+    rec: false,
+    desc: "Compare how each variation solves the 4 pain points from IMG_0661 & IMG_0648. Jump into any variation to test Sets, Select Mode, Edit Mode, Privacy, and live Bulk Audio Leveling.",
+    fixes: ["All 4 pain points solved", "Light + Dark ready", "Duo Portrait + Landscape"]
+  }
+};
+
+// ====== APP STATE ======
+const state = {
+  variation: "A",
+  surface: "both",      // "both" | "links" | "detail"
+  pose: "landscape",    // "landscape" | "portrait"
+  theme: "dark",        // "dark" | "light"
+  selectedSet: "all",
+  selectMode: false,
+  selectedColls: new Set(),
+  seriesExpanded: true,
+  linksTabMode: "all",  // "all" | "collections" | "links" (for Var D / tabs)
+  copiedId: null,
+  // Share Link detail state
+  linkTitle: "6 files",
+  linkPrivate: false,
+  linkEditing: false,
+  useNormalAudio: false,
+  showDiscord: false,
+  linkColls: new Set(["Lia Share 40"]),
+  files: INITIAL_LINK_FILES.map(f => ({ ...f })),
+  levelingTimer: null
+};
+
+let toastTimer = null;
+function showToast(msg, tone = "neutral") {
+  const el = document.getElementById("toastEl");
+  el.textContent = msg;
+  el.className = "toast-float show" + (tone === "ok" ? " ok" : tone === "err" ? " err" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2300);
+}
+
+function shakeEl(el) {
+  if (!el) return;
+  el.classList.remove("shaking");
+  void el.offsetWidth;
+  el.classList.add("shaking");
+}
+
+function flashCopy(id, msg, tone = "ok") {
+  state.copiedId = id;
+  showToast(msg, tone);
+  render();
+  setTimeout(() => {
+    if (state.copiedId === id) {
+      state.copiedId = null;
+      render();
+    }
+  }, 1500);
+}
+
+// ====== AUDIO GATE LOGIC (mirrors AudioShareGate) ======
+function getGate() {
+  const audible = state.files.filter(f => f.kind === "video");
+  const leveled = audible.filter(f => f.audio === "ok");
+  const working = audible.filter(f => f.audio === "work");
+  const remaining = audible.filter(f => f.audio !== "ok" && f.audio !== "work");
+  const unlocked = audible.length > 0 && leveled.length === audible.length;
+  return { audible, leveled, working, remaining, unlocked };
+}
+
+function startBulkLevel(singleId = null) {
+  const targets = singleId
+    ? state.files.filter(f => f.id === singleId && f.audio !== "ok" && f.audio !== "work")
+    : state.files.filter(f => f.kind === "video" && f.audio !== "ok" && f.audio !== "work");
+  if (!targets.length) return;
+  targets.forEach(f => { f.audio = "work"; });
+  showToast(`Leveling ${targets.length} video${targets.length > 1 ? "s" : ""} to -14 LUFS…`);
+  render();
+  targets.forEach((f, idx) => {
+    setTimeout(() => {
+      f.audio = "ok";
+      f.lufs = -14.0;
+      const g = getGate();
+      if (g.unlocked) {
+        state.useNormalAudio = true;
+        showToast("All videos leveled · ?audio=normal unlocked!", "ok");
+      }
+      render();
+    }, 650 + idx * 550);
+  });
+}
+
+function resetAudioDemo() {
+  state.files = INITIAL_LINK_FILES.map(f => ({ ...f }));
+  state.useNormalAudio = false;
+  showToast("Reset audio telemetry (2 videos un-leveled)");
+  render();
+}
+
+function activeShareURL() {
+  const base = state.linkPrivate
+    ? "share.capybaraharmony.com/p/k8m2v9q1x7"
+    : "share.capybaraharmony.com/g/8962396074701362336";
+  const g = getGate();
+  const suffix = g.unlocked && state.useNormalAudio ? "?audio=normal" : "";
+  return { base, suffix, full: base + suffix };
+}
+
+// ====== ADAPTIVE COVER HTML (1, 2, 3, or 4+ — ZERO EMPTY BOXES) ======
+function renderAdaptiveCover(thumbs, extra = 0, showPlay = true) {
+  const count = Math.min(4, Math.max(1, thumbs.length));
+  const shown = thumbs.slice(0, count);
+  const cells = shown.map((t, idx) => {
+    const isLastOverflow = idx === 3 && extra > 0;
+    return `
+      <div class="acell art ${t.cls}">
+        ${t.cap && count === 1 ? `<div class="art-cap">${t.cap}</div>` : ""}
+        ${showPlay && !isLastOverflow ? `<div class="play-pip ${count > 1 ? "sm" : ""}">${IC.play}</div>` : ""}
+        ${t.dur && count === 1 ? `<span class="dur-pip">${t.dur}</span>` : ""}
+        ${isLastOverflow ? `<div class="count-pip">+${extra}</div>` : ""}
+      </div>`;
+  }).join("");
+  return `<div class="acover n${count}">${cells}</div>`;
+}
+
+// ====== IPHONE DUO VERTICAL CONTROLS RAIL ======
+function renderDuoRail(mode) {
+  if (mode === "links") {
+    return `
+      <aside class="duo-rail" aria-label="iPhone Duo Vertical Controls">
+        <div class="rail-top">
+          <div class="rail-status">
+            <span>8:37</span>
+            <span class="rail-ring">93</span>
+          </div>
+          <button class="rail-circle" data-toast="Back">${IC.back}</button>
+          <div class="rail-capsule">
+            <button class="${state.selectMode ? "sel-on" : ""}" data-toggle-select title="Select Mode">${IC.checkCircle}</button>
+            <button data-toast="Refreshed 32 collections">${IC.refresh}</button>
+          </div>
+        </div>
+        <div class="rail-capsule">
+          <button data-toast="Save tab">${IC.downTab}</button>
+          <button data-toast="Library tab">${IC.libTab}</button>
+          <button data-toast="Live tab">${IC.liveTab}</button>
+          <button class="active-tab" title="Links tab">${IC.linksTab}</button>
+        </div>
+      </aside>`;
+  }
+  return `
+    <aside class="duo-rail" aria-label="iPhone Duo Vertical Controls">
+      <div class="rail-top">
+        <div class="rail-status">
+          <span>11:52</span>
+          <span class="rail-ring">95</span>
+        </div>
+        <button class="rail-circle" data-toast="Closed link pane">${IC.back}</button>
+        <div class="rail-capsule">
+          <button class="${state.linkEditing ? "sel-on" : ""}" data-toggle-edit title="Edit Link">${IC.edit}</button>
+          <button data-toast="More: Rotate key · New collection · Reroll">${IC.more}</button>
+        </div>
+      </div>
+      <div class="rail-capsule">
+        <button data-toast="Save tab">${IC.downTab}</button>
+        <button data-toast="Library tab">${IC.libTab}</button>
+        <button data-toast="Live tab">${IC.liveTab}</button>
+        <button class="active-tab" title="Links tab">${IC.linksTab}</button>
+      </div>
+    </aside>`;
+}
+
+// ====== SET CHIPS + INLINE SET BAR ======
+function renderSetChips(compact = false) {
+  const chips = SETS.map(s => {
+    const on = state.selectedSet === s.id;
+    const isAll = s.id === "all";
+    return `<button class="set-chip ${isAll ? "all-chip" : ""} ${on ? "on" : ""}" data-set="${s.id}">
+      ${isAll ? "" : IC.set}<span>${s.name} ${s.count}</span>
+    </button>`;
+  }).join("");
+
+  const activeSet = SETS.find(s => s.id === state.selectedSet);
+  const setBar = activeSet && activeSet.id !== "all" ? `
+    <div class="set-action-bar">
+      <span style="display:flex;align-items:center;gap:5px;font-weight:650;">${IC.set} ${activeSet.name} · ${activeSet.count} collections</span>
+      <div class="set-action-btns">
+        <button class="mini-pill-btn set-tint" data-copy-set="${activeSet.name}">${IC.copy} copy all</button>
+        <button class="mini-pill-btn" data-toast="Rename set '${activeSet.name}'">${IC.edit}</button>
+        <button class="mini-pill-btn" data-toast="Set menu: Rename · Delete set">${IC.more}</button>
+      </div>
+    </div>` : "";
+
+  return `
+    <div class="chip-row">
+      ${chips}
+      <button class="set-chip dashed" data-toast="New set dialog opened">${IC.plus} new set</button>
+    </div>
+    ${!compact ? setBar : setBar}`;
+}
+
+function getFilteredCollections() {
+  if (state.selectedSet === "all") return COLLECTIONS;
+  return COLLECTIONS.filter(c => c.set === state.selectedSet);
+}
+
+function renderSelectBanner() {
+  if (!state.selectMode) return "";
+  const n = state.selectedColls.size;
+  return `
+    <div class="select-banner">
+      <span>${n ? `${n} selected` : "Tap collections to select"}</span>
+      <div style="display:flex;gap:4px;">
+        <button class="mini-pill-btn" data-toast="Added ${n || 2} collections to set">${IC.set} add to set</button>
+        <button class="mini-pill-btn" data-toast="Copied all links from ${n || 2} collections">${IC.copy} copy</button>
+        <button class="mini-pill-btn" data-toggle-select>done</button>
+      </div>
+    </div>`;
+}
+
+// =========================================================================
+// SCREEN 1: COLLECTIONS & SETS (LinksScreen) — 4 DISTINCT VARIATIONS
+// =========================================================================
+function renderLinksScreen(v) {
+  const colls = getFilteredCollections();
+  let body = "";
+
+  if (v === "A") {
+    // VARIATION A: Adaptive Bento Grid (tight spacing, zero dead gap, 1/2/3/4-up adaptive covers)
+    const cards = colls.map(c => {
+      const sel = state.selectedColls.has(c.id);
+      const isCopied = state.copiedId === c.id;
+      return `
+        <div class="va-card ${sel ? "selected" : ""}" data-coll-tap="${c.id}" style="cursor:pointer;">
+          ${renderAdaptiveCover(c.thumbs, c.extra || 0)}
+          <div class="va-card-foot">
+            <div class="va-card-meta">
+              <div class="va-card-name">${IC.folder}<span style="overflow:hidden;text-overflow:ellipsis;">${c.name}</span></div>
+              <div class="va-card-sub">
+                <span>${c.links} ${c.links === 1 ? "link" : "links"}</span>
+                <span>·</span>
+                <span>${c.updated}</span>
+                ${c.priv ? `<span style="color:var(--set);display:inline-flex;">${IC.lock}</span>` : ""}
+              </div>
+            </div>
+            <button class="icon-copy-btn ${isCopied ? "copied" : ""}" data-copy-coll="${c.id}" title="Copy all links" style="width:24px;height:24px;">
+              ${isCopied ? IC.check : IC.copy}
+            </button>
+          </div>
+        </div>`;
+    }).join("");
+
+    const linkRows = INDIVIDUAL_LINKS.slice(0, 2).map(l => {
+      const isCopied = state.copiedId === l.id;
+      return `
+        <div class="link-row-card" data-open-detail="${l.id}" style="cursor:pointer;">
+          <div style="width:44px;height:44px;flex:none;">${renderAdaptiveCover(l.thumbs, 0, false).replace('class="acover', 'style="width:44px;height:44px;" class="acover')}</div>
+          <div class="link-row-info">
+            <div class="link-row-title">${l.title}</div>
+            <div class="link-row-sub">
+              <span class="vis-badge ${l.priv ? "is-priv" : ""}" style="padding:1px 5px;font-size:8.5px;">${l.priv ? IC.lock + " private" : IC.globe + " public"}</span>
+              <span>${l.files} files · ${l.when}</span>
+              <span style="color:var(--amber);display:inline-flex;align-items:center;gap:3px;">${IC.folder} ${l.coll}</span>
+            </div>
+          </div>
+          <button class="icon-copy-btn ${isCopied ? "copied" : ""}" data-copy-linkrow="${l.id}">${isCopied ? IC.check : IC.copy}</button>
+        </div>`;
+    }).join("");
+
+    body = `
+      <div class="nav-top">
+        <h2 class="nav-title">links</h2>
+        <div style="display:flex;gap:5px;align-items:center;">
+          <button class="mini-pill-btn amber-tint" data-toast="New collection sheet">${IC.plus} collection</button>
+        </div>
+      </div>
+      ${renderSetChips()}
+      ${renderSelectBanner()}
+      <div class="sec-lbl">
+        <span>collections · ${colls.length} shown</span>
+        <span>adaptive covers</span>
+      </div>
+      <div class="va-grid">
+        ${cards}
+      </div>
+      <div class="sec-lbl" style="margin-top:2px;">
+        <span>recent share links</span>
+        <span>tap to inspect →</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;">${linkRows}</div>
+    `;
+  } else if (v === "B") {
+    // VARIATION B: Editorial Full-Bleed Media Posters with Liquid Glass Footers
+    const posters = colls.map(c => {
+      const sel = state.selectedColls.has(c.id);
+      const isCopied = state.copiedId === c.id;
+      return `
+        <div class="vb-poster ${sel ? "selected" : ""}" data-coll-tap="${c.id}">
+          ${renderAdaptiveCover(c.thumbs, c.extra || 0, false)}
+          <div class="vb-top-badge">
+            <span class="vb-pill">${c.links} ${c.links === 1 ? "link" : "links"}</span>
+            ${c.priv ? `<span class="vb-pill" style="color:#d8c6ff;">${IC.lock}</span>` : `<span class="vb-pill">${c.updated}</span>`}
+          </div>
+          <div class="vb-glass-foot">
+            <div style="min-width:0;">
+              <div class="vb-glass-name">${IC.folder}<span style="overflow:hidden;text-overflow:ellipsis;">${c.name}</span></div>
+              <div class="vb-glass-sub">${c.set === "lia" ? "Lia Shares" : c.set === "discord" ? "Discord" : "Private Vault"}</div>
+            </div>
+            <button class="vb-glass-copy ${isCopied ? "copied" : ""}" data-copy-coll="${c.id}" title="Quick copy">${isCopied ? IC.check : IC.copy}</button>
+          </div>
+        </div>`;
+    }).join("");
+
+    body = `
+      <div class="nav-top">
+        <h2 class="nav-title">links</h2>
+        <button class="mini-pill-btn" data-toast="New collection sheet">${IC.plus} new</button>
+      </div>
+      ${renderSetChips()}
+      ${renderSelectBanner()}
+      <div class="sec-lbl">
+        <span>collections · visual wall</span>
+        <span>clear liquid glass</span>
+      </div>
+      <div class="vb-grid">${posters}</div>
+      <div class="sec-lbl" style="margin-top:2px;"><span>latest share link</span></div>
+      <div class="link-row-card" data-open-detail="l40" style="cursor:pointer;">
+        <div style="width:42px;height:42px;flex:none;">${renderAdaptiveCover(INDIVIDUAL_LINKS[0].thumbs, 0, false).replace('class="acover', 'style="width:42px;height:42px;" class="acover')}</div>
+        <div class="link-row-info">
+          <div class="link-row-title">6 files · Lia Share 40</div>
+          <div class="link-row-sub"><span>public · today 23:50 · share.capybaraharmony.com/g/8962…</span></div>
+        </div>
+        <button class="icon-copy-btn ${state.copiedId === "l40" ? "copied" : ""}" data-copy-linkrow="l40">${state.copiedId === "l40" ? IC.check : IC.copy}</button>
+      </div>
+    `;
+  } else if (v === "C") {
+    // VARIATION C: Smart Collapsible Series Stacks + Dense Command Rows
+    const liaItems = colls.filter(c => c.series === "Lia Share");
+    const otherItems = colls.filter(c => c.series !== "Lia Share");
+
+    const liaStack = liaItems.length ? `
+      <div class="vc-series-stack">
+        <button class="vc-series-head" data-toggle-series>
+          <div class="vc-fan">
+            <div class="vc-fan-tile f3 art art-f"></div>
+            <div class="vc-fan-tile f2 art art-b"></div>
+            <div class="vc-fan-tile f1 art art-a"><div class="play-pip sm">${IC.play}</div></div>
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;color:var(--amber);">
+              ${IC.folder} <span>Lia Share</span>
+              <span style="font-size:9px;padding:1.5px 6px;border-radius:99px;background:var(--amber-bg);border:1px solid var(--amber-bd);">series · ${liaItems.length} shown (18 total)</span>
+            </div>
+            <div style="font-size:9.5px;color:var(--caption);margin-top:2px;">#37 → #34 · single-link shares auto-grouped</div>
+          </div>
+          <span style="color:var(--amber);">${state.seriesExpanded ? IC.chevDown : IC.chevRight}</span>
+        </button>
+        ${state.seriesExpanded ? `
+          <div class="vc-series-list">
+            ${liaItems.map(c => {
+              const sel = state.selectedColls.has(c.id);
+              const isCopied = state.copiedId === c.id;
+              return `
+                <div class="vc-row ${sel ? "selected" : ""}" data-coll-tap="${c.id}" style="cursor:pointer;">
+                  <div style="width:36px;height:36px;flex:none;">${renderAdaptiveCover(c.thumbs, 0, true).replace('class="acover', 'style="width:36px;height:36px;border-radius:8px;" class="acover')}</div>
+                  <div style="flex:1;min-width:0;">
+                    <div style="font-size:10.5px;font-weight:650;color:var(--text);display:flex;align-items:center;gap:5px;">
+                      <span>${c.name}</span>
+                      ${c.priv ? `<span style="color:var(--set);display:inline-flex;">${IC.lock}</span>` : ""}
+                    </div>
+                    <div style="font-size:9px;color:var(--caption);">${c.links} link · ${c.updated}</div>
+                  </div>
+                  <button class="mini-pill-btn ${isCopied ? "em-tint" : ""}" data-copy-coll="${c.id}">${isCopied ? IC.check + " copied" : IC.copy + " copy"}</button>
+                </div>`;
+            }).join("")}
+          </div>` : ""}
+      </div>` : "";
+
+    const otherRows = otherItems.length ? `
+      <div class="vc-list-box">
+        ${otherItems.map(c => {
+          const sel = state.selectedColls.has(c.id);
+          const isCopied = state.copiedId === c.id;
+          return `
+            <div class="vc-row ${sel ? "selected" : ""}" data-coll-tap="${c.id}" style="cursor:pointer;">
+              <div style="width:42px;height:42px;flex:none;">${renderAdaptiveCover(c.thumbs, c.extra || 0, false).replace('class="acover', 'style="width:42px;height:42px;border-radius:8px;" class="acover')}</div>
+              <div style="flex:1;min-width:0;">
+                <div style="font-size:10.5px;font-weight:650;color:var(--amber);display:flex;align-items:center;gap:5px;">
+                  ${IC.folder} <span>${c.name}</span>
+                  ${c.priv ? `<span style="color:var(--set);display:inline-flex;">${IC.lock}</span>` : ""}
+                </div>
+                <div style="font-size:9px;color:var(--caption);">${c.links} links · updated ${c.updated}</div>
+              </div>
+              <button class="icon-copy-btn ${isCopied ? "copied" : ""}" data-copy-coll="${c.id}" style="width:26px;height:26px;">${isCopied ? IC.check : IC.copy}</button>
+            </div>`;
+        }).join("")}
+      </div>` : "";
+
+    body = `
+      <div class="nav-top">
+        <h2 class="nav-title">links</h2>
+        <div style="display:flex;gap:5px;">
+          <button class="mini-pill-btn" data-toggle-select>${IC.checkCircle} ${state.selectMode ? "selecting" : "select"}</button>
+          <button class="mini-pill-btn amber-tint" data-toast="New collection sheet">${IC.plus} new</button>
+        </div>
+      </div>
+      <div class="vc-search-bar">${IC.search}<span>filter 32 collections &amp; links…</span><span style="margin-left:auto;font-size:9px;opacity:0.75;">⌘K</span></div>
+      ${renderSetChips()}
+      ${renderSelectBanner()}
+      ${liaStack}
+      ${otherRows}
+    `;
+  } else {
+    // VARIATION D: Compact Horizontal Tile Grid + Clean Segment Switcher (Collections / All Links)
+    const showColls = state.linksTabMode !== "links";
+    const showLinks = state.linksTabMode !== "collections";
+
+    const tiles = colls.map(c => {
+      const sel = state.selectedColls.has(c.id);
+      const isCopied = state.copiedId === c.id;
+      return `
+        <div class="vd-tile ${sel ? "selected" : ""}" data-coll-tap="${c.id}" style="cursor:pointer;">
+          ${renderAdaptiveCover(c.thumbs, c.extra || 0, c.thumbs.length === 1)}
+          <div style="flex:1;min-width:0;">
+            <div class="va-card-name">${IC.folder}<span style="overflow:hidden;text-overflow:ellipsis;">${c.name}</span></div>
+            <div class="va-card-sub" style="margin-top:2px;">
+              <span>${c.links} ${c.links === 1 ? "link" : "links"}</span>
+              <span>·</span>
+              <span>${c.updated}</span>
+              ${c.priv ? `<span style="color:var(--set);display:inline-flex;">${IC.lock}</span>` : ""}
+            </div>
+          </div>
+          <button class="icon-copy-btn ${isCopied ? "copied" : ""}" data-copy-coll="${c.id}" style="width:26px;height:26px;">${isCopied ? IC.check : IC.copy}</button>
+        </div>`;
+    }).join("");
+
+    const linkRows = INDIVIDUAL_LINKS.map(l => {
+      const isCopied = state.copiedId === l.id;
+      return `
+        <div class="link-row-card" data-open-detail="${l.id}" style="cursor:pointer;">
+          <div style="width:42px;height:42px;flex:none;">${renderAdaptiveCover(l.thumbs, 0, false).replace('class="acover', 'style="width:42px;height:42px;" class="acover')}</div>
+          <div class="link-row-info">
+            <div class="link-row-title">${l.title}</div>
+            <div class="link-row-sub">
+              <span class="vis-badge ${l.priv ? "is-priv" : ""}" style="padding:1px 5px;font-size:8.5px;">${l.priv ? "private" : "public"}</span>
+              <span>${l.when}</span>
+              <span style="color:var(--amber);">${l.coll}</span>
+            </div>
+          </div>
+          <button class="icon-copy-btn ${isCopied ? "copied" : ""}" data-copy-linkrow="${l.id}">${isCopied ? IC.check : IC.copy}</button>
+        </div>`;
+    }).join("");
+
+    body = `
+      <div class="nav-top">
+        <h2 class="nav-title">links</h2>
+        <div class="seg-group" style="padding:2px;">
+          <button class="seg-btn ${state.linksTabMode === "all" ? "active" : ""}" data-ltab="all">split</button>
+          <button class="seg-btn ${state.linksTabMode === "collections" ? "active" : ""}" data-ltab="collections">folders 32</button>
+          <button class="seg-btn ${state.linksTabMode === "links" ? "active" : ""}" data-ltab="links">links</button>
+        </div>
+      </div>
+      ${renderSetChips()}
+      ${renderSelectBanner()}
+      ${showColls ? `
+        <div class="sec-lbl"><span>collections · compact tiles</span><button style="color:var(--amber);font-weight:700;" data-toast="New collection sheet">+ new</button></div>
+        <div class="vd-grid">${tiles}</div>` : ""}
+      ${showLinks ? `
+        <div class="sec-lbl" style="margin-top:2px;"><span>share links</span><span>${INDIVIDUAL_LINKS.length} active</span></div>
+        <div style="display:flex;flex-direction:column;gap:5px;">${linkRows}</div>` : ""}
+    `;
+  }
+
+  return `
+    <div class="duo-device theme-${state.theme} pose-${state.pose}">
+      <div class="duo-shell">
+        <div class="duo-content">${body}</div>
+        ${renderDuoRail("links")}
+      </div>
+    </div>`;
+}
+
+// =========================================================================
+// SCREEN 2: SHARE LINK DETAIL (LinkPanePage) — 4 DISTINCT VARIATIONS
+// =========================================================================
+function renderFileRows(dense = false) {
+  return state.files.map((f, i) => {
+    let badge = "";
+    if (!state.linkEditing) {
+      if (f.audio === "ok") {
+        badge = `<span class="lufs-pill ok">${IC.check} ${f.lufs.toFixed(1)}</span>`;
+      } else if (f.audio === "work") {
+        badge = `<span class="lufs-pill work">${IC.wave} leveling…</span>`;
+      } else if (f.audio === "loud") {
+        badge = `<button class="lufs-pill loud" data-level-one="${f.id}" title="Tap to level">${f.lufs.toFixed(1)} ${IC.wave}</button>`;
+      } else if (f.audio === "quiet") {
+        badge = `<button class="lufs-pill quiet" data-level-one="${f.id}" title="Tap to level">${f.lufs.toFixed(1)} ${IC.wave}</button>`;
+      } else {
+        badge = `<span class="lufs-pill img">image</span>`;
+      }
+    }
+    return `
+      <div class="file-row" style="${dense ? "padding:4.5px 7px;" : ""}">
+        ${state.linkEditing
+          ? `<button style="color:var(--red);" data-remove-file="${f.id}" title="Remove">${IC.minus}</button>`
+          : `<span class="file-num">${i + 1}</span>`}
+        <div class="file-thumb art ${f.cls}" style="${dense ? "width:30px;height:30px;" : ""}">
+          ${f.kind === "video" ? `<div class="play-pip sm">${IC.play}</div>` : ""}
+        </div>
+        <div class="file-meta">
+          <div class="file-name">${f.title}</div>
+          <div class="file-sub">${f.kind}${f.dur ? " · " + f.dur : ""}</div>
+        </div>
+        ${state.linkEditing ? `<span style="color:var(--caption);">${IC.grip}</span>` : `${badge}<span style="color:var(--caption);">${IC.chevRight}</span>`}
+      </div>`;
+  }).join("");
+}
+
+function renderHeroGrid(withBadges = true) {
+  return `
+    <div class="hero-mosaic">
+      ${state.files.slice(0, 4).map(f => {
+        const bCls = f.audio === "ok" ? "ok" : f.audio === "loud" ? "loud" : f.audio === "quiet" ? "quiet" : f.audio === "work" ? "work" : "";
+        const bTxt = f.audio === "ok" ? "-14.0" : f.audio === "work" ? "…" : f.lufs ? f.lufs.toFixed(1) : "img";
+        return `
+          <div class="hero-cell art ${f.cls}">
+            ${f.cap ? `<div class="art-cap">${f.cap}</div>` : ""}
+            ${f.kind === "video" ? `<div class="play-pip">${IC.play}</div>` : ""}
+            ${withBadges ? `<span class="hero-lufs ${bCls}">${bTxt}</span>` : ""}
+          </div>`;
+      }).join("")}
+    </div>`;
+}
+
+function renderDiscordCard() {
+  if (!state.showDiscord) return "";
+  return `
+    <div class="discord-box">
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:9.5px;">
+        <strong style="color:var(--text);">how discord shows it</strong>
+        <span style="color:var(--caption);">${state.files.length} files · gallery</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:2px;height:38px;border-radius:6px;overflow:hidden;">
+        ${state.files.slice(0, 4).map(f => `<div class="art ${f.cls}"></div>`).join("")}
+      </div>
+    </div>`;
+}
+
+function renderCollectionPills() {
+  const names = ["Lia Share 40", "Discord Drops", "Best Of"];
+  return names.map(n => {
+    const on = state.linkColls.has(n);
+    return `<button class="coll-tag ${on ? "" : "off"}" data-toggle-lcoll="${n}">${IC.folder} ${n}</button>`;
+  }).join("");
+}
+
+function renderAudioDistBar(g) {
+  const total = Math.max(1, g.audible.length);
+  const okW = (g.leveled.length / total) * 100;
+  const workW = (g.working.length / total) * 100;
+  const loudW = (g.audible.filter(f => f.audio === "loud").length / total) * 100;
+  const quietW = (g.audible.filter(f => f.audio === "quiet").length / total) * 100;
+  return `
+    <div class="dist-track">
+      ${okW ? `<span class="ds-ok" style="width:${okW}%"></span>` : ""}
+      ${workW ? `<span class="ds-work" style="width:${workW}%"></span>` : ""}
+      ${loudW ? `<span class="ds-loud" style="width:${loudW}%"></span>` : ""}
+      ${quietW ? `<span class="ds-quiet" style="width:${quietW}%"></span>` : ""}
+    </div>`;
+}
+
+function renderEditBar() {
+  if (!state.linkEditing) return "";
+  return `
+    <div class="edit-bar">
+      <span style="font-size:10px;color:var(--blue);font-weight:650;">editing · drag to reorder · min 2 files</span>
+      <div style="display:flex;gap:5px;">
+        <button class="mini-pill-btn" data-toggle-edit>cancel</button>
+        <button class="mini-pill-btn em-tint" data-save-edit>${IC.check} save</button>
+      </div>
+    </div>`;
+}
+
+function renderLinkDetailScreen(v) {
+  const g = getGate();
+  const u = activeShareURL();
+  const normalOn = g.unlocked && state.useNormalAudio;
+  const isCopied = state.copiedId === "detail-copy";
+
+  let body = "";
+
+  if (v === "A") {
+    // VARIATION A: Unified Liquid Glass Share Deck + Compact 4-Action Strip
+    body = `
+      <div class="nav-top">
+        <h2 class="nav-title">link</h2>
+        <div style="display:flex;gap:5px;">
+          <button class="mini-pill-btn" data-toggle-discord>${IC.eye} discord</button>
+          ${g.unlocked ? `<button class="mini-pill-btn" data-reset-audio>reset audio</button>` : ""}
+        </div>
+      </div>
+      <div class="link-two-col">
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${renderHeroGrid(true)}
+          ${renderDiscordCard()}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;min-width:0;">
+          ${state.linkEditing
+            ? `<input class="edit-title-input" value="${state.linkTitle}" data-title-input>`
+            : `<div>
+                <div style="font-size:15px;font-weight:750;letter-spacing:-0.02em;">${state.linkTitle}</div>
+                <div style="font-size:10px;color:var(--caption);margin-top:2px;">${state.files.length} files · ${state.linkPrivate ? "private" : "public"} · today 23:50</div>
+              </div>`}
+
+          <div class="share-deck ${normalOn ? "normal-on" : ""}">
+            <div class="audio-seg">
+              <button class="${!normalOn ? "on" : ""}" data-set-normal="0">original audio</button>
+              <button class="${normalOn ? "on em" : ""} ${!g.unlocked ? "locked" : ""}" data-set-normal="1">
+                ${g.unlocked ? IC.check : IC.lock} leveled ?audio=normal
+              </button>
+            </div>
+            <div class="url-pill">
+              <span class="url-path">${u.base}<span class="url-q">${u.suffix}</span></span>
+              <button class="icon-soft-btn ${normalOn ? "em" : "blue"}" data-toast="System Share Sheet: ${u.full}" style="width:24px;height:24px;">${IC.share}</button>
+            </div>
+            <div class="primary-copy-row">
+              <button class="cta-primary ${normalOn || isCopied ? "em" : ""}" data-copy-detail>
+                ${isCopied ? IC.check : IC.copy}
+                <span>${isCopied ? "copied link" : (normalOn ? "copy leveled link" : "copy link")}</span>
+              </button>
+              ${!g.unlocked && g.remaining.length ? `
+                <button class="mini-pill-btn em-tint" style="height:34px;padding:0 10px;border-radius:10px;" data-bulk-level>
+                  ${IC.wave} level ${g.remaining.length}
+                </button>` : ""}
+            </div>
+            ${renderAudioDistBar(g)}
+            <div style="display:flex;justify-content:space-between;font-size:9px;color:${g.unlocked ? "var(--emerald)" : "var(--caption)"};">
+              <span>${g.unlocked ? `all ${g.audible.length} audible videos at -14 LUFS` : `${g.leveled.length}/${g.audible.length} leveled · tap level to unlock ?audio=normal`}</span>
+              <span style="font-weight:700;">${g.leveled.length}/${g.audible.length}</span>
+            </div>
+          </div>
+
+          <div class="action-strip">
+            <button class="act-chip ${state.linkEditing ? "active" : ""}" data-toggle-edit>${IC.edit}<span>${state.linkEditing ? "editing" : "edit"}</span></button>
+            <button class="act-chip ${state.linkPrivate ? "priv" : ""}" data-toggle-priv>${state.linkPrivate ? IC.globe : IC.lock}<span>${state.linkPrivate ? "make public" : "private"}</span></button>
+            <button class="act-chip" data-toast="${state.linkPrivate ? "Rotated private link key" : "Add to collection picker"}">${state.linkPrivate ? IC.key : IC.folder}<span>${state.linkPrivate ? "rotate key" : "folders"}</span></button>
+            <button class="act-chip danger" data-toast="Confirm: Revoke this share link?">${IC.revoke}<span>revoke</span></button>
+          </div>
+
+          ${renderEditBar()}
+
+          <div class="badge-row">
+            <span class="vis-badge ${state.linkPrivate ? "is-priv" : ""}">${state.linkPrivate ? IC.lock + " private" : IC.globe + " public"}</span>
+            ${renderCollectionPills()}
+          </div>
+
+          <div class="sec-lbl"><span>files · in order</span><span>${state.files.length} of 10</span></div>
+          <div class="file-list">${renderFileRows()}</div>
+        </div>
+      </div>`;
+  } else if (v === "B") {
+    // VARIATION B: Cinematic Media Stage + Floating Liquid Glass HUD + Clean Inspector
+    body = `
+      <div class="nav-top">
+        <h2 class="nav-title">link</h2>
+        <div style="display:flex;gap:5px;">
+          <button class="mini-pill-btn ${state.linkPrivate ? "set-tint" : ""}" data-toggle-priv>${state.linkPrivate ? IC.lock + " private" : IC.globe + " public"}</button>
+          <button class="mini-pill-btn" data-toggle-discord>${IC.eye} discord</button>
+          ${g.unlocked ? `<button class="mini-pill-btn" data-reset-audio>reset</button>` : ""}
+        </div>
+      </div>
+      <div class="link-two-col">
+        <div class="vb-hero-stage">
+          ${renderHeroGrid(false)}
+          <div class="vb-hero-hud">
+            <div>
+              <div style="font-size:12px;font-weight:750;">${state.linkTitle}</div>
+              <div style="font-size:9px;opacity:0.78;">today 23:50 · ${g.leveled.length}/${g.audible.length} leveled</div>
+            </div>
+            <div style="display:flex;gap:4px;">
+              <button class="vb-glass-copy ${isCopied ? "copied" : ""}" data-copy-detail style="width:28px;height:28px;" title="Copy link">${isCopied ? IC.check : IC.copy}</button>
+              <button class="vb-glass-copy" data-toast="System Share Sheet: ${u.full}" style="width:28px;height:28px;" title="Share">${IC.share}</button>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;min-width:0;">
+          ${renderDiscordCard()}
+          <div class="share-deck ${normalOn ? "normal-on" : ""}">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+              <span style="font-size:10px;font-weight:700;color:${normalOn ? "var(--emerald)" : "var(--text)"};">
+                ${normalOn ? "leveled stream (?audio=normal)" : "original share address"}
+              </span>
+              <button class="mini-pill-btn ${normalOn ? "em-tint" : ""}" data-set-normal="${normalOn ? "0" : "1"}">
+                ${g.unlocked ? (normalOn ? IC.check + " ?audio=normal" : IC.wave + " enable normal") : IC.lock + " ?audio=normal"}
+              </button>
+            </div>
+            <div class="url-pill">
+              <span class="url-path">${u.base}<span class="url-q">${u.suffix}</span></span>
+              <button class="mini-pill-btn ${isCopied ? "em-tint" : ""}" data-copy-detail>${isCopied ? "copied" : "copy"}</button>
+            </div>
+            ${!g.unlocked && g.remaining.length ? `
+              <button class="cta-primary em" style="height:30px;font-size:10.5px;" data-bulk-level>
+                ${IC.wave} level ${g.remaining.length} videos · -14 lufs to unlock
+              </button>` : renderAudioDistBar(g)}
+          </div>
+
+          <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">
+            <button class="mini-pill-btn ${state.linkEditing ? "em-tint" : ""}" data-toggle-edit>${IC.edit} ${state.linkEditing ? "editing" : "edit order"}</button>
+            <button class="mini-pill-btn" data-toggle-priv>${state.linkPrivate ? IC.globe + " make public" : IC.lock + " make private"}</button>
+            <button class="mini-pill-btn red-tint" style="margin-left:auto;" data-toast="Confirm: Revoke this share link?">${IC.revoke} revoke</button>
+          </div>
+
+          ${renderEditBar()}
+          <div class="badge-row">${renderCollectionPills()}</div>
+          <div class="sec-lbl"><span>files · in order</span><span>${state.files.length} of 10</span></div>
+          <div class="file-list">${renderFileRows()}</div>
+        </div>
+      </div>`;
+  } else if (v === "C") {
+    // VARIATION C: Studio Command Inspector + Live LUFS Ruler + High-Density Queue
+    const dots = g.audible.map(f => {
+      const pct = Math.max(5, Math.min(95, ((f.lufs + 32) / 32) * 100));
+      const bg = f.audio === "ok" ? "var(--emerald)" : f.audio === "loud" ? "var(--loud)" : f.audio === "quiet" ? "var(--quiet)" : "var(--warn)";
+      return `<span class="vc-ruler-dot" style="left:${pct}%;background:${bg};"></span>`;
+    }).join("");
+
+    body = `
+      <div class="nav-top">
+        <div style="display:flex;align-items:center;gap:7px;min-width:0;">
+          <h2 class="nav-title">${state.linkTitle}</h2>
+          <span class="vis-badge ${state.linkPrivate ? "is-priv" : ""}">${state.linkPrivate ? IC.lock + " private" : IC.globe + " public"}</span>
+        </div>
+        <span style="font-size:9.5px;color:var(--caption);">today 23:50</span>
+      </div>
+
+      <div class="url-pill" style="padding:6px 8px;">
+        <span class="url-path" style="color:var(--text);">${u.base}<span class="url-q">${u.suffix}</span></span>
+        <button class="mini-pill-btn ${normalOn ? "em-tint" : ""}" data-set-normal="${normalOn ? "0" : "1"}">${g.unlocked ? IC.wave : IC.lock} ?audio=normal</button>
+        <button class="mini-pill-btn ${isCopied ? "em-tint" : ""}" data-copy-detail>${isCopied ? IC.check : IC.copy} ${isCopied ? "copied" : "copy"}</button>
+        <button class="icon-soft-btn blue" style="width:24px;height:24px;" data-toast="Share ${u.full}">${IC.share}</button>
+      </div>
+
+      <div class="vc-cmd-row">
+        <button class="mini-pill-btn ${state.linkEditing ? "em-tint" : ""}" data-toggle-edit>${IC.edit} edit</button>
+        <button class="mini-pill-btn" data-toggle-priv>${state.linkPrivate ? IC.globe + " public" : IC.lock + " private"}</button>
+        <button class="mini-pill-btn" data-toggle-discord>${IC.eye} discord</button>
+        ${renderCollectionPills()}
+        <button class="mini-pill-btn red-tint" style="margin-left:auto;" data-toast="Confirm: Revoke share link?">${IC.revoke} revoke</button>
+      </div>
+
+      ${renderEditBar()}
+      ${renderDiscordCard()}
+
+      <div style="padding:8px 10px;border-radius:12px;background:var(--surface);border:1px solid ${g.unlocked ? "var(--emerald-bd)" : "var(--hairline)"};display:flex;flex-direction:column;gap:5px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:9.5px;">
+          <span style="font-weight:700;color:${g.unlocked ? "var(--emerald)" : "var(--text)"};">loudness spread · target -14 LUFS (${g.leveled.length}/${g.audible.length})</span>
+          ${!g.unlocked && g.remaining.length
+            ? `<button class="mini-pill-btn em-tint" data-bulk-level>${IC.wave} level ${g.remaining.length} remaining</button>`
+            : `<button class="mini-pill-btn" data-reset-audio>reset demo</button>`}
+        </div>
+        <div class="vc-ruler">
+          <div class="vc-ruler-target"></div>
+          ${dots}
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:8px;color:var(--caption);">
+          <span>-32 quiet</span><span style="color:var(--text);font-weight:700;">-14 target</span><span>0 clip</span>
+        </div>
+      </div>
+
+      <div class="link-two-col" style="grid-template-columns:0.58fr 1.42fr;">
+        ${renderHeroGrid(true)}
+        <div style="display:flex;flex-direction:column;gap:5px;min-width:0;">
+          <div class="sec-lbl"><span>files · in order</span><span>${state.files.length} of 10</span></div>
+          <div class="file-list">${renderFileRows(true)}</div>
+        </div>
+      </div>`;
+  } else {
+    // VARIATION D: Split Media + Scrollable File Queue + Tactile Floating Bottom Glass Dock
+    body = `
+      <div class="nav-top">
+        <div>
+          <h2 class="nav-title" style="font-size:15px;">${state.linkTitle}</h2>
+          <div style="font-size:9.5px;color:var(--caption);">${state.files.length} files · ${state.linkPrivate ? "private" : "public"} · today 23:50</div>
+        </div>
+        <div style="display:flex;gap:5px;align-items:center;">
+          <span class="vis-badge ${state.linkPrivate ? "is-priv" : ""}">${state.linkPrivate ? IC.lock + " private" : IC.globe + " public"}</span>
+          <button class="mini-pill-btn" data-toggle-discord>${IC.eye} discord</button>
+          ${g.unlocked ? `<button class="mini-pill-btn" data-reset-audio>reset</button>` : ""}
+        </div>
+      </div>
+
+      <div class="link-two-col">
+        <div style="display:flex;flex-direction:column;gap:7px;">
+          ${renderHeroGrid(true)}
+          <div class="badge-row">${renderCollectionPills()}</div>
+          ${renderDiscordCard()}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;min-width:0;">
+          <div class="url-pill">
+            <span class="url-path">${u.base}<span class="url-q">${u.suffix}</span></span>
+            <span style="font-size:9px;font-weight:700;color:${g.unlocked ? "var(--emerald)" : "var(--caption)"};">${g.leveled.length}/${g.audible.length}</span>
+          </div>
+          ${renderAudioDistBar(g)}
+          ${renderEditBar()}
+          <div class="sec-lbl"><span>files · in order</span><span>${state.files.length} of 10</span></div>
+          <div class="file-list">${renderFileRows(true)}</div>
+        </div>
+      </div>
+
+      <div class="vd-dock-wrap">
+        <button class="cta-primary ${normalOn || isCopied ? "em" : ""}" style="height:32px;flex:1;min-width:130px;" data-copy-detail>
+          ${isCopied ? IC.check : IC.copy}
+          <span>${isCopied ? "copied" : (normalOn ? "copy ?audio=normal" : "copy link")}</span>
+        </button>
+        ${!g.unlocked && g.remaining.length
+          ? `<button class="mini-pill-btn em-tint" style="height:32px;padding:0 10px;border-radius:10px;" data-bulk-level>${IC.wave} level ${g.remaining.length}</button>`
+          : `<button class="mini-pill-btn ${normalOn ? "em-tint" : ""}" style="height:32px;padding:0 9px;border-radius:10px;" data-set-normal="${normalOn ? "0" : "1"}">${IC.wave} normal</button>`}
+        <button class="icon-soft-btn blue" data-toast="Share ${u.full}" title="Share">${IC.share}</button>
+        <button class="icon-soft-btn ${state.linkEditing ? "em" : ""}" data-toggle-edit title="Edit order">${IC.edit}</button>
+        <button class="icon-soft-btn" data-toggle-priv title="Toggle privacy">${state.linkPrivate ? IC.globe : IC.lock}</button>
+        <button class="icon-soft-btn red" data-toast="Confirm: Revoke link?" title="Revoke">${IC.revoke}</button>
+      </div>`;
+  }
+
+  return `
+    <div class="duo-device theme-${state.theme} pose-${state.pose}">
+      <div class="duo-shell">
+        <div class="duo-content">${body}</div>
+        ${renderDuoRail("detail")}
+      </div>
+    </div>`;
+}
+
+// ====== COMPARE ALL VIEW ======
+function renderCompareAll() {
+  const specs = [
+    {
+      k: "A", name: "A · Adaptive Bento & Unified Share Deck", rec: true,
+      items: [
+        ["Collections:", "Tight 2/3-col grid with 1/2/3/4-up adaptive covers (0 gray boxes) + 1-tap copy button on every folder."],
+        ["Sets:", "Compact purple set chips + inline set bar directly above folders — dead whitespace completely removed."],
+        ["Share Link:", "Replaces bulky 2×2 action tiles with a single Liquid Glass Share Deck (audio switch + live URL + bulk level) + slim 4-action strip."],
+        ["Best fit:", "Most cohesive with existing Cobalt SwiftUI components; lowest migration risk."]
+      ]
+    },
+    {
+      k: "B", name: "B · Editorial Media Posters & Liquid Glass", rec: false,
+      items: [
+        ["Collections:", "Full-bleed poster cards with Clear Liquid Glass footers — instant visual recognition across video shares."],
+        ["Sets:", "Sticky set chips with floating count & freshness pills over media."],
+        ["Share Link:", "Cinematic media stage with floating Copy/Share HUD + calm inspector card for ?audio=normal & files."],
+        ["Best fit:", "Maximum iOS 27 Liquid Glass visual joy when media thumbnails are the star."]
+      ]
+    },
+    {
+      k: "C", name: "C · Series Stacks & Command Inspector", rec: false,
+      items: [
+        ["Collections:", "Auto-groups numbered series (`Lia Share 37…33`) into a fanned collapsible stack + filter bar & batch select."],
+        ["Sets:", "Fast set switching + dense single-line collection rows with zero wasted pixels."],
+        ["Share Link:", "Compact top command bar, live LUFS loudness ruler (-32 to 0), and high-density numbered file queue."],
+        ["Best fit:", "Power-user speed when managing 30–100+ dated or numbered share collections."]
+      ]
+    },
+    {
+      k: "D", name: "D · Compact Tiles & Floating Thumb Dock", rec: false,
+      items: [
+        ["Collections:", "Horizontal compact tiles (adaptive square thumb + amber title + instant copy) + `split / folders / links` switcher."],
+        ["Sets:", "Clean top header keeps sets, folders, and individual links cleanly separated."],
+        ["Share Link:", "Media & queue stay unobstructed while primary Copy, ?audio=normal, Share, Edit, Privacy, and Revoke live in a bottom glass dock."],
+        ["Best fit:", "One-handed iPhone Duo ergonomics and fastest vertical scanning."]
+      ]
+    }
+  ];
+
+  return `
+    <div class="cmp-grid">
+      ${specs.map(s => `
+        <div class="cmp-card">
+          <div class="cmp-head">
+            <h3>${s.name}</h3>
+            ${s.rec ? `<span class="rec-pill">Recommended</span>` : ""}
+          </div>
+          <ul class="cmp-bullets">
+            ${s.items.map(([k, txt]) => `<li><strong>${k}</strong> ${txt}</li>`).join("")}
+          </ul>
+          <button class="cmp-jump" data-var="${s.k}">Inspect Variation ${s.k} →</button>
+        </div>`).join("")}
+    </div>`;
+}
+
+// ====== MAIN RENDER ======
+function render() {
+  // Variation tabs
+  document.getElementById("varTabs").innerHTML = ["A", "B", "C", "D", "CMP"].map(k => {
+    const active = state.variation === k;
+    const cls = active ? (k === "CMP" ? "seg-btn cmp-active" : "seg-btn active") : "seg-btn";
+    return `<button class="${cls}" data-var="${k}">${VARIATIONS[k].short}</button>`;
+  }).join("");
+
+  // Surface tabs
+  document.getElementById("surfaceTabs").innerHTML = [
+    ["both", "Both Screens"],
+    ["links", "Collections & Sets"],
+    ["detail", "Share Link Detail"]
+  ].map(([k, lbl]) => `<button class="seg-btn ${state.surface === k ? "active" : ""}" data-surface="${k}">${lbl}</button>`).join("");
+
+  // Pose tabs
+  document.getElementById("poseTabs").innerHTML = [
+    ["landscape", "Duo Landscape"],
+    ["portrait", "Duo Portrait"]
+  ].map(([k, lbl]) => `<button class="seg-btn ${state.pose === k ? "active" : ""}" data-pose="${k}">${lbl}</button>`).join("");
+
+  // Theme tabs
+  document.getElementById("themeTabs").innerHTML = [
+    ["dark", "Dark"],
+    ["light", "Light"]
+  ].map(([k, lbl]) => `<button class="seg-btn ${state.theme === k ? "active" : ""}" data-theme="${k}">${lbl}</button>`).join("");
+
+  // Brief banner
+  const vInfo = VARIATIONS[state.variation];
+  document.getElementById("briefHost").innerHTML = `
+    <div class="brief-banner">
+      <div class="brief-main">
+        <h1 class="brief-title">${vInfo.title} ${vInfo.rec ? `<span class="rec-pill">Recommended</span>` : ""}</h1>
+        <p class="brief-desc">${vInfo.desc}</p>
+      </div>
+      <div class="brief-chips">${vInfo.fixes.map(f => `<span class="fix-chip">${f}</span>`).join("")}</div>
+    </div>`;
+
+  const stage = document.getElementById("stageHost");
+  if (state.variation === "CMP") {
+    stage.innerHTML = renderCompareAll();
+    return;
+  }
+
+  const showLinks = state.surface === "both" || state.surface === "links";
+  const showDetail = state.surface === "both" || state.surface === "detail";
+  const sideBySide = showLinks && showDetail && state.pose === "portrait";
+
+  stage.innerHTML = `
+    <div class="stage-grid ${sideBySide ? "side-by-side-portrait" : ""}">
+      ${showLinks ? `
+        <div class="screen-block">
+          <div class="screen-meta">
+            <span><strong>Collections &amp; Sets</strong> · LinksScreen</span>
+            <span>Try set chips, rail select ✓, or copy</span>
+          </div>
+          ${renderLinksScreen(state.variation)}
+        </div>` : ""}
+      ${showDetail ? `
+        <div class="screen-block">
+          <div class="screen-meta">
+            <span><strong>Share Link Detail</strong> · LinkPanePage</span>
+            <span>Try ?audio=normal, level, edit, privacy</span>
+          </div>
+          ${renderLinkDetailScreen(state.variation)}
+        </div>` : ""}
+    </div>`;
+}
+
+// ====== INTERACTION HANDLERS ======
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("button, [data-coll-tap], [data-open-detail]");
+  if (!el) return;
+
+  if (el.dataset.var) { state.variation = el.dataset.var; render(); return; }
+  if (el.dataset.surface) { state.surface = el.dataset.surface; render(); return; }
+  if (el.dataset.pose) { state.pose = el.dataset.pose; render(); return; }
+  if (el.dataset.theme) { state.theme = el.dataset.theme; render(); return; }
+
+  if (el.dataset.set) {
+    state.selectedSet = state.selectedSet === el.dataset.set && el.dataset.set !== "all" ? "all" : el.dataset.set;
+    render();
+    return;
+  }
+  if (el.dataset.ltab) { state.linksTabMode = el.dataset.ltab; render(); return; }
+
+  if (el.hasAttribute("data-toggle-select")) {
+    state.selectMode = !state.selectMode;
+    if (!state.selectMode) state.selectedColls.clear();
+    render();
+    return;
+  }
+  if (el.hasAttribute("data-toggle-series")) {
+    state.seriesExpanded = !state.seriesExpanded;
+    render();
+    return;
+  }
+
+  if (el.dataset.copyColl) {
+    e.stopPropagation();
+    const c = COLLECTIONS.find(x => x.id === el.dataset.copyColl);
+    flashCopy(c.id, `Copied ${c.links} link${c.links > 1 ? "s" : ""} from ${c.name}`);
+    return;
+  }
+  if (el.dataset.copySet) {
+    showToast(`Copied all links in set "${el.dataset.copySet}"`, "ok");
+    return;
+  }
+  if (el.dataset.copyLinkrow) {
+    e.stopPropagation();
+    const l = INDIVIDUAL_LINKS.find(x => x.id === el.dataset.copyLinkrow);
+    flashCopy(l.id, `Copied ${l.url}`);
+    return;
+  }
+  if (el.dataset.collTap) {
+    const id = el.dataset.collTap;
+    if (state.selectMode) {
+      if (state.selectedColls.has(id)) state.selectedColls.delete(id);
+      else state.selectedColls.add(id);
+      render();
+    } else {
+      const c = COLLECTIONS.find(x => x.id === id);
+      showToast(`Opened collection "${c.name}" (${c.links} ${c.links === 1 ? "link" : "links"})`);
+    }
+    return;
+  }
+  if (el.dataset.openDetail) {
+    showToast("Focused Share Link detail pane");
+    return;
+  }
+
+  if (el.hasAttribute("data-toggle-edit")) {
+    state.linkEditing = !state.linkEditing;
+    render();
+    return;
+  }
+  if (el.hasAttribute("data-save-edit")) {
+    state.linkEditing = false;
+    showToast("Link updated · undo available", "ok");
+    render();
+    return;
+  }
+  if (el.dataset.removeFile) {
+    if (state.files.length <= 2) {
+      showToast("Share links need at least 2 files", "err");
+      return;
+    }
+    state.files = state.files.filter(f => f.id !== el.dataset.removeFile);
+    render();
+    return;
+  }
+  if (el.hasAttribute("data-toggle-priv")) {
+    state.linkPrivate = !state.linkPrivate;
+    showToast(state.linkPrivate ? "Made private · key link copied" : "Made public · original link active", "ok");
+    render();
+    return;
+  }
+  if (el.hasAttribute("data-toggle-discord")) {
+    state.showDiscord = !state.showDiscord;
+    render();
+    return;
+  }
+  if (el.dataset.toggleLcoll) {
+    const name = el.dataset.toggleLcoll;
+    if (state.linkColls.has(name)) {
+      state.linkColls.delete(name);
+      showToast(`Removed from ${name}`);
+    } else {
+      state.linkColls.add(name);
+      showToast(`Added to ${name}`, "ok");
+    }
+    render();
+    return;
+  }
+  if (el.dataset.setNormal !== undefined) {
+    const want = el.dataset.setNormal === "1";
+    const g = getGate();
+    if (want && !g.unlocked) {
+      shakeEl(el);
+      showToast(`Locked: ${g.remaining.length} video${g.remaining.length > 1 ? "s" : ""} still need leveling first`, "err");
+      return;
+    }
+    state.useNormalAudio = want;
+    render();
+    return;
+  }
+  if (el.hasAttribute("data-bulk-level")) {
+    startBulkLevel();
+    return;
+  }
+  if (el.dataset.levelOne) {
+    startBulkLevel(el.dataset.levelOne);
+    return;
+  }
+  if (el.hasAttribute("data-reset-audio")) {
+    resetAudioDemo();
+    return;
+  }
+  if (el.hasAttribute("data-copy-detail")) {
+    const u = activeShareURL();
+    flashCopy("detail-copy", `Copied ${u.full}`, u.suffix ? "ok" : "neutral");
+    return;
+  }
+  if (el.dataset.toast) {
+    showToast(el.dataset.toast);
+    return;
+  }
+});
+
+document.addEventListener("input", (e) => {
+  if (e.target.matches("[data-title-input]")) {
+    state.linkTitle = e.target.value;
+  }
+});
+
+render();
+</script>
+</body>
+</html>

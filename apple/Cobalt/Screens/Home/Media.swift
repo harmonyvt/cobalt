@@ -180,7 +180,18 @@ struct AnimatedImageView: View {
     /// Frames are shrunk to this on their long side: enough for the full-screen viewer on any screen the app runs on,
     /// and far less than a texture the size of a tall webp for every frame.
     var maxPixel: Int = 1_400
+    @Environment(\.lifecycle) private var lifecycle
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model = AnimatedImageModel()
+
+    private var allowsMotion: Bool {
+        lifecycle.isForeground && !lifecycle.shouldConservePower && !reduceMotion
+    }
+
+    private struct PlayKey: Equatable {
+        let source: Source
+        let allowsMotion: Bool
+    }
 
     // Session replay (APP-API-CONTRACT 58): media is always masked.
     var body: some View { mediaBody.mediaMask() }
@@ -196,7 +207,11 @@ struct AnimatedImageView: View {
             .onChange(of: model.hasFrame) { _, up in
                 if up, started?.wrappedValue != true { started?.wrappedValue = true }
             }
-            .task(id: source) {
+            .task(id: PlayKey(source: source, allowsMotion: allowsMotion)) {
+                guard allowsMotion else {
+                    model.stop()
+                    return
+                }
                 switch source {
                 case .file(let url):
                     model.play(file: url, maxPixel: maxPixel)

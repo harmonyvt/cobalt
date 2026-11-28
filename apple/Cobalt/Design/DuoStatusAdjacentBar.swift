@@ -102,7 +102,8 @@ struct DuoStatusAdjacentBar<Content: View>: View {
 
 // MARK: - Compact Bar Primitives
 
-/// Circular leading back/dismiss button sized for the ~54–58 pt status-adjacent strip with a full-height hit target.
+/// Circular leading back/dismiss button sized for the status-adjacent strip with a full 44 pt hit target
+/// and high-contrast rim so it stands out clearly against pure black bezels and media alike.
 struct DuoStatusBarBackButton: View {
     let surface: DuoStatusAdjacentBarSurface
     var accessibilityLabel: String = Copy.close
@@ -112,7 +113,7 @@ struct DuoStatusBarBackButton: View {
     var body: some View {
         Button(action: action) {
             backVisual
-                .frame(minWidth: 36, minHeight: Metrics.hit)
+                .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -123,14 +124,18 @@ struct DuoStatusBarBackButton: View {
     @ViewBuilder
     private var backVisual: some View {
         let icon = Image(systemName: "chevron.backward")
-            .font(.system(size: 13.5, weight: .semibold))
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.white)
-            .frame(width: 32, height: 32)
+            .frame(width: 38, height: 38)
 
         switch surface {
         case .bezelMatte:
             icon
-                .background(Color.white.opacity(0.11), in: Circle())
+                .background(Color.white.opacity(0.16), in: Circle())
+                .overlay {
+                    Circle()
+                        .strokeBorder(Color.white.opacity(0.24), lineWidth: 0.75)
+                }
         case .clearLiquidGlass:
             icon
                 .mediaGlassCircle()
@@ -138,7 +143,7 @@ struct DuoStatusBarBackButton: View {
     }
 }
 
-/// Compact circular icon visual for status-bar actions (`⋯`, play/pause, glow, captions) with generous hit area.
+/// Compact circular icon visual for status-bar actions (`⋯`, play/pause, glow, captions) with full 44 pt hit area.
 struct DuoStatusBarIconVisual: View {
     let systemImage: String
     let surface: DuoStatusAdjacentBarSurface
@@ -148,7 +153,7 @@ struct DuoStatusBarIconVisual: View {
 
     var body: some View {
         iconCircle
-            .frame(minWidth: 36, minHeight: Metrics.hit)
+            .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
             .contentShape(Rectangle())
     }
 
@@ -156,17 +161,24 @@ struct DuoStatusBarIconVisual: View {
     private var iconCircle: some View {
         let usesLightSurface = surface == .bezelMatte && highlighted && tint == nil
         let symbol = Image(systemName: systemImage)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 14.5, weight: .semibold))
             .foregroundStyle(usesLightSurface ? .black : foreground)
-            .frame(width: 32, height: 32)
+            .frame(width: 38, height: 38)
 
         switch surface {
         case .bezelMatte:
             symbol
                 .background(
-                    tint ?? (highlighted ? Color.white : Color.white.opacity(0.11)),
+                    tint ?? (highlighted ? Color.white : Color.white.opacity(0.16)),
                     in: Circle()
                 )
+                .overlay {
+                    Circle()
+                        .strokeBorder(
+                            usesLightSurface ? Color.white : Color.white.opacity(0.24),
+                            lineWidth: 0.75
+                        )
+                }
         case .clearLiquidGlass:
             symbol
                 .mediaGlassCircle(tint: tint ?? (highlighted ? CobaltColor.focus : nil))
@@ -174,7 +186,8 @@ struct DuoStatusBarIconVisual: View {
     }
 }
 
-/// Compact capsule pill visual for status-bar actions (`+ 2nd`, `Copy Share`, `Deck`, `Swap`, `50/50`).
+/// Compact capsule pill visual for status-bar actions (`+ 2nd`, `Copy Share`, `Deck`, `Swap`, `50/50`)
+/// with comfortable press target and crisp border definition.
 struct DuoStatusBarPillVisual: View {
     let title: String
     var systemImage: String? = nil
@@ -191,26 +204,33 @@ struct DuoStatusBarPillVisual: View {
     @ViewBuilder
     private var pillCapsule: some View {
         let usesLightSurface = surface == .bezelMatte && emphasized && tint == nil
-        let label = HStack(spacing: 4) {
+        let label = HStack(spacing: 5) {
             if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.system(size: 12.5, weight: .semibold))
             }
             Text(title)
-                .font(Font.cobalt(12, .semibold, relativeTo: .caption))
+                .font(Font.cobalt(13, .semibold, relativeTo: .caption))
                 .lineLimit(1)
         }
         .foregroundStyle(usesLightSurface ? .black : .white)
-        .padding(.horizontal, 10)
-        .frame(height: 30)
+        .padding(.horizontal, 12)
+        .frame(height: 36)
 
         switch surface {
         case .bezelMatte:
             label
                 .background(
-                    tint ?? (emphasized ? Color.white : Color.white.opacity(0.12)),
+                    tint ?? (emphasized ? Color.white : Color.white.opacity(0.16)),
                     in: Capsule()
                 )
+                .overlay {
+                    Capsule()
+                        .strokeBorder(
+                            usesLightSurface ? Color.white : Color.white.opacity(0.24),
+                            lineWidth: 0.75
+                        )
+                }
         case .clearLiquidGlass:
             label
                 .mediaGlassCapsule(tint: tint ?? (emphasized ? CobaltColor.focus : nil))

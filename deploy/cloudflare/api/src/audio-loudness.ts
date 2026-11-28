@@ -1322,3 +1322,68 @@ export class AudioLevelService {
         }
     }
 }
+
+export const AUDIO_QUEUE_RECENT_MS = 30 * 60 * 1000;
+export const AUDIO_QUEUE_LIST_MAX = 25;
+
+export type AudioQueueEntry = {
+    item_id: string;
+    title: string;
+    state: "rendering" | "ready" | "failed";
+    target_lufs: number | null;
+    output_lufs: number | null;
+    error: string | null;
+    updated_at: number;
+    leveled_at: number | null;
+};
+
+/**
+ * Reads active (`rendering`) and recently settled (`ready` / `failed` within 30 minutes) audio leveling
+ * jobs from D1 for `GET /queue` without ever waking the helper container.
+ */
+export async function queueAudioLevels(db: D1Database, now: number): Promise<AudioQueueEntry[]> {
+    const cutoff = now - AUDIO_QUEUE_RECENT_MS;
+    try {
+        const res = await db
+            .prepare(
+                `SELECT a.item_id, m.name, a.state, a.target_lufs, a.output_lufs, a.error, a.updated_at, a.leveled_at
+                 FROM media_audio a
+                 JOIN media_items m ON m.id = a.item_id
+                 WHERE m.deleted_at IS NULL
+                   AND (
+                       a.state = 'rendering'
+                       OR (a.state = 'ready' AND a.leveled_at IS NOT NULL AND a.leveled_at >= ?1)
+                       OR (a.state = 'failed' AND a.updated_at >= ?1)
+                   )
+                 ORDER BY CASE a.state WHEN 'rendering' THEN 0 ELSE 1 END, a.updated_at DESC
+                 LIMIT ?2`,
+            )
+            .bind(cutoff, AUDIO_QUEUE_LIST_MAX)
+            .all<{
+                item_id: string;
+                name: string | null;
+                state: string;
+                target_lufs: number | null;
+                output_lufs: number | null;
+                error: string | null;
+                updated_at: number;
+                leveled_at: number | null;
+            }>();
+        return (res.results ?? [])
+            .filter((r) => r.state === "rendering" || r.state === "ready" || r.state === "failed")
+            .map((r) => ({
+                item_id: r.item_id,
+                title: (r.name ?? "").trim() || r.item_id,
+                state: r.state as "rendering" | "ready" | "failed",
+                target_lufs: r.target_lufs,
+                output_lufs: r.output_lufs,
+                error: r.error,
+                updated_at: r.updated_at,
+                leveled_at: r.leveled_at,
+            }));
+    } catch (e) {
+        if (isMissingTable(e)) return [];
+        throw e;
+    }
+}
+

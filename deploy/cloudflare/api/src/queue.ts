@@ -9,6 +9,7 @@
 import { searchQueue, type SearchQueue } from "./embed";
 import { posterBacklog } from "./poster";
 import { queueEdits } from "./edits";
+import { queueAudioLevels } from "./audio-loudness";
 import type { StudioReply } from "./studio";
 
 // A line answer slower than this is left out (null).
@@ -26,7 +27,7 @@ export type QueueDeps = {
 
 export async function queueSnapshot(d: QueueDeps): Promise<StudioReply> {
     const now = d.now();
-    const [line, search, posters, edits] = await Promise.all([
+    const [line, search, posters, edits, audio] = await Promise.all([
         withTimeout(d.line(), QUEUE_LINE_MS).catch(() => null),
         searchQueue({ db: d.db, mediaBaseUrl: d.mediaBaseUrl, now, enabled: d.searchEnabled }).catch((e): SearchQueue | null => {
             console.error("[queue] search failed", String(e));
@@ -42,8 +43,12 @@ export async function queueSnapshot(d: QueueDeps): Promise<StudioReply> {
             console.error("[queue] edits failed", e instanceof Error ? e.message : String(e));
             return null;
         }),
+        queueAudioLevels(d.db, now).catch((e): null => {
+            console.error("[queue] audio failed", e instanceof Error ? e.message : String(e));
+            return null;
+        }),
     ]);
-    return { status: 200, body: { status: "success", now, line, search, posters, edits } };
+    return { status: 200, body: { status: "success", now, line, search, posters, edits, audio } };
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {

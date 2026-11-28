@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import {
-    API_BASE, DEFAULT_PAGE, LIBRARY_CSP, MAX_UPLOAD_BYTES, UPLOAD_TYPES, handleLibrary, matchRoute,
+    API_BASE, DEFAULT_PAGE, LIBRARY_CSP, MAX_SINGLE_UPLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_TYPES, handleLibrary, matchRoute,
 } from "../src/library";
 import { LIBRARY_HTML } from "../src/library/page.generated";
 import config from "../cloudflare.config";
@@ -1214,7 +1214,7 @@ describe("PUT /api/library/upload", () => {
         let cancelled = false;
         const body = new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } });
         const r = await call("PUT", "/api/library/upload?name=big.mp4", {
-            raw: body, headers: { "content-type": "video/mp4", "content-length": String(MAX_UPLOAD_BYTES + 1) },
+            raw: body, headers: { "content-type": "video/mp4", "content-length": String(MAX_SINGLE_UPLOAD_BYTES + 1) },
         });
         expect(r.status).toBe(413);
         expect(await errorCode(r)).toBe("error.library.too_large");
@@ -1223,14 +1223,20 @@ describe("PUT /api/library/upload", () => {
     });
     it("accepts exactly 100_000_000 bytes (streamed through, never buffered by the Worker)", async () => {
         const r = await call("PUT", "/api/library/upload?name=max.mp4", {
-            raw: streamOf(MAX_UPLOAD_BYTES), headers: { "content-type": "video/mp4", "content-length": String(MAX_UPLOAD_BYTES) },
+            raw: streamOf(MAX_SINGLE_UPLOAD_BYTES), headers: { "content-type": "video/mp4", "content-length": String(MAX_SINGLE_UPLOAD_BYTES) },
         });
         expect(r.status).toBe(201);
         const it = (await json(r)).item;
-        expect(it.bytes).toBe(MAX_UPLOAD_BYTES);
+        expect(it.bytes).toBe(MAX_SINGLE_UPLOAD_BYTES);
         expect(originals.puts[0]!.valueKind).toBe("stream");
-        expect(originals.objects.get(`uploads/${it.id}.mp4`)!.size).toBe(MAX_UPLOAD_BYTES);
+        expect(originals.objects.get(`uploads/${it.id}.mp4`)!.size).toBe(MAX_SINGLE_UPLOAD_BYTES);
     }, 30_000);
+    it("exposes multipart upload proxy routes and 1 GiB MAX_UPLOAD_BYTES", () => {
+        expect(MAX_UPLOAD_BYTES).toBe(1_073_741_824);
+        expect(matchRoute("/api/library/upload/multipart")).toEqual({ name: "uploadMultipart" });
+        expect(matchRoute("/api/library/upload/multipart/part")).toEqual({ name: "uploadMultipartPart" });
+        expect(matchRoute("/api/library/upload/multipart/complete")).toEqual({ name: "uploadMultipartComplete" });
+    });
     it("requires a content-length (411)", async () => {
         const r = await call("PUT", "/api/library/upload?name=a.gif", { raw: streamOf(10, 10), headers: { "content-type": "image/gif" } });
         expect(r.status).toBe(411);

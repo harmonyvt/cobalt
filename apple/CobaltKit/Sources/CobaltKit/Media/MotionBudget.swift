@@ -13,11 +13,11 @@ import UIKit
 ///
 /// 8.16's 7TV tab played every animated emote it had drawn, visible or not, which was most of its 401 ms/s of hitches.
 @MainActor
-public final class MotionBudget {
+public final class MotionBudget: LifecycleAware {
     public static let shared = MotionBudget(limit: MotionBudget.deviceLimit)
-    /// Dedicated budget for GPU-only animated 7TV name paint shaders so they pause in Low Power Mode without taking
-    /// decode slots away from animated WebP emotes.
-    public static let shader = MotionBudget(limit: 24)
+    /// Dedicated budget for GPU-only animated 7TV name paint shaders so they pause in Low Power Mode / thermal pressure
+    /// without taking decode slots away from animated WebP emotes.
+    public static let shader = MotionBudget(limit: MotionBudget.shaderDeviceLimit)
 
     /// 10 on iPhone, 16 on iPad and Mac so busy dual-stream chats stay smooth during scrolls and rotations.
     public static var deviceLimit: Int {
@@ -28,11 +28,19 @@ public final class MotionBudget {
         #endif
     }
 
+    /// 8 on iPhone, 12 on iPad and Mac to keep per-frame Metal paint overhead bounded.
+    public static var shaderDeviceLimit: Int {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .phone ? 8 : 12
+        #else
+        return 12
+        #endif
+    }
+
     public let limit: Int
     private var dynamicLimitOverride: Int?
     private var line: [WeakTicket] = []
     private var lowPower: Bool
-    private var observer: NSObjectProtocol?
 
     /// Active animated emote limit after accounting for concurrent multi-stream playback.
     public var effectiveLimit: Int {
@@ -44,17 +52,20 @@ public final class MotionBudget {
         weak var ticket: MotionTicket?
     }
 
-    /// `watchPower: false` for tests: the budget then never hears of Low Power Mode.
+    /// `watchPower: false` for tests: the budget then never registers with `AppLifecycle`.
     public init(limit: Int, watchPower: Bool = true) {
         self.limit = max(0, limit)
-        lowPower = watchPower && ProcessInfo.processInfo.isLowPowerModeEnabled
-        guard watchPower else { return }
-        observer = NotificationCenter.default.addObserver(
-            forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main
-        ) { @Sendable [weak self] _ in
-            let low = ProcessInfo.processInfo.isLowPowerModeEnabled
-            Task { @MainActor [weak self] in self?.setLowPower(low) }
+        if watchPower {
+            let snap = AppLifecycle.shared.snapshot
+            self.lowPower = snap.shouldConservePower || ProcessInfo.processInfo.isLowPowerModeEnabled
+            AppLifecycle.shared.register(self, order: .media)
+        } else {
+            self.lowPower = false
         }
+    }
+
+    public func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        setLowPower(snapshot.shouldConservePower || !snapshot.isForeground)
     }
 
     /// Tightens animated emote budget when 3+ live Twitch streams are decoding concurrently so busy multi-channel
@@ -62,7 +73,7 @@ public final class MotionBudget {
     public func setActiveStreamCount(_ count: Int) {
         let nextOverride: Int?
         if count >= 3 {
-            nextOverride = limit <= 10 ? 6 : 10
+            nextOverride = limit <= 8 ? 4 : (limit <= 10 ? 6 : 8)
         } else {
             nextOverride = nil
         }

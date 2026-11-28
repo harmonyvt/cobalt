@@ -14,7 +14,8 @@ import { jwksFor, type Deps, type Env } from "./keys";
 import { LIBRARY_HTML } from "./library/page.generated";
 
 export const API_BASE = "https://api.capybaraharmony.com";
-export const MAX_UPLOAD_BYTES = 100_000_000;
+export const MAX_SINGLE_UPLOAD_BYTES = 100_000_000;
+export const MAX_UPLOAD_BYTES = 1_073_741_824;
 export const MAX_PAGE = 100;
 export const DEFAULT_PAGE = 48;
 export const MAX_WAIT = 25;
@@ -179,6 +180,9 @@ type Route =
     | { name: "list" }
     | { name: "link" }
     | { name: "upload" }
+    | { name: "uploadMultipart" }
+    | { name: "uploadMultipartPart" }
+    | { name: "uploadMultipartComplete" }
     | { name: "search" }
     | { name: "searchPost" }
     | { name: "emotes" }
@@ -209,6 +213,9 @@ const ALLOWED: Record<Route["name"], string[]> = {
     list: ["GET"],
     link: ["POST"],
     upload: ["PUT"],
+    uploadMultipart: ["POST", "DELETE"],
+    uploadMultipartPart: ["PUT"],
+    uploadMultipartComplete: ["POST"],
     search: ["GET"],
     searchPost: ["GET"],
     emotes: ["GET", "POST"],
@@ -240,6 +247,9 @@ export function matchRoute(pathname: string): Route | null {
     if (pathname === "/api/library") return { name: "list" };
     if (pathname === "/api/library/link") return { name: "link" };
     if (pathname === "/api/library/upload") return { name: "upload" };
+    if (pathname === "/api/library/upload/multipart") return { name: "uploadMultipart" };
+    if (pathname === "/api/library/upload/multipart/part") return { name: "uploadMultipartPart" };
+    if (pathname === "/api/library/upload/multipart/complete") return { name: "uploadMultipartComplete" };
     if (pathname === "/api/library/search") return { name: "search" };
     if (pathname === "/api/library/search/post") return { name: "searchPost" };
     if (pathname === "/api/library/emotes") return { name: "emotes" };
@@ -312,6 +322,14 @@ export async function handleLibrary(request: Request, env: Env, deps?: Partial<L
                 return await link(ctx, request);
             case "upload":
                 return await upload(ctx, request, searchParams);
+            case "uploadMultipart":
+                return request.method === "DELETE"
+                    ? await uploadMultipartAbort(ctx, request, searchParams)
+                    : await uploadMultipartCreate(ctx, request);
+            case "uploadMultipartPart":
+                return await uploadMultipartPart(ctx, request, searchParams);
+            case "uploadMultipartComplete":
+                return await uploadMultipartComplete(ctx, request);
             case "search":
                 return await search(ctx, searchParams);
             case "searchPost":
@@ -885,7 +903,7 @@ async function upload(ctx: Ctx, request: Request, q: URLSearchParams): Promise<R
     const declared = request.headers.get("content-length");
     if (declared === null || !/^\d{1,15}$/.test(declared)) return reject(411, "error.library.length_required");
     const size = Number(declared);
-    if (size > MAX_UPLOAD_BYTES) return reject(413, "error.library.too_large");
+    if (size > MAX_SINGLE_UPLOAD_BYTES) return reject(413, "error.library.too_large");
     if (size === 0 || !request.body) return reject(400, "error.library.empty");
 
     const id = (ctx.deps.randomId ?? base62)(16);
@@ -911,6 +929,83 @@ async function upload(ctx: Ctx, request: Request, q: URLSearchParams): Promise<R
     }
     const row = await getItem(ctx, id);
     return json(201, { status: "success", item: itemShape(row!) });
+}
+
+// ---------- /api/library/upload/multipart* (files up to 1 GiB) ----------
+
+async function uploadMultipartCreate(ctx: Ctx, request: Request): Promise<Response> {
+    const body = await readJson(request);
+    if (!body) return err(400, "error.library.bad_request");
+    const res = await callApi(ctx, "/studio/upload/multipart", { method: "POST", body });
+    return relayResponse(res, (b) => b);
+}
+
+async function uploadMultipartPart(ctx: Ctx, request: Request, q: URLSearchParams): Promise<Response> {
+    const reject = (status: number, code: string) => {
+        void request.body?.cancel().catch(() => {});
+        return err(status, code);
+    };
+    const key = ctx.env.COBALT_API_KEY;
+    if (!key) return reject(502, "error.library.upstream");
+    const uploadId = request.headers.get("x-upload-id") ?? q.get("upload_id") ?? "";
+    const part = q.get("part") ?? "";
+    const length = request.headers.get("content-length");
+    if (!uploadId || !/^\d{1,5}$/.test(part)) return reject(400, "error.library.bad_request");
+    if (length === null || !/^\d{1,15}$/.test(length)) return reject(411, "error.library.length_required");
+    if (!request.body) return reject(400, "error.library.empty");
+
+    const headers = new Headers({
+        "x-cobalt-service": key,
+        accept: "application/json",
+        "content-type": "application/octet-stream",
+        "content-length": length,
+        "x-upload-id": uploadId,
+    });
+    let res: Response | null = null;
+    try {
+        res = await ctx.env.API.fetch(
+            new Request(`${API_BASE}/studio/upload/multipart/part?part=${encodeURIComponent(part)}`, {
+                method: "PUT",
+                headers,
+                body: request.body,
+            }),
+        );
+    } catch {
+        res = null;
+    }
+    return relayResponse(res, (b) => b);
+}
+
+async function uploadMultipartComplete(ctx: Ctx, request: Request): Promise<Response> {
+    let body: Record<string, unknown> | null = null;
+    try {
+        const parsed: unknown = await request.json();
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) body = parsed as Record<string, unknown>;
+    } catch {
+        body = null;
+    }
+    if (!body) return err(400, "error.library.bad_request");
+    const res = await callApi(ctx, "/studio/upload/multipart/complete", { method: "POST", body });
+    return relayResponse(res, (b) => b);
+}
+
+async function uploadMultipartAbort(ctx: Ctx, request: Request, q: URLSearchParams): Promise<Response> {
+    const key = ctx.env.COBALT_API_KEY;
+    if (!key) return err(502, "error.library.upstream");
+    const uploadId = request.headers.get("x-upload-id") ?? q.get("upload_id") ?? "";
+    if (!uploadId) return err(400, "error.library.bad_request");
+    const headers = new Headers({
+        "x-cobalt-service": key,
+        accept: "application/json",
+        "x-upload-id": uploadId,
+    });
+    let res: Response | null = null;
+    try {
+        res = await ctx.env.API.fetch(new Request(`${API_BASE}/studio/upload/multipart`, { method: "DELETE", headers }));
+    } catch {
+        res = null;
+    }
+    return relayResponse(res, (b) => b);
 }
 
 async function getItem(ctx: Ctx, id: string): Promise<MediaRow | null> {

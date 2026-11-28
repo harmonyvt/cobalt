@@ -88,7 +88,7 @@ struct AmbientCinemaPostStudio: View {
         "\(item.id)|\(activeRendition?.id ?? "missing:\(context.missingIndex ?? -1)")"
     }
     private var shouldSampleLiveVideo: Bool {
-        ambientEnabled && !reduceMotion && lifecycle.isForeground && activeRenditionIsVideo
+        ambientEnabled && !reduceMotion && lifecycle.isForeground && !lifecycle.shouldConservePower && activeRenditionIsVideo
     }
     private var model: AppModel { context.model }
     private var controller: DetailController { context.controller }
@@ -404,7 +404,7 @@ struct AmbientCinemaPostStudio: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if showDockedDeck {
-                dockedStudioDeck
+                dockedStudioDeck(topClearance: statusBar.isActive ? statusBar.bandHeight : 0)
                     .frame(width: deckWidth)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
@@ -1342,7 +1342,7 @@ struct AmbientCinemaPostStudio: View {
 
     // MARK: - Creator Studio Deck (Docked Right on Wide / Separated Crease / Compact Sheet)
 
-    private var dockedStudioDeck: some View {
+    private func dockedStudioDeck(topClearance: CGFloat = 0) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Text("Studio Deck")
@@ -1353,10 +1353,14 @@ struct AmbientCinemaPostStudio: View {
                     wideDeckOpen = false
                 } label: {
                     Image(systemName: Symbol.close)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.78))
-                        .frame(width: 32, height: 32)
-                        .background(Color.white.opacity(0.1), in: Circle())
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(Color.white.opacity(0.16), in: Circle())
+                        .overlay {
+                            Circle()
+                                .strokeBorder(Color.white.opacity(0.24), lineWidth: 0.75)
+                        }
                         .frame(width: Metrics.hit, height: Metrics.hit)
                         .contentShape(Rectangle())
                 }
@@ -1364,7 +1368,7 @@ struct AmbientCinemaPostStudio: View {
                 .accessibilityLabel("Close Studio Deck")
             }
             .padding(.horizontal, 14)
-            .padding(.top, 8)
+            .padding(.top, topClearance > 0 ? topClearance + 4 : 8)
             .padding(.bottom, 6)
 
             deckTabPicker

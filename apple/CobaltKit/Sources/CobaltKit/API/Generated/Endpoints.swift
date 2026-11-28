@@ -71,6 +71,26 @@ enum Endpoints {
         APIEndpoint(op: "studio.upload", method: "PUT", path: "/studio/upload", auth: .keyOrService)
     }
 
+    /// `POST /studio/upload/multipart` (op `studio.upload.multipart.create`, auth key_or_service): Begin a multipart upload (POST /studio/upload/multipart).
+    static func studioUploadMultipartCreate() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "studio.upload.multipart.create", method: "POST", path: "/studio/upload/multipart", auth: .keyOrService)
+    }
+
+    /// `PUT /studio/upload/multipart/part` (op `studio.upload.multipart.part`, auth key_or_service): Upload one multipart chunk (PUT /studio/upload/multipart/part).
+    static func studioUploadMultipartPart() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "studio.upload.multipart.part", method: "PUT", path: "/studio/upload/multipart/part", auth: .keyOrService)
+    }
+
+    /// `POST /studio/upload/multipart/complete` (op `studio.upload.multipart.complete`, auth key_or_service): Complete a multipart upload (POST /studio/upload/multipart/complete).
+    static func studioUploadMultipartComplete() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "studio.upload.multipart.complete", method: "POST", path: "/studio/upload/multipart/complete", auth: .keyOrService)
+    }
+
+    /// `DELETE /studio/upload/multipart` (op `studio.upload.multipart.abort`, auth key_or_service): Abort a multipart upload (DELETE /studio/upload/multipart).
+    static func studioUploadMultipartAbort() -> APIEndpoint<APIUntyped> {
+        APIEndpoint(op: "studio.upload.multipart.abort", method: "DELETE", path: "/studio/upload/multipart", auth: .keyOrService)
+    }
+
     /// `POST /studio/:sid/publish` (op `studio.publish`, auth key_or_service): Host a session's original publicly (legacy).
     static func studioPublish(sid: String) -> APIEndpoint<APIUntyped> {
         APIEndpoint(op: "studio.publish", method: "POST", path: "/studio/\(HTTPCobaltClient.encode(sid))/publish", auth: .keyOrService)

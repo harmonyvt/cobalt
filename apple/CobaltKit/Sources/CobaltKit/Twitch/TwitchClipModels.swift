@@ -492,11 +492,17 @@ public struct TwitchClipChatConfig: Sendable, Equatable, Codable {
     }
 }
 
+public enum TwitchClipOrientation: String, Sendable, Equatable, Codable, CaseIterable {
+    case portrait
+    case landscape
+}
+
 public struct TwitchClipEditConfig: Sendable, Equatable, Codable {
+    public var orientation: TwitchClipOrientation
     public var layout: TwitchClipLayout
     /// Top-half fraction of the video area in `.split` mode (`0.25...0.75`, snaps to 35/40/50/60/65%).
     public var splitRatio: Double
-    /// Which region occupies the top slot in `.split` mode (`.a` default; swapped via `swap A ⇅ B`).
+    /// Which region occupies the top (or left in landscape) slot in `.split` mode (`.a` default; swapped via `swap A ⇅ B`).
     public var topRegion: TwitchClipRegionID
     public var regionA: TwitchClipRegionTarget
     public var regionB: TwitchClipRegionTarget
@@ -504,6 +510,7 @@ public struct TwitchClipEditConfig: Sendable, Equatable, Codable {
     public var chat: TwitchClipChatConfig
 
     public init(
+        orientation: TwitchClipOrientation = .portrait,
         layout: TwitchClipLayout = .split,
         splitRatio: Double = 0.5,
         topRegion: TwitchClipRegionID = .a,
@@ -512,6 +519,7 @@ public struct TwitchClipEditConfig: Sendable, Equatable, Codable {
         pip: TwitchClipPiPBox = TwitchClipPiPBox(),
         chat: TwitchClipChatConfig = TwitchClipChatConfig()
     ) {
+        self.orientation = orientation
         self.layout = layout
         self.splitRatio = splitRatio
         self.topRegion = topRegion
@@ -519,6 +527,22 @@ public struct TwitchClipEditConfig: Sendable, Equatable, Codable {
         self.regionB = regionB
         self.pip = pip
         self.chat = chat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case orientation, layout, splitRatio, topRegion, regionA, regionB, pip, chat
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.orientation = try c.decodeIfPresent(TwitchClipOrientation.self, forKey: .orientation) ?? .portrait
+        self.layout = try c.decodeIfPresent(TwitchClipLayout.self, forKey: .layout) ?? .split
+        self.splitRatio = try c.decodeIfPresent(Double.self, forKey: .splitRatio) ?? 0.5
+        self.topRegion = try c.decodeIfPresent(TwitchClipRegionID.self, forKey: .topRegion) ?? .a
+        self.regionA = try c.decodeIfPresent(TwitchClipRegionTarget.self, forKey: .regionA) ?? TwitchClipRegionTarget(cx: 0.16, cy: 0.76, w: 0.28)
+        self.regionB = try c.decodeIfPresent(TwitchClipRegionTarget.self, forKey: .regionB) ?? TwitchClipRegionTarget(cx: 0.62, cy: 0.50, w: 0.50)
+        self.pip = try c.decodeIfPresent(TwitchClipPiPBox.self, forKey: .pip) ?? TwitchClipPiPBox()
+        self.chat = try c.decodeIfPresent(TwitchClipChatConfig.self, forKey: .chat) ?? TwitchClipChatConfig()
     }
 
     public func target(for region: TwitchClipRegionID) -> TwitchClipRegionTarget {

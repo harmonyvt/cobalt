@@ -10731,6 +10731,112 @@
         }
       }
     },
+    "/studio/upload/multipart": {
+      "post": {
+        "operationId": "studio.upload.multipart.create",
+        "summary": "Begin a multipart upload (POST /studio/upload/multipart).",
+        "tags": [
+          "studio"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      },
+      "delete": {
+        "operationId": "studio.upload.multipart.abort",
+        "summary": "Abort a multipart upload (DELETE /studio/upload/multipart).",
+        "tags": [
+          "studio"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/upload/multipart/complete": {
+      "post": {
+        "operationId": "studio.upload.multipart.complete",
+        "summary": "Complete a multipart upload (POST /studio/upload/multipart/complete).",
+        "tags": [
+          "studio"
+        ],
+        "responses": {
+          "default": {
+            "description": "JSON, as the contract describes"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "no_store": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
+    "/studio/upload/multipart/part": {
+      "put": {
+        "operationId": "studio.upload.multipart.part",
+        "summary": "Upload one multipart chunk (PUT /studio/upload/multipart/part).",
+        "tags": [
+          "studio"
+        ],
+        "responses": {
+          "default": {
+            "description": "the handler's own response (see the contract)"
+          }
+        },
+        "security": [
+          {
+            "apiKey": []
+          }
+        ],
+        "x-cobalt": {
+          "auth": "key_or_service",
+          "runs": "worker",
+          "cors": true,
+          "raw": true,
+          "input": "read by the handler",
+          "ai": "hidden"
+        }
+      }
+    },
     "/studio/{sid}": {
       "get": {
         "operationId": "studio.status",

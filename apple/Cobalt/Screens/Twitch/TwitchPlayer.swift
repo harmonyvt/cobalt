@@ -37,7 +37,11 @@ enum TwitchEmbed {
     static let firstPartyWait: Duration = .seconds(15)
 
     static func safe(_ channel: String) -> String {
-        channel.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "_" }
+        let trimmed = channel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = StreamAddress.parse(trimmed) {
+            return parsed.canonicalKey
+        }
+        return trimmed.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "_" }
     }
 
     /// The player page for `channel`, to load with `baseURL: base` (`parent` must be the page's own domain).
@@ -296,10 +300,12 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     private(set) var secondaryHasPlaybackError = false
     private(set) var secondaryVariants: [TwitchVariant] = []
     private(set) var secondarySelectedVariantID: String?
-    /// True while non-spotlight streams have been stepped down under `AppLifecycle.snapshot.shouldThrottle`.
+    /// True while streams have been stepped down under `AppLifecycle.snapshot.shouldThrottle` or Low Power Mode.
     private(set) var isThermalThrottled = false
+    /// True while iOS Low Power Mode is active (`AppLifecycle.snapshot.isLowPowerMode`).
+    private(set) var isLowPowerModeActive = false
     private(set) var thermalThrottledSlot: TwitchDualSlot?
-    /// True while the owner has manually overridden quality on at least one slot in multi-stream mode.
+    /// True while the owner has manually overridden quality on at least one slot.
     private(set) var hasManualQualityOverrides = false
 
     /// True when low-latency native mode has handed video off to an AirPlay TV via `AVPlayer`.
@@ -419,6 +425,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     @ObservationIgnored private var activeSurfaceIDBySlot: [TwitchStreamSlot: UUID] = [:]
     @ObservationIgnored private var surfaceHealthTask: Task<Void, Never>?
     @ObservationIgnored private var preThrottleVariantID: String?
+    @ObservationIgnored private var preBudgetVariantIDs: [TwitchStreamSlot: String] = [:]
+    @ObservationIgnored private var preBackgroundVariantIDs: [TwitchStreamSlot: String] = [:]
+    @ObservationIgnored private var budgetRestoreTask: Task<Void, Never>?
+    @ObservationIgnored private var extraSlotDelays: [TwitchStreamSlot: Double] = [:]
     @ObservationIgnored private var lastThermalShouldThrottle = false
     @ObservationIgnored private var resumeSecondaryChannel: String?
     @ObservationIgnored private var resumeChannels: [String] = []
@@ -492,6 +502,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         self.preferredMode = savedMode
         self.activeMode = savedMode
         self.preferredQualityID = UserDefaults.standard.string(forKey: Self.qualityKey)
+        let snap = AppLifecycle.shared.snapshot
+        self.lastThermalShouldThrottle = snap.shouldThrottle
+        self.isLowPowerModeActive = snap.isLowPowerMode
 
         let proxy = TwitchMessageProxy()
         self.proxy = proxy
@@ -501,6 +514,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         configurePiPAndNowPlaying()
         AppLifecycle.shared.register(self, order: .media)
         AppLifecycle.shared.register(purgeable: self)
+        let recorder = clipRecorder
+        let lpm = snap.isLowPowerMode
+        Task { await recorder.setLowPowerMode(lpm) }
     }
 
     private func configurePiPAndNowPlaying() {
@@ -517,6 +533,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             self.releaseTask = nil
             self.backgroundVideoOffTask?.cancel()
             self.backgroundVideoOffTask = nil
+            self.restoreBackgroundAudioVariantsIfNeeded()
             AudioSessionCoordinator.shared.claim(Self.pipAudioClaimID, kind: .playback(allowsPiP: true))
             if self.activeChannels.count >= 3 {
                 // Spotlight PiP (iOS 3–4 streams): keep Spotlight video decoding, pause off-screen video outputs.
@@ -607,6 +624,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             self.releaseTask = nil
             self.backgroundVideoOffTask?.cancel()
             self.backgroundVideoOffTask = nil
+            self.restoreBackgroundAudioVariantsIfNeeded()
             self.dualMixer.handleForegrounded()
             AudioSessionCoordinator.shared.claim(Self.pipAudioClaimID, kind: .playback(allowsPiP: true))
             let primaryEngine = self.nativeEngine
@@ -858,7 +876,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     }
 
     private static func defaultClipTitle(channel: String, streamTitle: String?) -> String {
-        let base = channel.lowercased()
+        let base = StreamAddress.displayLabel(for: channel)
         if let streamTitle {
             let clean = streamTitle.trimmingCharacters(in: .whitespacesAndNewlines)
             if !clean.isEmpty {
@@ -1058,7 +1076,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             let activeSlots = TwitchStreamSlot.slots(forCount: activeChannels.count)
             let louder = multiMixer.louderSlot ?? multiMixer.spotlightSlot
             let audioChannel = channel(for: louder) ?? ch
-            let louderName = twitch?.displayName(for: audioChannel) ?? audioChannel
+            let louderName = twitch?.displayName(for: audioChannel) ?? StreamAddress.displayLabel(for: audioChannel)
             let othersCount = max(0, activeChannels.count - 1)
             let combinedTitle = "🔊 \(louderName) +\(othersCount)"
             let info = twitch?.streamInfo(for: audioChannel)
@@ -1088,8 +1106,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 self?.swapDualAudioFocusFromRemote()
             }
             let twitch = attachedModel?.twitch
-            let nameA = twitch?.displayName(for: ch) ?? ch
-            let nameB = twitch?.displayName(for: sec) ?? sec
+            let nameA = twitch?.displayName(for: ch) ?? StreamAddress.displayLabel(for: ch)
+            let nameB = twitch?.displayName(for: sec) ?? StreamAddress.displayLabel(for: sec)
             let louder = dualMixer.louderSlot
             let combinedTitle: String
             switch louder {
@@ -1124,12 +1142,12 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             nowPlaying.clear()
             return
         }
-        var displayName = ch
+        var displayName = StreamAddress.displayLabel(for: ch)
         var title: String?
         var game: String?
         var artworkURL: URL?
         if let twitch = attachedModel?.twitch, twitch.channel == ch {
-            displayName = twitch.stream?.displayName ?? twitch.channelInfo?.displayName ?? ch
+            displayName = twitch.stream?.displayName ?? twitch.channelInfo?.displayName ?? StreamAddress.displayLabel(for: ch)
             title = twitch.stream?.title
             game = twitch.stream?.game
             artworkURL = twitch.stream?.thumbnail ?? twitch.channelInfo?.avatar
@@ -1230,12 +1248,13 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     }
 
     /// Returns unified observable playback & quality state for any slot `.a`...`.d`.
-    func slotState(for slot: TwitchStreamSlot) -> TwitchSlotState {
+    /// By default omits `delay` so layout containers like `TwitchDualStage` don't invalidate on telemetry ticks.
+    func slotState(for slot: TwitchStreamSlot, includeDelay: Bool = false) -> TwitchSlotState {
         switch slot {
         case .a:
             return TwitchSlotState(
                 channel: channel,
-                delay: delay,
+                delay: includeDelay ? delay : nil,
                 isPlaying: isPlaying,
                 isLoading: isLoading,
                 isBuffering: isBuffering,
@@ -1247,7 +1266,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         case .b:
             return TwitchSlotState(
                 channel: secondaryChannel,
-                delay: secondaryDelay,
+                delay: includeDelay ? secondaryDelay : nil,
                 isPlaying: secondaryIsPlaying,
                 isLoading: secondaryIsLoading,
                 isBuffering: secondaryIsBuffering,
@@ -1257,7 +1276,11 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 selectedVariantID: secondarySelectedVariantID
             )
         case .c, .d:
-            return extraSlotStates[slot] ?? TwitchSlotState()
+            var st = extraSlotStates[slot] ?? TwitchSlotState()
+            if includeDelay {
+                st.delay = extraSlotDelays[slot]
+            }
+            return st
         }
     }
 
@@ -1348,6 +1371,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
 
     /// Switch between native low-latency playback and Twitch's embed, persisting the choice.
     func setMode(_ mode: TwitchPlayerMode) {
+        if mode == .embed, let current = channel, !StreamAddress.platform(for: current).supportsEmbedFallback {
+            return
+        }
         preferredMode = mode
         UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
         fellBackToEmbed = false
@@ -1372,6 +1398,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         guard activeMode == .lowLatency else { return }
         preferredQualityID = id
         UserDefaults.standard.set(id, forKey: Self.qualityKey)
+        manualQualityOverrides.insert(.a)
+        hasManualQualityOverrides = true
+        preBudgetVariantIDs.removeValue(forKey: .a)
+        preBackgroundVariantIDs.removeValue(forKey: .a)
         selectedVariantID = id
         if isAudioOnly && isPiPActive {
             pipController.stop()
@@ -1442,12 +1472,14 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             }
             return
         }
-        // Switching to a fresh channel resets any per-channel fallback so the owner's preferred mode runs again.
-        if fellBackToEmbed {
+        // Switching to a fresh channel resets any per-channel fallback so the owner's preferred mode runs again
+        // (and Kick / YouTube channels always use native HLS playback).
+        let targetMode: TwitchPlayerMode = StreamAddress.platform(for: c).supportsEmbedFallback ? preferredMode : .lowLatency
+        if fellBackToEmbed || activeMode != targetMode {
             fellBackToEmbed = false
-            if activeMode != preferredMode {
+            if activeMode != targetMode {
                 if activeMode == .embed { stopEmbed() } else { stopNative() }
-                activeMode = preferredMode
+                activeMode = targetMode
             }
         }
         allowAirPlayProbe = true
@@ -1668,7 +1700,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 channel: ch,
                 view: madeNative,
                 engine: eng,
-                state: slotState(for: .a),
+                state: slotState(for: .a, includeDelay: true),
                 manualQuality: manualQualityOverrides.contains(.a)
             )
         }
@@ -1677,7 +1709,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 channel: ch,
                 view: madeSecondaryNative,
                 engine: eng,
-                state: slotState(for: .b),
+                state: slotState(for: .b, includeDelay: true),
                 manualQuality: manualQualityOverrides.contains(.b)
             )
         }
@@ -1689,7 +1721,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                     channel: ch,
                     view: runtime.madeView,
                     engine: eng,
-                    state: slotState(for: slot),
+                    state: slotState(for: slot, includeDelay: true),
                     manualQuality: manualQualityOverrides.contains(slot)
                 )
             }
@@ -1739,6 +1771,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             runtime.madeView = nil
             runtime.engine = nil
             extraSlotStates[slot] = nil
+            extraSlotDelays[slot] = nil
         }
 
         for (idx, ch) in targetChannels.enumerated() {
@@ -1804,8 +1837,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             runtime.channel = ch
             runtime.madeView = view
             runtime.engine = engine
+            extraSlotDelays[slot] = state.delay
             var nextState = state
             nextState.channel = ch
+            nextState.delay = nil
             extraSlotStates[slot] = nextState
             rebindExtraEventStream(for: engine, slot: slot)
         }
@@ -2043,7 +2078,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             Task { await oldPrimaryEngine.stop() }
         }
 
-        let state = slotState(for: slot)
+        let state = slotState(for: slot, includeDelay: true)
         let view = runtime.madeView
         runtime.channel = nil
         runtime.madeView = nil
@@ -2054,6 +2089,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         runtime.eventTask?.cancel()
         runtime.eventTask = nil
         extraSlotStates[slot] = nil
+        extraSlotDelays[slot] = nil
 
         seatLiveSlot(.a, channel: ch, view: view, engine: eng, state: state)
     }
@@ -2107,8 +2143,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         attachedModel?.twitch.updateCombinedChatFocus(focusedChannel)
         syncDualPiPLayout()
         syncNowPlaying()
-        if AppLifecycle.shared.snapshot.shouldThrottle {
-            applyThermalThrottling(shouldThrottle: true)
+        if lastThermalShouldThrottle || isLowPowerModeActive {
+            applyQualityBudget()
         }
         Breadcrumbs.add("twitch.stage.focus", ["slot": .string(slot.rawValue)])
         scheduleSurfaceHealthCheck(reason: "dual_focus")
@@ -2244,10 +2280,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     /// Selects quality variant for any stream slot (`.a`...`.d`), recording a manual override until reset or channel change.
     func selectVariant(_ id: String, for slot: TwitchStreamSlot) {
         guard activeMode == .lowLatency else { return }
-        if activeChannels.count >= 2 {
-            manualQualityOverrides.insert(slot)
-            hasManualQualityOverrides = true
-        }
+        manualQualityOverrides.insert(slot)
+        hasManualQualityOverrides = true
+        preBudgetVariantIDs.removeValue(forKey: slot)
+        preBackgroundVariantIDs.removeValue(forKey: slot)
         switch slot {
         case .a:
             if activeChannels.count <= 1 {
@@ -2270,7 +2306,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
     }
 
-    /// Clears all manual per-slot quality overrides and re-applies automatic stream-count & thermal quality budgeting.
+    /// Clears all manual per-slot quality overrides and re-applies automatic stream-count, thermal, and Low Power Mode budgeting.
     func resetAutoQuality() {
         manualQualityOverrides.removeAll()
         hasManualQualityOverrides = false
@@ -2363,34 +2399,89 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
     }
 
-    /// Applies automatic quality budgeting across 3–4 streams (or thermal step-down in 2-stream mode)
-    /// while respecting any per-slot manual overrides.
-    private func applyQualityBudget() {
+    /// Applies automatic quality budgeting across 1–4 streams for thermal pressure, Low Power Mode, and multi-stream
+    /// decoder limits while respecting per-slot manual overrides and using a 2 s hysteresis before stepping back up.
+    private func applyQualityBudget(allowImmediateRestore: Bool = false) {
         let count = activeChannels.count
-        guard count >= 2 else {
-            if isThermalThrottled { clearThermalThrottling(restoreVariant: false) }
-            return
-        }
-        if count == 2 {
-            applyThermalThrottling(shouldThrottle: lastThermalShouldThrottle)
+        guard count >= 1, activeMode == .lowLatency else {
+            budgetRestoreTask?.cancel()
+            budgetRestoreTask = nil
+            preBudgetVariantIDs.removeAll()
+            if isThermalThrottled { isThermalThrottled = false }
+            thermalThrottledSlot = nil
             return
         }
 
-        isThermalThrottled = lastThermalShouldThrottle
-        let spotlight = multiMixer.spotlightSlot
-        for slot in TwitchStreamSlot.slots(forCount: count) {
-            guard !manualQualityOverrides.contains(slot) else { continue }
-            let state = slotState(for: slot)
-            guard !state.isOffline, !state.hasPlaybackError, !state.variants.isEmpty else { continue }
-            let isSpot = (slot == spotlight)
-            guard let target = TwitchQualityBudgetPolicy.preferredVariant(
-                from: state.variants,
-                streamCount: count,
-                isSpotlight: isSpot,
-                isThermalThrottled: lastThermalShouldThrottle
-            ), target.id != state.selectedVariantID else { continue }
+        let conserve = lastThermalShouldThrottle || isLowPowerModeActive
+        let needsBudget = conserve || count >= 3
+        let spotlight: TwitchStreamSlot = count >= 3
+            ? multiMixer.spotlightSlot
+            : (count == 2 ? (dualMixer.focusedSlot == .primary ? .a : .b) : .a)
 
-            applyBudgetVariant(target.id, to: slot)
+        if needsBudget {
+            budgetRestoreTask?.cancel()
+            budgetRestoreTask = nil
+            isThermalThrottled = conserve
+            thermalThrottledSlot = (conserve && count == 2) ? dualMixer.focusedSlot.other : nil
+
+            for slot in TwitchStreamSlot.slots(forCount: count) {
+                guard !manualQualityOverrides.contains(slot) else { continue }
+                guard preBackgroundVariantIDs[slot] == nil else { continue }
+                let state = slotState(for: slot)
+                guard !state.isOffline, !state.hasPlaybackError, !state.variants.isEmpty else { continue }
+                guard state.selectedVariant?.isAudioOnly != true else { continue }
+                let isSpot = (slot == spotlight)
+                guard let target = TwitchQualityBudgetPolicy.preferredVariant(
+                    from: state.variants,
+                    streamCount: count,
+                    isSpotlight: isSpot,
+                    isThermalThrottled: lastThermalShouldThrottle,
+                    isLowPowerMode: isLowPowerModeActive
+                ), target.id != state.selectedVariantID else { continue }
+
+                if conserve, preBudgetVariantIDs[slot] == nil, let currentID = state.selectedVariantID {
+                    preBudgetVariantIDs[slot] = currentID
+                }
+                applyBudgetVariant(target.id, to: slot)
+            }
+            return
+        }
+
+        // Neither thermal throttling nor Low Power Mode is active, and streamCount <= 2:
+        // restore any stepped-down variants after a short 2 s hysteresis to avoid thrashing on transient flips.
+        isThermalThrottled = false
+        thermalThrottledSlot = nil
+        preThrottleVariantID = nil
+        guard !preBudgetVariantIDs.isEmpty else { return }
+
+        let performRestore: @MainActor () -> Void = { [weak self] in
+            guard let self else { return }
+            guard !self.lastThermalShouldThrottle, !self.isLowPowerModeActive, self.activeChannels.count <= 2 else { return }
+            let saved = self.preBudgetVariantIDs
+            self.preBudgetVariantIDs.removeAll()
+            for (slot, previousID) in saved {
+                guard slot.rawValue < self.activeChannels.count,
+                      !self.manualQualityOverrides.contains(slot),
+                      self.preBackgroundVariantIDs[slot] == nil else { continue }
+                let state = self.slotState(for: slot)
+                guard !state.isOffline, !state.hasPlaybackError,
+                      state.variants.contains(where: { $0.id == previousID }),
+                      state.selectedVariantID != previousID else { continue }
+                self.applyBudgetVariant(previousID, to: slot)
+            }
+        }
+
+        budgetRestoreTask?.cancel()
+        if allowImmediateRestore {
+            budgetRestoreTask = nil
+            performRestore()
+        } else {
+            budgetRestoreTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, !Task.isCancelled else { return }
+                self.budgetRestoreTask = nil
+                performRestore()
+            }
         }
     }
 
@@ -2399,6 +2490,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             "slot": .string(slot.letter),
             "variant": .string(variantID),
             "streams": .int(activeChannels.count),
+            "lpm": .bool(isLowPowerModeActive),
+            "thermal": .bool(lastThermalShouldThrottle),
         ])
         switch slot {
         case .a:
@@ -2420,104 +2513,72 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
 
     private func startupBudgetHint(for slot: TwitchStreamSlot) -> TwitchQualityBudgetHint? {
         let count = max(1, activeChannels.count)
-        guard count >= 2, !manualQualityOverrides.contains(slot) else { return nil }
-        if count == 2 {
-            guard lastThermalShouldThrottle else { return nil }
+        guard !manualQualityOverrides.contains(slot) else { return nil }
+        let conserve = lastThermalShouldThrottle || isLowPowerModeActive
+        guard conserve || count >= 3 else { return nil }
+        let isSpot: Bool
+        if count >= 3 {
+            isSpot = (slot == multiMixer.spotlightSlot)
+        } else if count == 2 {
             let focused: TwitchStreamSlot = dualMixer.focusedSlot == .primary ? .a : .b
-            return TwitchQualityBudgetHint(streamCount: 2, isSpotlight: slot == focused, isThermalThrottled: true)
+            isSpot = (slot == focused)
+        } else {
+            isSpot = true
         }
         return TwitchQualityBudgetHint(
             streamCount: count,
-            isSpotlight: slot == multiMixer.spotlightSlot,
-            isThermalThrottled: lastThermalShouldThrottle
+            isSpotlight: isSpot,
+            isThermalThrottled: lastThermalShouldThrottle,
+            isLowPowerMode: isLowPowerModeActive
         )
     }
 
-    /// Steps down the unfocused stream's quality under thermal or memory pressure (`AppLifecycle.snapshot.shouldThrottle`)
-    /// and restores it once pressure clears.
+    /// Pushes Low Power Mode state to every active native stream engine and the rolling clip recorder.
+    private func syncPowerModeToEngines(_ enabled: Bool) {
+        let engines = TwitchStreamSlot.slots(forCount: max(1, activeChannels.count)).compactMap { engine(for: $0) }
+        let recorder = clipRecorder
+        Task {
+            await recorder.setLowPowerMode(enabled)
+            for eng in engines {
+                await eng.setLowPowerMode(enabled)
+            }
+        }
+    }
+
+    /// Steps down stream quality under thermal pressure or Low Power Mode and restores once pressure clears.
     private func applyThermalThrottling(shouldThrottle: Bool) {
-        if activeChannels.count >= 3 {
-            applyQualityBudget()
-            return
-        }
-        guard isDualStream else {
-            if isThermalThrottled { clearThermalThrottling(restoreVariant: false) }
-            return
-        }
-        if !shouldThrottle {
-            clearThermalThrottling(restoreVariant: true)
-            return
-        }
-
-        let targetSlot = dualMixer.focusedSlot.other
-        let streamSlot: TwitchStreamSlot = targetSlot == .primary ? .a : .b
-        if manualQualityOverrides.contains(streamSlot) { return }
-        let targetState = slotState(for: streamSlot)
-        guard !targetState.isOffline, !targetState.hasPlaybackError else { return }
-
-        // If focus moved to the previously throttled slot, restore it before stepping down the newly unfocused slot.
-        if let existingSlot = thermalThrottledSlot, existingSlot != targetSlot {
-            clearThermalThrottling(restoreVariant: true)
-        }
-
-        let slotVariants = targetSlot == .primary ? variants : secondaryVariants
-        let currentID = targetSlot == .primary ? selectedVariantID : secondarySelectedVariantID
-        guard let steppedDown = Self.lowPowerVariant(from: slotVariants), steppedDown.id != currentID else { return }
-
-        if preThrottleVariantID == nil {
-            preThrottleVariantID = currentID
-        }
-        thermalThrottledSlot = targetSlot
-        isThermalThrottled = true
-        if targetSlot == .primary {
-            selectedVariantID = steppedDown.id
-            let engine = nativeEngine
-            Task { await engine?.selectVariant(id: steppedDown.id) }
-        } else {
-            secondarySelectedVariantID = steppedDown.id
-            let engine = secondaryNativeEngine
-            Task { await engine?.selectVariant(id: steppedDown.id) }
-        }
-        Breadcrumbs.add("twitch.dual.thermal_stepdown", [
-            "slot": .string(targetSlot.rawValue),
-            "variant": .string(steppedDown.shortLabel),
-        ])
+        lastThermalShouldThrottle = shouldThrottle
+        applyQualityBudget()
     }
 
     private func clearThermalThrottling(restoreVariant: Bool) {
-        guard isThermalThrottled || thermalThrottledSlot != nil else { return }
-        let slot = thermalThrottledSlot
-        let previousID = preThrottleVariantID
+        budgetRestoreTask?.cancel()
+        budgetRestoreTask = nil
         isThermalThrottled = false
         thermalThrottledSlot = nil
         preThrottleVariantID = nil
-        guard restoreVariant, let slot, let previousID else { return }
-        let streamSlot: TwitchStreamSlot = slot == .primary ? .a : .b
-        let state = slotState(for: streamSlot)
-        guard !state.isOffline, !state.hasPlaybackError else { return }
-        if slot == .primary {
-            selectedVariantID = previousID
-            let engine = nativeEngine
-            Task { await engine?.selectVariant(id: previousID) }
+        if restoreVariant {
+            applyQualityBudget(allowImmediateRestore: true)
         } else {
-            secondarySelectedVariantID = previousID
-            let engine = secondaryNativeEngine
-            Task { await engine?.selectVariant(id: previousID) }
+            preBudgetVariantIDs.removeAll()
         }
     }
 
-    /// Picks a low-power video variant (preferring 480p/360p, else lowest non-audio-only video tier) for thermal step-down.
-    private static func lowPowerVariant(from list: [TwitchVariant]) -> TwitchVariant? {
-        let videoOnly = list.filter { !$0.isAudioOnly }
-        guard !videoOnly.isEmpty else { return nil }
-        let moderate = videoOnly
-            .filter { ($0.height ?? 0) > 0 && ($0.height ?? 0) <= 480 }
-            .sorted { ($0.height ?? 0) > ($1.height ?? 0) }
-        if let pick = moderate.first { return pick }
-        return videoOnly.min { ($0.bandwidth) < ($1.bandwidth) }
-    }
-
     private func startActive(_ channel: String) {
+        if !StreamAddress.platform(for: channel).supportsEmbedFallback {
+            if activeMode == .embed {
+                stopEmbed()
+                activeMode = .lowLatency
+            }
+            #if os(iOS)
+            if isAirPlayingVideo {
+                switchAirPlayChannel(channel)
+                return
+            }
+            #endif
+            startNative(channel)
+            return
+        }
         switch activeMode {
         case .lowLatency:
             #if os(iOS)
@@ -2591,8 +2652,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             guard !Task.isCancelled, self.nativeSessionID == sessionID,
                   self.activeMode == .lowLatency, self.channel == channel else { return }
             let videoEnabled = !self.isInBackground || self.isPiPActive || self.hasPiPClaim
+            let lpm = self.isLowPowerModeActive
             let recorder = self.clipRecorder
             await recorder.reset(for: channel)
+            await recorder.setLowPowerMode(lpm)
             await engine.setSampleTap { samples in
                 recorder.enqueueSamples(samples)
             }
@@ -2600,6 +2663,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 continuation.yield(event)
             }
             await engine.attach(videoRenderer: rendererBox)
+            await engine.setLowPowerMode(lpm)
             await engine.setVideoOutputEnabled(videoEnabled)
             await engine.setVolume(initialGain)
             await engine.setMuted(initialMuted)
@@ -2661,10 +2725,12 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             guard !Task.isCancelled, self.secondaryNativeSessionID == sessionID,
                   self.activeMode == .lowLatency, self.secondaryChannel == channel else { return }
             let videoEnabled = !self.isInBackground || self.isPiPActive || self.hasPiPClaim
+            let lpm = self.isLowPowerModeActive
             await engine.setEventHandler { event in
                 continuation.yield(event)
             }
             await engine.attach(videoRenderer: rendererBox)
+            await engine.setLowPowerMode(lpm)
             await engine.setVideoOutputEnabled(videoEnabled)
             await engine.setVolume(initialGain)
             await engine.setMuted(initialMuted)
@@ -2725,10 +2791,12 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             guard !Task.isCancelled, runtime.sessionID == sessionID,
                   self.activeMode == .lowLatency, runtime.channel == channel else { return }
             let videoEnabled = !self.isInBackground || (self.isPiPActive && self.multiMixer.spotlightSlot == slot)
+            let lpm = self.isLowPowerModeActive
             await engine.setEventHandler { event in
                 continuation.yield(event)
             }
             await engine.attach(videoRenderer: rendererBox)
+            await engine.setLowPowerMode(lpm)
             await engine.setVideoOutputEnabled(videoEnabled)
             await engine.setVolume(initialGain)
             await engine.setMuted(initialMuted)
@@ -3376,8 +3444,17 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     // MARK: the app's state
 
     func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        let lpmChanged = (isLowPowerModeActive != snapshot.isLowPowerMode)
+        let thermalChanged = (lastThermalShouldThrottle != snapshot.shouldThrottle)
         lastThermalShouldThrottle = snapshot.shouldThrottle
-        applyThermalThrottling(shouldThrottle: snapshot.shouldThrottle)
+        if lpmChanged {
+            isLowPowerModeActive = snapshot.isLowPowerMode
+            syncPowerModeToEngines(snapshot.isLowPowerMode)
+            Breadcrumbs.add("twitch.power.lpm", ["on": .bool(snapshot.isLowPowerMode)])
+        }
+        if lpmChanged || thermalChanged {
+            applyQualityBudget()
+        }
         switch event {
         case .didEnterBackground, .hidden: suspend()
         case .becameActive, .unhidden: resume()
@@ -3400,9 +3477,10 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     }
 
     /// Stops the stream for the background only when background audio, PiP, TV Mode, and AirPlay are all inactive.
-    /// When background audio continues without PiP on iOS, video decoding is paused after a brief grace window (so
-    /// auto-PiP can still engage on swipe-home) and seamlessly resumes on return. In dual/multi-stream mode when locked
-    /// without PiP, muted non-spotlight streams are immediately suspended (`dualMixer`/`multiMixer.handleBackgrounded`).
+    /// When background audio continues without PiP on iOS, active slots drop to their `audio_only` variant (when
+    /// available) and pause video decoding after a brief grace window (so auto-PiP can still engage on swipe-home),
+    /// seamlessly restoring on return. In dual/multi-stream mode when locked without PiP, muted non-spotlight streams
+    /// are immediately suspended (`dualMixer`/`multiMixer.handleBackgrounded`).
     private func suspend() {
         isInBackground = true
         guard !suspended else { return }
@@ -3429,10 +3507,31 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                     try? await Task.sleep(for: .milliseconds(450))
                     guard let self, !Task.isCancelled, self.isInBackground,
                           !self.isPiPOwningViews, !TwitchTV.shared.onTV else { return }
-                    let engines = TwitchStreamSlot.slots(forCount: max(1, self.activeChannels.count))
-                        .compactMap { self.engine(for: $0) }
+                    let activeSlots = TwitchStreamSlot.slots(forCount: max(1, self.activeChannels.count))
+                    var audioOnlySwitches: [(TwitchStreamSlot, String, TwitchNativeEngine)] = []
+                    for slot in activeSlots {
+                        guard let eng = self.engine(for: slot) else { continue }
+                        let st = self.slotState(for: slot)
+                        if let audioVariant = st.variants.first(where: \.isAudioOnly),
+                           st.selectedVariantID != audioVariant.id {
+                            if self.preBackgroundVariantIDs[slot] == nil, let prev = st.selectedVariantID {
+                                self.preBackgroundVariantIDs[slot] = prev
+                            }
+                            audioOnlySwitches.append((slot, audioVariant.id, eng))
+                        }
+                    }
+                    for (slot, audioID, _) in audioOnlySwitches {
+                        self.setSlotSelectedVariantID(audioID, for: slot)
+                    }
+                    let engines = activeSlots.compactMap { self.engine(for: $0) }
+                    for (_, audioID, eng) in audioOnlySwitches {
+                        await eng.selectVariant(id: audioID)
+                    }
                     for eng in engines {
                         await eng.setVideoOutputEnabled(false)
+                    }
+                    if !audioOnlySwitches.isEmpty {
+                        Breadcrumbs.add("twitch.background.audio_only", ["slots": .int(audioOnlySwitches.count)])
                     }
                 }
             }
@@ -3446,8 +3545,59 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         if channel != nil { stop() }
     }
 
-    /// Back on screen: re-enables video output for background-audio sessions, resumes any lock-suspended slots,
-    /// or restarts suspended stream(s).
+    private func setSlotSelectedVariantID(_ variantID: String, for slot: TwitchStreamSlot) {
+        switch slot {
+        case .a:
+            selectedVariantID = variantID
+        case .b:
+            secondarySelectedVariantID = variantID
+        case .c, .d:
+            var st = extraSlotStates[slot] ?? TwitchSlotState(channel: extraSlots[slot]?.channel)
+            st.selectedVariantID = variantID
+            extraSlotStates[slot] = st
+        }
+    }
+
+    /// Restores any slots switched to `audio_only` during background audio back to their video variant
+    /// (respecting current Low Power Mode / thermal budget unless manually overridden).
+    private func restoreBackgroundAudioVariantsIfNeeded() {
+        guard !preBackgroundVariantIDs.isEmpty else { return }
+        let saved = preBackgroundVariantIDs
+        preBackgroundVariantIDs.removeAll()
+        let count = max(1, activeChannels.count)
+        let spotlight: TwitchStreamSlot = count >= 3
+            ? multiMixer.spotlightSlot
+            : (count == 2 ? (dualMixer.focusedSlot == .primary ? .a : .b) : .a)
+        let conserve = lastThermalShouldThrottle || isLowPowerModeActive
+
+        for (slot, previousID) in saved {
+            guard slot.rawValue < count, let eng = engine(for: slot) else { continue }
+            let st = slotState(for: slot)
+            guard !st.isOffline, !st.hasPlaybackError else { continue }
+
+            var targetID = previousID
+            if !manualQualityOverrides.contains(slot) && (conserve || count >= 3),
+               let budgeted = TwitchQualityBudgetPolicy.preferredVariant(
+                from: st.variants,
+                streamCount: count,
+                isSpotlight: slot == spotlight,
+                isThermalThrottled: lastThermalShouldThrottle,
+                isLowPowerMode: isLowPowerModeActive
+               ) {
+                if conserve && preBudgetVariantIDs[slot] == nil {
+                    preBudgetVariantIDs[slot] = previousID
+                }
+                targetID = budgeted.id
+            }
+
+            guard st.selectedVariantID != targetID else { continue }
+            setSlotSelectedVariantID(targetID, for: slot)
+            Task { await eng.selectVariant(id: targetID) }
+        }
+    }
+
+    /// Back on screen: re-enables video output for background-audio sessions, restores any `audio_only` switches,
+    /// resumes any lock-suspended slots, or restarts suspended stream(s).
     private func resume() {
         isInBackground = false
         backgroundVideoOffTask?.cancel()
@@ -3460,6 +3610,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         }
 
         if activeMode == .lowLatency && channel != nil && !isAirPlayingVideo {
+            restoreBackgroundAudioVariantsIfNeeded()
             if activeChannels.count >= 3 {
                 let suspendedSlots = multiMixer.suspendedSlots
                 let enginesToEnable = TwitchStreamSlot.slots(forCount: activeChannels.count)
@@ -3508,12 +3659,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
     /// background audio).
     func purge(_ level: PurgeLevel) {
         if level == .memoryWarning {
-            if activeChannels.count >= 3 {
-                lastThermalShouldThrottle = true
-                applyQualityBudget()
-            } else if isDualStream {
-                applyThermalThrottling(shouldThrottle: true)
-            }
+            lastThermalShouldThrottle = true
+            applyQualityBudget()
         }
         releaseResources()
     }
@@ -3699,10 +3846,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
                 hasLoggedVariants = true
                 Breadcrumbs.add("twitch.native.variants", ["count": .int(list.count)])
             }
-            if activeChannels.count >= 3 {
+            if activeChannels.count >= 3 || isLowPowerModeActive || lastThermalShouldThrottle {
                 applyQualityBudget()
-            } else if isDualStream && lastThermalShouldThrottle {
-                applyThermalThrottling(shouldThrottle: true)
             }
             syncPiPAndNowPlaying()
         case .playing:
@@ -3762,9 +3907,9 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             }
         case .failed(let reason):
             Breadcrumbs.add("twitch.native.fallback", ["slot": .string("A"), "reason": .string(Self.shortFallbackReason(reason))])
-            // Dual/multi-stream runs native display layers; never drop into a single WebView embed while multi is active,
-            // and record a playback error rather than falsely marking a live stream offline.
-            if isDualStream {
+            // Dual/multi-stream runs native display layers, and Kick/YouTube have no Twitch embed fallback:
+            // record a retryable playback error rather than falsely marking a live stream offline.
+            if isDualStream || !StreamAddress.platform(for: channel ?? "").supportsEmbedFallback {
                 hasPlaybackError = true
                 isOffline = false
                 isPlaying = false
@@ -3799,10 +3944,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
         case .variants(let list, let selectedID):
             secondaryVariants = list
             secondarySelectedVariantID = selectedID
-            if activeChannels.count >= 3 {
+            if activeChannels.count >= 3 || isLowPowerModeActive || lastThermalShouldThrottle {
                 applyQualityBudget()
-            } else if lastThermalShouldThrottle {
-                applyThermalThrottling(shouldThrottle: true)
             }
             syncPiPAndNowPlaying()
         case .playing:
@@ -3867,21 +4010,22 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
 
     private func receiveExtraNative(_ event: TwitchNativeEvent, slot: TwitchStreamSlot, sessionID: UInt64) {
         guard let runtime = extraSlots[slot], sessionID == runtime.sessionID, activeMode == .lowLatency else { return }
-        var state = extraSlotStates[slot] ?? TwitchSlotState(channel: runtime.channel)
+        let existing = extraSlotStates[slot]
+        var state = existing ?? TwitchSlotState(channel: runtime.channel)
         state.channel = runtime.channel
         switch event {
         case .loading:
             state.isLoading = true
             state.isOffline = false
             state.hasPlaybackError = false
-            extraSlotStates[slot] = state
+            if state != existing { extraSlotStates[slot] = state }
         case .streamURL:
             break
         case .variants(let list, let selectedID):
             state.variants = list
             state.selectedVariantID = selectedID
-            extraSlotStates[slot] = state
-            if activeChannels.count >= 3 {
+            if state != existing { extraSlotStates[slot] = state }
+            if activeChannels.count >= 3 || isLowPowerModeActive || lastThermalShouldThrottle {
                 applyQualityBudget()
             }
             syncPiPAndNowPlaying()
@@ -3891,7 +4035,7 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             state.isBuffering = false
             state.isOffline = false
             state.hasPlaybackError = false
-            extraSlotStates[slot] = state
+            if state != existing { extraSlotStates[slot] = state }
             if let started = runtime.startInstant {
                 let elapsed = ContinuousClock.now - started
                 let ms = Int(max(0, elapsed.components.seconds * 1_000 + elapsed.components.attoseconds / 1_000_000_000_000_000))
@@ -3902,12 +4046,12 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             syncPiPAndNowPlaying()
         case .paused:
             state.isPlaying = false
-            extraSlotStates[slot] = state
+            if state != existing { extraSlotStates[slot] = state }
             syncNowPlaying()
         case .userPausedChanged(let paused):
             if paused {
                 state.isPlaying = false
-                extraSlotStates[slot] = state
+                if state != existing { extraSlotStates[slot] = state }
             }
             syncPiPAndNowPlaying()
         case .offline:
@@ -3917,7 +4061,8 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             state.isLoading = false
             state.isBuffering = false
             state.delay = nil
-            extraSlotStates[slot] = state
+            extraSlotDelays[slot] = nil
+            if state != existing { extraSlotStates[slot] = state }
             runtime.startInstant = nil
             syncPiPAndNowPlaying()
             Breadcrumbs.add("twitch.native.extra.offline", ["slot": .string(slot.label)])
@@ -3930,16 +4075,18 @@ final class TwitchPlayerHost: LifecycleAware, Purgeable, TwitchDualAudioTarget, 
             }
             state.isBuffering = stats.isBuffering
             if let d = stats.delay, d > 0, state.isPlaying {
-                state.delay = d
+                extraSlotDelays[slot] = d
             }
-            extraSlotStates[slot] = state
+            if state != existing {
+                extraSlotStates[slot] = state
+            }
         case .failed(let reason):
             state.hasPlaybackError = true
             state.isOffline = false
             state.isPlaying = false
             state.isLoading = false
             state.isBuffering = false
-            extraSlotStates[slot] = state
+            if state != existing { extraSlotStates[slot] = state }
             runtime.startInstant = nil
             syncPiPAndNowPlaying()
             Breadcrumbs.add("twitch.native.extra.failed", ["slot": .string(slot.label), "reason": .string(Self.shortFallbackReason(reason))])
@@ -4167,7 +4314,7 @@ struct TwitchPlayer: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: showsTopPills)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: showsNativeHUD)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(channel)'s stream")
+        .accessibilityLabel("\(StreamAddress.displayLabel(for: channel))'s stream")
         // only the view holding the player shows its sign-in sheet
         .sheet(item: Binding(get: { isHolder ? host.popup : nil },
                              set: { if $0 == nil, isHolder { host.dismissPopup() } })) { popup in
@@ -4225,6 +4372,33 @@ struct TwitchPlayer: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .mediaGlassCapsule(interactive: false)
+        } else if host.hasPlaybackError {
+            VStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: Symbol.Twitch.warn)
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(Copy.Twitch.streamError)
+                        .font(Font.cobalt(12, .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .mediaGlassCapsule(interactive: false)
+
+                Button {
+                    host.retrySlot(.a)
+                } label: {
+                    Label(Copy.Twitch.retry, systemImage: Symbol.Twitch.retry)
+                        .font(Font.cobalt(11.5, .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .mediaGlassCapsule(interactive: true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Copy.Twitch.retry)
+                .accessibilityIdentifier("twitch.single.retry")
+            }
         } else if host.isLoading || host.isBuffering {
             ProgressView()
                 .tint(.white)
@@ -4331,14 +4505,16 @@ struct TwitchModeMenu: View {
                         Label(Copy.Twitch.playerLowLatency, systemImage: Symbol.Twitch.lowLatency)
                     }
                 }
-                Button {
-                    host.setMode(.embed)
-                    onInteract?()
-                } label: {
-                    if host.activeMode == .embed {
-                        Label(Copy.Twitch.playerEmbed, systemImage: "checkmark")
-                    } else {
-                        Label(Copy.Twitch.playerEmbed, systemImage: Symbol.Twitch.embed)
+                if StreamAddress.platform(for: host.channel ?? "").supportsEmbedFallback {
+                    Button {
+                        host.setMode(.embed)
+                        onInteract?()
+                    } label: {
+                        if host.activeMode == .embed {
+                            Label(Copy.Twitch.playerEmbed, systemImage: "checkmark")
+                        } else {
+                            Label(Copy.Twitch.playerEmbed, systemImage: Symbol.Twitch.embed)
+                        }
                     }
                 }
             }
@@ -4469,20 +4645,53 @@ private struct TwitchNativeControlBar: View {
                         .accessibilityHidden(true)
 
                     Menu {
-                        ForEach(host.variants) { variant in
-                            Button {
-                                host.selectVariant(variant.id)
-                                onInteract()
-                            } label: {
-                                if variant.id == host.selectedVariantID {
-                                    Label(variant.shortLabel, systemImage: "checkmark")
-                                } else {
-                                    Text(variant.shortLabel)
+                        if host.isLowPowerModeActive {
+                            Section {
+                                ForEach(host.variants) { variant in
+                                    Button {
+                                        host.selectVariant(variant.id)
+                                        onInteract()
+                                    } label: {
+                                        if variant.id == host.selectedVariantID {
+                                            Label(variant.shortLabel, systemImage: "checkmark")
+                                        } else {
+                                            Text(variant.shortLabel)
+                                        }
+                                    }
+                                }
+                            } header: {
+                                Label("Low Power Mode · 720p cap", systemImage: "battery.25")
+                            }
+                            if host.hasManualQualityOverrides {
+                                Divider()
+                                Button {
+                                    host.resetAutoQuality()
+                                    onInteract()
+                                } label: {
+                                    Label("Restore Auto Cap", systemImage: "arrow.counterclockwise")
+                                }
+                            }
+                        } else {
+                            ForEach(host.variants) { variant in
+                                Button {
+                                    host.selectVariant(variant.id)
+                                    onInteract()
+                                } label: {
+                                    if variant.id == host.selectedVariantID {
+                                        Label(variant.shortLabel, systemImage: "checkmark")
+                                    } else {
+                                        Text(variant.shortLabel)
+                                    }
                                 }
                             }
                         }
                     } label: {
                         HStack(spacing: 3) {
+                            if host.isLowPowerModeActive {
+                                Image(systemName: "battery.25")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.yellow)
+                            }
                             Text(host.selectedVariant?.shortLabel ?? Copy.Twitch.quality)
                                 .font(Font.cobalt(11.5, .semibold).monospacedDigit())
                             Image(systemName: "chevron.up.chevron.down")

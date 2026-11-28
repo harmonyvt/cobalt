@@ -255,7 +255,11 @@ enum LifecycleLint {
         for line in code where !line.isEmpty {
             if line.contains("connectingSceneSession.configuration") { add("scene-config", line) }
             if line.contains("scenePhase") { add("scenePhase", line) }
-            if matches(notificationPattern, line) || matches(notificationStringPattern, line) { add("app-notification", line) }
+            if matches(notificationPattern, line)
+                || matches(notificationStringPattern, line)
+                || line.contains("NSProcessInfoPowerStateDidChange") {
+                add("app-notification", line)
+            }
         }
 
         // scene-body-read: brace counting finds the Scene builders, a cheap heuristic like MainThreadLint's, not a parser.

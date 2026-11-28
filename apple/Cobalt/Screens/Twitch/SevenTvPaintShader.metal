@@ -145,47 +145,34 @@ inline float sampleShadowAlpha(SwiftUI::Layer layer, float2 center, float radius
     float weightSum = 1.0;
 
     if (radius <= 2.2) {
-        // 2-ring 17-tap Gaussian disc (8 inner + 8 staggered outer)
-        float r1 = radius * 0.50;
-        float r2 = radius * 1.00;
+        // 1-ring 9-tap Gaussian disc (1 center + 8 perimeter)
+        float r1 = radius * 0.85;
         float w1 = exp(-(r1 * r1) * invTwoSigmaSq);
-        float w2 = exp(-(r2 * r2) * invTwoSigmaSq);
 
         for (int i = 0; i < 8; ++i) {
             float a1 = (float(i) / 8.0) * kTwoPi;
             float2 d1 = float2(cos(a1), sin(a1)) * r1;
             sum += float(layer.sample(center + d1).a) * w1;
             weightSum += w1;
+        }
+    } else {
+        // 2-ring 13-tap Gaussian disc (1 center + 4 inner + 8 staggered outer)
+        float r1 = radius * 0.50;
+        float r2 = radius * 1.10;
+        float w1 = exp(-(r1 * r1) * invTwoSigmaSq);
+        float w2 = exp(-(r2 * r2) * invTwoSigmaSq);
 
+        for (int i = 0; i < 4; ++i) {
+            float a1 = (float(i) / 4.0) * kTwoPi;
+            float2 d1 = float2(cos(a1), sin(a1)) * r1;
+            sum += float(layer.sample(center + d1).a) * w1;
+            weightSum += w1;
+        }
+        for (int i = 0; i < 8; ++i) {
             float a2 = ((float(i) + 0.5) / 8.0) * kTwoPi;
             float2 d2 = float2(cos(a2), sin(a2)) * r2;
             sum += float(layer.sample(center + d2).a) * w2;
             weightSum += w2;
-        }
-    } else {
-        // 3-ring 25-tap Gaussian disc for soft wide neon glows (radius up to 8 pt)
-        float r1 = radius * 0.45;
-        float r2 = radius * 0.90;
-        float r3 = radius * 1.35;
-        float w1 = exp(-(r1 * r1) * invTwoSigmaSq);
-        float w2 = exp(-(r2 * r2) * invTwoSigmaSq);
-        float w3 = exp(-(r3 * r3) * invTwoSigmaSq);
-
-        for (int i = 0; i < 8; ++i) {
-            float a1 = (float(i) / 8.0) * kTwoPi;
-            float2 d1 = float2(cos(a1), sin(a1)) * r1;
-            sum += float(layer.sample(center + d1).a) * w1;
-            weightSum += w1;
-
-            float a2 = ((float(i) + 0.333) / 8.0) * kTwoPi;
-            float2 d2 = float2(cos(a2), sin(a2)) * r2;
-            sum += float(layer.sample(center + d2).a) * w2;
-            weightSum += w2;
-
-            float a3 = ((float(i) + 0.666) / 8.0) * kTwoPi;
-            float2 d3 = float2(cos(a3), sin(a3)) * r3;
-            sum += float(layer.sample(center + d3).a) * w3;
-            weightSum += w3;
         }
     }
 
@@ -351,7 +338,7 @@ inline float sampleShadowAlpha(SwiftUI::Layer layer, float2 center, float radius
     int shadowFloatCount
 ) {
     half4 fg = layer.sample(position);
-    int shadowCount = min(shadowFloatCount / kShadowStride, kMaxShadows);
+    int shadowCount = min(shadowFloatCount / kShadowStride, min(kMaxShadows, 3));
     if (shadowCount <= 0) {
         return fg;
     }

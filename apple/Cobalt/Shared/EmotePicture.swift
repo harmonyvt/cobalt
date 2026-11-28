@@ -16,6 +16,7 @@ struct EmotePicture: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.lifecycle) private var lifecycle
 
     /// Pixels on the tile's side: the still and every frame are decoded to this, never the 7TV file's own size.
     private var maxPixel: Int { MediaPipeline.maxPixel(points: side, scale: displayScale) }
@@ -26,7 +27,7 @@ struct EmotePicture: View {
     @ViewBuilder private var mediaBody: some View {
         // Static badges/emotes (the vast majority of chat rows) render `EmoteStill` directly with zero
         // `MotionTicket` or `.onScrollVisibilityChange` observers, avoiding AttributeGraph storms on rotation.
-        if animated && !reduceMotion, let url {
+        if animated && !reduceMotion && lifecycle.isForeground && !lifecycle.shouldConservePower, let url {
             AnimatedEmotePicture(url: url, side: side, maxPixel: maxPixel, fill: fill)
         } else {
             EmoteStill(url: url, maxPixel: maxPixel, fill: fill)

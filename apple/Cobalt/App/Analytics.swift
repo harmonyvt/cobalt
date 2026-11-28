@@ -166,6 +166,9 @@ enum Analytics {
     /// The `replay` super property last registered, so frames can be compared with replay on and off.
     private static var replayRegistered: Bool?
 
+    /// True while Low Power Mode or serious/critical thermal pressure suspends GPU session replay capture.
+    private static var replayPausedForPower = AppLifecycle.shared.snapshot.shouldConservePower
+
     private static func flagsLoaded() {
         let killed = PostHogSDK.shared.isFeatureEnabled("replay-off", sendFeatureFlagEvent: false)
         if killed != replayKilled {
@@ -175,12 +178,19 @@ enum Analytics {
         applyReplay()
     }
 
-    /// Starts or stops replay to match the settings and the kill switch, and registers what is really recording as
-    /// the `replay` super property.
+    /// Updates power/thermal suppression for GPU session replay (called by `AnalyticsLifecycle`).
+    fileprivate static func setPowerConservation(_ conserve: Bool) {
+        guard conserve != replayPausedForPower else { return }
+        replayPausedForPower = conserve
+        applyReplay()
+    }
+
+    /// Starts or stops replay to match the settings, kill switch, and power/thermal state, and registers what is really
+    /// recording as the `replay` super property.
     private static func applyReplay() {
         guard running else { return }
         #if os(iOS)
-        let on = replayWanted && !replayKilled
+        let on = replayWanted && !replayKilled && !replayPausedForPower
         if on, !PostHogSDK.shared.isSessionReplayActive() {
             PostHogSDK.shared.startSessionRecording()
         } else if !on, PostHogSDK.shared.isSessionReplayActive() {
@@ -264,10 +274,13 @@ enum Analytics {
 }
 
 /// Sends the engines' timings (`EngineClock.drain()`) as the app leaves the screen, before it may be ended: the background
-/// on iPhone and iPad, losing the front on the Mac (which has no background).
+/// on iPhone and iPad, losing the front on the Mac (which has no background). Also pauses GPU session replay & ProMotion
+/// frame probing when Low Power Mode or thermal throttling activates.
 @MainActor
 private final class AnalyticsLifecycle: LifecycleAware {
     func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        Analytics.setPowerConservation(snapshot.shouldConservePower)
+        if snapshot.isLowPowerMode { FrameMonitor.appLeft() }
         // the frame timer never measures time away from the screen
         if event == .willResignActive || event == .didEnterBackground { FrameMonitor.appLeft() }
         #if os(iOS)

@@ -82,6 +82,7 @@ enum JobLiveKinds {
     static let saves: Set<String> = ["save", "upload", "make", "many", SwarmLiveActivities.kind]
     static let edits: Set<String> = ["edit"]
     static let chats: Set<String> = ["chat"]
+    static let audio: Set<String> = [AudioLevelLiveManager.kind]
 }
 
 // MARK: - ActivityKit
@@ -132,9 +133,9 @@ final class ActivityKitJobHandle: JobActivityHandle {
     }
 }
 
-/// The real adapter behind all three managers: `Activity<CobaltJobActivityAttributes>`, narrowed to the manager's kinds.
+/// The real adapter behind all managers: `Activity<CobaltJobActivityAttributes>`, narrowed to the manager's kinds.
 @MainActor
-final class ActivityKitJobAdapter: LiveActivityAdapter, EditLiveAdapter, ChatLiveAdapter {
+final class ActivityKitJobAdapter: LiveActivityAdapter, EditLiveAdapter, ChatLiveAdapter, AudioLevelLiveAdapter {
     private let kinds: Set<String>
 
     private init(kinds: Set<String>) { self.kinds = kinds }
@@ -147,6 +148,9 @@ final class ActivityKitJobAdapter: LiveActivityAdapter, EditLiveAdapter, ChatLiv
 
     /// Chat replies (`ChatLiveManager`).
     static func chats() -> ActivityKitJobAdapter { ActivityKitJobAdapter(kinds: JobLiveKinds.chats) }
+
+    /// Audio loudness leveling (`AudioLevelLiveManager`).
+    static func audio() -> ActivityKitJobAdapter { ActivityKitJobAdapter(kinds: JobLiveKinds.audio) }
 
     /// Live Activities are allowed for capystore (Settings > capystore > Live Activities).
     static var activitiesAllowed: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }

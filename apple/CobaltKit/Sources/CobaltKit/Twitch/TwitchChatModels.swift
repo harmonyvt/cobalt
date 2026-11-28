@@ -5,7 +5,7 @@ import Foundation
 
 /// An emote as chat draws it: a Twitch emote from the message's own `emotes` tag, or a 7TV emote matched by name.
 public struct ChatEmote: Sendable, Hashable, Identifiable {
-    public enum Source: String, Sendable, Hashable { case twitch, sevenTv, sevenTvGlobal }
+    public enum Source: String, Sendable, Hashable { case twitch, sevenTv, sevenTvGlobal, kick, youtube }
 
     /// Twitch's or 7TV's emote id.
     public var id: String
@@ -422,7 +422,7 @@ public struct TwitchChatLine: Sendable, Hashable, Identifiable {
         deleted: Bool = false
     ) {
         self.id = id
-        self.channel = channel.lowercased()
+        self.channel = channel.isEmpty ? "" : StreamAddress.canonicalKey(for: channel)
         self.kind = kind
         self.login = login
         self.displayName = displayName
@@ -737,9 +737,9 @@ public enum ChatFragmenter {
 }
 
 extension ChatEmote {
-    /// A 7TV emote from chat as the 7tv tab's emote (for "add to a 7tv set…"); nil for a Twitch emote.
+    /// A 7TV emote from chat as the 7tv tab's emote (for "add to a 7tv set…"); nil for Twitch/Kick/YouTube native emotes.
     public var asHit: EmoteHit? {
-        guard source != .twitch else { return nil }
+        guard source == .sevenTv || source == .sevenTvGlobal else { return nil }
         let big = URL(string: url.absoluteString.replacingOccurrences(of: "/2x.", with: "/4x.")) ?? url
         return EmoteHit(id: id, name: name, animated: animated, previewURL: url, fileURL: big, libraryID: nil, libraryURL: nil)
     }

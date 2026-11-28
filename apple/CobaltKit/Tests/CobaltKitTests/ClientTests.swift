@@ -68,9 +68,9 @@ private func json(_ s: String, status: Int = 200) -> (status: Int, headers: [Str
 
 private let forkCapabilities = """
 {"status":"success","server":"cobalt-cloudflare","cobalt":{"version":"11.7.1"},
- "features":{"studio":true,"upload":true,"library":true,"save_progress":true,"render_progress":true,"finishes_unpolled":true},
+ "features":{"studio":true,"upload":true,"multipart_upload":true,"library":true,"save_progress":true,"render_progress":true,"finishes_unpolled":true},
  "limits":{"max_webp_seconds":10,"min_webp_seconds":0.5,"webp_widths":[320,480],"webp_qualities":["low","med","high"],
- "render_fps":15,"max_upload_bytes":100000000,"max_source_bytes":209715200,"session_ttl_ms":604800000},
+ "render_fps":15,"max_upload_bytes":1073741824,"max_source_bytes":1073741824,"session_ttl_ms":604800000},
  "media_base_url":"https://media.capybaraharmony.com/","key":"valid","key_name":"iphone"}
 """
 
@@ -92,7 +92,7 @@ struct CapabilityDetectionTests {
         }
         let caps = await client(host: host).capabilities()
         #expect(caps.kind == .fork && caps.cobaltVersion == "11.7.1")
-        #expect(caps.studio && caps.upload && caps.library && caps.saveProgress && caps.renderProgress && caps.finishesUnpolled)
+        #expect(caps.studio && caps.upload && caps.multipartUpload && caps.library && caps.saveProgress && caps.renderProgress && caps.finishesUnpolled)
         #expect(caps.limits == .fork && caps.limits.sessionTTL == 604_800)
         #expect(caps.mediaBaseURL?.absoluteString == "https://media.capybaraharmony.com/")
         #expect(caps.key == .valid && caps.keyName == "iphone")

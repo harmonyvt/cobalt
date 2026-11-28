@@ -22,6 +22,8 @@ struct EditorPlayerView: UIViewRepresentable {
         view.playerLayer.player = player
         view.playerLayer.videoGravity = .resizeAspect
         view.backgroundColor = .black
+        view.isUserInteractionEnabled = false
+        view.clipsToBounds = true
         return view
     }
 

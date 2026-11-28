@@ -137,10 +137,12 @@ public struct QueueItem: Identifiable {
         case finished(FinishedWork)
         /// One render of the video editor (CONTRACT-EDITOR 6): the server's copy merged with this device's, the freshest.
         case edit(EditRender)
+        /// An audio loudness leveling job (local optimistic or server `GET /queue` `audio`).
+        case audioLevel(QueueSnapshot.AudioLevelJob)
     }
 
     /// Stable across refreshes: "job:<uuid>", "server:…", "download:<key>", "photos", "indexing", "posters",
-    /// "finished:<uuid>".
+    /// "finished:<uuid>", "edit:<id>", "audio:<itemID>".
     public let id: String
     public let section: QueueSection
     public let kind: Kind
@@ -169,6 +171,8 @@ public struct QueueItem: Identifiable {
             if render.status == .done, let item = render.itemID { return .media("post:\(item)") }
             if render.isProjectless { return nil }      // a chat video or a framed copy has no project to open (45.3, 52.5)
             return .edit(projectID: render.projectID)
+        case .audioLevel(let job):
+            return .media("post:\(job.itemID)")
         case .server, .download: return nil
         }
     }
@@ -226,12 +230,23 @@ public final class UnifiedQueue {
     }
     /// Renders of the editor the owner hid with "dismiss" (this device only).
     public var dismissedEdits: Set<String> { activityStore.dismissedEdits }
+    /// Audio leveling jobs the owner hid with "dismiss" (this device only).
+    public var dismissedAudioLevels: Set<String> { activityStore.dismissedAudioLevels }
     /// The editor's renders on this device (`EditorStore.renders`), wired by `AppModel`; nil in a queue with no editor.
     @ObservationIgnored var editRenders: (@MainActor () -> [EditRender])?
+    /// Local audio leveling jobs (`AudioLevelStore.trackedJobs`), wired by `AppModel`.
+    @ObservationIgnored var audioLevels: (@MainActor () -> [QueueSnapshot.AudioLevelJob])?
+    /// Retries a failed audio leveling job by item ID, wired by `AppModel`.
+    @ObservationIgnored var retryAudioLevel: (@MainActor (String) async -> Void)?
     /// The renders of each fresh snapshot (the Live Activities of renders); wired by `AppModel`.
     @ObservationIgnored var onEdits: (@MainActor ([EditRender]) -> Void)? {
         get { activityStore.onEdits }
         set { activityStore.onEdits = newValue }
+    }
+    /// The audio leveling jobs of each fresh snapshot; wired by `AppModel`.
+    @ObservationIgnored var onAudioLevels: (@MainActor ([QueueSnapshot.AudioLevelJob]) -> Void)? {
+        get { activityStore.onAudioLevels }
+        set { activityStore.onAudioLevels = newValue }
     }
     /// The queue tab is on screen (`setVisible`).
     public private(set) var isVisible = false
@@ -270,12 +285,18 @@ public final class UnifiedQueue {
         Self.build(
             jobs: jobs.jobs, snapshot: ctx.capabilities.queue ? snapshot : nil,
             downloads: offline.rows, photos: photos.status, finished: finishedHistory, now: ctx.clock.now(),
-            edits: mergedEdits, dismissedEdits: dismissedEdits)
+            edits: mergedEdits, dismissedEdits: dismissedEdits,
+            audioLevels: mergedAudioLevels, dismissedAudioLevels: dismissedAudioLevels)
     }
 
     /// The server's renders (`GET /queue`) and this device's, one per render id, the freshest copy of each.
     var mergedEdits: [EditRender] {
         Self.mergeEdits(server: ctx.capabilities.queue ? (snapshot?.edits ?? []) : [], local: ctx.capabilities.editor ? (editRenders?() ?? []) : [])
+    }
+
+    /// The server's audio leveling jobs (`GET /queue`) merged with this device's optimistic tracking.
+    var mergedAudioLevels: [QueueSnapshot.AudioLevelJob] {
+        Self.mergeAudioLevels(server: ctx.capabilities.queue ? (snapshot?.audio ?? []) : [], local: audioLevels?() ?? [])
     }
 
     /// The rows of each section that has any, in the tab's order.
@@ -297,6 +318,7 @@ public final class UnifiedQueue {
         if let summary = ctx.activitySummary { return summary().activeCount }
         return jobs.live.count + offline.unfinishedCount
             + mergedEdits.filter { $0.isActive && !dismissedEdits.contains($0.id) }.count
+            + mergedAudioLevels.filter { $0.isActive && !dismissedAudioLevels.contains($0.itemID) }.count
     }
 
     /// Nothing to show at all: the empty state.
@@ -367,6 +389,11 @@ public final class UnifiedQueue {
             finishedHistory.removeAll { $0.id == work.id }
         case (.edit(let render), .dismiss):
             activityStore.dismissedEdits.insert(render.id)
+        case (.audioLevel(let job), .dismiss):
+            activityStore.dismissedAudioLevels.insert(job.itemID)
+        case (.audioLevel(let job), .retry):
+            activityStore.dismissedAudioLevels.remove(job.itemID)
+            await retryAudioLevel?(job.itemID)
         default:
             break
         }
@@ -384,7 +411,8 @@ public final class UnifiedQueue {
     static func build(
         jobs: [Job], snapshot: QueueSnapshot?, downloads: [OfflineDownloadRow],
         photos: PhotosSync.Status, finished: [FinishedWork], now: Date, edits: [EditRender] = [],
-        dismissedEdits: Set<String> = []
+        dismissedEdits: Set<String> = [], audioLevels: [QueueSnapshot.AudioLevelJob] = [],
+        dismissedAudioLevels: Set<String> = []
     ) -> [QueueItem] {
         var now_: [QueueItem] = []
         var waiting: [(item: QueueItem, place: Int, order: Int)] = []
@@ -511,6 +539,23 @@ public final class UnifiedQueue {
             }
         }
 
+        // (g) audio loudness leveling jobs: rendering is now, ready/failed linger for 30 minutes
+        for job in audioLevels where !dismissedAudioLevels.contains(job.itemID) {
+            let id = "audio:\(job.itemID)"
+            switch job.state {
+            case .rendering:
+                now_.append(QueueItem(id: id, section: .now, kind: .audioLevel(job), actions: [.open]))
+            case .ready:
+                if now.timeIntervalSince(job.lastMoment) < finishedLinger {
+                    finishedRows.append((QueueItem(id: id, section: .finished, kind: .audioLevel(job), actions: [.open, .dismiss]), job.lastMoment))
+                }
+            case .failed:
+                if now.timeIntervalSince(job.lastMoment) < finishedLinger {
+                    failed.append(QueueItem(id: id, section: .failed, kind: .audioLevel(job), actions: [.retry, .open, .dismiss]))
+                }
+            }
+        }
+
         let waitingSorted = waiting.sorted { ($0.place, $0.order) < ($1.place, $1.order) }.map { $0.item }
         let finishedSorted = finishedRows.sorted { $0.at > $1.at }.prefix(finishedLimit).map { $0.item }
         var rows: [QueueItem] = now_
@@ -532,6 +577,31 @@ public final class UnifiedQueue {
             byID[r.id] = r
         }
         return byID.values.sorted { $0.createdAt != $1.createdAt ? $0.createdAt > $1.createdAt : $0.id < $1.id }
+    }
+
+    /// One audio leveling job per item id from the server's list and this device's: settled wins over optimistic rendering,
+    /// otherwise newer timestamp wins; rendering jobs first, then newest first.
+    static func mergeAudioLevels(server: [QueueSnapshot.AudioLevelJob], local: [QueueSnapshot.AudioLevelJob]) -> [QueueSnapshot.AudioLevelJob] {
+        var byID: [String: QueueSnapshot.AudioLevelJob] = [:]
+        for job in server { byID[job.itemID] = job }
+        for job in local {
+            if let theirs = byID[job.itemID] {
+                if job.isFresher(than: theirs) {
+                    byID[job.itemID] = job
+                } else if theirs.title == theirs.itemID, job.title != job.itemID {
+                    var enriched = theirs
+                    enriched.title = job.title
+                    byID[job.itemID] = enriched
+                }
+            } else {
+                byID[job.itemID] = job
+            }
+        }
+        return byID.values.sorted { lhs, rhs in
+            if lhs.isActive != rhs.isActive { return lhs.isActive }
+            if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+            return lhs.itemID < rhs.itemID
+        }
     }
 
     /// A failed job: "try again" when the input was fine and the run was not; "open" when the focus has more to offer

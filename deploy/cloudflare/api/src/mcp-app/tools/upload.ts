@@ -1,7 +1,7 @@
 // upload_files: short-lived links to PUT local files to (MCP-APP-CONTRACT.md section 4); the widget sends the files
 // itself, a host with no widget gets a ready curl line for each.
 import * as z from "zod";
-import { MAX_UPLOAD_BYTES, UPLOAD_TYPES } from "../../app-routes";
+import { MAX_SINGLE_UPLOAD_BYTES, UPLOAD_TYPES } from "../../app-routes";
 import { UploadOut } from "../shapes";
 import type { AppTool } from "../types";
 import { arr, int, plural, rec, str } from "./common";
@@ -66,7 +66,7 @@ export const uploadFiles: AppTool<z.infer<typeof Input>> = {
                 curl: `curl -sS -T FILE '${url}'`,
             };
         });
-        const maxBytes = int(first.max_bytes, MAX_UPLOAD_BYTES);
+        const maxBytes = int(first.max_bytes, MAX_SINGLE_UPLOAD_BYTES);
         const accept = extensions(first.types);
         const mb = Math.round(maxBytes / 1_000_000);
         const text = [

@@ -138,7 +138,7 @@ public final class SystemHealth {
                 continue
             }
             switch item.kind {
-            case .editorRender, .swarm:
+            case .editorRender, .audioLevel, .swarm:
                 if case .rendering = item.stage { warm.insert(.editRenderer) }
             case .save, .gallery, .upload, .webpRender:
                 switch item.stage {

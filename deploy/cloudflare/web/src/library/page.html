@@ -436,7 +436,7 @@ dialog.sheet.wide { width: min(760px, calc(100vw - 24px)); }
         <input id="pick" class="sr" type="file" multiple tabindex="-1" aria-label="choose files" accept="image/gif,image/webp,image/png,image/jpeg,video/mp4,video/quicktime,image/heic,.gif,.webp,.png,.jpg,.jpeg,.mp4,.mov,.heic">
         <div class="drop" id="drop" tabindex="0" role="button" aria-label="choose files or drop them here">
           <b>drop files here, or tap to choose</b>
-          <span class="small muted">gif, webp, png, jpg, mp4, mov, heic &middot; up to 100 MB each &middot; on a phone this opens your photos</span>
+          <span class="small muted">gif, webp, png, jpg, mp4, mov, heic &middot; up to 1 GB each &middot; on a phone this opens your photos</span>
         </div>
         <div class="files" id="files"></div>
         <div class="status" id="filesStatus" role="status" aria-live="polite"></div>
@@ -541,7 +541,8 @@ dialog.sheet.wide { width: min(760px, calc(100vw - 24px)); }
 
 <script>
 /* ---------- constants ---------- */
-var MAX_BYTES = 100000000;          // contract: bytes <= 100_000_000
+var MAX_BYTES = 1073741824;         // contract: bytes <= 1_073_741_824 (1 GiB via multipart)
+var MULTIPART_THRESHOLD = 90000000; // files > 90 MB stream in parts to bypass Worker 100 MB cap
 var LIMIT_S = 30;                   // webp length limit (WEBP_MAX_SECONDS)
 var FREE_BYTES = 10e9;              // the 10 GB meter
 var PAGE_SIZE = 48;
@@ -641,7 +642,7 @@ var MESSAGES = {
   "error.library.upstream": "the server couldn't reach capystore's api. try again in a moment.",
   "error.library.timeout": "this is taking too long. try again.",
   "error.library.unsupported": "that file type isn't supported.",
-  "error.library.too_large": "too big: the limit is 100 MB.",
+  "error.library.too_large": "too big: the limit is 1 GB.",
   "error.library.empty": "that file is empty.",
   "error.library.incomplete": "the upload didn't finish. try again.",
   "error.library.missing": "the stored file is gone.",
@@ -1033,7 +1034,7 @@ function addFiles(list) {
     var type = typeOfFile(file);
     var f = { id: nextFileId++, file: file, name: file.name || "file", bytes: file.size, type: type, ext: type ? TYPES[type] : extOf(file.name), state: "queued", pct: 0, note: "", bad: false };
     if (!type) { f.bad = true; f.state = "bad"; f.note = (f.ext ? "." + f.ext : "that type") + " isn't supported"; }
-    else if (file.size > MAX_BYTES) { f.bad = true; f.state = "bad"; f.note = "too big: " + fmtBytes(file.size) + ", the limit is 100 MB"; }
+    else if (file.size > MAX_BYTES) { f.bad = true; f.state = "bad"; f.note = "too big: " + fmtBytes(file.size) + ", the limit is 1 GB"; }
     else if (file.size === 0) { f.bad = true; f.state = "bad"; f.note = "that file is empty"; }
     if (f.bad) skipped++; else { added++; f.preview = URL.createObjectURL(file); }
     files.push(f);
@@ -1059,6 +1060,7 @@ function pump() {
   }
 }
 function uploadFile(f) {
+  if (f.file.size > MULTIPART_THRESHOLD) return uploadFileMultipart(f);
   return new Promise(function (resolve) {
     f.state = "uploading"; f.pct = 0; renderFile(f);
     var xhr = new XMLHttpRequest();
@@ -1092,6 +1094,85 @@ function uploadFile(f) {
     };
     xhr.send(f.file);
   });
+}
+
+async function uploadFileMultipart(f) {
+  f.state = "uploading"; f.pct = 0; renderFile(f);
+  var total = f.file.size;
+  var uploadId = null;
+  function fail(code) {
+    f.state = "failed"; f.note = messageFor(code) + (code === "network" ? "" : " (" + code + ")");
+    renderFile(f);
+  }
+  try {
+    var init = ok(await libPost("/api/library/upload/multipart", {
+      name: f.name,
+      content_type: f.type,
+      bytes: total
+    }));
+    uploadId = init.upload_id;
+    var partSize = Math.min(init.max_part_size || 67108864, Math.max(5242880, init.part_size || 50000000));
+    var parts = [];
+    var offset = 0;
+    var partNumber = 1;
+
+    while (offset < total) {
+      if (files.indexOf(f) < 0) {
+        if (uploadId) fetch("/api/library/upload/multipart", { method: "DELETE", headers: { "x-upload-id": uploadId } }).catch(function () {});
+        return;
+      }
+      var end = Math.min(total, offset + partSize);
+      var slice = f.file.slice(offset, end);
+      var baseOffset = offset;
+      var uploaded = await new Promise(function (resolve, reject) {
+        var xhr = new XMLHttpRequest();
+        f.xhr = xhr;
+        xhr.open("PUT", "/api/library/upload/multipart/part?part=" + partNumber);
+        xhr.setRequestHeader("content-type", "application/octet-stream");
+        xhr.setRequestHeader("x-upload-id", uploadId);
+        xhr.upload.onprogress = function (e) {
+          if (!e.lengthComputable) return;
+          f.pct = Math.min(99, Math.floor(((baseOffset + e.loaded) / total) * 100));
+          renderProgress(f);
+        };
+        xhr.onerror = async function () {
+          try { await lib("/api/library?limit=1"); reject(new Fail("network")); } catch (e) { reject(e && e.code === "expired" ? new Fail("expired") : new Fail("network")); }
+        };
+        xhr.onabort = function () { reject(new Fail("aborted")); };
+        xhr.onload = function () {
+          var b = null;
+          try { b = JSON.parse(xhr.responseText); } catch (e) {}
+          if (xhr.status === 401 || xhr.responseURL && xhr.responseURL.indexOf("/api/library/upload/multipart/part") < 0) {
+            showExpired(); return reject(new Fail("expired"));
+          }
+          if (xhr.status >= 200 && xhr.status < 300 && b && b.etag) return resolve(b);
+          reject(new Fail(b && b.error && b.error.code || "error.library.upstream"));
+        };
+        xhr.send(slice);
+      });
+      parts.push({ part_number: uploaded.part_number || partNumber, etag: uploaded.etag });
+      offset = end;
+      partNumber++;
+      f.pct = Math.min(99, Math.floor((offset / total) * 100));
+      renderProgress(f);
+    }
+
+    var done = ok(await libPost("/api/library/upload/multipart/complete", {
+      upload_id: uploadId,
+      parts: parts
+    }));
+    if (done && done.item) {
+      f.item = done.item; f.pct = 100; f.state = "ready"; f.noDur = false;
+      if (typeof done.item.duration === "number" && done.item.duration > 0 && !f.dur) f.dur = done.item.duration;
+      renderFile(f); refreshGrid();
+      return;
+    }
+    fail("error.library.upstream");
+  } catch (e) {
+    if (uploadId) fetch("/api/library/upload/multipart", { method: "DELETE", headers: { "x-upload-id": uploadId } }).catch(function () {});
+    if (e && e.code === "aborted") return;
+    fail((e && e.code) || "error.library.upstream");
+  }
 }
 
 async function hostFile(f) {

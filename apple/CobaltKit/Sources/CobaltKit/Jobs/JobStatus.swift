@@ -24,7 +24,7 @@ import Foundation
 
 public struct JobStatus: Sendable, Equatable, Identifiable {
     public enum Kind: Sendable, Equatable, CaseIterable {
-        case save, gallery, upload, webpRender, editorRender, deviceDownload, photosExport, swarm
+        case save, gallery, upload, webpRender, editorRender, audioLevel, deviceDownload, photosExport, swarm
     }
 
     public enum Stage: Sendable, Equatable {
@@ -78,6 +78,8 @@ public struct JobStatus: Sendable, Equatable, Identifiable {
         case server(id: String)
         /// A render of the video editor, by its id.
         case editRender(id: String)
+        /// An audio loudness leveling job, by library item id.
+        case audioLevel(itemID: String)
         /// A job that finished and left the queue (`FinishedWork.id`).
         case finished(UUID)
         /// The photos album adding saves.
@@ -275,7 +277,7 @@ public struct JobStep: Sendable, Equatable, Identifiable {
         switch kind {
         case .save, .upload, .gallery: return [.queued, .wake, .source, .store, .device]
         case .webpRender: return [.queued, .wake, .store, .device]
-        case .editorRender, .swarm: return [.queued, .wake, .store]
+        case .editorRender, .audioLevel, .swarm: return [.queued, .wake, .store]
         case .deviceDownload, .photosExport: return [.queued, .device]
         }
     }
@@ -284,7 +286,7 @@ public struct JobStep: Sendable, Equatable, Identifiable {
     static func defaultFailure(_ kind: JobStatus.Kind) -> ID {
         switch kind {
         case .save, .upload, .gallery: return .source
-        case .webpRender, .editorRender, .swarm: return .store
+        case .webpRender, .editorRender, .audioLevel, .swarm: return .store
         case .deviceDownload, .photosExport: return .device
         }
     }

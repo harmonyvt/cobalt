@@ -92,26 +92,40 @@ struct LinkPanePage: View {
             LinkPaneHero(entries: entries, model: model)
                 .draggable(activeURL)
         } controls: {
-            LinkPaneControls(actions: gridActions(link, gate: gate))
+            LinkPaneControls(
+                link: link,
+                gate: gate,
+                audioEnabled: audioEnabled,
+                target: model.audioLeveling.settings.target,
+                useNormalAudio: $useNormalAudio,
+                activeURL: activeURL,
+                isSubmitting: controller.levelingBulk,
+                isCopied: controller.copiedID == link.id,
+                onCopy: {
+                    if audioEnabled {
+                        controller.copy(link, gate: gate, useNormal: useNormalAudio, shell: shell)
+                    } else {
+                        controller.copy(link, shell: shell)
+                    }
+                },
+                onLevelRemaining: {
+                    autoUnlockPending = true
+                    controller.levelBulk(link: link, shell: shell)
+                },
+                onBlockedTap: {
+                    controller.blockedAudioTap(gate: gate, shell: shell)
+                },
+                actions: stripActions(link)
+            )
         } body: {
             LinkPaneBody(
                 link: link,
                 entries: entries,
                 model: model,
                 controller: controller,
-                gate: gate,
-                useNormalAudio: $useNormalAudio,
-                activeURL: activeURL,
-                onLevelRemaining: {
-                    autoUnlockPending = true
-                    controller.levelBulk(link: link, shell: shell)
-                },
                 onLevelSingle: { fileID in
                     autoUnlockPending = true
                     controller.levelSingle(fileID: fileID, linkID: link.id, shell: shell)
-                },
-                onBlockedTap: {
-                    controller.blockedAudioTap(gate: gate, shell: shell)
                 }
             )
         } shelf: {
@@ -137,21 +151,8 @@ struct LinkPanePage: View {
         return Copy.LinkEdit.captionTitle
     }
 
-    private func gridActions(_ link: ShareSet, gate: AudioShareGate) -> [PaneAction] {
-        let copied = controller.copiedID == link.id
-        let normalActive = audioEnabled && gate.canShareNormalAudio && useNormalAudio
-        var actions = [
-            PaneAction(
-                normalActive ? Copy.AudioBulk.copyLeveledLink : Copy.Links.copyLink,
-                systemImage: copied ? Symbol.Library.copied : Symbol.copyLink
-            ) {
-                if audioEnabled {
-                    controller.copy(link, gate: gate, useNormal: useNormalAudio, shell: shell)
-                } else {
-                    controller.copy(link, shell: shell)
-                }
-            },
-        ]
+    private func stripActions(_ link: ShareSet) -> [PaneAction] {
+        var actions: [PaneAction] = []
         if model.capabilities.shareSetEdit {
             actions.append(PaneAction(Copy.LinkEdit.edit, systemImage: "pencil", needsServer: true) { editing = true })
         }
@@ -160,6 +161,9 @@ struct LinkPanePage: View {
                 actions.append(PaneAction(
                     Copy.PrivateLinks.makePublic, systemImage: Symbol.PrivateLinks.makePublic, needsServer: true
                 ) { controller.makingPublic = link })
+                actions.append(PaneAction(
+                    Copy.PrivateLinks.rotateKey, systemImage: Symbol.PrivateLinks.rotate, needsServer: true
+                ) { controller.rotatingKey = link })
             } else {
                 actions.append(PaneAction(
                     Copy.PrivateLinks.makePrivate, systemImage: Symbol.PrivateLinks.makePrivate, needsServer: true
@@ -188,22 +192,220 @@ struct LinkPanePage: View {
     }
 }
 
-// MARK: - the controls
+// MARK: - the controls (Unified Liquid Glass Share Deck + Compact Glassy Action Strip)
 
-/// The big buttons; nothing in the bar (a link never runs, so the bar never shows it).
+/// Unified Liquid Glass Share Deck (copy, `?audio=normal` hard gate, 1-tap bulk level, live URL + share)
+/// paired with a compact 1-row glassy action strip (`edit`, `private`, `rotate`, `revoke`).
+/// Hidden in the bar (a link never runs, so the bar never shows it).
 private struct LinkPaneControls: View {
+    let link: ShareSet
+    let gate: AudioShareGate
+    let audioEnabled: Bool
+    let target: AudioTargetLufs
+    @Binding var useNormalAudio: Bool
+    let activeURL: URL
+    let isSubmitting: Bool
+    let isCopied: Bool
+    let onCopy: () -> Void
+    let onLevelRemaining: () -> Void
+    let onBlockedTap: () -> Void
     let actions: [PaneAction]
+
     @Environment(\.paneShape) private var shape
 
     var body: some View {
-        if shape != .bar { PaneActionGrid(actions) }
+        if shape != .bar {
+            VStack(alignment: .leading, spacing: 10) {
+                if audioEnabled {
+                    LinkAudioDock(
+                        link: link,
+                        gate: gate,
+                        target: target,
+                        useNormalAudio: $useNormalAudio,
+                        activeURL: activeURL,
+                        isSubmitting: isSubmitting,
+                        isCopied: isCopied,
+                        primaryCopyMode: true,
+                        onCopy: onCopy,
+                        onLevelRemaining: onLevelRemaining,
+                        onBlockedTap: onBlockedTap
+                    )
+                } else {
+                    LinkPlainShareDeck(link: link, isCopied: isCopied, onCopy: onCopy)
+                }
+
+                if !actions.isEmpty {
+                    LinkActionStrip(actions: actions)
+                }
+            }
+        }
+    }
+}
+
+/// Compact 1-row Liquid Glass action strip beneath the Share Deck (stacks into full-width rows at accessibility
+/// text sizes), honoring the pane's offline honesty contract (notes, caption, toast on paused tap).
+private struct LinkActionStrip: View {
+    let actions: [PaneAction]
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.paneOffline) private var offline
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var toast: String?
+    @State private var toastTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GlassEffectContainer(spacing: 8) {
+                if typeSize.isAccessibilitySize {
+                    VStack(spacing: 8) {
+                        ForEach(actions) { action in
+                            stripButton(action, compactRow: true)
+                        }
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        ForEach(actions) { action in
+                            stripButton(action, compactRow: false)
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if offline {
+                ForEach(PaneActionGrid.notes(for: actions, offline: offline), id: \.self) { note in
+                    Text(note)
+                        .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
+                        .foregroundStyle(CobaltColor.captionOnElevated)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 4)
+                }
+            }
+
+            if let toast {
+                Text(toast)
+                    .font(Font.cobalt(12, .medium, relativeTo: .caption))
+                    .foregroundStyle(CobaltColor.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(CobaltColor.elevated.opacity(0.9), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .transition(.opacity)
+                    .accessibilityIdentifier("pane.actions.toast")
+            }
+        }
+        .onChange(of: offline) { _, now in
+            if !now { toastTask?.cancel(); toast = nil }
+        }
+    }
+
+    @ViewBuilder
+    private func stripButton(_ action: PaneAction, compactRow: Bool) -> some View {
+        let paused = action.pausedOffline(offline) && !action.isDisabled && !action.isWorking
+        let locked = action.isDisabled || action.isWorking
+        let destructive = action.role == .destructive
+        let caption = PaneActionGrid.caption(for: action, offline: offline)
+        let tint: Color = destructive ? CobaltColor.error.opacity(0.14) : CobaltColor.surface.opacity(0.6)
+
+        Group {
+            if paused {
+                Button { say(Copy.Pane.pausedReason(action.title)) } label: {
+                    buttonLabel(action, caption: caption, compactRow: compactRow)
+                }
+                .accessibilityValue(Copy.Pane.needsNetwork)
+                .accessibilityHint(Copy.Pane.needsServer)
+            } else {
+                Button(role: action.role) {
+                    action.perform()
+                } label: {
+                    buttonLabel(action, caption: caption, compactRow: compactRow)
+                }
+            }
+        }
+        .buttonStyle(LinkStripButtonStyle(destructive: destructive, tint: tint))
+        .disabled(locked)
+        .opacity(action.isWorking ? 0.82 : (action.isDisabled ? 0.45 : (paused ? 0.6 : 1)))
+    }
+
+    @ViewBuilder
+    private func buttonLabel(_ action: PaneAction, caption: String?, compactRow: Bool) -> some View {
+        if compactRow {
+            HStack(spacing: 10) {
+                Image(systemName: action.systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(action.title)
+                        .font(Font.cobalt(13.5, .semibold, relativeTo: .body))
+                    if let caption {
+                        Text(caption)
+                            .font(Font.cobalt(11, .regular, relativeTo: .caption2))
+                            .foregroundStyle(CobaltColor.caption)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        } else {
+            VStack(spacing: 4) {
+                Image(systemName: action.systemImage)
+                    .font(.system(size: Platform.isMac ? 14 : 15, weight: .semibold))
+                Text(action.title)
+                    .font(Font.cobalt(Platform.isMac ? 11 : 11.5, .semibold, relativeTo: .caption))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                if let caption {
+                    Text(caption)
+                        .font(Font.cobalt(9.5, .regular, relativeTo: .caption2))
+                        .foregroundStyle(CobaltColor.caption)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: Platform.isMac ? 48 : 52, maxHeight: .infinity)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func say(_ text: String) {
+        toastTask?.cancel()
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { toast = text }
+        AccessibilityNotification.Announcement(text).post()
+        toastTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation(reduceMotion ? nil : .easeIn(duration: 0.18)) { toast = nil }
+        }
+    }
+}
+
+private struct LinkStripButtonStyle: ButtonStyle {
+    let destructive: Bool
+    let tint: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(destructive ? CobaltColor.errorText : CobaltColor.text)
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .glassEffect(.regular.tint(tint).interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(destructive ? CobaltColor.error.opacity(0.28) : CobaltColor.hairline, lineWidth: 0.65)
+                    .allowsHitTesting(false)
+            )
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(Motion.press, value: configuration.isPressed)
+            .haptic(.impact(weight: .light), trigger: configuration.isPressed) { $0 }
     }
 }
 
 // MARK: - the hero
 
 /// The link's files as tiles under the header: up to four (2x2) beside the tab; spanned over two screens, every file
-/// fills the media screen. A tile opens its post.
+/// fills the media screen. A tile opens its post and shows a Clear Liquid Glass loudness pip for videos when audio
+/// leveling is enabled.
 private struct LinkPaneHero: View {
     let entries: [LinkFileEntry]
     let model: AppModel
@@ -214,7 +416,7 @@ private struct LinkPaneHero: View {
     var body: some View {
         switch shape {
         case .bar:
-            LinkCover(items: entries.map(\.item), side: 40)
+            LinkCover(items: entries.map(\.item), side: 40, totalCount: entries.count)
         case .tall:
             grid(Array(entries.prefix(4)))
                 .aspectRatio(1, contentMode: .fit)
@@ -228,13 +430,25 @@ private struct LinkPaneHero: View {
     }
 
     private func grid(_ shown: [LinkFileEntry]) -> some View {
-        LinkTileGrid(count: shown.count) { index, side in
+        let showAudioPips = model.capabilities.audioLeveling
+        return LinkTileGrid(count: shown.count) { index, side in
             let entry = shown[index]
             Button {
                 if let post = entry.post { pane?.open(.post(post.id)) }
             } label: {
-                LinkFileThumb(entry: entry, side: side, radius: 12, maxPixel: 640, model: model)
+                LinkFileThumb(entry: entry, side: side, radius: 14, maxPixel: 640, model: model)
                     .opacity(entry.shows ? 1 : 0.45)
+                    .overlay(alignment: .bottomTrailing) {
+                        if showAudioPips, entry.shows, entry.kind == .video, side >= 100 {
+                            HeroAudioPip(audio: entry.audio)
+                                .padding(7)
+                        }
+                    }
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.6)
+                            .allowsHitTesting(false)
+                    )
             }
             .buttonStyle(.plain)
             .disabled(entry.post == nil)
@@ -248,11 +462,60 @@ private struct LinkPaneHero: View {
     }
 }
 
+/// Tiny Clear Liquid Glass loudness indicator placed in the bottom-trailing corner of hero video tiles.
+private struct HeroAudioPip: View {
+    let audio: AudioLoudnessInfo?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if audio?.isRendering == true {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(AudioDockTone.amber)
+            } else if audio?.isLeveled == true {
+                Image(systemName: Symbol.AudioBulk.leveled)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(AudioDockTone.emerald)
+            } else if audio?.isSilent == true {
+                Image(systemName: Symbol.AudioBulk.silent)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+            } else {
+                Circle()
+                    .fill(audio?.statusTint ?? AudioDockTone.neutral)
+                    .frame(width: 6, height: 6)
+            }
+            if let text = shortText {
+                Text(text)
+                    .font(Font.cobalt(10, .semibold, relativeTo: .caption2))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3.5)
+        .mediaGlassCapsule(interactive: false)
+        .accessibilityHidden(true)
+    }
+
+    private var shortText: String? {
+        guard let audio else { return nil }
+        if audio.isLeveled {
+            if let out = audio.outputLufs, out.isFinite { return String(format: "%.1f", out) }
+            return Copy.AudioBulk.badgeLeveledFallback
+        }
+        if audio.isRendering { return Copy.AudioBulk.badgeLeveling }
+        if audio.isSilent { return Copy.AudioBulk.badgeSilent }
+        if let lufs = audio.integratedLufs, lufs.isFinite { return String(format: "%.1f", lufs) }
+        return nil
+    }
+}
+
 /// Square tiles in the most room they can have: the grid picks the column count that makes each tile biggest in the
 /// space it is given (1 file one big tile, 2 side by side or stacked, 3-4 a square, 5-10 three or four across).
 struct LinkTileGrid<Tile: View>: View {
     let count: Int
-    var gap: CGFloat = 4
+    var gap: CGFloat = 5
     @ViewBuilder let tile: (Int, CGFloat) -> Tile
 
     var body: some View {
@@ -288,57 +551,21 @@ struct LinkTileGrid<Tile: View>: View {
 
 // MARK: - the body
 
-/// The address (Studio Audio Dock when `audio_leveling` is enabled, else the plain short link and share sheet),
-/// the badge and collections, then the numbered files with per-row loudness telemetry.
+/// Privacy & collection tags, then the numbered files with per-row loudness telemetry.
 private struct LinkPaneBody: View {
     let link: ShareSet
     let entries: [LinkFileEntry]
     let model: AppModel
     let controller: LinksController
-    let gate: AudioShareGate
-    @Binding var useNormalAudio: Bool
-    let activeURL: URL
-    let onLevelRemaining: () -> Void
     let onLevelSingle: (String) -> Void
-    let onBlockedTap: () -> Void
 
     @Environment(Pane.self) private var pane: Pane?
 
     private var audioEnabled: Bool { model.capabilities.audioLeveling }
-    private var shortLink: String { (link.url.host ?? "") + link.url.path }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                if audioEnabled {
-                    LinkAudioDock(
-                        link: link,
-                        gate: gate,
-                        target: model.audioLeveling.settings.target,
-                        useNormalAudio: $useNormalAudio,
-                        activeURL: activeURL,
-                        isSubmitting: controller.levelingBulk,
-                        onLevelRemaining: onLevelRemaining,
-                        onBlockedTap: onBlockedTap
-                    )
-                } else {
-                    HStack(spacing: 8) {
-                        Text(shortLink)
-                            .font(CobaltType.captionSmall)
-                            .foregroundStyle(CobaltColor.caption)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .accessibilityLabel(Copy.LinksPane.addressA11y)
-                        Spacer(minLength: 4)
-                        IconRow(spacing: 8, alignment: .trailing) {
-                            ShareLink(item: link.url) { Label(Copy.Links.share, systemImage: Symbol.share) }
-                                .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.linkBlue))
-                        }
-                        .fixedSize()
-                    }
-                }
-                LinkHeaderTags(link: link, controller: controller)
-            }
+            LinkHeaderTags(link: link, controller: controller)
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     SectionLabel(text: Copy.LinkEdit.filesSection)
@@ -415,7 +642,7 @@ private struct LinkPaneCollections: View {
                     .foregroundStyle(CobaltColor.caption)
                     .padding(.horizontal, 12)
                     .frame(minHeight: 32)
-                    .overlay(Capsule().strokeBorder(CobaltColor.border, style: StrokeStyle(lineWidth: 1.2, dash: [4, 3])))
+                    .overlay(Capsule().strokeBorder(CobaltColor.border, style: StrokeStyle(lineWidth: 1.1, dash: [4, 3])))
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -427,16 +654,23 @@ private struct LinkPaneCollections: View {
         return Button { controller.toggle(link, in: collection, shell: shell) } label: {
             Label(collection.name, systemImage: on ? Symbol.linkPicked : Symbol.collection)
                 .labelStyle(CollectionLineLabel())
-                .font(Font.cobalt(12, on ? .semibold : .regular, relativeTo: .caption))
+                .font(Font.cobalt(12, on ? .semibold : .medium, relativeTo: .caption))
                 .foregroundStyle(on ? CobaltColor.collection : CobaltColor.text)
                 .lineLimit(1)
                 .padding(.horizontal, 12)
-                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-                .background(Capsule().fill(CobaltColor.elevated))
-                .overlay(Capsule().strokeBorder(on ? CobaltColor.collection : Color.clear, lineWidth: 1.2))
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .glassEffect(
+            .regular.tint(on ? CobaltColor.collection.opacity(0.16) : CobaltColor.elevated.opacity(0.55)).interactive(),
+            in: .capsule
+        )
+        .overlay(
+            Capsule()
+                .strokeBorder(on ? CobaltColor.collection.opacity(0.55) : CobaltColor.hairline, lineWidth: on ? 1 : 0.6)
+                .allowsHitTesting(false)
+        )
         .accessibilityAddTraits(on ? .isSelected : [])
         .contextMenu {
             Button(Copy.LinksPane.openCollection, systemImage: Symbol.collection) { pane?.open(.collection(collection.id)) }

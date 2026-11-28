@@ -86,6 +86,99 @@ export class MemoryOriginals implements OriginalsBucket {
     async delete(key: string | string[]) {
         for (const k of Array.isArray(key) ? key : [key]) this.objects.delete(k);
     }
+
+    multiparts = new Map<
+        string,
+        {
+            key: string;
+            uploadId: string;
+            contentType: string;
+            meta: Record<string, string>;
+            parts: Map<number, { bytes: Uint8Array; etag: string }>;
+            aborted: boolean;
+            completed: boolean;
+        }
+    >();
+    private nextUploadSeq = 1;
+
+    async createMultipartUpload(
+        key: string,
+        options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> },
+    ) {
+        if (this.failPut) throw new Error("R2 down");
+        const uploadId = `mp-${this.nextUploadSeq++}`;
+        const state = {
+            key,
+            uploadId,
+            contentType: options?.httpMetadata?.contentType ?? "application/octet-stream",
+            meta: options?.customMetadata ?? {},
+            parts: new Map<number, { bytes: Uint8Array; etag: string }>(),
+            aborted: false,
+            completed: false,
+        };
+        this.multiparts.set(`${key}\0${uploadId}`, state);
+        return this.resumeMultipartUpload(key, uploadId);
+    }
+
+    resumeMultipartUpload(key: string, uploadId: string) {
+        const self = this;
+        const lookup = () => {
+            const s = self.multiparts.get(`${key}\0${uploadId}`);
+            if (!s || s.aborted || s.completed) throw new Error("NoSuchUpload");
+            return s;
+        };
+        return {
+            key,
+            uploadId,
+            async uploadPart(partNumber: number, value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob) {
+                if (self.failPut) throw new Error("R2 down");
+                const s = lookup();
+                let bytes: Uint8Array;
+                if (value instanceof ReadableStream) {
+                    bytes = await collect(value);
+                } else if (value instanceof Uint8Array) {
+                    bytes = new Uint8Array(value);
+                } else if (ArrayBuffer.isView(value)) {
+                    bytes = new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+                } else if (value instanceof ArrayBuffer) {
+                    bytes = new Uint8Array(value);
+                } else if (typeof value === "string") {
+                    bytes = new TextEncoder().encode(value);
+                } else {
+                    bytes = new Uint8Array(await value.arrayBuffer());
+                }
+                const etag = `"part-${uploadId}-${partNumber}-${bytes.length}"`;
+                s.parts.set(partNumber, { bytes, etag });
+                return { partNumber, etag };
+            },
+            async complete(uploadedParts: Array<{ partNumber: number; etag: string }>) {
+                if (self.failPut) throw new Error("R2 down");
+                const s = lookup();
+                const sorted = [...uploadedParts].sort((a, b) => a.partNumber - b.partNumber);
+                const chunks: Uint8Array[] = [];
+                let total = 0;
+                for (const p of sorted) {
+                    const stored = s.parts.get(p.partNumber);
+                    if (!stored || stored.etag !== p.etag) throw new Error("InvalidPart");
+                    chunks.push(stored.bytes);
+                    total += stored.bytes.length;
+                }
+                const combined = new Uint8Array(total);
+                let offset = 0;
+                for (const c of chunks) {
+                    combined.set(c, offset);
+                    offset += c.length;
+                }
+                s.completed = true;
+                self.objects.set(key, { bytes: combined, contentType: s.contentType, meta: s.meta });
+                return { size: combined.length };
+            },
+            async abort() {
+                const s = self.multiparts.get(`${key}\0${uploadId}`);
+                if (s) s.aborted = true;
+            },
+        };
+    }
 }
 
 // R2 `cobalt-media`: put() takes the WebP bytes (the encode path) or a stream

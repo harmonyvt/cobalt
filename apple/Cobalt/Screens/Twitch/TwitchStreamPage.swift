@@ -22,9 +22,9 @@ struct TwitchStreamPage: View {
         for ch in channels {
             let trimmed = ch.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            let key = trimmed.lowercased()
+            let key = StreamAddress.canonicalKey(for: trimmed)
             if seen.insert(key).inserted {
-                normalized.append(trimmed)
+                normalized.append(key)
                 if normalized.count == PaneItem.maxSimultaneousStreams { break }
             }
         }
@@ -63,6 +63,7 @@ struct TwitchStreamPage: View {
     @State private var streamPickerMode: StreamPickerMode?
     @State private var showingDrafts = false
     @State private var editingDraftID: String?
+    @State private var addingEmoteToSet: SevenTvAddToSetModel?
     @State private var containerSize: CGSize = .zero
 
     private var store: TwitchStore { model.twitch }
@@ -111,6 +112,17 @@ struct TwitchStreamPage: View {
 
     /// True when the top status-adjacent bar owns leading chrome instead of the system navigation toolbar.
     private var usesStatusAdjacentBar: Bool { statusBarMetrics.isActive }
+
+    /// True on iOS when the system toolbar (e.g. iPhone Duo's trailing Vertical Controls rail in landscape)
+    /// already presents Play/Pause, Clip, Record, PiP, Add Stream, Drafts, and More, so we avoid rendering
+    /// a duplicate bottom-left `TwitchStreamBar` or floating control pill beneath the video.
+    private var toolbarOwnsWatchControls: Bool {
+        #if os(iOS)
+        return ownsGlassHUD && !usesStatusAdjacentBar
+        #else
+        return false
+        #endif
+    }
 
     /// Pure-SwiftUI keyboard detection comparing keyboard-ignored `paneHostSize` against the live container height.
     private var keyboardOpen: Bool {
@@ -205,9 +217,9 @@ struct TwitchStreamPage: View {
             }
             let excluded: Set<String> = switch mode {
             case .add:
-                Set(channels.map { $0.lowercased() })
+                Set(channels.map(StreamAddress.canonicalKey(for:)))
             case .replaceSecond:
-                Set([login.lowercased()])
+                Set([StreamAddress.canonicalKey(for: login)])
             }
             TwitchAddSecondStreamSheet(
                 model: model,
@@ -232,6 +244,9 @@ struct TwitchStreamPage: View {
             #if os(iOS)
             .presentationDetents([.medium, .large])
             #endif
+        }
+        .sheet(item: $addingEmoteToSet) { picker in
+            SevenTvAddToSetSheet(picker: picker)
         }
         #if os(iOS)
         .fullScreenCover(isPresented: Binding(
@@ -356,12 +371,16 @@ struct TwitchStreamPage: View {
         }
 
         ToolbarItem(placement: .automatic) {
+            let draftsTitle = clipStore.drafts.isEmpty
+                ? Copy.Twitch.drafts
+                : "\(Copy.Twitch.drafts) (\(clipStore.drafts.count))"
             DuoToolbarButton(
-                title: Copy.Twitch.drafts,
+                title: draftsTitle,
                 systemImage: Symbol.Twitch.drafts
             ) {
                 showingDrafts = true
             }
+            .badge(clipStore.unreadCount > 0 ? clipStore.unreadCount : clipStore.drafts.count)
             .accessibilityIdentifier("twitch.toolbar.drafts")
         }
         .duoVisibilityPriority(.low)
@@ -437,7 +456,8 @@ struct TwitchStreamPage: View {
                 }
                 Divider()
                 ForEach(channels, id: \.self) { ch in
-                    Button("\(Copy.Twitch.openOnTwitch) (\(store.displayName(for: ch)))", systemImage: Symbol.Twitch.open) {
+                    let openLabel = Copy.Twitch.openOnPlatform(StreamAddress.platform(for: ch).lowercaseName)
+                    Button("\(openLabel) (\(store.displayName(for: ch)))", systemImage: Symbol.Twitch.open) {
                         openChannelOnTwitch(ch)
                     }
                 }
@@ -447,14 +467,16 @@ struct TwitchStreamPage: View {
                     choosingTV = true
                 }
                 #endif
-                Button(
-                    host.activeMode == .lowLatency ? Copy.Twitch.playerEmbed : Copy.Twitch.playerLowLatency,
-                    systemImage: host.activeMode == .lowLatency ? Symbol.Twitch.embed : Symbol.Twitch.lowLatency
-                ) {
-                    host.setMode(host.activeMode == .lowLatency ? .embed : .lowLatency)
+                if StreamAddress.platform(for: login).supportsEmbedFallback {
+                    Button(
+                        host.activeMode == .lowLatency ? Copy.Twitch.playerEmbed : Copy.Twitch.playerLowLatency,
+                        systemImage: host.activeMode == .lowLatency ? Symbol.Twitch.embed : Symbol.Twitch.lowLatency
+                    ) {
+                        host.setMode(host.activeMode == .lowLatency ? .embed : .lowLatency)
+                    }
                 }
                 TwitchJumpToLiveMenuButton(host: host)
-                Button(Copy.Twitch.openOnTwitch, systemImage: Symbol.Twitch.open) {
+                Button(Copy.Twitch.openOnPlatform(StreamAddress.platform(for: login).lowercaseName), systemImage: Symbol.Twitch.open) {
                     openChannelOnTwitch(login)
                 }
             }
@@ -709,29 +731,29 @@ struct TwitchStreamPage: View {
                 host.setDualFocus(slot)
             }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Circle()
                     .fill(accent)
-                    .frame(width: 7, height: 7)
+                    .frame(width: 7.5, height: 7.5)
                 Text(name)
-                    .font(Font.cobalt(12, isFocused ? .semibold : .medium, relativeTo: .caption))
-                    .foregroundStyle(isFocused ? .white : .white.opacity(0.76))
+                    .font(Font.cobalt(13, isFocused ? .semibold : .medium, relativeTo: .caption))
+                    .foregroundStyle(isFocused ? .white : .white.opacity(0.84))
                     .lineLimit(1)
                 if isLouder {
                     Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(accent)
                 }
             }
-            .padding(.horizontal, 9)
-            .frame(height: 30)
+            .padding(.horizontal, 11)
+            .frame(height: 36)
             .background(
-                isFocused ? accent.opacity(0.24) : Color.white.opacity(0.10),
+                isFocused ? accent.opacity(0.28) : Color.white.opacity(0.15),
                 in: Capsule()
             )
             .overlay {
                 Capsule()
-                    .strokeBorder(isFocused ? accent.opacity(0.85) : Color.white.opacity(0.12), lineWidth: 1)
+                    .strokeBorder(isFocused ? accent.opacity(0.92) : Color.white.opacity(0.24), lineWidth: 1)
             }
             .frame(minHeight: Metrics.hit)
             .contentShape(Rectangle())
@@ -812,7 +834,8 @@ struct TwitchStreamPage: View {
                 }
                 Divider()
                 ForEach(channels, id: \.self) { ch in
-                    Button("\(Copy.Twitch.openOnTwitch) (\(store.displayName(for: ch)))", systemImage: Symbol.Twitch.open) {
+                    let openLabel = Copy.Twitch.openOnPlatform(StreamAddress.platform(for: ch).lowercaseName)
+                    Button("\(openLabel) (\(store.displayName(for: ch)))", systemImage: Symbol.Twitch.open) {
                         openChannelOnTwitch(ch)
                     }
                 }
@@ -845,14 +868,16 @@ struct TwitchStreamPage: View {
                     choosingTV = true
                 }
                 #endif
-                Button(
-                    host.activeMode == .lowLatency ? Copy.Twitch.playerEmbed : Copy.Twitch.playerLowLatency,
-                    systemImage: host.activeMode == .lowLatency ? Symbol.Twitch.embed : Symbol.Twitch.lowLatency
-                ) {
-                    host.setMode(host.activeMode == .lowLatency ? .embed : .lowLatency)
+                if StreamAddress.platform(for: login).supportsEmbedFallback {
+                    Button(
+                        host.activeMode == .lowLatency ? Copy.Twitch.playerEmbed : Copy.Twitch.playerLowLatency,
+                        systemImage: host.activeMode == .lowLatency ? Symbol.Twitch.embed : Symbol.Twitch.lowLatency
+                    ) {
+                        host.setMode(host.activeMode == .lowLatency ? .embed : .lowLatency)
+                    }
                 }
                 TwitchJumpToLiveMenuButton(host: host)
-                Button(Copy.Twitch.openOnTwitch, systemImage: Symbol.Twitch.open) {
+                Button(Copy.Twitch.openOnPlatform(StreamAddress.platform(for: login).lowercaseName), systemImage: Symbol.Twitch.open) {
                     openChannelOnTwitch(login)
                 }
             }
@@ -878,21 +903,30 @@ struct TwitchStreamPage: View {
     private var adaptiveWatch: some View {
         Group {
             if activeFoldAxis == .vertical {
-                // Half-Closed Tabletop: video stage above the crease, chat + composer + keyboard strictly below the crease.
+                // Half-Closed Tabletop: video stage above the crease, chat + full-width composer + keyboard strictly below the crease.
                 DuoSplit(ratio: keyboardOpen ? 0.42 : 0.5, axes: .vertical) {
                     videoStage(compactControls: true, maxHeight: nil)
                 } secondary: {
-                    chatPanel
+                    VStack(spacing: 0) {
+                        chatPanel
+                        fullWidthComposerDock
+                    }
                 }
             } else if activeFoldAxis == .horizontal {
-                // Book Crease: video + controls on the leading half, full-height chat on the trailing half.
-                DuoSplit(ratio: 0.5, axes: .horizontal) {
-                    mediaPanel(condensed: isDualStream || (keyboardOpen && containerSize.height < 360))
-                } secondary: {
-                    chatPanel
+                // Book Crease: video + controls on the leading half, live chat on the trailing half, full-width composer docked below both.
+                VStack(spacing: 0) {
+                    DuoSplit(ratio: 0.5, axes: .horizontal) {
+                        mediaPanel(condensed: isDualStream || (keyboardOpen && containerSize.height < 360))
+                    } secondary: {
+                        chatPanel
+                    }
+                    fullWidthComposerDock
                 }
             } else {
-                flatWatchLayout
+                VStack(spacing: 0) {
+                    flatWatchLayout
+                    fullWidthComposerDock
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -915,8 +949,8 @@ struct TwitchStreamPage: View {
             ? TwitchWatchLayout.singleFocusChatWidth(for: containerSize.width)
             : TwitchWatchLayout.chatWidth(for: containerSize.width)
         let condensed = isSideBySide
-            ? (isDualStream || (keyboardOpen && containerSize.height < 360))
-            : (isDualStream || TwitchWatchLayout.compactOverlayStreamBar(
+            ? (isDualStream || toolbarOwnsWatchControls || (keyboardOpen && containerSize.height < 360))
+            : (isDualStream || toolbarOwnsWatchControls || TwitchWatchLayout.compactOverlayStreamBar(
                 isStacked: true,
                 isTabletop: false,
                 keyboardOpen: keyboardOpen
@@ -966,9 +1000,10 @@ struct TwitchStreamPage: View {
 
     /// Media half for wide side-by-side and book-crease layouts: full-area video stage with optional docked stream bar.
     private func mediaPanel(condensed: Bool) -> some View {
-        VStack(spacing: 0) {
-            videoStage(compactControls: condensed, maxHeight: nil)
-            if !condensed {
+        let hideBar = condensed || toolbarOwnsWatchControls
+        return VStack(spacing: 0) {
+            videoStage(compactControls: hideBar, maxHeight: nil)
+            if !hideBar {
                 hairline(horizontal: true)
                 streamBar
             }
@@ -1020,7 +1055,7 @@ struct TwitchStreamPage: View {
     @ViewBuilder
     private func videoStage(compactControls: Bool, maxHeight: CGFloat?) -> some View {
         if isDualStream {
-            let namesMap = Dictionary(uniqueKeysWithValues: channels.map { ($0.lowercased(), store.displayName(for: $0)) })
+            let namesMap = Dictionary(uniqueKeysWithValues: channels.map { (StreamAddress.canonicalKey(for: $0), store.displayName(for: $0)) })
             let stageHasVerticalCrease = activeFoldAxis == nil
                 && (reservedRegions.activeDivision.map { $0.height > $0.width } ?? false)
             TwitchDualStage(
@@ -1040,6 +1075,7 @@ struct TwitchStreamPage: View {
             .frame(maxWidth: .infinity)
             .frame(maxHeight: maxHeight ?? .infinity)
         } else {
+            let showFloatingButtons = compactControls && !toolbarOwnsWatchControls
             ZStack {
                 if onTV {
                     CobaltColor.bg
@@ -1055,7 +1091,7 @@ struct TwitchStreamPage: View {
                             MediaEdgeVignette(edge: .top, height: compactControls ? 54 : 70, intensity: 0.36)
                         }
                         Spacer(minLength: 0)
-                        if compactControls {
+                        if showFloatingButtons {
                             MediaEdgeVignette(edge: .bottom, height: 64, intensity: 0.48)
                         }
                     }
@@ -1078,7 +1114,7 @@ struct TwitchStreamPage: View {
                             clipSaveToast(toast)
                                 .padding(.bottom, compactControls ? 4 : 10)
                         }
-                        if compactControls {
+                        if showFloatingButtons {
                             floatingCompactControls
                         }
                     }
@@ -1097,7 +1133,7 @@ struct TwitchStreamPage: View {
                             clipSaveToast(toast)
                                 .padding(.bottom, compactControls ? 4 : 10)
                         }
-                        if compactControls {
+                        if showFloatingButtons {
                             floatingCompactControls
                         }
                     }
@@ -1378,12 +1414,31 @@ struct TwitchStreamPage: View {
     }
 
     private var chatPanel: some View {
-        TwitchChatCard(
+        TwitchChatPane(
             model: model,
             delay: isDualStream ? 0 : chatDelay,
-            combined: isDualStream ? store.combinedChat : nil
+            showsLabel: false,
+            combined: isDualStream ? store.combinedChat : nil,
+            includesComposer: false,
+            filterTrailingClearance: 0,
+            onAddEmote: presentAddEmote
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var fullWidthComposerDock: some View {
+        TwitchChatComposerDock(
+            model: model,
+            combined: isDualStream ? store.combinedChat : nil,
+            onAddEmote: presentAddEmote
+        )
+        .frame(maxWidth: .infinity)
+    }
+
+    private func presentAddEmote(_ emote: ChatEmote) {
+        guard let hit = emote.asHit else { return }
+        SevenTvEmoteHits.remember(hit)
+        addingEmoteToSet = model.sevenTv.addToSetPicker(emote: hit)
     }
 
     /// Minimized running bar over the tabs: live mini-player thumb, channel title/subtitle, focus swap/cycle, play/pause, and explicit stop/dismiss.
@@ -1555,22 +1610,25 @@ struct TwitchStreamPage: View {
             }
             for ch in channels {
                 let name = store.displayName(for: ch)
-                if let url = URL(string: "https://www.twitch.tv/\(ch)") {
-                    out.append(PaneAction("\(Copy.Twitch.openOnTwitch) (\(name))", systemImage: Symbol.Twitch.open) { openURL(url) })
+                let openLabel = Copy.Twitch.openOnPlatform(StreamAddress.platform(for: ch).lowercaseName)
+                if let url = StreamAddress.webURL(for: ch) {
+                    out.append(PaneAction("\(openLabel) (\(name))", systemImage: Symbol.Twitch.open) { openURL(url) })
                 }
             }
         } else {
             out.append(PaneAction(Copy.Twitch.addSecondStream, systemImage: Symbol.Twitch.addStream) {
                 streamPickerMode = .add
             })
-            out.append(PaneAction(
-                host.activeMode == .lowLatency ? Copy.Twitch.playerEmbed : Copy.Twitch.playerLowLatency,
-                systemImage: host.activeMode == .lowLatency ? Symbol.Twitch.embed : Symbol.Twitch.lowLatency
-            ) {
-                host.setMode(host.activeMode == .lowLatency ? .embed : .lowLatency)
-            })
-            if let url = URL(string: "https://www.twitch.tv/\(login)") {
-                out.append(PaneAction(Copy.Twitch.openOnTwitch, systemImage: Symbol.Twitch.open) { openURL(url) })
+            if StreamAddress.platform(for: login).supportsEmbedFallback {
+                out.append(PaneAction(
+                    host.activeMode == .lowLatency ? Copy.Twitch.playerEmbed : Copy.Twitch.playerLowLatency,
+                    systemImage: host.activeMode == .lowLatency ? Symbol.Twitch.embed : Symbol.Twitch.lowLatency
+                ) {
+                    host.setMode(host.activeMode == .lowLatency ? .embed : .lowLatency)
+                })
+            }
+            if let url = StreamAddress.webURL(for: login) {
+                out.append(PaneAction(Copy.Twitch.openOnPlatform(StreamAddress.platform(for: login).lowercaseName), systemImage: Symbol.Twitch.open) { openURL(url) })
             }
         }
         return out
@@ -1579,7 +1637,7 @@ struct TwitchStreamPage: View {
     /// Zero-flash promotion appending a new channel (1->2, 2->3, 3->4).
     private func addStream(_ picked: String) {
         guard let clean = TwitchStore.login(from: picked),
-              !channels.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }),
+              !channels.contains(where: { StreamAddress.canonicalKey(for: $0) == clean }),
               canAddMoreStreams,
               let next = item.addingStream(clean) else { return }
         pane.open(next)
@@ -1588,7 +1646,7 @@ struct TwitchStreamPage: View {
     /// Zero-flash replacement of Slot B while keeping Slot A live.
     private func replaceSecondStream(with picked: String) {
         guard let clean = TwitchStore.login(from: picked),
-              clean.caseInsensitiveCompare(login) != .orderedSame,
+              clean != StreamAddress.canonicalKey(for: login),
               let next = item.replacingStream(at: 1, with: clean) else { return }
         pane.open(next)
     }
@@ -1608,7 +1666,7 @@ struct TwitchStreamPage: View {
     }
 
     private func openChannelOnTwitch(_ channel: String) {
-        if let url = URL(string: "https://www.twitch.tv/\(channel)") {
+        if let url = StreamAddress.webURL(for: channel) {
             openURL(url)
         }
     }
@@ -1759,29 +1817,33 @@ struct TwitchAddSecondStreamSheet: View {
     private var filteredLive: [TwitchStreamInfo] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return store.following.filter { s in
-            let lower = s.login.lowercased()
-            guard !excluding.contains(lower) else { return false }
+            let key = StreamAddress.canonicalKey(for: s.login)
+            guard !excluding.contains(key) else { return false }
             if q.isEmpty { return true }
-            return lower.contains(q) || s.displayName.lowercased().contains(q) || s.game.lowercased().contains(q)
+            return key.lowercased().contains(q) || s.displayName.lowercased().contains(q) || s.game.lowercased().contains(q)
         }
     }
 
     private var filteredRecents: [String] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let liveSet = Set(store.following.map { $0.login.lowercased() })
+        let liveSet = Set(store.following.map { StreamAddress.canonicalKey(for: $0.login) })
         return store.recents.filter { login in
-            let lower = login.lowercased()
-            guard !excluding.contains(lower), !liveSet.contains(lower) else { return false }
+            let key = StreamAddress.canonicalKey(for: login)
+            guard !excluding.contains(key), !liveSet.contains(key) else { return false }
             if q.isEmpty { return true }
-            return lower.contains(q)
+            return key.lowercased().contains(q) || StreamAddress.displayLabel(for: login).lowercased().contains(q)
         }
     }
 
-    private var parsedQueryLogin: String? {
-        guard let candidate = TwitchStore.login(from: query), !excluding.contains(candidate.lowercased()) else {
+    private var parsedQueryAddress: StreamAddress? {
+        guard let address = StreamAddress.parse(query), !excluding.contains(address.canonicalKey) else {
             return nil
         }
-        return candidate
+        return address
+    }
+
+    private var parsedQueryLogin: String? {
+        parsedQueryAddress?.canonicalKey
     }
 
     var body: some View {
@@ -1801,7 +1863,10 @@ struct TwitchAddSecondStreamSheet: View {
                             #endif
                             .onSubmit(submitQuery)
                             .accessibilityIdentifier("twitch.dual.picker.search")
-                        if parsedQueryLogin != nil {
+                        if let parsed = parsedQueryAddress {
+                            if parsed.platform != .twitch {
+                                StreamPlatformBadge(platform: parsed.platform)
+                            }
                             Button(Copy.Twitch.open, action: submitQuery)
                                 .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
                         }
@@ -1866,15 +1931,22 @@ struct TwitchAddSecondStreamSheet: View {
                                 .foregroundStyle(CobaltColor.caption)
                             TwitchFlow(spacing: 8, lineSpacing: 8) {
                                 ForEach(filteredRecents, id: \.self) { recentLogin in
+                                    let platform = StreamAddress.platform(for: recentLogin)
+                                    let label = StreamAddress.displayLabel(for: recentLogin)
                                     Button {
                                         pick(recentLogin)
                                     } label: {
-                                        Label(recentLogin, systemImage: Symbol.Twitch.recent)
-                                            .font(Font.cobalt(13.5, .medium))
-                                            .foregroundStyle(CobaltColor.text)
-                                            .padding(.horizontal, 12)
-                                            .frame(minHeight: Metrics.hit)
-                                            .background(CobaltColor.surface, in: Capsule())
+                                        HStack(spacing: 6) {
+                                            if platform != .twitch {
+                                                StreamPlatformBadge(platform: platform)
+                                            }
+                                            Label(label, systemImage: Symbol.Twitch.recent)
+                                        }
+                                        .font(Font.cobalt(13.5, .medium))
+                                        .foregroundStyle(CobaltColor.text)
+                                        .padding(.horizontal, 12)
+                                        .frame(minHeight: Metrics.hit)
+                                        .background(CobaltColor.surface, in: Capsule())
                                     }
                                     .buttonStyle(.plain)
                                 }

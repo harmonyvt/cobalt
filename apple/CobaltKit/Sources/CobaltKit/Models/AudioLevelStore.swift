@@ -28,6 +28,11 @@ public final class AudioLevelStore {
     public private(set) var inFlightItems: Set<String> = []
     /// Library file IDs queued by bulk leveling that are still rendering on the server.
     public private(set) var activeBulkIDs: Set<String> = []
+    /// Local audio leveling jobs (rendering + recently settled) surfaced immediately in the queue, Activity sheet, and Live Activity.
+    public private(set) var trackedJobs: [QueueSnapshot.AudioLevelJob] = []
+
+    /// Notified whenever `trackedJobs` changes (wired to `AudioLevelLiveManager` by `AppModel`).
+    @ObservationIgnored var onJobsChanged: (@MainActor ([QueueSnapshot.AudioLevelJob]) -> Void)?
 
     @ObservationIgnored private let ctx: PipelineContext
     @ObservationIgnored private let library: LibraryModel
@@ -65,6 +70,81 @@ public final class AudioLevelStore {
         lastError = nil
         inFlightItems.removeAll()
         activeBulkIDs.removeAll()
+        trackedJobs.removeAll()
+        notifyJobsChanged()
+    }
+
+    /// Merges server-reported audio leveling jobs (`GET /queue`) into local tracking so items settle immediately
+    /// even if another device started them or before the next library page refresh lands.
+    func reconcileFromServer(_ serverJobs: [QueueSnapshot.AudioLevelJob]) {
+        guard !serverJobs.isEmpty else { return }
+        var changed = false
+        for s in serverJobs {
+            if !s.isActive, activeBulkIDs.contains(s.itemID) {
+                activeBulkIDs.remove(s.itemID)
+                pollTasks[s.itemID]?.cancel()
+                pollTasks[s.itemID] = nil
+                changed = true
+            }
+            if let idx = trackedJobs.firstIndex(where: { $0.itemID == s.itemID }) {
+                if s.isFresher(than: trackedJobs[idx]) {
+                    var merged = s
+                    if merged.title == merged.itemID, trackedJobs[idx].title != merged.itemID {
+                        merged.title = trackedJobs[idx].title
+                    }
+                    trackedJobs[idx] = merged
+                    changed = true
+                }
+            }
+        }
+        if changed { notifyJobsChanged() }
+    }
+
+    private func labelForItem(_ fileID: String) -> String {
+        if let name = library.file(id: fileID)?.name.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return name
+        }
+        return fileID
+    }
+
+    private func upsertTrackedJob(_ job: QueueSnapshot.AudioLevelJob, notify: Bool = true) {
+        if let idx = trackedJobs.firstIndex(where: { $0.itemID == job.itemID }) {
+            trackedJobs[idx] = job
+        } else {
+            trackedJobs.insert(job, at: 0)
+        }
+        if trackedJobs.count > 30 {
+            trackedJobs = Array(trackedJobs.prefix(30))
+        }
+        if notify { notifyJobsChanged() }
+    }
+
+    private func markTrackedSettled(id fileID: String, resolved: AudioLoudnessInfo?) {
+        let now = ctx.clock.now()
+        let existingTitle = trackedJobs.first(where: { $0.itemID == fileID })?.title ?? labelForItem(fileID)
+        let target: Double = resolved?.targetLufs.map(Double.init)
+            ?? trackedJobs.first(where: { $0.itemID == fileID })?.targetLufs
+            ?? Double(settings.target.rawValue)
+        switch resolved?.state {
+        case .ready?:
+            upsertTrackedJob(
+                QueueSnapshot.AudioLevelJob(
+                    itemID: fileID, title: existingTitle, state: .ready, targetLufs: target,
+                    outputLufs: resolved?.outputLufs, error: nil, updatedAt: now, leveledAt: now))
+        case .failed?:
+            upsertTrackedJob(
+                QueueSnapshot.AudioLevelJob(
+                    itemID: fileID, title: existingTitle, state: .failed, targetLufs: target,
+                    outputLufs: nil, error: resolved?.error ?? "error.audio.level_failed", updatedAt: now, leveledAt: nil))
+        default:
+            // skipped or unknown terminal state: clear optimistic rendering entry
+            trackedJobs.removeAll { $0.itemID == fileID && $0.state == .rendering }
+            notifyJobsChanged()
+        }
+    }
+
+    private func notifyJobsChanged() {
+        onJobsChanged?(trackedJobs)
     }
 
     /// Resolves the live loudness metadata for `fileID`, merging library state, fallback (e.g. `ShareSetItem.audio`),
@@ -136,6 +216,8 @@ public final class AudioLevelStore {
         inFlightItems.insert(fileID)
         defer { inFlightItems.remove(fileID) }
 
+        let now = ctx.clock.now()
+        let title = labelForItem(fileID)
         let previousFile = library.file(id: fileID)
         if var optimistic = previousFile {
             var info = optimistic.audio ?? AudioLoudnessInfo()
@@ -145,17 +227,27 @@ public final class AudioLevelStore {
             optimistic.audio = info
             library.replace(file: optimistic)
         }
+        upsertTrackedJob(
+            QueueSnapshot.AudioLevelJob(
+                itemID: fileID, title: title, state: .rendering, targetLufs: Double(chosenTarget.rawValue),
+                outputLufs: nil, error: nil, updatedAt: now, leveledAt: nil))
 
         do {
             let queued = try await ctx.client.levelItemAudio(id: fileID, target: chosenTarget)
             lastError = nil
             activeBulkIDs.insert(fileID)
             startPolling(fileID: fileID, onRefresh: onRefresh, audioLookup: audioLookup)
+            Task { _ = await ServerActivityStore.current(for: self.ctx)?.refresh() }
             return queued
         } catch {
             if let previousFile { library.replace(file: previousFile) }
             activeBulkIDs.remove(fileID)
-            lastError = Self.describe(error)
+            let desc = Self.describe(error)
+            lastError = desc
+            upsertTrackedJob(
+                QueueSnapshot.AudioLevelJob(
+                    itemID: fileID, title: title, state: .failed, targetLufs: Double(chosenTarget.rawValue),
+                    outputLufs: nil, error: desc, updatedAt: ctx.clock.now(), leveledAt: nil))
             throw error
         }
     }
@@ -199,11 +291,15 @@ public final class AudioLevelStore {
             return AudioBulkLevelResult(queued: [], skipped: skipped, failed: [])
         }
 
-        // Optimistically mark all target files as rendering so the UI updates cleanly in one frame.
+        // Optimistically mark all target files as rendering so the UI, Queue, Activity pill, and Live Activity update in one frame.
+        let batchStart = ctx.clock.now()
         var previousFiles: [String: LibraryFile] = [:]
+        var titlesByID: [String: String] = [:]
         for id in targets {
             inFlightItems.insert(id)
             activeBulkIDs.insert(id)
+            let title = labelForItem(id)
+            titlesByID[id] = title
             if var file = library.file(id: id) {
                 previousFiles[id] = file
                 var info = file.audio ?? AudioLoudnessInfo()
@@ -213,7 +309,13 @@ public final class AudioLevelStore {
                 file.audio = info
                 library.replace(file: file)
             }
+            upsertTrackedJob(
+                QueueSnapshot.AudioLevelJob(
+                    itemID: id, title: title, state: .rendering, targetLufs: Double(chosenTarget.rawValue),
+                    outputLufs: nil, error: nil, updatedAt: batchStart, leveledAt: nil),
+                notify: false)
         }
+        notifyJobsChanged()
 
         let client = ctx.client
         var outcomes: [String: Result<AudioLevelQueued, Error>] = [:]
@@ -255,6 +357,7 @@ public final class AudioLevelStore {
         var queued: [String] = []
         var failed: [String] = []
         var firstError: Error?
+        let doneAt = ctx.clock.now()
 
         for id in targets {
             inFlightItems.remove(id)
@@ -266,12 +369,23 @@ public final class AudioLevelStore {
                 activeBulkIDs.remove(id)
                 if let prev = previousFiles[id] { library.replace(file: prev) }
                 if firstError == nil { firstError = error }
+                upsertTrackedJob(
+                    QueueSnapshot.AudioLevelJob(
+                        itemID: id, title: titlesByID[id] ?? id, state: .failed, targetLufs: Double(chosenTarget.rawValue),
+                        outputLufs: nil, error: Self.describe(error), updatedAt: doneAt, leveledAt: nil),
+                    notify: false)
             case nil:
                 failed.append(id)
                 activeBulkIDs.remove(id)
                 if let prev = previousFiles[id] { library.replace(file: prev) }
+                upsertTrackedJob(
+                    QueueSnapshot.AudioLevelJob(
+                        itemID: id, title: titlesByID[id] ?? id, state: .failed, targetLufs: Double(chosenTarget.rawValue),
+                        outputLufs: nil, error: "error.audio.level_failed", updatedAt: doneAt, leveledAt: nil),
+                    notify: false)
             }
         }
+        if !failed.isEmpty { notifyJobsChanged() }
 
         if let firstError {
             lastError = Self.describe(firstError)
@@ -281,6 +395,7 @@ public final class AudioLevelStore {
 
         if !queued.isEmpty {
             startBatchPolling(onRefresh: onRefresh, audioLookup: audioLookup)
+            Task { _ = await ServerActivityStore.current(for: self.ctx)?.refresh() }
         }
 
         return AudioBulkLevelResult(queued: queued, skipped: skipped, failed: failed)
@@ -295,6 +410,8 @@ public final class AudioLevelStore {
         pollTasks[fileID]?.cancel()
         pollTasks[fileID] = nil
         activeBulkIDs.remove(fileID)
+        trackedJobs.removeAll { $0.itemID == fileID }
+        notifyJobsChanged()
 
         let previousFile = library.file(id: fileID)
         if var optimistic = previousFile, var info = optimistic.audio {
@@ -370,12 +487,15 @@ public final class AudioLevelStore {
                 let resolved = self.library.file(id: fileID)?.audio ?? audioLookup?(fileID)
                 if let state = resolved?.state, state != .rendering {
                     self.activeBulkIDs.remove(fileID)
+                    self.markTrackedSettled(id: fileID, resolved: resolved)
                     await self.load(force: true)
                     self.pollTasks[fileID] = nil
                     return
                 }
             }
             self?.activeBulkIDs.remove(fileID)
+            self?.trackedJobs.removeAll { $0.itemID == fileID && $0.state == .rendering }
+            self?.notifyJobsChanged()
             self?.pollTasks[fileID] = nil
         }
     }
@@ -401,19 +521,24 @@ public final class AudioLevelStore {
                 for hook in hooks { await hook() }
 
                 let lookups = self.batchAudioLookups
-                let settled = self.activeBulkIDs.filter { id in
-                    if let libState = self.library.file(id: id)?.audio?.state, libState != .rendering {
-                        return true
+                var settledInfo: [String: AudioLoudnessInfo?] = [:]
+                for id in self.activeBulkIDs {
+                    if let libAudio = self.library.file(id: id)?.audio, libAudio.state != .rendering {
+                        settledInfo[id] = libAudio
+                        continue
                     }
                     for lookup in lookups {
-                        if let state = lookup(id)?.state, state != .rendering {
-                            return true
+                        if let audio = lookup(id), audio.state != .rendering {
+                            settledInfo[id] = audio
+                            break
                         }
                     }
-                    return false
                 }
-                if !settled.isEmpty {
-                    self.activeBulkIDs.subtract(settled)
+                if !settledInfo.isEmpty {
+                    self.activeBulkIDs.subtract(settledInfo.keys)
+                    for (id, info) in settledInfo {
+                        self.markTrackedSettled(id: id, resolved: info)
+                    }
                 }
                 if self.activeBulkIDs.isEmpty {
                     await self.load(force: true)
@@ -424,6 +549,8 @@ public final class AudioLevelStore {
                 }
             }
             self?.activeBulkIDs.removeAll()
+            self?.trackedJobs.removeAll { $0.state == .rendering }
+            self?.notifyJobsChanged()
             self?.batchRefreshHooks.removeAll()
             self?.batchAudioLookups.removeAll()
             self?.batchPollTask = nil

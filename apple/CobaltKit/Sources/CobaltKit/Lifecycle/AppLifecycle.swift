@@ -36,6 +36,7 @@ public enum LifecycleEvent: Sendable, Equatable {
     case willTerminate
     case memoryWarning
     case thermalChanged(ProcessInfo.ThermalState)
+    case lowPowerModeChanged(Bool)
     /// Mac: Cmd-H / the app was hidden, and shown again.
     case hidden
     case unhidden
@@ -47,11 +48,19 @@ public struct LifecycleSnapshot: Sendable, Equatable {
     /// A memory warning arrived since the app last became active.
     public var memoryPressure: Bool
     public var thermal: ProcessInfo.ThermalState
+    /// iOS/macOS Low Power Mode is enabled.
+    public var isLowPowerMode: Bool
 
-    public init(phase: AppPhase = .launching, memoryPressure: Bool = false, thermal: ProcessInfo.ThermalState = .nominal) {
+    public init(
+        phase: AppPhase = .launching,
+        memoryPressure: Bool = false,
+        thermal: ProcessInfo.ThermalState = .nominal,
+        isLowPowerMode: Bool = false
+    ) {
         self.phase = phase
         self.memoryPressure = memoryPressure
         self.thermal = thermal
+        self.isLowPowerMode = isLowPowerMode
     }
 
     /// On screen (active or inactive). Polling, animation and playback may run.
@@ -60,6 +69,8 @@ public struct LifecycleSnapshot: Sendable, Equatable {
     public var isActive: Bool { phase == .active }
     /// Heavy, optional work (animation, prefetch) should hold back: serious or critical thermal state, or memory pressure.
     public var shouldThrottle: Bool { memoryPressure || thermal == .serious || thermal == .critical }
+    /// Broad power-conservation state: Low Power Mode OR thermal/memory throttling.
+    public var shouldConservePower: Bool { isLowPowerMode || shouldThrottle }
 }
 
 /// How hard a cache should let go.
@@ -127,6 +138,8 @@ public enum LifecycleRules {
             purge = .memoryWarning
         case .thermalChanged(let state):
             next.thermal = state
+        case .lowPowerModeChanged(let enabled):
+            next.isLowPowerMode = enabled
         }
         // Repeats (a second "did become active", the same thermal state) are not delivered, but a memory warning always is.
         let deliver = next != s || event == .memoryWarning || event == .willTerminate
@@ -164,26 +177,32 @@ public final class AppLifecycle {
                 MainActor.assumeIsolated { self?.feed(event) }
             })
         }
-        #if os(macOS)
-        watch("NSApplicationDidBecomeActiveNotification", .becameActive)
-        watch("NSApplicationWillResignActiveNotification", .willResignActive)
-        watch("NSApplicationDidHideNotification", .hidden)
-        watch("NSApplicationDidUnhideNotification", .unhidden)
-        watch("NSApplicationWillTerminateNotification", .willTerminate)
-        #else
+        #if os(iOS)
         watch("UIApplicationDidBecomeActiveNotification", .becameActive)
         watch("UIApplicationWillResignActiveNotification", .willResignActive)
         watch("UIApplicationWillEnterForegroundNotification", .willEnterForeground)
         watch("UIApplicationDidEnterBackgroundNotification", .didEnterBackground)
         watch("UIApplicationWillTerminateNotification", .willTerminate)
         watch("UIApplicationDidReceiveMemoryWarningNotification", .memoryWarning)
+        #else
+        watch("NSApplicationDidBecomeActiveNotification", .becameActive)
+        watch("NSApplicationWillResignActiveNotification", .willResignActive)
+        watch("NSApplicationDidHideNotification", .hidden)
+        watch("NSApplicationDidUnhideNotification", .unhidden)
+        watch("NSApplicationWillTerminateNotification", .willTerminate)
         #endif
         observers.append(center.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             let state = ProcessInfo.processInfo.thermalState
             MainActor.assumeIsolated { self?.feed(.thermalChanged(state)) }
         })
+        observers.append(center.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+            let enabled = ProcessInfo.processInfo.isLowPowerModeEnabled
+            MainActor.assumeIsolated { self?.feed(.lowPowerModeChanged(enabled)) }
+        })
         let state = ProcessInfo.processInfo.thermalState
         if state != snapshot.thermal { snapshot.thermal = state }
+        let lpm = ProcessInfo.processInfo.isLowPowerModeEnabled
+        if lpm != snapshot.isLowPowerMode { snapshot.isLowPowerMode = lpm }
     }
 
     /// Signs a process-lifetime object up for events, called in `order` (then in the order they registered). Held weakly.

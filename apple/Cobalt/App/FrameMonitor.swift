@@ -79,6 +79,8 @@ enum FrameMonitor {
 
     private static func begin() {
         guard !running else { return }
+        // In Low Power Mode, avoid starting a CADisplayLink that can keep ProMotion elevated.
+        guard !AppLifecycle.shared.snapshot.isLowPowerMode, !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
         stats = FrameStats()
         startScreen = Analytics.currentScreen
         scrolled = false
@@ -195,8 +197,14 @@ enum FrameMonitor {
 
     private static func startLink() {
         let link = CADisplayLink(target: target, selector: #selector(LinkTarget.tick(_:)))
-        // ask for the display's top rate, so a 120 Hz frame missed is seen as missed (Info.plist opts the iPhone in)
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        let snap = AppLifecycle.shared.snapshot
+        if snap.shouldConservePower || startScreen == "twitch" {
+            // Do not force ProMotion to 120 Hz while watching 30/60 fps live video or under thermal/power pressure.
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        } else {
+            // ask for the display's top rate, so a 120 Hz frame missed is seen as missed (Info.plist opts the iPhone in)
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        }
         link.add(to: .main, forMode: .common)
         self.link = link
     }

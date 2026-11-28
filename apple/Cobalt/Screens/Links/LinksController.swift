@@ -39,6 +39,8 @@ final class LinksController {
     var copiedToken = 0
     /// The link copied last: its row's button says "copied" for a moment.
     var copiedID: String?
+    /// The collection copied last: its bento card's copy button flashes a checkmark for a moment.
+    var copiedCollectionID: String?
     /// +1 when a revoke, an add or remove, a reroll or a delete lands (success haptic) or fails (error haptic).
     var doneToken = 0
     var failedToken = 0
@@ -272,6 +274,12 @@ final class LinksController {
         Pasteboard.copy(text)
         shell.showStatus(Copy.Media.copied)
         copiedToken += 1
+        copiedCollectionID = collection.id
+        let token = copiedToken
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if copiedToken == token { copiedCollectionID = nil }
+        }
     }
 
     func revoke(_ link: ShareSet, shell: ShellActions) {

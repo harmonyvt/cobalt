@@ -102,7 +102,11 @@ import { serviceFromUrl } from "./webp";
 import { readMp4Info, readQuicktimeAlphaCut, VIDEO_PROBE_BYTES, VP9_HDR_CODECS, webmInfo, type Mp4Info } from "./mp4-info";
 import { sniffSave, type SniffedSave } from "./workbench-rules";
 
-export const MAX_UPLOAD_BYTES = 100_000_000;
+export const MAX_SINGLE_UPLOAD_BYTES = 100_000_000;
+export const MAX_UPLOAD_BYTES = 1_073_741_824;
+export const MULTIPART_PART_BYTES = 50_000_000;
+export const MULTIPART_MAX_PART_BYTES = 67_108_864;
+export const MULTIPART_TTL_MS = 6 * 60 * 60 * 1000;
 export const MAX_NAME_CHARS = 120;
 export const DEFAULT_LIBRARY_LIMIT = 20;
 export const MAX_LIBRARY_LIMIT = 50;
@@ -392,6 +396,8 @@ export async function capabilities(
                 booru: true,
                 // EBU R128 loudness measurement & opt-in `?audio=normal` leveling (v10.1); routes answer 503 until migration 0047 is applied
                 audio_leveling: true,
+                // R2 multipart upload for files up to 1 GiB (POST/PUT/DELETE /studio/upload/multipart*)
+                multipart_upload: true,
                 // PUT /live/edits/<rid>: the server keeps an editor render's Live Activity current (section 32)
                 edit_live_push: editor === true && livePush === true,
                 // PUT /live/chat-start-token: a chat reply sent from another device shows on this one (section 27.9)
@@ -590,7 +596,7 @@ export async function studioUpload(
     const declared = request.headers.get("content-length");
     if (declared === null || !/^\d{1,15}$/.test(declared)) return reject(411, "error.library.length_required");
     const size = Number(declared);
-    if (size > MAX_UPLOAD_BYTES) return reject(413, "error.library.too_large");
+    if (size > MAX_SINGLE_UPLOAD_BYTES) return reject(413, "error.library.too_large");
     if (size === 0 || !request.body) return reject(400, "error.library.empty");
 
     let body: ReadableStream<Uint8Array> = request.body;
@@ -630,6 +636,37 @@ export async function studioUpload(
         await d.originals.delete(key).catch(() => {});
         return err(400, "error.library.incomplete");
     }
+
+    return finalizeUploadedObject(d, {
+        id,
+        key,
+        name,
+        type,
+        size,
+        keyId,
+        now,
+        title,
+        wantsPublic,
+        wantsQueue,
+    });
+}
+
+async function finalizeUploadedObject(
+    d: AppDeps,
+    opts: {
+        id: string;
+        key: string;
+        name: string;
+        type: string;
+        size: number;
+        keyId: string;
+        now: number;
+        title: string | null;
+        wantsPublic: boolean;
+        wantsQueue: boolean;
+    },
+): Promise<StudioReply> {
+    const { id, key, name, type, size, keyId, now, title, wantsPublic, wantsQueue } = opts;
 
     // A video's header fills the row the share page's og:video:width/height tags read. A miss (moov
     // unreadable, not an mp4) leaves them null; the upload still stands.
@@ -785,6 +822,364 @@ export async function studioUpload(
             ...(wantsQueue ? { queued: lineState?.queued ?? false, queue_ahead: lineState?.queue_ahead ?? null } : {}),
         },
     };
+}
+
+// ---- 3b. R2 Multipart Upload (up to 1 GiB) --------------------------------------------------
+
+const EXT_TO_UPLOAD_TYPE: Record<string, string> = {
+    mp4: "video/mp4",
+    mov: "video/quicktime",
+    gif: "image/gif",
+    webp: "image/webp",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    heic: "image/heic",
+};
+
+interface MultipartClaims {
+    v: 1;
+    id: string;
+    key: string;
+    uid: string;
+    kid: string;
+    name: string;
+    ct: string;
+    bytes: number;
+    pub: boolean;
+    q: boolean;
+    title: string | null;
+    exp: number;
+}
+
+const b64urlBytesEncode = (bytes: Uint8Array): string => {
+    let bin = "";
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+
+const b64urlBytesDecode = (s: string): Uint8Array | null => {
+    if (!/^[A-Za-z0-9_-]+$/.test(s)) return null;
+    try {
+        const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+        return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    } catch {
+        return null;
+    }
+};
+
+async function importMultipartKey(secret: string): Promise<CryptoKey> {
+    return crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(`cobalt-multipart-v1:${secret}`),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign", "verify"],
+    );
+}
+
+async function signMultipartToken(claims: MultipartClaims, secret: string): Promise<string> {
+    const payload = b64urlEncode(JSON.stringify(claims));
+    const key = await importMultipartKey(secret);
+    const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload)));
+    return `${payload}.${b64urlBytesEncode(sig)}`;
+}
+
+async function verifyMultipartToken(token: string, secret: string, now: number): Promise<MultipartClaims | null> {
+    if (!token || token.length > 4096) return null;
+    const dot = token.indexOf(".");
+    if (dot <= 0 || token.indexOf(".", dot + 1) !== -1) return null;
+    const payload = token.slice(0, dot);
+    const sigRaw = b64urlBytesDecode(token.slice(dot + 1));
+    if (!sigRaw) return null;
+    const key = await importMultipartKey(secret);
+    const ok = await crypto.subtle.verify("HMAC", key, sigRaw, new TextEncoder().encode(payload));
+    if (!ok) return null;
+    const jsonText = b64urlDecode(payload);
+    if (!jsonText) return null;
+    try {
+        const parsed = JSON.parse(jsonText) as Partial<MultipartClaims>;
+        if (
+            parsed.v !== 1 ||
+            typeof parsed.id !== "string" ||
+            typeof parsed.key !== "string" ||
+            typeof parsed.uid !== "string" ||
+            typeof parsed.kid !== "string" ||
+            typeof parsed.name !== "string" ||
+            typeof parsed.ct !== "string" ||
+            typeof parsed.bytes !== "number" ||
+            typeof parsed.pub !== "boolean" ||
+            typeof parsed.q !== "boolean" ||
+            (parsed.title !== null && typeof parsed.title !== "string") ||
+            typeof parsed.exp !== "number"
+        ) {
+            return null;
+        }
+        if (parsed.exp < now) return null;
+        return parsed as MultipartClaims;
+    } catch {
+        return null;
+    }
+}
+
+function resolveMultipartType(contentType: unknown, name: unknown): { type: string; ext: string } | null {
+    const rawCt = typeof contentType === "string" ? contentType.split(";")[0]!.trim().toLowerCase() : "";
+    if (rawCt && rawCt !== "application/octet-stream") {
+        const ext = UPLOAD_TYPES[rawCt];
+        return ext ? { type: rawCt, ext } : null;
+    }
+    if (typeof name === "string") {
+        const m = /\.([A-Za-z0-9]{1,8})$/.exec(name.trim());
+        const inferred = m ? EXT_TO_UPLOAD_TYPE[m[1]!.toLowerCase()] : undefined;
+        if (inferred) {
+            const ext = UPLOAD_TYPES[inferred];
+            if (ext) return { type: inferred, ext };
+        }
+    }
+    return null;
+}
+
+export async function studioUploadMultipartCreate(
+    d: AppDeps,
+    secret: string,
+    keyId: string,
+    request: Request,
+): Promise<StudioReply> {
+    if (!secret) return err(503, "error.api.generic");
+    if (!d.originals.createMultipartUpload || !d.originals.resumeMultipartUpload) {
+        return err(501, "error.api.unsupported");
+    }
+    let body: Record<string, unknown>;
+    try {
+        const parsed: unknown = await request.json();
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return err(400, "error.library.bad_request");
+        body = parsed as Record<string, unknown>;
+    } catch {
+        return err(400, "error.library.bad_request");
+    }
+
+    const resolved = resolveMultipartType(body.content_type, body.name);
+    if (!resolved) return err(415, "error.library.unsupported");
+
+    const bytes = body.bytes;
+    if (typeof bytes !== "number" || !Number.isInteger(bytes) || !Number.isSafeInteger(bytes)) {
+        return err(400, "error.library.bad_request");
+    }
+    if (bytes <= 0) return err(400, "error.library.empty");
+    if (bytes > MAX_UPLOAD_BYTES) return err(413, "error.library.too_large");
+
+    const wantsPublic = body.public === true;
+    if (body.public !== undefined && typeof body.public !== "boolean") return err(400, "error.library.bad_request");
+    const wantsQueue = body.queue === true;
+    if (body.queue !== undefined && typeof body.queue !== "boolean") return err(400, "error.library.bad_request");
+
+    let title: string | null = null;
+    if (body.title !== undefined && body.title !== null) {
+        if (typeof body.title !== "string") return err(400, "error.library.bad_title");
+        const t = cleanTitle(body.title);
+        if (!t.ok) return err(400, "error.library.bad_title");
+        title = t.title;
+    }
+
+    const id = mintItemId(d.randomBytes);
+    const key = `uploads/${id}.${resolved.ext}`;
+    const name = cleanName(typeof body.name === "string" ? body.name : null, resolved.ext);
+    const now = d.now();
+
+    let mp: { uploadId: string };
+    try {
+        mp = await d.originals.createMultipartUpload(key, {
+            httpMetadata: { contentType: resolved.type },
+            customMetadata: { keyId, source: "upload", createdAt: String(now) },
+        });
+    } catch (e) {
+        console.error("[upload:multipart] create failed", String(e));
+        return err(502, "error.library.storage");
+    }
+
+    const exp = now + MULTIPART_TTL_MS;
+    const uploadId = await signMultipartToken(
+        {
+            v: 1,
+            id,
+            key,
+            uid: mp.uploadId,
+            kid: keyId,
+            name,
+            ct: resolved.type,
+            bytes,
+            pub: wantsPublic,
+            q: wantsQueue,
+            title,
+            exp,
+        },
+        secret,
+    );
+
+    return {
+        status: 201,
+        body: {
+            status: "success",
+            upload_id: uploadId,
+            part_size: MULTIPART_PART_BYTES,
+            max_part_size: MULTIPART_MAX_PART_BYTES,
+            max_bytes: MAX_UPLOAD_BYTES,
+            expires_at: exp,
+        },
+    };
+}
+
+export async function studioUploadMultipartPart(
+    d: AppDeps,
+    secret: string,
+    keyId: string,
+    request: Request,
+    q: URLSearchParams,
+): Promise<StudioReply> {
+    const reject = (status: number, code: string) => {
+        void request.body?.cancel().catch(() => {});
+        return err(status, code);
+    };
+    if (!secret) return reject(503, "error.api.generic");
+    if (!d.originals.resumeMultipartUpload) return reject(501, "error.api.unsupported");
+
+    const token = (request.headers.get("x-upload-id") ?? q.get("upload_id") ?? "").trim();
+    if (!token) return reject(400, "error.library.bad_request");
+
+    const rawPart = q.get("part");
+    if (!rawPart || !/^\d{1,5}$/.test(rawPart)) return reject(400, "error.library.bad_request");
+    const partNumber = Number(rawPart);
+    if (partNumber < 1 || partNumber > 10_000) return reject(400, "error.library.bad_request");
+
+    const declared = request.headers.get("content-length");
+    if (declared === null || !/^\d{1,15}$/.test(declared)) return reject(411, "error.library.length_required");
+    const size = Number(declared);
+    if (size === 0 || !request.body) return reject(400, "error.library.empty");
+    if (size > MULTIPART_MAX_PART_BYTES) return reject(413, "error.library.too_large");
+
+    const claims = await verifyMultipartToken(token, secret, d.now());
+    if (!claims) return reject(400, "error.library.bad_request");
+    if (claims.kid !== keyId) return reject(403, "error.auth.forbidden");
+
+    try {
+        const mp = d.originals.resumeMultipartUpload(claims.key, claims.uid);
+        const uploaded = await mp.uploadPart(partNumber, request.body);
+        return {
+            status: 200,
+            body: {
+                status: "success",
+                part_number: uploaded.partNumber,
+                etag: uploaded.etag,
+            },
+        };
+    } catch (e) {
+        console.error("[upload:multipart] uploadPart failed", partNumber, String(e));
+        return err(502, "error.library.storage");
+    }
+}
+
+export async function studioUploadMultipartComplete(
+    d: AppDeps,
+    secret: string,
+    keyId: string,
+    request: Request,
+): Promise<StudioReply> {
+    if (!secret) return err(503, "error.api.generic");
+    if (!d.originals.resumeMultipartUpload) return err(501, "error.api.unsupported");
+
+    let body: Record<string, unknown>;
+    try {
+        const parsed: unknown = await request.json();
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return err(400, "error.library.bad_request");
+        body = parsed as Record<string, unknown>;
+    } catch {
+        return err(400, "error.library.bad_request");
+    }
+
+    const token = typeof body.upload_id === "string" ? body.upload_id.trim() : "";
+    if (!token) return err(400, "error.library.bad_request");
+    const claims = await verifyMultipartToken(token, secret, d.now());
+    if (!claims) return err(400, "error.library.bad_request");
+    if (claims.kid !== keyId) return err(403, "error.auth.forbidden");
+
+    if (!Array.isArray(body.parts) || body.parts.length === 0 || body.parts.length > 10_000) {
+        return err(400, "error.library.bad_request");
+    }
+    const seen = new Set<number>();
+    const parts: { partNumber: number; etag: string }[] = [];
+    for (const raw of body.parts) {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return err(400, "error.library.bad_request");
+        const p = raw as { part_number?: unknown; etag?: unknown };
+        if (typeof p.part_number !== "number" || !Number.isInteger(p.part_number) || p.part_number < 1 || p.part_number > 10_000) {
+            return err(400, "error.library.bad_request");
+        }
+        if (typeof p.etag !== "string" || p.etag.trim().length === 0) return err(400, "error.library.bad_request");
+        if (seen.has(p.part_number)) return err(400, "error.library.bad_request");
+        seen.add(p.part_number);
+        parts.push({ partNumber: p.part_number, etag: p.etag });
+    }
+    parts.sort((a, b) => a.partNumber - b.partNumber);
+
+    let obj: { size: number } | null;
+    try {
+        const mp = d.originals.resumeMultipartUpload(claims.key, claims.uid);
+        obj = await mp.complete(parts);
+    } catch (e) {
+        console.error("[upload:multipart] complete failed", String(e));
+        return err(502, "error.library.storage");
+    }
+
+    if (!obj || obj.size !== claims.bytes) {
+        await d.originals.delete(claims.key).catch(() => {});
+        return err(400, "error.library.incomplete");
+    }
+
+    return finalizeUploadedObject(d, {
+        id: claims.id,
+        key: claims.key,
+        name: claims.name,
+        type: claims.ct,
+        size: claims.bytes,
+        keyId,
+        now: d.now(),
+        title: claims.title,
+        wantsPublic: claims.pub,
+        wantsQueue: claims.q,
+    });
+}
+
+export async function studioUploadMultipartAbort(
+    d: AppDeps,
+    secret: string,
+    keyId: string,
+    request: Request,
+    q: URLSearchParams,
+): Promise<StudioReply> {
+    if (!secret) return err(503, "error.api.generic");
+    if (!d.originals.resumeMultipartUpload) return err(501, "error.api.unsupported");
+
+    let token = (request.headers.get("x-upload-id") ?? q.get("upload_id") ?? "").trim();
+    if (!token && request.body) {
+        try {
+            const parsed = (await request.json()) as { upload_id?: unknown } | null;
+            if (parsed && typeof parsed.upload_id === "string") token = parsed.upload_id.trim();
+        } catch {
+            // ignore non-JSON body
+        }
+    }
+    if (!token) return err(400, "error.library.bad_request");
+
+    const claims = await verifyMultipartToken(token, secret, d.now());
+    if (!claims) return err(400, "error.library.bad_request");
+    if (claims.kid !== keyId) return err(403, "error.auth.forbidden");
+
+    try {
+        const mp = d.originals.resumeMultipartUpload(claims.key, claims.uid);
+        await mp.abort();
+    } catch (e) {
+        console.error("[upload:multipart] abort failed", String(e));
+    }
+    return { status: 200, body: { status: "success", aborted: true } };
 }
 
 // ---- 5a. GET /library -----------------------------------------------------------------------
@@ -2286,7 +2681,7 @@ export async function libraryMade(
             if (type !== "video/quicktime") return reject(400, "error.library.bad_request");
             ext = "mov";
         } else return reject(400, "error.library.bad_request");
-        maxBytes = MAX_UPLOAD_BYTES;
+        maxBytes = MAX_SINGLE_UPLOAD_BYTES;
     } else if (role === "crop") {
         if (type !== "image/jpeg") return reject(400, "error.library.bad_request");
         ext = "jpg";

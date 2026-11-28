@@ -5,7 +5,8 @@ import UIKit
 #endif
 
 // The live chat beside or under the player (APP-API-CONTRACT 70): the room's modes, the lines (kept at the newest unless
-// the owner scrolls up, then "paused · N new"), and the composer with emote completion and replies.
+// the owner scrolls up, then "paused · N new"), and the full-width composer dock with multi-line input, 500-char limit
+// indicator, emote completion, replies, and redesigned emote picker.
 
 struct TwitchChatPane: View {
     let model: AppModel
@@ -13,9 +14,14 @@ struct TwitchChatPane: View {
     var delay: TimeInterval = 0
     /// The "chat" word over the lines; off when a card already says it (the pane's shelf).
     var showsLabel = true
-    /// Optional combined chat model coordinating 1 or 2 streams. When nil, uses `model.twitch` single-stream chat.
+    /// Optional combined chat model coordinating 1...4 streams. When nil, uses `model.twitch` single-stream chat.
     /// When coordinating only 1 stream, renders crisp single-stream chat with zero dual-stream clutter.
     var combined: TwitchCombinedChatModel? = nil
+    /// Whether this pane renders the composer directly at its bottom. `TwitchStreamPage` sets this to `false`
+    /// and docks `TwitchChatComposerDock` full-width underneath both streams and chat.
+    var includesComposer = true
+    /// Extra trailing padding on the filter bar so floating top-right system orbs never obscure the last chip.
+    var filterTrailingClearance: CGFloat = 0
     let onAddEmote: (ChatEmote) -> Void
 
     private var store: TwitchStore { model.twitch }
@@ -23,11 +29,12 @@ struct TwitchChatPane: View {
     var body: some View {
         if let combined {
             TwitchCombinedChatContent(
-                store: store,
+                model: model,
                 combined: combined,
                 delay: delay,
                 showsLabel: showsLabel,
-                canAddToSet: model.sevenTv.isLinked,
+                includesComposer: includesComposer,
+                filterTrailingClearance: filterTrailingClearance,
                 onAddEmote: onAddEmote)
         } else {
             VStack(spacing: 0) {
@@ -39,7 +46,9 @@ struct TwitchChatPane: View {
                 } else {
                     lines(cutoff: nil)
                 }
-                TwitchComposer(store: store, canAddToSet: model.sevenTv.isLinked, onAddEmote: onAddEmote)
+                if includesComposer {
+                    TwitchChatComposerDock(model: model, combined: nil, onAddEmote: onAddEmote)
+                }
             }
             .background(CobaltColor.bg)
         }
@@ -208,199 +217,15 @@ private struct TwitchChatLines: View {
     }
 }
 
-// MARK: - composer
-
-private struct TwitchComposer: View {
-    let store: TwitchStore
-    let canAddToSet: Bool
-    let onAddEmote: (ChatEmote) -> Void
-
-    @State private var text = ""
-    @State private var sending = false
-    /// The emote picker is open under the field (the keyboard is down meanwhile).
-    @State private var picking = false
-    @FocusState private var focused: Bool
-
-    /// The word being typed (after the last space).
-    private var lastWord: Substring {
-        text.split(separator: " ", omittingEmptySubsequences: false).last ?? ""
-    }
-
-    private var completions: [ChatEmote] {
-        guard focused, !lastWord.hasPrefix("@") else { return [] }
-        return store.emotes.completions(for: String(lastWord))
-    }
-
-    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if !completions.isEmpty { completionRow }
-            if let reply = store.replyTo { replyBanner(reply) }
-            HStack(spacing: 8) {
-                Button(picking ? Copy.Twitch.hideEmotes : Copy.Twitch.showEmotes, systemImage: picking ? Symbol.Twitch.keyboard : Symbol.Twitch.emotes) {
-                    togglePicker()
-                }
-                    .labelStyle(.iconOnly)
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(picking ? TwitchChatPalette.twitch : CobaltColor.caption)
-                    .frame(width: 34, height: 38)
-                    .contentShape(Rectangle())
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("twitch.emotes")
-                TextField(store.canSend ? Copy.Twitch.composerPrompt : Copy.Twitch.composerReadOnly, text: $text)
-                    .textFieldStyle(.plain)
-                    .font(Font.cobalt(14.5))
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.send)
-                    #endif
-                    .focused($focused)
-                    .disabled(!store.canSend)
-                    .onSubmit(send)
-                    .onChange(of: text) { if text.count > 500 { text = String(text.prefix(500)) } }
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 38)
-                    .background(CobaltColor.surface, in: Capsule())
-                #if os(iOS)
-                if focused || picking {
-                    Button(Copy.Twitch.hideKeyboard, systemImage: Symbol.Twitch.hideKeyboard) {
-                        dismissKeyboard()
-                    }
-                    .labelStyle(.iconOnly)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(CobaltColor.caption)
-                    .frame(width: 36, height: Metrics.hit)
-                    .contentShape(Rectangle())
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("twitch.hideKeyboard")
-                }
-                #endif
-                Button(Copy.Twitch.send, systemImage: Symbol.Twitch.send, action: send)
-                    .labelStyle(.iconOnly)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 38, height: 38)
-                    .background(canSend ? TwitchChatPalette.twitch : CobaltColor.elevated, in: Circle())
-                    .buttonStyle(.plain)
-                    .disabled(!canSend)
-            }
-            .padding(.leading, 4)
-            .padding(.trailing, 10)
-            .padding(.vertical, 8)
-            if picking {
-                TwitchEmotePicker(store: store, canAddToSet: canAddToSet, onAddEmote: onAddEmote) { pick($0) }
-                    .frame(height: 260)
-                    .overlay(alignment: .top) { Divider() }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-        .background(CobaltColor.bg)
-        .overlay(alignment: .top) { Divider() }
-        .animation(.snappy(duration: 0.25), value: picking)
-        // the keyboard and the picker take turns under the field
-        .onChange(of: focused) { _, now in if now { picking = false } }
-    }
-
-    private func dismissKeyboard() {
-        focused = false
-        picking = false
-        #if os(iOS)
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        #endif
-    }
-
-    private func togglePicker() {
-        if picking {
-            picking = false
-            if store.canSend { focused = true }
-        } else {
-            focused = false
-            picking = true
-        }
-    }
-
-    /// Puts the emote's name in the message, with a space either side, where the text ends.
-    private func pick(_ emote: ChatEmote) {
-        var next = text
-        if !next.isEmpty, !next.hasSuffix(" ") { next += " " }
-        next += emote.name + " "
-        guard next.count <= 500 else { return }
-        text = next
-        store.noteEmotePicked(emote)
-    }
-
-    private var canSend: Bool { store.canSend && !trimmed.isEmpty && !sending }
-
-    private var completionRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(completions, id: \.self) { emote in
-                    Button { complete(emote) } label: {
-                        HStack(spacing: 5) {
-                            EmotePicture(url: emote.url, animated: emote.animated, side: 22)
-                            Text(emote.name)
-                                .font(Font.cobalt(12.5, .medium))
-                                .foregroundStyle(CobaltColor.text)
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 8)
-                        .frame(height: 32)
-                        .background(CobaltColor.surface, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
-        }
-    }
-
-    private func replyBanner(_ reply: TwitchChatLine) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: Symbol.Twitch.reply)
-            Text("\(Copy.Twitch.replyingTo(reply.displayName)): \(reply.plainText)")
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            Button(Copy.Twitch.cancelReply, systemImage: Symbol.Twitch.close) { store.replyTo = nil }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .frame(width: 30, height: 30)
-        }
-        .font(Font.cobalt(12))
-        .foregroundStyle(CobaltColor.caption)
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-    }
-
-    private func complete(_ emote: ChatEmote) {
-        var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-        if words.isEmpty { words = [""] }
-        words[words.count - 1] = emote.name
-        text = words.joined(separator: " ") + " "
-    }
-
-    private func send() {
-        guard canSend else { return }
-        let message = trimmed
-        sending = true
-        Task {
-            if await store.send(message) { text = "" }
-            sending = false
-            if !picking { focused = true }
-        }
-    }
-}
-
-// MARK: - combined dual-stream chat (Phase 4 + Opus Foolproof Dual-Target Composer)
+// MARK: - combined multi-stream chat
 
 private struct TwitchCombinedChatContent: View {
-    let store: TwitchStore
+    let model: AppModel
     let combined: TwitchCombinedChatModel
     let delay: TimeInterval
     let showsLabel: Bool
-    let canAddToSet: Bool
+    let includesComposer: Bool
+    let filterTrailingClearance: CGFloat
     let onAddEmote: (ChatEmote) -> Void
 
     var body: some View {
@@ -410,6 +235,7 @@ private struct TwitchCombinedChatContent: View {
                 TwitchDualChatFilterBar(
                     accents: combined.orderedAccents,
                     selection: combined.filter,
+                    trailingClearance: filterTrailingClearance,
                     onSelect: { combined.setFilter($0) })
             }
             if delay > 0 {
@@ -419,11 +245,9 @@ private struct TwitchCombinedChatContent: View {
             } else {
                 linesView(cutoff: nil)
             }
-            TwitchDualComposer(
-                store: store,
-                combined: combined,
-                canAddToSet: canAddToSet,
-                onAddEmote: onAddEmote)
+            if includesComposer {
+                TwitchChatComposerDock(model: model, combined: combined, onAddEmote: onAddEmote)
+            }
         }
         .background(CobaltColor.bg)
     }
@@ -432,7 +256,7 @@ private struct TwitchCombinedChatContent: View {
         TwitchCombinedChatLines(
             combined: combined,
             cutoff: cutoff,
-            canAddEmotes: canAddToSet,
+            canAddEmotes: model.sevenTv.isLinked,
             onAddEmote: onAddEmote)
     }
 }
@@ -442,6 +266,7 @@ private struct TwitchCombinedChatContent: View {
 private struct TwitchDualChatFilterBar: View {
     let accents: [TwitchChannelAccent]
     let selection: TwitchChatChannelFilter
+    var trailingClearance: CGFloat = 0
     let onSelect: (TwitchChatChannelFilter) -> Void
 
     var body: some View {
@@ -466,7 +291,8 @@ private struct TwitchDualChatFilterBar: View {
                     }
                 }
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, 10)
+            .padding(.trailing, max(10, trailingClearance))
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(height: Metrics.hit)
@@ -623,43 +449,84 @@ private struct TwitchCombinedChatLines: View {
     }
 }
 
-/// Opus's Foolproof Dual-Target Composer:
-/// - Zero dual-stream clutter when only 1 stream is active.
-/// - In dual-stream mode: one >= 44 pt leading channel button opening a SwiftUI `Menu` (never tap-to-cycle).
-/// - Target initializes once when keyboard opens (`reply > filter > focus`), then changes ONLY via menu or reply tap.
-/// - `"Both"` lives only inside the menu; when active, shows dual-color accent border and `"send to 2"` send button.
-/// - When target != focused stream, displays an explicit inline `→ channel · not in focus` indicator.
-private struct TwitchDualComposer: View {
-    let store: TwitchStore
-    let combined: TwitchCombinedChatModel
-    let canAddToSet: Bool
+// MARK: - Full-Width Multi-Line Chat Composer Dock
+
+/// Unified full-width chat composer supporting both single-stream and multi-stream (`TwitchCombinedChatModel`) sessions:
+/// - Spans the entire display width beneath streams and chat on iPhone Duo, iPad, and macOS.
+/// - Multi-line expanding `TextField(..., axis: .vertical)` (`1...5` lines) with live Twitch 500-char counter + ring.
+/// - Opus's foolproof dual-target locking (`reply > filter > focus`), explicit `Menu` target picker, and full-width emote tray.
+struct TwitchChatComposerDock: View {
+    let model: AppModel
+    var combined: TwitchCombinedChatModel? = nil
     let onAddEmote: (ChatEmote) -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var text = ""
     @State private var sending = false
+    /// The emote picker is open under the field (the keyboard is down meanwhile).
     @State private var picking = false
+    @State private var dockWidth: CGFloat = 0
     @FocusState private var focused: Bool
 
-    private var lastWord: Substring {
-        text.split(separator: " ", omittingEmptySubsequences: false).last ?? ""
+    private var store: TwitchStore { model.twitch }
+    private var canAddToSet: Bool { model.sevenTv.isLinked }
+    private var isDual: Bool { combined?.isDualChannel == true }
+    private var isWideDock: Bool { dockWidth >= 520 || sizeClass == .regular }
+
+    private var activeEmotes: TwitchEmoteList {
+        combined?.activeEmotes ?? store.emotes
+    }
+
+    private var canSendToTarget: Bool {
+        combined?.canSendToTarget ?? store.canSend
+    }
+
+    private var activeReply: TwitchChatLine? {
+        combined != nil ? combined?.replyTo : store.replyTo
+    }
+
+    private var currentWord: Substring {
+        TwitchChatComposerRules.currentToken(in: text)
     }
 
     private var completions: [ChatEmote] {
-        guard focused, !lastWord.hasPrefix("@") else { return [] }
-        return combined.activeEmotes.completions(for: String(lastWord))
+        guard focused, !currentWord.hasPrefix("@") else { return [] }
+        return activeEmotes.completions(for: String(currentWord))
     }
 
-    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var charCount: Int {
+        TwitchChatComposerRules.characterCount(text)
+    }
+
+    private var remainingChars: Int {
+        TwitchChatComposerRules.remainingCharacters(text)
+    }
+
+    private var counterTone: TwitchChatComposerRules.CounterTone {
+        TwitchChatComposerRules.tone(for: text)
+    }
+
+    private var isOverLimit: Bool {
+        counterTone == .overLimit
+    }
+
+    private var preparedMessage: String {
+        TwitchChatComposerRules.preparedForSend(text)
+    }
 
     private var targetAccent: TwitchChannelAccent? {
-        combined.composerTarget.channelLogin.flatMap { combined.accent(for: $0) }
+        guard let combined else { return nil }
+        return combined.composerTarget.channelLogin.flatMap { combined.accent(for: $0) }
     }
 
     private var channelCount: Int {
-        max(2, combined.orderedAccents.count)
+        max(2, combined?.orderedAccents.count ?? 2)
     }
 
     private var targetDisplayName: String {
+        guard let combined else {
+            return store.displayName(for: store.channel ?? "")
+        }
         switch combined.composerTarget {
         case .both:
             return Copy.TwitchDualChat.allChannels(channelCount)
@@ -668,24 +535,45 @@ private struct TwitchDualComposer: View {
         }
     }
 
+    private var activeTargetChannel: String? {
+        if let combined {
+            return combined.composerTarget.channelLogin
+        }
+        return store.channel
+    }
+
     private var promptText: String {
-        guard combined.canSendToTarget else { return Copy.Twitch.composerReadOnly }
-        guard combined.isDualChannel else { return Copy.Twitch.composerPrompt }
+        if !canSendToTarget {
+            if let ch = activeTargetChannel {
+                let platform = StreamAddress.platform(for: ch)
+                if !platform.supportsSendingChat {
+                    return Copy.Twitch.composerReadOnlyPlatform(platform.lowercaseName)
+                }
+            }
+            return Copy.Twitch.composerReadOnly
+        }
+        guard let combined, combined.isDualChannel else { return Copy.Twitch.composerPrompt }
         if combined.composerTarget.isBoth {
             return Copy.TwitchDualChat.composerPromptAll(channelCount)
         }
         return Copy.TwitchDualChat.composerPrompt(targetDisplayName)
     }
 
-    private var canSendNow: Bool { combined.canSendToTarget && !trimmed.isEmpty && !sending }
+    private var canSendNow: Bool {
+        canSendToTarget && TwitchChatComposerRules.canSend(text) && !sending
+    }
+
+    private var showCounter: Bool {
+        canSendToTarget && (focused || charCount > 0)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if !completions.isEmpty { completionRow }
-            if let reply = combined.replyTo { replyBanner(reply) }
-            if combined.isTargetOutOfFocus { outOfFocusBanner }
+            if let reply = activeReply { replyBanner(reply) }
+            if let combined, combined.isTargetOutOfFocus { outOfFocusBanner(combined: combined) }
 
-            HStack(spacing: 6) {
+            HStack(alignment: .bottom, spacing: 8) {
                 Button(
                     picking ? Copy.Twitch.hideEmotes : Copy.Twitch.showEmotes,
                     systemImage: picking ? Symbol.Twitch.keyboard : Symbol.Twitch.emotes
@@ -693,33 +581,55 @@ private struct TwitchDualComposer: View {
                     togglePicker()
                 }
                 .labelStyle(.iconOnly)
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(picking ? TwitchChatPalette.twitch : CobaltColor.caption)
-                .frame(width: 36, height: Metrics.hit)
+                .frame(width: 38, height: 40)
+                .background(
+                    picking ? TwitchChatPalette.twitch.opacity(0.14) : CobaltColor.surface,
+                    in: Circle()
+                )
+                .overlay {
+                    Circle().strokeBorder(
+                        picking ? TwitchChatPalette.twitch.opacity(0.45) : CobaltColor.hairline.opacity(0.75),
+                        lineWidth: 0.75
+                    )
+                }
                 .contentShape(Rectangle())
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("twitch.emotes")
 
-                if combined.isDualChannel {
-                    targetMenuButton
+                if let combined, combined.isDualChannel {
+                    targetMenuButton(combined: combined)
                 }
 
-                TextField(promptText, text: $text)
-                    .textFieldStyle(.plain)
-                    .font(Font.cobalt(14.5))
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.send)
-                    #endif
-                    .focused($focused)
-                    .disabled(!combined.canSendToTarget)
-                    .onSubmit(send)
-                    .onChange(of: text) { if text.count > 500 { text = String(text.prefix(500)) } }
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 38)
-                    .background(CobaltColor.surface, in: Capsule())
-                    .overlay { fieldBorderOverlay }
+                // Multi-line expanding input container with embedded 500-char counter + progress ring.
+                HStack(alignment: .bottom, spacing: 8) {
+                    TextField(promptText, text: $text, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(Font.cobalt(14.5))
+                        .lineLimit(1...5)
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                        .focused($focused)
+                        .disabled(!canSendToTarget)
+                        #if os(macOS)
+                        .onSubmit(send)
+                        #endif
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 9)
+
+                    if showCounter {
+                        characterLimitBadge
+                            .padding(.bottom, 8)
+                    }
+                }
+                .padding(.leading, 14)
+                .padding(.trailing, showCounter ? 10 : 14)
+                .frame(minHeight: 40)
+                .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay { fieldBorderOverlay }
 
                 #if os(iOS)
                 if focused || picking {
@@ -729,7 +639,7 @@ private struct TwitchDualComposer: View {
                     .labelStyle(.iconOnly)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(CobaltColor.caption)
-                    .frame(width: 36, height: Metrics.hit)
+                    .frame(width: 38, height: 40)
                     .contentShape(Rectangle())
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("twitch.hideKeyboard")
@@ -738,54 +648,96 @@ private struct TwitchDualComposer: View {
 
                 sendButton
             }
-            .padding(.leading, 4)
-            .padding(.trailing, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
 
             if picking {
                 TwitchEmotePicker(
                     store: store,
                     canAddToSet: canAddToSet,
-                    emotesOverride: combined.activeEmotes,
-                    recentOverride: combined.recentEmotesForActiveTarget,
-                    channelNameOverride: targetDisplayName,
+                    emotesOverride: combined?.activeEmotes,
+                    recentOverride: combined?.recentEmotesForActiveTarget,
+                    channelNameOverride: combined != nil ? targetDisplayName : nil,
                     onAddEmote: onAddEmote
                 ) {
                     pick($0)
                 }
-                .frame(height: 260)
+                .frame(height: isWideDock ? 288 : 248)
                 .overlay(alignment: .top) { Divider() }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .background(CobaltColor.bg)
         .overlay(alignment: .top) { Divider() }
-        .animation(.snappy(duration: 0.25), value: picking)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            if abs(width - dockWidth) > 1 { dockWidth = width }
+        }
+        .animation(.snappy(duration: 0.22), value: picking)
         .onChange(of: focused) { _, now in
             if now {
                 picking = false
-                combined.composerDidOpen()
+                combined?.composerDidOpen()
             } else if !picking {
-                combined.composerDidClose(hasDraft: !trimmed.isEmpty)
+                combined?.composerDidClose(hasDraft: !preparedMessage.isEmpty)
             }
         }
         .onChange(of: picking) { _, now in
             if now {
-                combined.composerDidOpen()
+                combined?.composerDidOpen()
             } else if !focused {
-                combined.composerDidClose(hasDraft: !trimmed.isEmpty)
+                combined?.composerDidClose(hasDraft: !preparedMessage.isEmpty)
             }
         }
-        .onChange(of: combined.replyTo?.id) { _, nextID in
-            if nextID != nil, combined.canSendToTarget {
+        .onChange(of: activeReply?.id) { _, nextID in
+            if nextID != nil, canSendToTarget {
                 picking = false
                 focused = true
             }
         }
     }
 
-    /// Leading >= 44 pt channel selector button opening a SwiftUI `Menu` (NEVER tap-to-cycle).
-    private var targetMenuButton: some View {
+    /// Twitter/X-inspired circular limit progress ring + monospaced count (`used/500` or `-over`).
+    private var characterLimitBadge: some View {
+        let progress = min(1.0, Double(charCount) / Double(TwitchChatComposerRules.maxLength))
+        let ringColor: Color = switch counterTone {
+        case .normal:
+            charCount == 0 ? CobaltColor.hairline : TwitchChatPalette.twitch.opacity(0.75)
+        case .caution:
+            Color.orange
+        case .overLimit:
+            CobaltColor.errorText
+        }
+        let textColor: Color = switch counterTone {
+        case .normal: CobaltColor.caption
+        case .caution: Color.orange
+        case .overLimit: CobaltColor.errorText
+        }
+        let label = isOverLimit ? "\(remainingChars)" : "\(charCount)/\(TwitchChatComposerRules.maxLength)"
+
+        return HStack(spacing: 5) {
+            ZStack {
+                Circle()
+                    .stroke(CobaltColor.hairline.opacity(0.6), lineWidth: 2)
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(ringColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: 14, height: 14)
+
+            Text(label)
+                .font(Font.cobalt(11, isOverLimit || counterTone == .caution ? .semibold : .medium).monospacedDigit())
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+        }
+        .fixedSize()
+        .accessibilityIdentifier("twitch.composer.charLimit")
+        .accessibilityLabel("\(charCount) of \(TwitchChatComposerRules.maxLength) characters")
+    }
+
+    /// Leading channel selector button opening a SwiftUI `Menu` (NEVER tap-to-cycle).
+    /// Because the dock spans the full display width, shows the actual `@channel` handle instead of a single letter.
+    private func targetMenuButton(combined: TwitchCombinedChatModel) -> some View {
         let isBoth = combined.composerTarget.isBoth
         let singleTint = targetAccent.map { TwitchChatPalette.accentColor($0) } ?? TwitchChatPalette.twitch
         let gradient = TwitchChatPalette.dualAccentGradient(for: combined.orderedAccents)
@@ -815,7 +767,7 @@ private struct TwitchDualComposer: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 if isBoth {
                     HStack(spacing: 2) {
                         ForEach(combined.orderedAccents, id: \.channel) { accent in
@@ -824,21 +776,27 @@ private struct TwitchDualComposer: View {
                                 .frame(width: 6, height: 6)
                         }
                     }
-                    Text("\(channelCount)")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                    Text(Copy.TwitchDualChat.allShort(channelCount))
+                        .font(Font.cobalt(12.5, .semibold))
                         .foregroundStyle(CobaltColor.text)
+                        .lineLimit(1)
                 } else {
-                    Text(targetAccent?.mark ?? "?")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(singleTint)
+                    Circle()
+                        .fill(singleTint)
+                        .frame(width: 7, height: 7)
+                    Text(isWideDock ? Copy.TwitchDualChat.channelHandle(targetDisplayName) : (targetAccent?.mark ?? targetDisplayName))
+                        .font(Font.cobalt(12.5, .semibold))
+                        .foregroundStyle(CobaltColor.text)
+                        .lineLimit(1)
+                        .frame(maxWidth: isWideDock ? 140 : 44, alignment: .leading)
                 }
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(CobaltColor.caption)
             }
-            .padding(.horizontal, 8)
-            .frame(height: 32)
-            .background(isBoth ? CobaltColor.surface : singleTint.opacity(0.16), in: Capsule())
+            .padding(.horizontal, 10)
+            .frame(height: 40)
+            .background(isBoth ? CobaltColor.surface : singleTint.opacity(0.14), in: Capsule())
             .overlay {
                 if isBoth {
                     Capsule().strokeBorder(gradient, lineWidth: 1.5)
@@ -846,7 +804,6 @@ private struct TwitchDualComposer: View {
                     Capsule().strokeBorder(singleTint.opacity(0.55), lineWidth: 1)
                 }
             }
-            .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -856,33 +813,40 @@ private struct TwitchDualComposer: View {
     }
 
     @ViewBuilder private var fieldBorderOverlay: some View {
-        if combined.isDualChannel {
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        if isOverLimit {
+            shape.strokeBorder(CobaltColor.errorText.opacity(0.85), lineWidth: 1.5)
+        } else if let combined, combined.isDualChannel {
             if combined.composerTarget.isBoth {
-                Capsule()
-                    .strokeBorder(
-                        TwitchChatPalette.dualAccentGradient(for: combined.orderedAccents),
-                        lineWidth: 1.75)
+                shape.strokeBorder(
+                    TwitchChatPalette.dualAccentGradient(for: combined.orderedAccents),
+                    lineWidth: 1.5
+                )
             } else if let accent = targetAccent {
-                Capsule()
-                    .strokeBorder(TwitchChatPalette.accentColor(accent).opacity(0.45), lineWidth: 1)
+                shape.strokeBorder(TwitchChatPalette.accentColor(accent).opacity(focused ? 0.7 : 0.42), lineWidth: 1)
             }
+        } else {
+            shape.strokeBorder(
+                focused ? TwitchChatPalette.twitch.opacity(0.55) : CobaltColor.hairline.opacity(0.85),
+                lineWidth: focused ? 1.15 : 0.75
+            )
         }
     }
 
     @ViewBuilder private var sendButton: some View {
-        if combined.isDualChannel && combined.composerTarget.isBoth {
+        if let combined, combined.isDualChannel, combined.composerTarget.isBoth {
             let gradient = TwitchChatPalette.dualAccentGradient(for: combined.orderedAccents)
             let sendAllLabel = Copy.TwitchDualChat.sendToAll(channelCount)
             Button(action: send) {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Text(sendAllLabel)
                         .font(Font.cobalt(12.5, .semibold))
                     Image(systemName: Symbol.Twitch.send)
                         .font(.system(size: 12, weight: .bold))
                 }
                 .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .frame(height: 38)
+                .padding(.horizontal, 13)
+                .frame(height: 40)
                 .background {
                     if canSendNow {
                         Capsule().fill(gradient)
@@ -897,24 +861,24 @@ private struct TwitchDualComposer: View {
             .accessibilityIdentifier("twitch.dual.sendBoth")
         } else {
             let fill = canSendNow
-                ? (combined.isDualChannel ? targetAccent.map { TwitchChatPalette.accentColor($0) } ?? TwitchChatPalette.twitch : TwitchChatPalette.twitch)
+                ? (isDual ? targetAccent.map { TwitchChatPalette.accentColor($0) } ?? TwitchChatPalette.twitch : TwitchChatPalette.twitch)
                 : CobaltColor.elevated
             Button(
-                combined.isDualChannel ? Copy.TwitchDualChat.sendingTo(targetDisplayName) : Copy.Twitch.send,
+                isDual ? Copy.TwitchDualChat.sendingTo(targetDisplayName) : Copy.Twitch.send,
                 systemImage: Symbol.Twitch.send,
                 action: send
             )
             .labelStyle(.iconOnly)
             .font(.system(size: 15, weight: .bold))
             .foregroundStyle(.white)
-            .frame(width: 38, height: 38)
+            .frame(width: 40, height: 40)
             .background(fill, in: Circle())
             .buttonStyle(.plain)
             .disabled(!canSendNow)
         }
     }
 
-    private var outOfFocusBanner: some View {
+    private func outOfFocusBanner(combined: TwitchCombinedChatModel) -> some View {
         let tint = targetAccent.map { TwitchChatPalette.accentColor($0) } ?? CobaltColor.caption
         return HStack(spacing: 6) {
             Circle()
@@ -932,7 +896,7 @@ private struct TwitchDualComposer: View {
     }
 
     private func replyBanner(_ reply: TwitchChatLine) -> some View {
-        let replyAccent = combined.isDualChannel ? combined.accent(for: reply.channel) : nil
+        let replyAccent = combined?.isDualChannel == true ? combined?.accent(for: reply.channel) : nil
         return HStack(spacing: 6) {
             if let accent = replyAccent {
                 let tint = TwitchChatPalette.accentColor(accent)
@@ -948,7 +912,11 @@ private struct TwitchDualComposer: View {
                 .lineLimit(1)
             Spacer(minLength: 0)
             Button(Copy.Twitch.cancelReply, systemImage: Symbol.Twitch.close) {
-                combined.cancelReply(composerOpen: focused, hasDraft: !trimmed.isEmpty)
+                if let combined {
+                    combined.cancelReply(composerOpen: focused, hasDraft: !preparedMessage.isEmpty)
+                } else {
+                    store.replyTo = nil
+                }
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.plain)
@@ -972,9 +940,12 @@ private struct TwitchDualComposer: View {
                                 .foregroundStyle(CobaltColor.text)
                                 .lineLimit(1)
                         }
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 9)
                         .frame(height: 32)
                         .background(CobaltColor.surface, in: Capsule())
+                        .overlay {
+                            Capsule().strokeBorder(CobaltColor.hairline.opacity(0.7), lineWidth: 0.5)
+                        }
                     }
                     .buttonStyle(.plain)
                 }
@@ -995,7 +966,7 @@ private struct TwitchDualComposer: View {
     private func togglePicker() {
         if picking {
             picking = false
-            if combined.canSendToTarget { focused = true }
+            if canSendToTarget { focused = true }
         } else {
             focused = false
             picking = true
@@ -1004,26 +975,33 @@ private struct TwitchDualComposer: View {
 
     private func pick(_ emote: ChatEmote) {
         var next = text
-        if !next.isEmpty, !next.hasSuffix(" ") { next += " " }
+        if !next.isEmpty, !next.hasSuffix(" "), !next.hasSuffix("\n") { next += " " }
         next += emote.name + " "
-        guard next.count <= 500 else { return }
+        guard TwitchChatComposerRules.characterCount(next) <= TwitchChatComposerRules.maxLength else { return }
         text = next
-        combined.noteEmotePicked(emote)
+        if let combined {
+            combined.noteEmotePicked(emote)
+        } else {
+            store.noteEmotePicked(emote)
+        }
     }
 
     private func complete(_ emote: ChatEmote) {
-        var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-        if words.isEmpty { words = [""] }
-        words[words.count - 1] = emote.name
-        text = words.joined(separator: " ") + " "
+        text = TwitchChatComposerRules.replacingCurrentToken(in: text, with: emote.name)
     }
 
     private func send() {
         guard canSendNow else { return }
-        let message = trimmed
+        let message = preparedMessage
         sending = true
         Task {
-            if await combined.send(message) { text = "" }
+            let ok: Bool
+            if let combined {
+                ok = await combined.send(message)
+            } else {
+                ok = await store.send(message)
+            }
+            if ok { text = "" }
             sending = false
             if !picking { focused = true }
         }

@@ -7,7 +7,7 @@ import { STATUS_IDS_MAX } from "../src/hidden";
 import { dispatch as decide } from "./dispatch";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
-import { EDIT_ALT_KINDS, MAX_UPLOAD_BYTES } from "../src/app-routes";
+import { EDIT_ALT_KINDS, MAX_SINGLE_UPLOAD_BYTES, MAX_UPLOAD_BYTES } from "../src/app-routes";
 import { SHARE_SET_MAX } from "../src/share-sets";
 import type { GateRequest } from "../src/gate";
 import { KEY_ID_HEADER, PORT_HEADER, SERVICE_HEADER } from "../src/headers";
@@ -989,6 +989,7 @@ describe("GET /capabilities", () => {
                 seventv: true,
                 booru: true,
                 audio_leveling: true,
+                multipart_upload: true,
                 accounts: true,
                 still_webp: false,
                 // no embedding Space in this world's env (section 21)
@@ -1020,8 +1021,8 @@ describe("GET /capabilities", () => {
                 webp_widths: [320, 480],
                 webp_qualities: ["low", "med", "high"],
                 render_fps: 15,
-                max_upload_bytes: 100000000,
-                max_source_bytes: 209715200,
+                max_upload_bytes: 1073741824,
+                max_source_bytes: 1073741824,
                 session_ttl_ms: 604800000,
                 line_max: 50,
                 line_wait_ms: 1800000,
@@ -1484,7 +1485,7 @@ describe("PUT /studio/upload", () => {
             noTraces();
         });
         it("a 100 000 000-byte body is accepted and streamed in full", async () => {
-            const total = MAX_UPLOAD_BYTES;
+            const total = MAX_SINGLE_UPLOAD_BYTES;
             const chunk = new Uint8Array(1_000_000).fill(1);
             let sent = 0;
             const stream = new ReadableStream<Uint8Array>({
@@ -1681,6 +1682,152 @@ describe("PUT /studio/upload", () => {
         it("the library routes make no request_log rows", async () => {
             await w.call("/library", { headers: auth });
             expect(logRows()).toHaveLength(0);
+        });
+    });
+
+    describe("multipart upload (up to 1 GiB)", () => {
+        it("creates, uploads multiple parts, completes into library + studio, and probes stored bytes", async () => {
+            const part1 = bytesOf(32, 0x11);
+            const part2 = bytesOf(24, 0x22);
+            const total = part1.byteLength + part2.byteLength;
+
+            const initRes = await w.call("/studio/upload/multipart", {
+                method: "POST",
+                headers: { ...auth, "content-type": "application/json" },
+                body: JSON.stringify({
+                    name: "big-recording.mp4",
+                    content_type: "video/mp4",
+                    bytes: total,
+                    queue: true,
+                    title: "Long Stream Clip",
+                }),
+            });
+            expect(initRes.status).toBe(201);
+            const init = (await initRes.json()) as any;
+            expect(init).toMatchObject({
+                status: "success",
+                part_size: 50_000_000,
+                max_part_size: 67_108_864,
+                max_bytes: MAX_UPLOAD_BYTES,
+            });
+            expect(typeof init.upload_id).toBe("string");
+
+            const p1Res = await w.call("/studio/upload/multipart/part?part=1", {
+                method: "PUT",
+                headers: {
+                    ...auth,
+                    "x-upload-id": init.upload_id,
+                    "content-length": String(part1.byteLength),
+                    "content-type": "application/octet-stream",
+                },
+                body: part1,
+            });
+            expect(p1Res.status).toBe(200);
+            const p1 = (await p1Res.json()) as any;
+            expect(p1.part_number).toBe(1);
+            expect(typeof p1.etag).toBe("string");
+
+            const p2Res = await w.call("/studio/upload/multipart/part?part=2", {
+                method: "PUT",
+                headers: {
+                    ...auth,
+                    "x-upload-id": init.upload_id,
+                    "content-length": String(part2.byteLength),
+                    "content-type": "application/octet-stream",
+                },
+                body: part2,
+            });
+            expect(p2Res.status).toBe(200);
+            const p2 = (await p2Res.json()) as any;
+            expect(p2.part_number).toBe(2);
+
+            const doneRes = await w.call("/studio/upload/multipart/complete", {
+                method: "POST",
+                headers: { ...auth, "content-type": "application/json" },
+                body: JSON.stringify({
+                    upload_id: init.upload_id,
+                    parts: [
+                        { part_number: 2, etag: p2.etag },
+                        { part_number: 1, etag: p1.etag },
+                    ],
+                }),
+            });
+            expect(doneRes.status).toBe(201);
+            const done = (await doneRes.json()) as any;
+            expect(done.status).toBe("success");
+            expect(done.item).toMatchObject({
+                name: "big-recording.mp4",
+                content_type: "video/mp4",
+                bytes: total,
+            });
+            expect(typeof done.id).toBe("string"); // adopted into studio session
+            const stored = w.originals.objects.get(`uploads/${done.item.id}.mp4`);
+            expect(stored?.bytes.byteLength).toBe(total);
+            expect(stored?.bytes[0]).toBe(0x11);
+            expect(stored?.bytes[32]).toBe(0x22);
+        });
+
+        it("accepts 1 GiB (1_073_741_824) and rejects > 1 GiB with 413", async () => {
+            const okInit = await w.call("/studio/upload/multipart", {
+                method: "POST",
+                headers: { ...auth, "content-type": "application/json" },
+                body: JSON.stringify({ name: "1gb.mp4", content_type: "video/mp4", bytes: MAX_UPLOAD_BYTES }),
+            });
+            expect(okInit.status).toBe(201);
+            const { upload_id } = (await okInit.json()) as any;
+            const abortRes = await w.call("/studio/upload/multipart", {
+                method: "DELETE",
+                headers: { ...auth, "x-upload-id": upload_id },
+            });
+            expect(abortRes.status).toBe(200);
+            expect(await abortRes.json()).toEqual({ status: "success", aborted: true });
+
+            const tooBig = await w.call("/studio/upload/multipart", {
+                method: "POST",
+                headers: { ...auth, "content-type": "application/json" },
+                body: JSON.stringify({ name: "too-big.mp4", content_type: "video/mp4", bytes: MAX_UPLOAD_BYTES + 1 }),
+            });
+            expect(tooBig.status).toBe(413);
+            expect(await tooBig.json()).toEqual({ status: "error", error: { code: "error.library.too_large" } });
+        });
+
+        it("rejects mismatched keyId with 403 and mismatched assembled byte count with 400 incomplete", async () => {
+            const otherKey = "1c6e3d4f-7d2b-4a6f-8b68-2e1f7d0a3b22";
+            w.db.raw
+                .prepare("INSERT INTO api_keys (id, name, key_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)")
+                .run("other-key", "other", await hashKey(otherKey), otherKey.slice(0, 8), 1);
+            const initRes = await w.call("/studio/upload/multipart", {
+                method: "POST",
+                headers: { ...auth, "content-type": "application/json" },
+                body: JSON.stringify({ name: "clip.mp4", content_type: "video/mp4", bytes: 40 }),
+            });
+            const { upload_id } = (await initRes.json()) as any;
+
+            const wrongKeyPart = await w.call("/studio/upload/multipart/part?part=1", {
+                method: "PUT",
+                headers: {
+                    authorization: `Api-Key ${otherKey}`,
+                    "x-upload-id": upload_id,
+                    "content-length": "10",
+                },
+                body: bytesOf(10),
+            });
+            expect(wrongKeyPart.status).toBe(403);
+
+            const p1 = (await (
+                await w.call("/studio/upload/multipart/part?part=1", {
+                    method: "PUT",
+                    headers: { ...auth, "x-upload-id": upload_id, "content-length": "10" },
+                    body: bytesOf(10),
+                })
+            ).json()) as any;
+            const badDone = await w.call("/studio/upload/multipart/complete", {
+                method: "POST",
+                headers: { ...auth, "content-type": "application/json" },
+                body: JSON.stringify({ upload_id, parts: [{ part_number: 1, etag: p1.etag }] }),
+            });
+            expect(badDone.status).toBe(400);
+            expect(await badDone.json()).toEqual({ status: "error", error: { code: "error.library.incomplete" } });
         });
     });
 });

@@ -9,7 +9,7 @@
 //    for any origin (and its OPTIONS preflight): a widget's sandbox runs on an origin nobody knows ahead; the token is the credential.
 //  - upload.begin (MCP only): mints that link.
 import * as z from "zod";
-import { MAX_UPLOAD_BYTES, studioUpload, UPLOAD_TYPES, uploadLogInfo } from "../../app-routes";
+import { MAX_SINGLE_UPLOAD_BYTES, studioUpload, UPLOAD_TYPES, uploadLogInfo } from "../../app-routes";
 import { countryOf, lookupKey } from "../../keys";
 import { mcpAuthorization, signUploadToken, UPLOAD_TOKEN_REGEX, UPLOAD_TOKEN_TTL_MS, verifyUploadToken, type McpCaller } from "../../mcp";
 import {
@@ -408,7 +408,7 @@ export const uploadBeginOp = defineOp({
         only: true,
         summary:
             `Upload a local video or image into the library: returns a link (15 min) to PUT the file's bytes to, e.g. with curl -T. ` +
-            `mp4 mov gif jpg png webp heic, max ${MAX_UPLOAD_BYTES / 1_000_000} MB, typed by its bytes. The PUT answers the new item ` +
+            `mp4 mov gif jpg png webp heic, max ${MAX_SINGLE_UPLOAD_BYTES / 1_000_000} MB, typed by its bytes. The PUT answers the new item ` +
             "(a video also opens a studio session, `sid`). For a link on the web use library_save instead.",
         options: true,
         when: (f) => f.mcp === true,
@@ -431,7 +431,7 @@ export const uploadBeginOp = defineOp({
                 upload_url: url,
                 method: "PUT",
                 expires_at: new Date(expires).toISOString(),
-                max_bytes: MAX_UPLOAD_BYTES,
+                max_bytes: MAX_SINGLE_UPLOAD_BYTES,
                 types: Object.keys(UPLOAD_TYPES),
                 curl: `curl -sS -T FILE '${url}'`,
             },

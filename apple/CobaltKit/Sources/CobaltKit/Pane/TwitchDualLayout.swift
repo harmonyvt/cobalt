@@ -306,21 +306,23 @@ public enum TwitchQualityBudgetPolicy {
     public static func maxHeight(
         streamCount: Int,
         isSpotlight: Bool,
-        isThermalThrottled: Bool
+        isThermalThrottled: Bool,
+        isLowPowerMode: Bool = false
     ) -> Int? {
+        let conserve = isThermalThrottled || isLowPowerMode
         switch streamCount {
         case ...1:
-            return isThermalThrottled ? 720 : nil
+            return conserve ? 720 : nil
         case 2:
             if isSpotlight {
-                return isThermalThrottled ? 720 : nil
+                return conserve ? 720 : nil
             }
-            return isThermalThrottled ? 480 : nil
+            return conserve ? 480 : nil
         default: // 3 or 4 streams
             if isSpotlight {
-                return isThermalThrottled ? 720 : 1080
+                return conserve ? 720 : 1080
             }
-            return isThermalThrottled ? 360 : 480
+            return conserve ? 360 : 480
         }
     }
 
@@ -328,10 +330,12 @@ public enum TwitchQualityBudgetPolicy {
     public static func preferLowerFrameRate(
         streamCount: Int,
         isSpotlight: Bool,
-        isThermalThrottled: Bool
+        isThermalThrottled: Bool,
+        isLowPowerMode: Bool = false
     ) -> Bool {
+        if isLowPowerMode { return true }
+        if isThermalThrottled { return true }
         if streamCount >= 3 && !isSpotlight { return true }
-        if isThermalThrottled && streamCount >= 2 { return true }
         return false
     }
 
@@ -341,14 +345,16 @@ public enum TwitchQualityBudgetPolicy {
         from variants: [TwitchVariant],
         streamCount: Int,
         isSpotlight: Bool,
-        isThermalThrottled: Bool
+        isThermalThrottled: Bool,
+        isLowPowerMode: Bool = false
     ) -> TwitchVariant? {
         let videoVariants = variants.filter { !$0.isAudioOnly && $0.isNativeCompatible }
         guard !videoVariants.isEmpty else { return nil }
         guard let capHeight = maxHeight(
             streamCount: streamCount,
             isSpotlight: isSpotlight,
-            isThermalThrottled: isThermalThrottled
+            isThermalThrottled: isThermalThrottled,
+            isLowPowerMode: isLowPowerMode
         ) else {
             return videoVariants.first(where: \.isSource) ?? videoVariants.max(by: { $0.bandwidth < $1.bandwidth })
         }
@@ -356,7 +362,8 @@ public enum TwitchQualityBudgetPolicy {
         let prefer30 = preferLowerFrameRate(
             streamCount: streamCount,
             isSpotlight: isSpotlight,
-            isThermalThrottled: isThermalThrottled
+            isThermalThrottled: isThermalThrottled,
+            isLowPowerMode: isLowPowerMode
         )
         let eligible = videoVariants.filter { ($0.height ?? 0) > 0 && ($0.height ?? Int.max) <= capHeight }
         let pool = eligible.isEmpty ? videoVariants : eligible
@@ -395,7 +402,8 @@ public enum TwitchQualityBudgetPolicy {
             from: variants,
             streamCount: hint.streamCount,
             isSpotlight: hint.isSpotlight,
-            isThermalThrottled: hint.isThermalThrottled
+            isThermalThrottled: hint.isThermalThrottled,
+            isLowPowerMode: hint.isLowPowerMode
         )
     }
 }
@@ -406,11 +414,18 @@ public struct TwitchQualityBudgetHint: Sendable, Equatable {
     public let streamCount: Int
     public let isSpotlight: Bool
     public let isThermalThrottled: Bool
+    public let isLowPowerMode: Bool
 
-    public init(streamCount: Int, isSpotlight: Bool, isThermalThrottled: Bool) {
+    public init(
+        streamCount: Int,
+        isSpotlight: Bool,
+        isThermalThrottled: Bool,
+        isLowPowerMode: Bool = false
+    ) {
         self.streamCount = streamCount
         self.isSpotlight = isSpotlight
         self.isThermalThrottled = isThermalThrottled
+        self.isLowPowerMode = isLowPowerMode
     }
 }
 

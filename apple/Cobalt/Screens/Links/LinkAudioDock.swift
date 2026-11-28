@@ -39,8 +39,9 @@ struct HorizontalShakeEffect: GeometryEffect {
 
 // MARK: - Studio Audio Dock (Share Link Detail)
 
-/// Variation A Studio Audio Dock: segmented `original audio` vs `leveled (?audio=normal)` switch, live URL preview
-/// with strictly gated `ShareLink`, stacked loudness distribution bar, gate status, and 1-tap bulk-level CTA.
+/// Unified Liquid Glass Share Deck & Studio Audio Dock: segmented `original audio` vs `leveled (?audio=normal)`
+/// hard-gated switch, recessed live URL pill with `ShareLink`, unified primary Copy + inline Level CTA row (when
+/// `primaryCopyMode` is true), stacked loudness distribution bar, and gate status.
 struct LinkAudioDock: View {
     let link: ShareSet
     let gate: AudioShareGate
@@ -49,12 +50,16 @@ struct LinkAudioDock: View {
     let activeURL: URL
     var isSubmitting = false
     var isCopied = false
+    /// When true, renders the prominent primary `copy link` / `copy ?audio=normal` CTA paired inline with
+    /// the 1-tap `level N` button inside the unified glass deck (used by `LinkPanePage` and `LinkScreen`).
+    var primaryCopyMode = false
     var onCopy: (() -> Void)? = nil
     let onLevelRemaining: () -> Void
     let onBlockedTap: () -> Void
 
     @State private var shakeTrigger: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var normalActive: Bool {
         gate.canShareNormalAudio && useNormalAudio
@@ -62,6 +67,10 @@ struct LinkAudioDock: View {
 
     private var shortBase: String {
         (link.url.host ?? "") + link.url.path
+    }
+
+    private var showsInlineLevelCTA: Bool {
+        primaryCopyMode && gate.audibleVideoCount > 0 && gate.status == .blocked && !gate.queueableVideoIDs.isEmpty
     }
 
     var body: some View {
@@ -72,6 +81,10 @@ struct LinkAudioDock: View {
 
             addressBarRow
 
+            if primaryCopyMode, let onCopy {
+                primaryActionRow(onCopy: onCopy)
+            }
+
             if gate.audibleVideoCount > 0 {
                 distributionBar
                 statusAndActionRow
@@ -80,12 +93,15 @@ struct LinkAudioDock: View {
             }
         }
         .padding(12)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glassEffect(
+            .regular.tint(normalActive ? AudioDockTone.emerald.opacity(0.08) : CobaltColor.surface.opacity(0.55)),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .strokeBorder(
                     normalActive ? AudioDockTone.emerald.opacity(0.45) : CobaltColor.hairline,
-                    lineWidth: normalActive ? 1 : 0.6
+                    lineWidth: normalActive ? 1 : 0.7
                 )
                 .allowsHitTesting(false)
         )
@@ -193,6 +209,11 @@ struct LinkAudioDock: View {
 
     private var addressBarRow: some View {
         HStack(spacing: 8) {
+            Image(systemName: Symbol.copyLink)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(normalActive ? AudioDockTone.emerald : CobaltColor.caption)
+                .accessibilityHidden(true)
+
             HStack(spacing: 0) {
                 Text(shortBase)
                     .font(CobaltType.captionSmall)
@@ -212,8 +233,8 @@ struct LinkAudioDock: View {
             .accessibilityLabel(Copy.LinksPane.addressA11y)
             .accessibilityValue(activeURL.absoluteString)
 
-            IconRow(spacing: 8, alignment: .trailing) {
-                if let onCopy {
+            IconRow(spacing: 6, alignment: .trailing) {
+                if !primaryCopyMode, let onCopy {
                     Button(action: onCopy) {
                         Label(
                             normalActive ? Copy.AudioBulk.copyLeveledLink : Copy.Links.copyLink,
@@ -228,6 +249,100 @@ struct LinkAudioDock: View {
                 .buttonStyle(.cobaltIcon(.small, tint: normalActive ? AudioDockTone.emerald : CobaltColor.linkBlue))
             }
             .fixedSize()
+        }
+        .padding(.leading, primaryCopyMode ? 10 : 0)
+        .padding(.trailing, primaryCopyMode ? 4 : 0)
+        .padding(.vertical, primaryCopyMode ? 4 : 0)
+        .background(
+            primaryCopyMode ? Color.primary.opacity(0.055) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(primaryCopyMode ? CobaltColor.hairline : Color.clear, lineWidth: 0.5)
+                .allowsHitTesting(false)
+        )
+    }
+
+    // MARK: unified primary CTA row (copy + inline level)
+
+    @ViewBuilder
+    private func primaryActionRow(onCopy: @escaping () -> Void) -> some View {
+        let copyButton = Button(action: onCopy) {
+            HStack(spacing: 6) {
+                Image(systemName: isCopied ? Symbol.Library.copied : Symbol.copyLink)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(
+                    isCopied
+                        ? Copy.PrivateLinks.copied
+                        : (normalActive ? Copy.AudioBulk.copyLeveledLink : Copy.Links.copyLink)
+                )
+                .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            }
+            .foregroundStyle(isCopied ? .white : CobaltColor.onText)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 40)
+            .padding(.horizontal, 12)
+            .background(
+                isCopied
+                    ? CobaltColor.success
+                    : (normalActive ? AudioDockTone.emerald : CobaltColor.text),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .animation(Motion.chip, value: isCopied)
+
+        if showsInlineLevelCTA {
+            let count = gate.queueableVideoIDs.count
+            let isRetryOnly = gate.failedCount > 0 && gate.failedCount == count
+            let levelButton = Button(action: onLevelRemaining) {
+                HStack(spacing: 5) {
+                    if isSubmitting {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(CobaltColor.onText)
+                    } else {
+                        Image(systemName: isRetryOnly ? Symbol.AudioBulk.retry : Symbol.AudioBulk.waveform)
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    Text(
+                        isSubmitting
+                            ? Copy.AudioBulk.leveling
+                            : (isRetryOnly ? Copy.AudioBulk.retryShort(count) : Copy.AudioBulk.levelShort(count))
+                    )
+                    .font(Font.cobalt(12.5, .semibold, relativeTo: .subheadline))
+                    .lineLimit(1)
+                }
+                .foregroundStyle(CobaltColor.onText)
+                .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil)
+                .frame(minHeight: 40)
+                .padding(.horizontal, 14)
+                .background(AudioDockTone.emerald, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isSubmitting)
+            .accessibilityLabel(
+                isRetryOnly ? Copy.AudioBulk.retryRemaining(count) : Copy.AudioBulk.levelRemaining(count, target: target)
+            )
+
+            if typeSize.isAccessibilitySize {
+                VStack(spacing: 8) {
+                    copyButton
+                    levelButton
+                }
+            } else {
+                HStack(spacing: 8) {
+                    copyButton
+                    levelButton
+                }
+            }
+        } else {
+            copyButton
         }
     }
 
@@ -284,7 +399,7 @@ struct LinkAudioDock: View {
             }
 
             if gate.status == .blocked {
-                if !gate.queueableVideoIDs.isEmpty {
+                if !primaryCopyMode, !gate.queueableVideoIDs.isEmpty {
                     let count = gate.queueableVideoIDs.count
                     let isRetryOnly = gate.failedCount > 0 && gate.failedCount == count
                     Button(action: onLevelRemaining) {
@@ -316,7 +431,7 @@ struct LinkAudioDock: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(isSubmitting)
-                } else if gate.isLeveling {
+                } else if gate.isLeveling && gate.queueableVideoIDs.isEmpty {
                     HStack(spacing: 6) {
                         ProgressView()
                             .controlSize(.mini)
@@ -364,6 +479,80 @@ struct LinkAudioDock: View {
             return Copy.AudioBulk.allLeveled(gate.audibleVideoCount)
         }
         return gate.blockedReason ?? Copy.AudioBulk.lockedSuffix
+    }
+}
+
+/// Matching Liquid Glass Share Deck used when the server does not enable `audio_leveling`:
+/// recessed live URL pill + `ShareLink` + prominent full-width `copy link` CTA.
+struct LinkPlainShareDeck: View {
+    let link: ShareSet
+    let isCopied: Bool
+    let onCopy: () -> Void
+
+    private var shortLink: String {
+        (link.url.host ?? "") + link.url.path
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: Symbol.copyLink)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(CobaltColor.caption)
+                    .accessibilityHidden(true)
+
+                Text(shortLink)
+                    .font(CobaltType.captionSmall)
+                    .foregroundStyle(CobaltColor.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel(Copy.LinksPane.addressA11y)
+                    .accessibilityValue(link.url.absoluteString)
+
+                ShareLink(item: link.url) {
+                    Label(Copy.Links.share, systemImage: Symbol.share)
+                }
+                .buttonStyle(.cobaltIcon(.small, tint: CobaltColor.linkBlue))
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, 4)
+            .padding(.vertical, 4)
+            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(CobaltColor.hairline, lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            )
+
+            Button(action: onCopy) {
+                HStack(spacing: 6) {
+                    Image(systemName: isCopied ? Symbol.Library.copied : Symbol.copyLink)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(isCopied ? Copy.PrivateLinks.copied : Copy.Links.copyLink)
+                        .font(Font.cobalt(13, .semibold, relativeTo: .subheadline))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(isCopied ? .white : CobaltColor.onText)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 40)
+                .padding(.horizontal, 12)
+                .background(
+                    isCopied ? CobaltColor.success : CobaltColor.text,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .animation(Motion.chip, value: isCopied)
+        }
+        .padding(12)
+        .glassEffect(.regular.tint(CobaltColor.surface.opacity(0.55)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(CobaltColor.hairline, lineWidth: 0.7)
+                .allowsHitTesting(false)
+        )
     }
 }
 

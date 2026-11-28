@@ -268,8 +268,11 @@ final class AmbientVideoSampler {
         loopTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.active, let player = self.player else { break }
+                let isPlaying = player.timeControlStatus == .playing
                 await self.sampleCurrentFrameIfNeeded(from: player)
-                try? await Task.sleep(for: .milliseconds(150))
+                // 350 ms (~2.8 Hz) matches the 0.42 s mesh crossfade while cutting GPU->CPU readbacks >2x;
+                // while paused, back off to 1.2 s so idle paused videos don't wake the CPU 6.7x/sec.
+                try? await Task.sleep(for: .milliseconds(isPlaying ? 350 : 1_200))
             }
         }
     }
@@ -418,13 +421,15 @@ struct AmbientCinemaBackdrop: View {
     var featherBottom: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.lifecycle) private var lifecycle
     @State private var staticPalette: AmbientPalette = .darkNeutral
     @State private var loadedItemID: MediaItem.ID?
 
     private var activeRendition: Rendition? { rendition ?? item?.face }
+    private var staticOnly: Bool { reduceMotion || lifecycle.shouldConservePower }
 
     private var effectivePalette: AmbientPalette {
-        if let livePalette, !reduceMotion {
+        if let livePalette, !staticOnly {
             return livePalette
         }
         return staticPalette
@@ -464,7 +469,7 @@ struct AmbientCinemaBackdrop: View {
                         smoothsColors: true
                     )
                     .opacity(0.86)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.42), value: effectivePalette)
+                    .animation(staticOnly ? nil : .easeInOut(duration: 0.42), value: effectivePalette)
 
                     // Soft theatrical vignette so media edges and Clear Liquid Glass pills remain crisp over any frame.
                     RadialGradient(

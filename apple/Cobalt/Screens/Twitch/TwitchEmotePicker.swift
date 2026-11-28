@@ -3,8 +3,8 @@ import SwiftUI
 
 // The composer's emote picker (APP-API-CONTRACT 70.6): every emote the open channel offers, one section per source
 // (`TwitchEmoteList.pickerSections`: this channel's 7TV set, this channel's Twitch emotes with the sub emotes the user
-// lacks locked, the user's other Twitch emotes, Twitch global, 7TV global), "recent" on top, a filter and a row of
-// section jumps. A tap puts the emote's name in the message; the picker stays open for more. Long press: copy the
+// lacks locked, the user's other Twitch emotes, Twitch global, 7TV global), "recent" on top, a filter and labeled
+// category jump pills. A tap puts the emote's name in the message; the picker stays open for more. Long press: copy the
 // name, or add a 7TV emote to a set.
 
 struct TwitchEmotePicker: View {
@@ -21,12 +21,14 @@ struct TwitchEmotePicker: View {
     @State private var gridWidth: CGFloat = 0
     @State private var isScrolling = false
     @State private var shownSections: [Shown] = []
+    @State private var selectedSectionID: String?
 
     private static let recentID = "recent"
 
     private struct Shown: Identifiable {
         var id: String
         var title: String
+        var pillTitle: String
         var emotes: [ChatEmote]
         var locked: Set<String>
     }
@@ -42,23 +44,29 @@ struct TwitchEmotePicker: View {
     private var activeRecents: [ChatEmote] { recentOverride ?? store.recentEmotesHere }
     private var channelName: String { channelNameOverride ?? store.channelInfo?.displayName ?? store.channel ?? "" }
 
-    private static let tile: CGFloat = 34
+    private var isWide: Bool { gridWidth >= 560 || sizeClass == .regular }
+    private var tileImageSize: CGFloat { isWide ? 38 : 34 }
 
     private var columns: [GridItem] {
+        let minWidth: CGFloat = isWide ? 68 : 60
         if gridWidth > 0 {
             return DuoGrid.gridItems(
                 forWidth: gridWidth,
-                minItemWidth: 54,
-                spacing: 4,
+                minItemWidth: minWidth,
+                spacing: 6,
                 sizeClass: sizeClass,
                 minColumns: 4
             )
         }
-        return DuoGrid.fixedGridItems(compact: 4, regular: 6, spacing: 4, sizeClass: sizeClass)
+        return DuoGrid.fixedGridItems(compact: 5, regular: 8, spacing: 6, sizeClass: sizeClass)
     }
 
     private var filterKey: FilterKey {
         FilterKey(filter: filter, emotes: activeEmotes, recents: activeRecents, channelName: channelName)
+    }
+
+    private var totalMatches: Int {
+        shownSections.reduce(0) { $0 + $1.emotes.count }
     }
 
     /// Recomputes visible sections only when filter text, emote list, recents, or channel name actually change.
@@ -67,10 +75,24 @@ struct TwitchEmotePicker: View {
         var out: [Shown] = []
         if needle.isEmpty {
             let recent = activeRecents
-            if !recent.isEmpty { out.append(Shown(id: Self.recentID, title: Copy.Twitch.emotesRecent, emotes: recent, locked: [])) }
+            if !recent.isEmpty {
+                out.append(Shown(
+                    id: Self.recentID,
+                    title: Copy.Twitch.emotesRecent,
+                    pillTitle: Copy.Twitch.emotesRecent,
+                    emotes: recent,
+                    locked: []
+                ))
+            }
         }
         for s in activeEmotes.sections(matching: needle) {
-            out.append(Shown(id: s.id, title: title(s.kind), emotes: s.emotes, locked: s.locked))
+            out.append(Shown(
+                id: s.id,
+                title: title(s.kind),
+                pillTitle: pillTitle(s.kind),
+                emotes: s.emotes,
+                locked: s.locked
+            ))
         }
         return out
     }
@@ -85,6 +107,16 @@ struct TwitchEmotePicker: View {
         }
     }
 
+    private func pillTitle(_ kind: TwitchEmoteSection.Kind) -> String {
+        switch kind {
+        case .channelSevenTv: return "7tv"
+        case .channelTwitch: return channelName.isEmpty ? "channel" : channelName
+        case .yourTwitch: return "yours"
+        case .twitchGlobal: return "twitch"
+        case .sevenTvGlobal: return "7tv global"
+        }
+    }
+
     private var emptyText: String {
         if !filter.trimmingCharacters(in: .whitespaces).isEmpty { return Copy.Twitch.emotesNone }
         // the sections arrive with the first emote list; until then they are still loading
@@ -92,72 +124,47 @@ struct TwitchEmotePicker: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: Symbol.Twitch.search)
-                    .foregroundStyle(CobaltColor.caption)
-                TextField(Copy.Twitch.emoteFilter, text: $filter)
-                    .textFieldStyle(.plain)
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
-                if !filter.isEmpty {
-                    Button { filter = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 13))
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                topBar(proxy: proxy)
+
+                if shownSections.isEmpty {
+                    VStack(spacing: 6) {
+                        Image(systemName: Symbol.Twitch.emotes)
+                            .font(.system(size: 22, weight: .regular))
+                            .foregroundStyle(CobaltColor.caption.opacity(0.6))
+                        Text(emptyText)
+                            .font(CobaltType.caption)
                             .foregroundStyle(CobaltColor.caption)
                     }
-                    .buttonStyle(.plain)
-                }
-            }
-            .font(Font.cobalt(13.5))
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .background(CobaltColor.surface, in: Capsule())
-            .overlay {
-                Capsule().strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
-
-            if shownSections.isEmpty {
-                Text(emptyText)
-                    .font(CobaltType.caption)
-                    .foregroundStyle(CobaltColor.caption)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollViewReader { proxy in
-                    VStack(spacing: 0) {
-                        if shownSections.count > 1 { jumps(shownSections, proxy: proxy) }
-                        ScrollView {
-                            LazyVGrid(columns: columns, alignment: .leading, spacing: 4, pinnedViews: [.sectionHeaders]) {
-                                ForEach(shownSections) { section in
-                                    Section {
-                                        ForEach(section.emotes, id: \.self) { emote in
-                                            tile(emote, locked: section.locked.contains(emote.id))
-                                        }
-                                    } header: {
-                                        header(section.title, count: section.emotes.count)
-                                            .id(section.id)
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 6, pinnedViews: [.sectionHeaders]) {
+                            ForEach(shownSections) { section in
+                                Section {
+                                    ForEach(section.emotes, id: \.self) { emote in
+                                        tile(emote, locked: section.locked.contains(emote.id))
                                     }
-                                }
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.bottom, 8)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-                                if abs(width - gridWidth) > 1 {
-                                    gridWidth = width
+                                } header: {
+                                    header(section.title, count: section.emotes.count)
+                                        .id(section.id)
                                 }
                             }
                         }
-                        .scrollDismissesKeyboard(.immediately)
-                        .onScrollPhaseChange { _, newPhase in
-                            let scrolling = newPhase == .tracking || newPhase == .interacting || newPhase == .decelerating
-                            if isScrolling != scrolling {
-                                isScrolling = scrolling
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 10)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                            if abs(width - gridWidth) > 1 {
+                                gridWidth = width
                             }
+                        }
+                    }
+                    .scrollDismissesKeyboard(.immediately)
+                    .onScrollPhaseChange { _, newPhase in
+                        let scrolling = newPhase == .tracking || newPhase == .interacting || newPhase == .decelerating
+                        if isScrolling != scrolling {
+                            isScrolling = scrolling
                         }
                     }
                 }
@@ -166,61 +173,147 @@ struct TwitchEmotePicker: View {
         .background(CobaltColor.bg)
         .onChange(of: filterKey, initial: true) { _, _ in
             shownSections = recomputeSections()
+            if let current = selectedSectionID, !shownSections.contains(where: { $0.id == current }) {
+                selectedSectionID = shownSections.first?.id
+            } else if selectedSectionID == nil {
+                selectedSectionID = shownSections.first?.id
+            }
         }
         .accessibilityIdentifier("twitch.emotePicker")
     }
 
-    /// One button per section (its first emote, a clock for recent): tap to scroll there.
-    private func jumps(_ shown: [Shown], proxy: ScrollViewProxy) -> some View {
+    /// On wide screens, places the search input and category pills on one sleek row; on compact widths, stacks them cleanly.
+    @ViewBuilder
+    private func topBar(proxy: ScrollViewProxy) -> some View {
+        if isWide {
+            HStack(spacing: 8) {
+                searchField
+                    .frame(width: 220)
+                if shownSections.count > 1 {
+                    categoryPills(shownSections, proxy: proxy)
+                } else {
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .overlay(alignment: .bottom) { Divider() }
+        } else {
+            VStack(spacing: 6) {
+                searchField
+                    .padding(.horizontal, 10)
+                if shownSections.count > 1 {
+                    categoryPills(shownSections, proxy: proxy)
+                        .padding(.horizontal, 10)
+                }
+            }
+            .padding(.vertical, 8)
+            .overlay(alignment: .bottom) { Divider() }
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: Symbol.Twitch.search)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(CobaltColor.caption)
+            TextField(Copy.Twitch.emoteFilter, text: $filter)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+            if !filter.isEmpty {
+                Text("\(totalMatches)")
+                    .font(Font.cobalt(11, .medium).monospacedDigit())
+                    .foregroundStyle(CobaltColor.caption)
+                Button { filter = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(CobaltColor.caption)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .font(Font.cobalt(13.5))
+        .padding(.horizontal, 11)
+        .frame(height: 34)
+        .background(CobaltColor.surface, in: Capsule())
+        .overlay {
+            Capsule().strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
+        }
+    }
+
+    /// Scrollable labeled category jump pills with icon/preview + count + active selection highlight.
+    private func categoryPills(_ shown: [Shown], proxy: ScrollViewProxy) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 ForEach(shown) { section in
+                    let isSelected = (selectedSectionID ?? shown.first?.id) == section.id
                     Button {
-                        withAnimation(.snappy) { proxy.scrollTo(section.id, anchor: .top) }
+                        selectedSectionID = section.id
+                        withAnimation(.snappy(duration: 0.22)) {
+                            proxy.scrollTo(section.id, anchor: .top)
+                        }
                     } label: {
-                        Group {
+                        HStack(spacing: 5) {
                             if section.id == Self.recentID {
                                 Image(systemName: Symbol.Twitch.recent)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(CobaltColor.caption)
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .foregroundStyle(isSelected ? TwitchChatPalette.twitch : CobaltColor.caption)
                             } else if let first = section.emotes.first {
-                                EmotePicture(url: first.url, animated: false, side: 20)
+                                EmotePicture(url: first.url, animated: false, side: 18)
                             }
+                            Text(section.pillTitle)
+                                .font(Font.cobalt(12, isSelected ? .semibold : .medium))
+                                .foregroundStyle(isSelected ? CobaltColor.text : CobaltColor.caption)
+                                .lineLimit(1)
+                            Text("\(section.emotes.count)")
+                                .font(Font.cobalt(10.5, .medium).monospacedDigit())
+                                .foregroundStyle(isSelected ? TwitchChatPalette.twitch : CobaltColor.caption.opacity(0.75))
                         }
-                        .frame(width: 32, height: 28)
-                        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(
+                            isSelected ? TwitchChatPalette.twitch.opacity(0.16) : CobaltColor.surface,
+                            in: Capsule()
+                        )
                         .overlay {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
+                            Capsule().strokeBorder(
+                                isSelected ? TwitchChatPalette.twitch.opacity(0.65) : CobaltColor.hairline,
+                                lineWidth: isSelected ? 1 : 0.75
+                            )
                         }
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(section.title)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                     #if os(macOS)
                     .help(section.title)
                     #endif
                 }
             }
-            .padding(.horizontal, 10)
         }
-        .padding(.bottom, 4)
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     private func header(_ title: String, count: Int) -> some View {
-        HStack {
+        HStack(spacing: 6) {
             Text(title)
                 .lineLimit(1)
                 .font(Font.cobalt(11.5, .semibold))
                 .foregroundStyle(CobaltColor.caption)
-            Spacer(minLength: 0)
             Text("\(count)")
-                .font(Font.cobalt(11))
-                .foregroundStyle(CobaltColor.caption)
-                .monospacedDigit()
+                .font(Font.cobalt(10.5, .medium).monospacedDigit())
+                .foregroundStyle(CobaltColor.caption.opacity(0.85))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1.5)
+                .background(CobaltColor.surface, in: Capsule())
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 4)
-        .padding(.vertical, 5)
-        .background(CobaltColor.bg)
+        .padding(.vertical, 6)
+        .background(CobaltColor.bg.opacity(0.96))
     }
 
     private func tile(_ emote: ChatEmote, locked: Bool) -> some View {
@@ -228,24 +321,35 @@ struct TwitchEmotePicker: View {
             guard !locked else { return }
             onPick(emote)
         } label: {
-            VStack(spacing: 2) {
-                EmotePicture(url: emote.url, animated: emote.animated && !isScrolling, side: Self.tile)
+            VStack(spacing: 4) {
+                EmotePicture(url: emote.url, animated: emote.animated && !isScrolling, side: tileImageSize)
                     .opacity(locked ? 0.35 : 1)
-                    .overlay(alignment: .bottomTrailing) {
-                        if locked {
-                            Image(systemName: Symbol.Twitch.locked)
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(CobaltColor.caption)
-                        }
-                    }
                 Text(emote.name)
-                    .font(Font.cobalt(9.5))
-                    .foregroundStyle(CobaltColor.caption)
+                    .font(Font.cobalt(10, .medium))
+                    .foregroundStyle(locked ? CobaltColor.caption.opacity(0.55) : CobaltColor.caption)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            .frame(maxWidth: .infinity, minHeight: 52)
-            .contentShape(Rectangle())
+            .padding(.horizontal, 4)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, minHeight: isWide ? 64 : 58)
+            .background(
+                CobaltColor.surface.opacity(locked ? 0.45 : 0.72),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(CobaltColor.hairline.opacity(0.65), lineWidth: 0.5)
+            }
+            .overlay(alignment: .topTrailing) {
+                if locked {
+                    Image(systemName: Symbol.Twitch.locked)
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(CobaltColor.caption)
+                        .padding(4)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(locked ? "\(emote.name), \(Copy.Twitch.locked)" : emote.name)

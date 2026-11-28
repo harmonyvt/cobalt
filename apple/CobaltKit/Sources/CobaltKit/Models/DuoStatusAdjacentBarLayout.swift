@@ -57,13 +57,18 @@ public struct DuoStatusAdjacentBarMetrics: Equatable, Sendable {
 public enum DuoStatusAdjacentBarLayout {
     /// Minimum top safe-area height indicating a horizontal top status band is present.
     public static let minTopSafeArea: CGFloat = 36
-    /// Visual floor and ceiling for the status-adjacent bar height.
-    public static let minBandHeight: CGFloat = 54
-    public static let maxBandHeight: CGFloat = 62
-    /// Trailing exclusion floor clearing `9:41` + gap + circular status orb + Control Center pull buffer.
-    public static let minTrailingReserve: CGFloat = 114
-    /// Extra trailing clearance left of a detected top-trailing `.occlusion` camera orb for `9:41` + gap.
-    public static let clockWidthBesideOcclusion: CGFloat = 60
+    /// Visual floor and ceiling for the status-adjacent bar height, tall enough to clear iPhone Duo's
+    /// top-right circular battery/Wi-Fi status orb so controls directly below the bar are never clipped.
+    public static let minBandHeight: CGFloat = 66
+    public static let maxBandHeight: CGFloat = 76
+    /// Trailing exclusion floor clearing Focus/Profile icon + clock (`10:29`) + gap + circular status orb
+    /// + top-right Control Center pull buffer on real iPhone Duo hardware.
+    public static let minTrailingReserve: CGFloat = 160
+    /// Extra trailing clearance left of a detected top-trailing `.occlusion` status/camera orb for the
+    /// Focus icon + clock stack + breathing room.
+    public static let clockWidthBesideOcclusion: CGFloat = 92
+    /// Extra vertical breathing room below a detected top-trailing `.occlusion` orb.
+    public static let occlusionBottomPadding: CGFloat = 8
     /// Minimum container width and usable leading width before falling back to standard chrome.
     public static let minContainerWidth: CGFloat = 320
     public static let minLeadingWidth: CGFloat = 180
@@ -97,15 +102,17 @@ public enum DuoStatusAdjacentBarLayout {
         // Inspect any top-edge camera/Dynamic Island `.occlusion` to guard against centered or leading cutouts.
         var hasTrailingCornerOcclusion = false
         var occlusionTrailingReserve: CGFloat = 0
+        var occlusionBottomClearance: CGFloat = 0
 
         if let occ = occlusion, !occ.isNull, !occ.isInfinite, occ.width > 0, occ.height > 0 {
-            let nearTopEdge = occ.minY < max(effectiveTopSafeArea, 64) && occ.maxY <= max(effectiveTopSafeArea, 64) + 20
+            let nearTopEdge = occ.minY < max(effectiveTopSafeArea, 72) && occ.maxY <= max(effectiveTopSafeArea, 72) + 24
             if nearTopEdge {
                 let relativeMidX = occ.midX / containerSize.width
                 if relativeMidX > 0.65 {
                     hasTrailingCornerOcclusion = true
                     let distanceFromTrailingEdge = max(0, containerSize.width - occ.minX)
                     occlusionTrailingReserve = distanceFromTrailingEdge + clockWidthBesideOcclusion
+                    occlusionBottomClearance = occ.maxY + occlusionBottomPadding
                 } else if !forceEnable {
                     // Centered Dynamic Island or leading camera cutout: never draw into the top status band.
                     return .inactive
@@ -118,7 +125,8 @@ public enum DuoStatusAdjacentBarLayout {
             return .inactive
         }
 
-        let bandHeight = min(max(effectiveTopSafeArea, minBandHeight), maxBandHeight).rounded()
+        let requiredBandHeight = max(effectiveTopSafeArea, occlusionBottomClearance)
+        let bandHeight = min(max(requiredBandHeight, minBandHeight), maxBandHeight).rounded()
         let leadingInset = max(12, leadingSafeArea + 10).rounded()
         let trailingReserve = max(minTrailingReserve, occlusionTrailingReserve).rounded()
         let availableLeadingWidth = max(0, containerSize.width - leadingInset - trailingReserve)

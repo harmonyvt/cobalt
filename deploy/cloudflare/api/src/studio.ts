@@ -81,7 +81,7 @@ const ERROR_DETAIL_PREFIX = "errdetail:";
 const SHARE_PREFIX = "share:";
 type ShareRecord = { keyId: string; at: number };
 
-export const MAX_SOURCE_BYTES = 200 * 1024 * 1024;
+export const MAX_SOURCE_BYTES = 1024 * 1024 * 1024;
 export const MAX_BODY_BYTES = 8192;
 export const MAX_STUDIO_WAIT_SECONDS = 25;
 // GET /studio/<sid>/<name> with ?wait=N holds a request longer (APP-API-CONTRACT section 11).
@@ -764,6 +764,17 @@ export async function repointLead(db: D1Database, sid: string): Promise<void> {
 
 // --- the Durable Object half ------------------------------------------------------
 
+export interface MultipartUploadHandle {
+    readonly key: string;
+    readonly uploadId: string;
+    uploadPart(
+        partNumber: number,
+        value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob,
+    ): Promise<{ partNumber: number; etag: string }>;
+    complete(uploadedParts: Array<{ partNumber: number; etag: string }>): Promise<{ size: number }>;
+    abort(): Promise<void>;
+}
+
 export interface OriginalsBucket {
     put(
         key: string,
@@ -794,6 +805,14 @@ export interface OriginalsBucket {
         uploaded?: Date;
     } | null>;
     delete(key: string): Promise<void>;
+    createMultipartUpload?(
+        key: string,
+        options?: {
+            httpMetadata?: { contentType?: string };
+            customMetadata?: Record<string, string>;
+        },
+    ): Promise<MultipartUploadHandle>;
+    resumeMultipartUpload?(key: string, uploadId: string): MultipartUploadHandle;
 }
 
 export type StudioDeps = {

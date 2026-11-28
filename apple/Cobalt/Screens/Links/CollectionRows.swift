@@ -9,52 +9,72 @@ struct CollectionRoute: Hashable {
     let id: String
 }
 
-/// The collections as folders (links tab, design A): two to a row (three or more on a wide window), each with a 2x2
-/// cover of its newest links, its name and how many links; then a dashed "new collection" card. A tap opens the
-/// collection; the long press copies all, renames, rerolls and deletes (`CollectionMenuItems`).
+/// The collections as Glassy Adaptive Bento folders: two to a row (even counts on wide/Duo windows), each with an
+/// adaptive 16:10 media cover of its newest links, amber title, link count, and a 1-tap copy-all button. A tap opens
+/// the collection; the long press copies all, renames, rerolls, sets privacy, assigns sets, and deletes.
 struct CollectionFolderGrid: View {
     let store: ShareSetStore
     let controller: LinksController
     let open: (ShareCollection) -> Void
 
+    @Environment(\.shell) private var shell
+
     var body: some View {
-        DuoAdaptiveGrid(minItemWidth: 150, spacing: 10) {
-            ForEach(controller.shownCollections) { collection in
-                Button { open(collection) } label: {
-                    CollectionFolderCard(collection: collection, links: store.sets(in: collection))
+        let shown = controller.shownCollections
+        let copiedCollectionID = controller.copiedCollectionID
+        if shown.isEmpty, controller.selectedSet == nil {
+            Button { controller.newCollection(including: nil) } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: Symbol.collectionNew)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(CobaltColor.collection)
+                    Text(Copy.Collections.new)
+                        .font(CobaltType.bodyMedium)
+                        .foregroundStyle(CobaltColor.text)
                 }
-                .buttonStyle(.borderless)
-                .contextMenu { CollectionMenuItems(collection: collection, controller: controller) }
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
-            // inside a set, the dashed card would make a collection outside it: the menu's `sets` adds one instead
-            if controller.selectedSet == nil {
-                Button { controller.newCollection(including: nil) } label: {
-                    VStack(spacing: 6) {
-                        Image(systemName: Symbol.collectionNew)
-                            .font(.system(size: 20))
-                        Text(Copy.Collections.new)
-                            .font(CobaltType.bodyMedium)
-                    }
-                    .foregroundStyle(CobaltColor.caption)
-                    .frame(maxWidth: .infinity, minHeight: CollectionFolderCard.height)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(CobaltColor.border, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
-                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(CobaltColor.collection.opacity(0.10)).interactive(), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(CobaltColor.collection.opacity(0.32), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                    .allowsHitTesting(false)
+            )
+        } else {
+            DuoAdaptiveGrid(minItemWidth: 156, spacing: 10) {
+                ForEach(shown) { collection in
+                    let links = store.sets(in: collection)
+                    let privateCount = controller.privateLinksEnabled ? store.privateCount(in: collection) : 0
+                    let canCopy = store.linksText(in: collection) != nil
+                    CollectionFolderCard(
+                        collection: collection,
+                        links: links,
+                        privateCount: privateCount,
+                        canCopy: canCopy,
+                        copied: copiedCollectionID == collection.id,
+                        onOpen: { open(collection) },
+                        onCopyAll: { controller.copyAll(collection, shell: shell) }
+                    )
+                    .contextMenu { CollectionMenuItems(collection: collection, controller: controller) }
                 }
-                .buttonStyle(.borderless)
             }
+            .motion(Motion.rows, value: shown.map(\.id))
         }
-        .motion(Motion.rows, value: controller.shownCollections.map(\.id))
     }
 }
 
-/// One folder: the cover (one file from each of the newest four links), the name in the collection amber, the count.
+/// One Glassy Adaptive Bento folder card: adaptive 16:10 cover on top (zero empty boxes), optional Clear Liquid Glass
+/// privacy pill, amber folder title, link count, and a 1-tap copy-all button with green checkmark feedback.
 struct CollectionFolderCard: View {
     let collection: ShareCollection
     let links: [ShareSet]
-
-    static let height: CGFloat = 132
+    var privateCount: Int = 0
+    var canCopy: Bool = false
+    var copied: Bool = false
+    var onOpen: (() -> Void)? = nil
+    var onCopyAll: (() -> Void)? = nil
 
     /// A file per link, the public one first, newest links first.
     private var coverItems: [ShareSetItem] {
@@ -62,24 +82,82 @@ struct CollectionFolderCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            LinkCover(items: coverItems, side: 64)
-            Label(collection.name, systemImage: Symbol.collection)
-                .labelStyle(CollectionLineLabel())
-                .font(CobaltType.bodySemibold)
-                .foregroundStyle(CobaltColor.collection)
-                .lineLimit(1)
-            Text(Copy.Collections.linkCount(collection.setIDs.count))
-                .font(CobaltType.captionSmall)
-                .foregroundStyle(CobaltColor.caption)
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                BentoMediaCover(items: coverItems, totalCount: links.count, cornerRadius: 12)
+                if privateCount > 0 {
+                    HStack(spacing: 3) {
+                        Image(systemName: Symbol.PrivateLinks.lock)
+                            .font(.system(size: 9, weight: .bold))
+                        if privateCount < links.count {
+                            Text("\(privateCount)")
+                                .font(Font.cobalt(9.5, .semibold, relativeTo: .caption2))
+                                .monospacedDigit()
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .mediaGlassCapsule(interactive: false)
+                    .padding(6)
+                }
+            }
+            .padding([.top, .horizontal], 6)
+
+            HStack(alignment: .center, spacing: 6) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(collection.name, systemImage: Symbol.collection)
+                        .labelStyle(CollectionLineLabel())
+                        .font(CobaltType.bodySemibold)
+                        .foregroundStyle(CobaltColor.collection)
+                        .lineLimit(1)
+                    Text(Copy.Collections.linkCount(collection.setIDs.count))
+                        .font(CobaltType.captionSmall)
+                        .foregroundStyle(CobaltColor.caption)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(Copy.Collections.rowA11y(name: collection.name, links: collection.setIDs.count))
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { onOpen?() }
+
+                if let onCopyAll, canCopy {
+                    Button(action: onCopyAll) {
+                        Image(systemName: copied ? Symbol.Library.copied : Symbol.copyLink)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(copied ? .white : CobaltColor.text)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(
+                        .regular.tint(copied ? CobaltColor.success : CobaltColor.elevated.opacity(0.6)).interactive(),
+                        in: .circle
+                    )
+                    .overlay(
+                        Circle()
+                            .strokeBorder(copied ? CobaltColor.success.opacity(0.5) : CobaltColor.hairline, lineWidth: 0.6)
+                            .allowsHitTesting(false)
+                    )
+                    .accessibilityLabel(Copy.Collections.copyAll)
+                    .animation(Motion.chip, value: copied)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 10)
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, minHeight: Self.height, alignment: .topLeading)
-        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Copy.Collections.rowA11y(name: collection.name, links: collection.setIDs.count))
-        .accessibilityAddTraits(.isButton)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .glassEffect(.regular.tint(CobaltColor.surface.opacity(0.55)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(CobaltColor.hairline, lineWidth: 0.7)
+                .allowsHitTesting(false)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onTapGesture { onOpen?() }
     }
 }
 
@@ -185,42 +263,55 @@ struct CollectionSetChips: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    chip(title: Copy.Sets.chip(Copy.Sets.all, count: store.collections.count), symbol: nil, on: controller.selectedSet == nil) {
-                        controller.selectedSetID = nil
-                    }
-                    ForEach(store.groups) { set in
-                        chip(title: Copy.Sets.chip(set.name, count: store.collections(in: set).count), symbol: Symbol.collectionSet,
-                             on: controller.selectedSetID == set.id) {
-                            controller.selectedSetID = controller.selectedSetID == set.id ? nil : set.id
+                ScrollView(.horizontal, showsIndicators: false) {
+                    GlassEffectContainer(spacing: 6) {
+                        HStack(spacing: 6) {
+                            chip(
+                                title: Copy.Sets.chip(Copy.Sets.all, count: store.collections.count),
+                                symbol: nil,
+                                on: controller.selectedSet == nil
+                            ) {
+                                controller.selectedSetID = nil
+                            }
+                            ForEach(store.groups) { set in
+                                chip(
+                                    title: Copy.Sets.chip(set.name, count: store.collections(in: set).count),
+                                    symbol: Symbol.collectionSet,
+                                    on: controller.selectedSetID == set.id
+                                ) {
+                                    controller.selectedSetID = controller.selectedSetID == set.id ? nil : set.id
+                                }
+                                .contextMenu { items(set) }
+                                .id(set.id)
+                            }
+                            Button { controller.naming = .create(including: nil) } label: {
+                                Label(Copy.Sets.new, systemImage: Symbol.collectionSetNew)
+                                    .font(Font.cobalt(11.5, .medium, relativeTo: .caption))
+                                    .foregroundStyle(CobaltColor.caption)
+                                    .padding(.horizontal, 12)
+                                    .frame(minHeight: 32)
+                                    .overlay(
+                                        Capsule()
+                                            .strokeBorder(CobaltColor.border, style: StrokeStyle(lineWidth: 1.1, dash: [4, 3]))
+                                    )
+                                    .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .contextMenu { items(set) }
-                        .id(set.id)
+                        .padding(.vertical, 2)
                     }
-                    Button { controller.naming = .create(including: nil) } label: {
-                        Label(Copy.Sets.new, systemImage: Symbol.collectionSetNew)
-                            .font(Font.cobalt(11.5, .regular, relativeTo: .caption))
-                            .foregroundStyle(CobaltColor.caption)
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 30)
-                            .overlay(Capsule().strokeBorder(CobaltColor.border, style: StrokeStyle(lineWidth: 1.2, dash: [4, 3])))
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.borderless)
                 }
-                .padding(.vertical, 2)
-            }
-            .scrollClipDisabled()
-            .onChange(of: controller.selectedSetID) { _, id in
-                guard let id else { return }
-                withAnimation(Motion.rows) { proxy.scrollTo(id, anchor: .center) }
-            }
+                .scrollClipDisabled()
+                .onChange(of: controller.selectedSetID) { _, id in
+                    guard let id else { return }
+                    withAnimation(Motion.rows) { proxy.scrollTo(id, anchor: .center) }
+                }
             }
             if let set = controller.selectedSet {
                 HStack(spacing: 8) {
-                    Text(Copy.Sets.collectionCount(store.collections(in: set).count))
-                        .font(CobaltType.captionSmall)
+                    Label(Copy.Sets.collectionCount(store.collections(in: set).count), systemImage: Symbol.collectionSet)
+                        .labelStyle(CollectionLineLabel())
+                        .font(CobaltType.captionSmall.weight(.semibold))
                         .foregroundStyle(CobaltColor.collectionSet)
                     Spacer(minLength: 8)
                     Button { controller.copyAll(set, shell: shell) } label: {
@@ -240,9 +331,17 @@ struct CollectionSetChips: View {
                     .buttonStyle(.borderless)
                     .iconName(Copy.Sets.menu)
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(CobaltColor.collectionSetBack, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .glassEffect(
+                    .regular.tint(CobaltColor.collectionSet.opacity(0.14)),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(CobaltColor.collectionSet.opacity(0.3), lineWidth: 0.65)
+                        .allowsHitTesting(false)
+                )
                 if store.collections(in: set).isEmpty {
                     Text(Copy.Sets.emptySet)
                         .font(CobaltType.captionSmall)
@@ -264,24 +363,36 @@ struct CollectionSetChips: View {
     }
 
     private func chip(title: String, symbol: String?, on: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let isSet = symbol != nil
+        let glassTint: Color = on
+            ? (isSet ? CobaltColor.collectionSet : CobaltColor.text)
+            : (isSet ? CobaltColor.collectionSet.opacity(0.14) : CobaltColor.elevated.opacity(0.55))
+        return Button(action: action) {
             HStack(spacing: 5) {
                 if let symbol {
                     Image(systemName: symbol).font(.system(size: 10, weight: .bold))
                 }
                 Text(title)
-                    .font(Font.cobalt(11.5, on ? .semibold : .regular, relativeTo: .caption))
+                    .font(Font.cobalt(11.5, on ? .semibold : .medium, relativeTo: .caption))
                     .monospacedDigit()
                     .lineLimit(1)
                     .fixedSize()
             }
-            .foregroundStyle(on ? CobaltColor.onText : (symbol == nil ? Color.primary : CobaltColor.collectionSet))
+            .foregroundStyle(on ? CobaltColor.onText : (isSet ? CobaltColor.collectionSet : CobaltColor.text))
             .padding(.horizontal, 12)
-            .frame(minHeight: 30)
-            .background(Capsule().fill(on ? (symbol == nil ? CobaltColor.text : CobaltColor.collectionSet) : CobaltColor.elevated))
+            .frame(minHeight: 32)
             .contentShape(Capsule())
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
+        .glassEffect(.regular.tint(glassTint).interactive(), in: .capsule)
+        .overlay(
+            Capsule()
+                .strokeBorder(
+                    on ? Color.clear : (isSet ? CobaltColor.collectionSet.opacity(0.32) : CobaltColor.hairline),
+                    lineWidth: 0.65
+                )
+                .allowsHitTesting(false)
+        )
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 }

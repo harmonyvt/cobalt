@@ -224,6 +224,16 @@ public final class AppModel {
             unifiedQueue.onEdits = editLive == nil ? nil : feed
         }
     }
+    /// Audio loudness leveling Live Activity (iOS only; nil on the Mac, in previews and in tests unless one is injected).
+    @ObservationIgnored var audioLevelLive: AudioLevelLiveManager? {
+        didSet {
+            guard let live = audioLevelLive else { return }
+            let current = unifiedQueue.mergedAudioLevels
+            if !current.isEmpty {
+                Task { @MainActor in await live.observe(current) }
+            }
+        }
+    }
 
     /// Crash reports and logs to the owner's server; nil in previews and tests.
     @ObservationIgnored public internal(set) var telemetry: TelemetryService?
@@ -300,6 +310,23 @@ public final class AppModel {
         self.health = SystemHealth(context: context)
         self.makeClient = makeClient
         unifiedQueue.editRenders = { [weak self] in self?.editor.renders ?? [] }
+        unifiedQueue.audioLevels = { [weak self] in self?.audioLeveling.trackedJobs ?? [] }
+        unifiedQueue.retryAudioLevel = { [weak self] itemID in
+            guard let self else { return }
+            _ = try? await self.audioLeveling.levelItem(id: itemID, target: self.audioLeveling.settings.target)
+        }
+        audioLeveling.onJobsChanged = { [weak self] _ in
+            guard let self, let live = self.audioLevelLive else { return }
+            let merged = self.unifiedQueue.mergedAudioLevels
+            Task { @MainActor in await live.observe(merged) }
+        }
+        unifiedQueue.onAudioLevels = { [weak self] serverJobs in
+            guard let self else { return }
+            self.audioLeveling.reconcileFromServer(serverJobs)
+            guard let live = self.audioLevelLive else { return }
+            let merged = self.unifiedQueue.mergedAudioLevels
+            Task { @MainActor in await live.observe(merged) }
+        }
         context.keyRejected = { [weak self] in self?.markKeyInvalid() }
         context.capabilitiesChanged = { [weak self] caps in self?.apply(caps) }
         // a gallery saved, or something made from one: the library re-reads the post (its items, its tabs)
@@ -415,6 +442,9 @@ public final class AppModel {
             capabilities: { [unowned model] in model.capabilities },
             client: { [unowned ctx] in ctx.client as? any EditorClient },
             now: { [unowned ctx] in ctx.clock.now() })
+        model.audioLevelLive = AudioLevelLiveManager(
+            adapter: ActivityKitJobAdapter.audio(),
+            now: { [unowned ctx] in ctx.clock.now() })
         let chatLive = ChatLiveManager(
             adapter: ActivityKitJobAdapter.chats(), now: { [unowned ctx] in ctx.clock.now() },
             isAppActive: { [unowned ctx] in ctx.background.activity.isActive },
@@ -501,6 +531,9 @@ public final class AppModel {
         savePull.capabilitiesChanged()                // a check that waited for the server runs now
         editor.capabilitiesChanged()                  // `features.editor` went: close the editor
         if let editLive { Task { await editLive.capabilitiesChanged() } }
+        if !caps.audioLeveling, caps.kind != .unreachable, let audioLevelLive {
+            Task { await audioLevelLive.stopAll() }
+        }
         if caps.audioLeveling, caps.key == .valid, !audioLeveling.loaded {
             Task { await audioLeveling.load() }
         }
@@ -527,6 +560,7 @@ public final class AppModel {
     /// New server: a new client, nothing known, nothing cached.
     func serverChanged() {
         queue.serverChanged()                    // first: every job's Live Activity ends against the server it belonged to
+        if let audioLevelLive { Task { await audioLevelLive.stopAll() } }
         savePull.serverChanged()                 // another library: a new baseline for the pull
         unifiedQueue.serverChanged()             // nothing from the old server's queue is kept
         ctx.client = makeClient(settings)

@@ -695,4 +695,68 @@ describe("AudioLevelService, visibility/delete cascades, HTTP API, library/sync 
         expect(gNormHtml).toContain(`${MEDIA}PubNoAlt01.mp4`); // non-leveled item stays original!
         expect(gNormHtml).toContain("Audio leveled");
     });
+
+    it("surfaces rendering and recent audio leveling jobs in GET /queue without waking containers", async () => {
+        const container = {} as any;
+        const active = seedVideo({ id: "AudioQActive0001", name: "loud-stream.mp4" });
+        const recent = seedVideo({ id: "AudioQRecent0001", name: "done-clip.mp4" });
+        const stale = seedVideo({ id: "AudioQStale00001", name: "old-clip.mp4" });
+        const deleted = seedVideo({ id: "AudioQDelete0001", name: "deleted-clip.mp4", deleted_at: nowMs });
+
+        db.raw
+            .prepare(
+                `INSERT INTO media_audio (item_id, integrated_lufs, true_peak_dbtp, zone, state, target_lufs, output_lufs, error, measured_at, leveled_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(active.id, -6.2, -0.1, "loud", "rendering", -14, null, null, nowMs - 2_000, null, nowMs - 1_000);
+        db.raw
+            .prepare(
+                `INSERT INTO media_audio (item_id, integrated_lufs, true_peak_dbtp, zone, state, target_lufs, output_lufs, error, measured_at, leveled_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(recent.id, -7.0, -0.2, "loud", "ready", -14, -14.1, null, nowMs - 60_000, nowMs - 5_000, nowMs - 5_000);
+        db.raw
+            .prepare(
+                `INSERT INTO media_audio (item_id, integrated_lufs, true_peak_dbtp, zone, state, target_lufs, output_lufs, error, measured_at, leveled_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(stale.id, -7.0, -0.2, "loud", "ready", -14, -14.0, null, nowMs - 4_000_000, nowMs - 3_600_000, nowMs - 3_600_000);
+        db.raw
+            .prepare(
+                `INSERT INTO media_audio (item_id, integrated_lufs, true_peak_dbtp, zone, state, target_lufs, output_lufs, error, measured_at, leveled_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(deleted.id, -6.0, -0.1, "loud", "rendering", -14, null, null, nowMs - 1_000, null, nowMs - 500);
+
+        const res = await handleRequest(
+            new Request(`${API}/queue`, { headers: { authorization: `Api-Key ${CLIENT}` } }),
+            env,
+            container,
+            { now: () => nowMs },
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as {
+            audio: Array<{
+                item_id: string;
+                title: string;
+                state: string;
+                target_lufs: number | null;
+                output_lufs: number | null;
+            }>;
+        };
+        expect(body.audio.map((j) => j.item_id)).toEqual([active.id, recent.id]);
+        expect(body.audio[0]).toMatchObject({
+            item_id: active.id,
+            title: "loud-stream.mp4",
+            state: "rendering",
+            target_lufs: -14,
+        });
+        expect(body.audio[1]).toMatchObject({
+            item_id: recent.id,
+            title: "done-clip.mp4",
+            state: "ready",
+            output_lufs: -14.1,
+        });
+    });
 });
+

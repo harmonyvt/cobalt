@@ -18,32 +18,33 @@ import Testing
         )
 
         #expect(metrics.isActive)
-        #expect(metrics.bandHeight == 54)
+        #expect(metrics.bandHeight == 66)
         #expect(metrics.leadingInset == 12)
-        // 466 - 416 = 50 + 60 = 110 -> floored to 114
-        #expect(metrics.trailingReserve == 114)
-        #expect(metrics.availableLeadingWidth == 340)
+        // 466 - 416 = 50 + 92 = 142 -> floored to 160
+        #expect(metrics.trailingReserve == 160)
+        #expect(metrics.availableLeadingWidth == 294)
         #expect(!metrics.isWideLeadingSlot)
     }
 
-    @Test func expandsTrailingReserveWhenOcclusionExtendsFurtherLeft() {
+    @Test func expandsTrailingReserveAndHeightWhenStatusOrbExtendsFurtherLeftAndDown() {
         let metrics = DuoStatusAdjacentBarLayout.resolve(
             containerSize: CGSize(width: 466, height: 678),
             topSafeArea: 56,
             leadingSafeArea: 4,
             trailingSafeArea: 0,
-            occlusion: CGRect(x: 396, y: 10, width: 48, height: 34),
+            occlusion: CGRect(x: 386, y: 12, width: 54, height: 52),
             anyDivision: nil,
             isAccessibilityText: false,
             isMac: false
         )
 
         #expect(metrics.isActive)
-        #expect(metrics.bandHeight == 56)
+        // occ.maxY (64) + 8 = 72 -> clears tall battery/Wi-Fi orb vertically
+        #expect(metrics.bandHeight == 72)
         #expect(metrics.leadingInset == 14)
-        // 466 - 396 = 70 + 60 = 130
-        #expect(metrics.trailingReserve == 130)
-        #expect(metrics.availableLeadingWidth == 322)
+        // 466 - 386 = 80 + 92 = 172
+        #expect(metrics.trailingReserve == 172)
+        #expect(metrics.availableLeadingWidth == 280)
     }
 
     @Test func activatesOnDuoInnerPortraitFlatAndTabletopEvenWhenOcclusionIsInactive() {
@@ -61,9 +62,9 @@ import Testing
         )
 
         #expect(metrics.isActive)
-        #expect(metrics.bandHeight == 54)
-        #expect(metrics.trailingReserve == 114)
-        #expect(metrics.availableLeadingWidth == 543)
+        #expect(metrics.bandHeight == 66)
+        #expect(metrics.trailingReserve == 160)
+        #expect(metrics.availableLeadingWidth == 497)
         #expect(metrics.isWideLeadingSlot)
     }
 
@@ -124,8 +125,8 @@ import Testing
             forceEnable: true
         )
         #expect(preview.isActive)
-        #expect(preview.bandHeight == 54)
-        #expect(preview.availableLeadingWidth == 340)
+        #expect(preview.bandHeight == 66)
+        #expect(preview.availableLeadingWidth == 294)
     }
 
     @Test func deactivatesOnMacAccessibilityTextAndNarrowMultitaskingSlice() {

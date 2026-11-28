@@ -216,9 +216,11 @@ enum Copy {
 
     // MARK: failures
 
-    /// "100 MB" / "200 MB". The server's limits are 100 000 000 bytes (upload) and 200 MiB (source):
-    /// a whole number of MiB reads as that many MB, anything else in decimal MB.
+    /// "100 MB" / "1 GB". The server's limits are 1 GiB (upload and source):
+    /// a whole number of GiB reads as GB, MiB as MB, anything else in decimal MB.
     static func megabytes(_ bytes: Int64) -> String {
+        let gib: Int64 = 1_073_741_824
+        if bytes > 0, bytes % gib == 0 { return "\(bytes / gib) GB" }
         let mib: Int64 = 1_048_576
         if bytes > 0, bytes % mib == 0 { return "\(bytes / mib) MB" }
         return "\(bytes / 1_000_000) MB"

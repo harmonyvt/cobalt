@@ -242,6 +242,7 @@ private struct LinkScreenList: View {
                         activeURL: activeURL,
                         isSubmitting: controller.levelingBulk,
                         isCopied: controller.copiedID == link.id,
+                        primaryCopyMode: true,
                         onCopy: {
                             controller.copy(link, gate: gate, useNormal: useNormalAudio, shell: shell)
                         },

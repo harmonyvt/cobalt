@@ -9,32 +9,24 @@ import SwiftUI
 // while the scroll is moving (they resume 0.3 s after it settles), and none at all with Reduce Motion, Low Power
 // Mode, an inactive scene or (for a webp that is not on this device) an expensive or constrained network.
 
-/// What the system says that the budget cares about. Both callbacks arrive on system queues; the owner hops to
-/// the main actor itself.
+/// Network path signal for the library mosaic; power & thermal come from `AppLifecycle`.
 private final class SystemSignals: @unchecked Sendable {
     private let monitor = NWPathMonitor()
-    private var token: NSObjectProtocol?
 
-    init(power: @escaping @Sendable (Bool) -> Void, network: @escaping @Sendable (Bool) -> Void) {
+    init(network: @escaping @Sendable (Bool) -> Void) {
         monitor.pathUpdateHandler = { @Sendable path in
             network(!path.isExpensive && !path.isConstrained)
         }
         monitor.start(queue: DispatchQueue(label: "com.capybaraharmony.cobalt.library.path"))
-        token = NotificationCenter.default.addObserver(
-            forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main
-        ) { @Sendable _ in
-            power(ProcessInfo.processInfo.isLowPowerModeEnabled)
-        }
     }
 
     deinit {
         monitor.cancel()
-        if let token { NotificationCenter.default.removeObserver(token) }
     }
 }
 
 @MainActor @Observable
-final class AnimationBudget: Purgeable {
+final class AnimationBudget: Purgeable, LifecycleAware {
     /// A visible webp tile: where its centre is in the scroll content, and whether its bytes come from the network.
     struct Candidate: Equatable {
         var y: Double
@@ -52,7 +44,7 @@ final class AnimationBudget: Purgeable {
     @ObservationIgnored private var settled = true
     @ObservationIgnored private var reduceMotion = false
     @ObservationIgnored private var sceneActive = true
-    @ObservationIgnored private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @ObservationIgnored private var lowPower = AppLifecycle.shared.snapshot.shouldConservePower || ProcessInfo.processInfo.isLowPowerModeEnabled
     @ObservationIgnored private var networkOK = true
     @ObservationIgnored private var settleTask: Task<Void, Never>?
     @ObservationIgnored private var signals: SystemSignals?
@@ -61,6 +53,11 @@ final class AnimationBudget: Purgeable {
         self.limit = limit
         // held weakly there: a mosaic that goes away takes its budget with it
         AppLifecycle.shared.register(purgeable: self)
+        AppLifecycle.shared.register(self, order: .media)
+    }
+
+    func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        setLowPower(snapshot.shouldConservePower)
     }
 
     /// A memory warning (or the app leaving the screen) stops every moving tile: their decoded frames go with their
@@ -69,11 +66,11 @@ final class AnimationBudget: Purgeable {
         if !playing.isEmpty { playing = [] }
     }
 
-    /// Starts listening to Low Power Mode and the network path. Safe to call twice.
+    /// Starts listening to the network path. Safe to call twice.
     func start() {
         guard signals == nil else { return }
+        lowPower = AppLifecycle.shared.snapshot.shouldConservePower || ProcessInfo.processInfo.isLowPowerModeEnabled
         signals = SystemSignals(
-            power: { [weak self] low in Task { @MainActor in self?.setLowPower(low) } },
             network: { [weak self] ok in Task { @MainActor in self?.setNetworkOK(ok) } })
     }
 
@@ -122,6 +119,7 @@ final class AnimationBudget: Purgeable {
     }
 
     private func setLowPower(_ value: Bool) {
+        guard value != lowPower else { return }
         lowPower = value
         recompute()
     }

@@ -373,4 +373,184 @@ struct AudioLoudnessTests {
         model.audioLeveling.reset()
         #expect(!model.audioLeveling.isBulkLeveling)
     }
+
+    @Test("QueueSnapshot decodes audio leveling entries cleanly")
+    func queueSnapshotDecodesAudioJobs() throws {
+        let json = """
+        {
+          "status": "success",
+          "line": { "running": null, "waiting": [] },
+          "search": null,
+          "posters": null,
+          "edits": [],
+          "audio": [
+            {
+              "item_id": "itemA",
+              "title": "loud_clip.mp4",
+              "state": "rendering",
+              "target_lufs": -14,
+              "input_lufs": -6.2,
+              "output_lufs": null,
+              "error": null,
+              "updated_at": 1700000100000
+            },
+            {
+              "item_id": "itemB",
+              "title": "done_clip.mp4",
+              "state": "ready",
+              "target_lufs": -14,
+              "input_lufs": -7.4,
+              "output_lufs": -14.1,
+              "error": null,
+              "updated_at": 1700000090000
+            },
+            {
+              "item_id": "itemC",
+              "title": "bad_clip.mp4",
+              "state": "failed",
+              "target_lufs": -16,
+              "input_lufs": null,
+              "output_lufs": null,
+              "error": "ffmpeg failed",
+              "updated_at": 1700000080000
+            }
+          ]
+        }
+        """
+        let snap = try CobaltJSON.decoder().decode(QueueSnapshot.self, from: Data(json.utf8))
+        let audio = try #require(snap.audio)
+        #expect(audio.count == 3)
+        #expect(audio[0].itemID == "itemA")
+        #expect(audio[0].isActive == true)
+        #expect(audio[0].targetLufs == -14)
+        #expect(audio[1].state == .ready)
+        #expect(audio[1].outputLufs == -14.1)
+        #expect(audio[2].state == .failed)
+        #expect(audio[2].error == "ffmpeg failed")
+    }
+
+    @Test("Audio leveling appears in UnifiedQueue and ActivityModel immediately when queued")
+    @MainActor
+    func unifiedQueueAndActivitySurfaceAudioLeveling() async throws {
+        let model = AppModel.preview(.happy)
+        let loud = AudioLoudnessInfo(integratedLufs: -6.5, zone: .loud, state: .measured)
+        let result = await model.audioLeveling.levelItems(
+            ids: ["clip-1", "clip-2"],
+            target: .lufs14,
+            audioLookup: { _ in loud }
+        )
+        #expect(result.queued == ["clip-1", "clip-2"])
+
+        let nowSection = model.unifiedQueue.sections.first { $0.section == .now }
+        let audioItems = nowSection?.items.filter {
+            if case .audioLevel = $0.kind { return true }
+            return false
+        } ?? []
+        #expect(audioItems.count == 2)
+        #expect(model.unifiedQueue.summary.running >= 2)
+        #expect(model.unifiedQueue.badgeCount >= 2)
+        #expect(model.activity.activeCount >= 2)
+        #expect(model.activity.items.contains { $0.kind == .audioLevel && $0.id == "audio:clip-1" })
+
+        // Reconciling ready status from server moves items out of running into finished
+        let future = Date().addingTimeInterval(10)
+        model.audioLeveling.reconcileFromServer([
+            QueueSnapshot.AudioLevelJob(
+                itemID: "clip-1", title: "clip-1", state: .ready,
+                targetLufs: -14, outputLufs: -14.0, updatedAt: future
+            ),
+            QueueSnapshot.AudioLevelJob(
+                itemID: "clip-2", title: "clip-2", state: .failed,
+                targetLufs: -14, error: "timeout", updatedAt: future
+            ),
+        ])
+        #expect(model.unifiedQueue.summary.running == 0)
+        #expect(model.unifiedQueue.summary.failed == 1)
+        #expect(model.unifiedQueue.summary.finished >= 1)
+        #expect(model.activity.activeCount == 0)
+        #expect(model.activity.attentionCount == 1)
+
+        model.audioLeveling.reset()
+    }
+
+    @Test("AudioLevelLiveManager groups bulk leveling into one Live Activity and reports completion")
+    @MainActor
+    func audioLevelLiveActivityGroupsBatchAndFinishes() async {
+        var clockNow = Date(timeIntervalSince1970: 1_700_000_000)
+        let adapter = FakeAudioLevelLiveAdapter(clock: { clockNow })
+        let manager = AudioLevelLiveManager(adapter: adapter, now: { clockNow })
+
+        // Start a 3-clip bulk batch -> ONE Live Activity requested
+        let j1 = QueueSnapshot.AudioLevelJob(itemID: "a1", title: "clip1.mp4", state: .rendering, targetLufs: -14, updatedAt: clockNow)
+        let j2 = QueueSnapshot.AudioLevelJob(itemID: "a2", title: "clip2.mp4", state: .rendering, targetLufs: -14, updatedAt: clockNow)
+        let j3 = QueueSnapshot.AudioLevelJob(itemID: "a3", title: "clip3.mp4", state: .rendering, targetLufs: -14, updatedAt: clockNow)
+        await manager.observe([j1, j2, j3])
+
+        #expect(adapter.requests.count == 1)
+        let handle = adapter.handles[0]
+        #expect(handle.attributes.kind == "audio")
+        #expect(handle.attributes.id == "audio-level")
+        #expect(handle.state.phase == .working)
+        #expect(handle.state.headline == "leveling audio · 0 of 3")
+        #expect(handle.state.compact == "0/3")
+        #expect(handle.state.fraction == 0)
+
+        // 1 of 3 finishes -> updates same activity, does not spawn a second one
+        clockNow = clockNow.addingTimeInterval(5)
+        let j1Done = QueueSnapshot.AudioLevelJob(itemID: "a1", title: "clip1.mp4", state: .ready, targetLufs: -14, outputLufs: -14.0, updatedAt: clockNow)
+        await manager.observe([j1Done, j2, j3])
+        #expect(adapter.requests.count == 1)
+        #expect(handle.state.headline == "leveling audio · 1 of 3")
+        #expect(handle.state.compact == "1/3")
+        #expect(abs((handle.state.fraction ?? 0) - (1.0 / 3.0)) < 0.01)
+
+        // Remaining 2 settle: 1 ready, 1 failed -> ends activity cleanly with mixed summary
+        clockNow = clockNow.addingTimeInterval(5)
+        let j2Done = QueueSnapshot.AudioLevelJob(itemID: "a2", title: "clip2.mp4", state: .ready, targetLufs: -14, outputLufs: -14.1, updatedAt: clockNow)
+        let j3Fail = QueueSnapshot.AudioLevelJob(itemID: "a3", title: "clip3.mp4", state: .failed, targetLufs: -14, error: "ffmpeg error", updatedAt: clockNow)
+        await manager.observe([j1Done, j2Done, j3Fail])
+        #expect(handle.isEnded)
+        #expect(handle.end?.state.phase == .done)
+        #expect(handle.end?.state.headline == "2 leveled · 1 failed")
+        #expect(handle.end?.state.compact == "2/3")
+
+        // Single-clip run afterwards starts a fresh activity and ends with output LUFS
+        clockNow = clockNow.addingTimeInterval(10)
+        let solo = QueueSnapshot.AudioLevelJob(itemID: "s1", title: "solo.mp4", state: .rendering, targetLufs: -16, updatedAt: clockNow)
+        await manager.observe([solo])
+        #expect(adapter.requests.count == 2)
+        let soloHandle = adapter.handles[1]
+        #expect(soloHandle.state.headline == "leveling solo.mp4")
+        #expect(soloHandle.state.detail == "-16 LUFS")
+
+        clockNow = clockNow.addingTimeInterval(4)
+        let soloDone = QueueSnapshot.AudioLevelJob(itemID: "s1", title: "solo.mp4", state: .ready, targetLufs: -16, outputLufs: -16.0, updatedAt: clockNow)
+        await manager.observe([soloDone])
+        #expect(soloHandle.isEnded)
+        #expect(soloHandle.end?.state.phase == .done)
+        #expect(soloHandle.end?.state.headline == "audio leveled")
+        #expect(soloHandle.end?.state.result == "-16.0 LUFS")
+    }
 }
+
+@MainActor
+private final class FakeAudioLevelLiveAdapter: AudioLevelLiveAdapter {
+    var isAvailable = true
+    var handles: [FakeLiveHandle] = []
+    var requests: [JobLiveJob] = []
+    let clock: @MainActor () -> Date
+
+    init(clock: @escaping @MainActor () -> Date) {
+        self.clock = clock
+    }
+
+    var activities: [any JobActivityHandle] { handles }
+
+    func request(_ job: JobLiveJob, staleDate: Date, push: Bool) throws -> any JobActivityHandle {
+        requests.append(job)
+        let h = FakeLiveHandle(job: job, staleDate: staleDate, clock: clock)
+        handles.append(h)
+        return h
+    }
+}
+

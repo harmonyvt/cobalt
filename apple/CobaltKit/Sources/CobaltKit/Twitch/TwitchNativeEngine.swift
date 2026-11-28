@@ -277,9 +277,12 @@ private final class ChunkedStreamSession: NSObject, URLSessionDataDelegate, @unc
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    func stream(url: URL) -> AsyncThrowingStream<Data, Error> {
+    func stream(url: URL, headers: [String: String] = [:]) -> AsyncThrowingStream<Data, Error> {
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        for (field, value) in headers {
+            req.setValue(value, forHTTPHeaderField: field)
+        }
         return stream(request: req)
     }
 
@@ -303,9 +306,12 @@ private final class ChunkedStreamSession: NSObject, URLSessionDataDelegate, @unc
         }
     }
 
-    func fetchData(url: URL, byteRange: TwitchByteRange? = nil) async throws -> Data {
+    func fetchData(url: URL, byteRange: TwitchByteRange? = nil, headers: [String: String] = [:]) async throws -> Data {
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        for (field, value) in headers {
+            req.setValue(value, forHTTPHeaderField: field)
+        }
         if let byteRange {
             req.setValue(byteRange.httpRangeHeader, forHTTPHeaderField: "Range")
         }
@@ -369,6 +375,7 @@ private final class ChunkedStreamSession: NSObject, URLSessionDataDelegate, @unc
 private actor OverlappedSegmentFetch {
     let segment: TwitchSegment
     private var buffered: [Data] = []
+    private var bufferedHead = 0
     private var finished = false
     private var failure: Error?
     private var waiter: CheckedContinuation<Void, Never>?
@@ -408,8 +415,17 @@ private actor OverlappedSegmentFetch {
     func nextChunk() async throws -> Data? {
         while true {
             try Task.checkCancellation()
-            if !buffered.isEmpty {
-                return buffered.removeFirst()
+            if bufferedHead < buffered.count {
+                let chunk = buffered[bufferedHead]
+                bufferedHead += 1
+                if bufferedHead == buffered.count {
+                    buffered.removeAll(keepingCapacity: true)
+                    bufferedHead = 0
+                } else if bufferedHead >= 32 && bufferedHead * 2 >= buffered.count {
+                    buffered.removeFirst(bufferedHead)
+                    bufferedHead = 0
+                }
+                return chunk
             }
             if let failure { throw failure }
             if finished { return nil }
@@ -422,9 +438,9 @@ private actor OverlappedSegmentFetch {
     }
 
     private func waitForChunkOrDone() async {
-        guard buffered.isEmpty, failure == nil, !finished else { return }
+        guard bufferedHead >= buffered.count, failure == nil, !finished else { return }
         await withCheckedContinuation { cont in
-            if !buffered.isEmpty || failure != nil || finished {
+            if bufferedHead < buffered.count || failure != nil || finished {
                 cont.resume()
             } else {
                 waiter = cont
@@ -473,7 +489,9 @@ private final class SampleBufferPipeline: @unchecked Sendable {
     private var lastASC: Data?
 
     private var pendingVideo: [CMSampleBuffer] = []
+    private var pendingVideoHead = 0
     private var pendingAudio: [CMSampleBuffer] = []
+    private var pendingAudioHead = 0
     private var awaitingKeyframe = true
     private var audioOnly = false
     private var videoOutputEnabled = true
@@ -671,6 +689,7 @@ private final class SampleBufferPipeline: @unchecked Sendable {
             self.videoOutputEnabled = enabled
             if !enabled {
                 self.pendingVideo.removeAll(keepingCapacity: true)
+                self.pendingVideoHead = 0
                 self.videoRenderer?.flush(removingDisplayedImage: false)
                 self.highestVideoPTS = nil
                 self.awaitingKeyframe = true
@@ -697,7 +716,9 @@ private final class SampleBufferPipeline: @unchecked Sendable {
                 self.videoRenderer?.flush()
             }
             self.pendingVideo.removeAll(keepingCapacity: true)
+            self.pendingVideoHead = 0
             self.pendingAudio.removeAll(keepingCapacity: true)
+            self.pendingAudioHead = 0
             self.awaitingKeyframe = true
             self.clockStarted = false
             self.isPaused = false
@@ -733,6 +754,10 @@ private final class SampleBufferPipeline: @unchecked Sendable {
             guard let self, self.clockStarted else { return }
             Telemetry.log(.info, .live, "twitch.native.audio_flushed")
             self.audioRenderer.flush()
+            if self.pendingAudioHead > 0 {
+                self.pendingAudio.removeFirst(self.pendingAudioHead)
+                self.pendingAudioHead = 0
+            }
             let nowPTS = self.synchronizer.currentTime().seconds
             if nowPTS.isFinite {
                 // Drop queued audio frames that are already behind the current playhead.
@@ -762,6 +787,7 @@ private final class SampleBufferPipeline: @unchecked Sendable {
         )
         vr.flush()
         pendingVideo.removeAll(keepingCapacity: true)
+        pendingVideoHead = 0
         awaitingKeyframe = true
         if !clockStarted {
             // If the renderer failed or was invalidated by view reparenting before playback started, clear the
@@ -851,12 +877,18 @@ private final class SampleBufferPipeline: @unchecked Sendable {
         }
 
         // Prevent unbounded memory growth if rendering is paused or blocked.
-        if pendingVideo.count > 480 {
-            pendingVideo.removeFirst(pendingVideo.count - 240)
+        let queuedVideo = pendingVideo.count - pendingVideoHead
+        if queuedVideo > 480 {
+            let drop = pendingVideo.count - 240
+            pendingVideo.removeFirst(drop)
+            pendingVideoHead = 0
             awaitingKeyframe = true
         }
-        if pendingAudio.count > 480 {
-            pendingAudio.removeFirst(pendingAudio.count - 240)
+        let queuedAudio = pendingAudio.count - pendingAudioHead
+        if queuedAudio > 480 {
+            let drop = pendingAudio.count - 240
+            pendingAudio.removeFirst(drop)
+            pendingAudioHead = 0
         }
 
         drainVideo()
@@ -877,16 +909,36 @@ private final class SampleBufferPipeline: @unchecked Sendable {
         if videoOutputEnabled {
             recoverVideoRendererIfNeeded(vr)
         }
-        while !pendingVideo.isEmpty && vr.isReadyForMoreMediaData {
-            let sb = pendingVideo.removeFirst()
+        while pendingVideoHead < pendingVideo.count && vr.isReadyForMoreMediaData {
+            let sb = pendingVideo[pendingVideoHead]
+            pendingVideoHead += 1
             vr.enqueue(sb)
+        }
+        if pendingVideoHead == pendingVideo.count {
+            if !pendingVideo.isEmpty {
+                pendingVideo.removeAll(keepingCapacity: true)
+            }
+            pendingVideoHead = 0
+        } else if pendingVideoHead >= 64 && pendingVideoHead * 2 >= pendingVideo.count {
+            pendingVideo.removeFirst(pendingVideoHead)
+            pendingVideoHead = 0
         }
     }
 
     private func drainAudio() {
-        while !pendingAudio.isEmpty && audioRenderer.isReadyForMoreMediaData {
-            let sb = pendingAudio.removeFirst()
+        while pendingAudioHead < pendingAudio.count && audioRenderer.isReadyForMoreMediaData {
+            let sb = pendingAudio[pendingAudioHead]
+            pendingAudioHead += 1
             audioRenderer.enqueue(sb)
+        }
+        if pendingAudioHead == pendingAudio.count {
+            if !pendingAudio.isEmpty {
+                pendingAudio.removeAll(keepingCapacity: true)
+            }
+            pendingAudioHead = 0
+        } else if pendingAudioHead >= 64 && pendingAudioHead * 2 >= pendingAudio.count {
+            pendingAudio.removeFirst(pendingAudioHead)
+            pendingAudioHead = 0
         }
     }
 
@@ -1081,6 +1133,7 @@ public actor TwitchNativeEngine {
     private var channel: String?
     private var authToken: String?
     private var variants: [TwitchVariant] = []
+    private var streamHeaders: [String: String] = [:]
     private var selectedVariant: TwitchVariant?
     private var preferredVariantID: String?
     private var startupBudgetHint: TwitchQualityBudgetHint?
@@ -1089,6 +1142,9 @@ public actor TwitchNativeEngine {
     private var isInterrupted = false
     private var isMuted = false
     private var currentVolume: Float = 1.0
+    private var lowPowerMode = false
+    private var videoOutputEnabled = true
+    private var lastEmittedStats: TwitchNativeStats?
     private var volumeRampTask: Task<Void, Never>?
     private var generation: UInt64 = 0
     private var runTask: Task<Void, Never>?
@@ -1284,7 +1340,27 @@ public actor TwitchNativeEngine {
     /// Disables or re-enables video decoding/enqueuing while audio continues uninterrupted (e.g. screen-locked
     /// background audio without Picture-in-Picture).
     public func setVideoOutputEnabled(_ enabled: Bool) {
+        let changed = (videoOutputEnabled != enabled)
+        videoOutputEnabled = enabled
+        if !enabled {
+            cancelOverlap()
+        }
         pipeline.setVideoOutputEnabled(enabled)
+        if changed, runTask != nil {
+            startTelemetryLoop(gen: generation)
+        }
+    }
+
+    /// Adjusts LL-HLS polling, overlapped prefetch, and telemetry pacing for iOS Low Power Mode.
+    public func setLowPowerMode(_ enabled: Bool) {
+        guard lowPowerMode != enabled else { return }
+        lowPowerMode = enabled
+        if enabled {
+            cancelOverlap()
+        }
+        if runTask != nil {
+            startTelemetryLoop(gen: generation)
+        }
     }
 
     public func selectVariant(id: String) {
@@ -1381,7 +1457,8 @@ public actor TwitchNativeEngine {
     private func activeSegmentStream() -> SegmentStreamer {
         if let customSegmentStreamer { return customSegmentStreamer }
         let s = streamer
-        return { url in s.stream(url: url) }
+        let headers = streamHeaders
+        return { url in s.stream(url: url, headers: headers) }
     }
 
     private func handlePlayingChange(_ playing: Bool, gen: UInt64) {
@@ -1441,7 +1518,14 @@ public actor TwitchNativeEngine {
 
     private func startTelemetryLoop(gen: UInt64) {
         telemetryTask?.cancel()
-        let interval: Duration = startupTimeout < .seconds(2) ? .milliseconds(50) : .milliseconds(500)
+        let interval: Duration
+        if startupTimeout < .seconds(2) {
+            interval = .milliseconds(50)
+        } else if lowPowerMode || !videoOutputEnabled || selectedVariant?.isAudioOnly == true {
+            interval = .milliseconds(2000)
+        } else {
+            interval = .milliseconds(1000)
+        }
         telemetryTask = Task.detached(priority: .utility) { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: interval)
@@ -1461,6 +1545,7 @@ public actor TwitchNativeEngine {
         telemetryTask = nil
         cancelOverlap()
         loadingSince = nil
+        lastEmittedStats = nil
         audioSession.release(audioClaimID)
         emit(.failed(reason))
     }
@@ -1481,10 +1566,12 @@ public actor TwitchNativeEngine {
         resetDiagnostics()
         pipeline.flush(clearImage: clearImage, generation: gen)
         loadingSince = nil
+        lastEmittedStats = nil
         stallRecoveries = 0
         isInterrupted = false
         channel = nil
         variants = []
+        streamHeaders = [:]
         selectedVariant = nil
         if releaseAudioClaim {
             userPaused = false
@@ -1629,6 +1716,7 @@ public actor TwitchNativeEngine {
         let timeout = initMapTimeout
         let custom = customSegmentStreamer
         let session = streamer
+        let headers = streamHeaders
         return await withTaskGroup(of: InitMapFetchResult.self) { group in
             group.addTask {
                 do {
@@ -1647,7 +1735,7 @@ public actor TwitchNativeEngine {
                         }
                         return .data(collected)
                     }
-                    let fetched = try await session.fetchData(url: url, byteRange: byteRange)
+                    let fetched = try await session.fetchData(url: url, byteRange: byteRange, headers: headers)
                     return .data(fetched)
                 } catch {
                     return .failed
@@ -1760,6 +1848,7 @@ public actor TwitchNativeEngine {
                 return
             }
             variants = resolved.variants
+            streamHeaders = resolved.requiredHeaders
             let chosen = pickVariant(from: compatible, preferredID: preferredVariantID)
             selectedVariant = chosen
             diagPhase = "resolved"
@@ -1857,7 +1946,7 @@ public actor TwitchNativeEngine {
             let playlist: TwitchMediaPlaylist
             do {
                 let receivedAt = Date.now
-                playlist = try await resolver.fetchMediaPlaylist(url: activeVariant.url)
+                playlist = try await resolver.fetchMediaPlaylist(url: activeVariant.url, headers: streamHeaders)
                 diagPlaylistPolls += 1
                 diagLowLatency = playlist.isLowLatency
                 playlistFailures = 0
@@ -1943,7 +2032,11 @@ public actor TwitchNativeEngine {
                         continue
                     }
                 }
-                let waitMs = startupTimeout < .seconds(2) ? 40 : 450
+                let waitMs = playlistPollWaitMs(
+                    isLowLatency: true,
+                    audioOnly: activeVariant.isAudioOnly,
+                    emptyPolls: emptyCandidatePolls
+                )
                 try? await Task.sleep(for: .milliseconds(waitMs))
                 continue
             }
@@ -1993,8 +2086,12 @@ public actor TwitchNativeEngine {
                         continue
                     }
                 }
-                // Already caught up to the latest prefetch segment; wait a short beat and poll again.
-                let waitMs = startupTimeout < .seconds(2) ? 40 : (playlist.isLowLatency ? 450 : 900)
+                // Already caught up to the latest prefetch segment; wait a beat and poll again.
+                let waitMs = playlistPollWaitMs(
+                    isLowLatency: playlist.isLowLatency,
+                    audioOnly: activeVariant.isAudioOnly,
+                    emptyPolls: emptyCandidatePolls
+                )
                 try? await Task.sleep(for: .milliseconds(waitMs))
                 continue
             }
@@ -2003,8 +2100,10 @@ public actor TwitchNativeEngine {
             let current = candidates[0]
             let nextSegment = candidates.count > 1 ? candidates[1] : nil
 
-            // Start overlapping the next prefetch segment right away so handoff has zero RTT gap.
-            if let nextSegment, nextSegment.isPrefetch {
+            // Start overlapping the next prefetch segment right away so handoff has zero RTT gap
+            // (skipped in Low Power Mode or background/audio-only mode to keep radio/CPU idle).
+            if let nextSegment, nextSegment.isPrefetch,
+               !lowPowerMode, videoOutputEnabled, !activeVariant.isAudioOnly {
                 let existingSeq = overlappedFetch?.segment.sequence
                 if existingSeq != nextSegment.sequence {
                     cancelOverlap()
@@ -2136,6 +2235,7 @@ public actor TwitchNativeEngine {
             let compat = refreshed.variants.filter(\.isNativeCompatible)
             guard !compat.isEmpty else { return .failed }
             variants = refreshed.variants
+            streamHeaders = refreshed.requiredHeaders
             let chosen = pickVariant(from: compat, preferredID: preferredID)
             selectedVariant = chosen
             emit(.streamURL(refreshed.masterURL))
@@ -2339,6 +2439,18 @@ public actor TwitchNativeEngine {
         }
     }
 
+    private func playlistPollWaitMs(isLowLatency: Bool, audioOnly: Bool, emptyPolls: Int) -> Int {
+        if startupTimeout < .seconds(2) { return 40 }
+        let conserve = lowPowerMode || !videoOutputEnabled || audioOnly
+        if conserve {
+            let backoff = emptyPolls > 2 ? min(800, (emptyPolls - 2) * 400) : 0
+            return min(2000, 1200 + backoff)
+        }
+        let base = isLowLatency ? 650 : 1100
+        let backoff = emptyPolls > 2 ? min(550, (emptyPolls - 2) * 300) : 0
+        return min(1500, base + backoff)
+    }
+
     private func pollTelemetry(gen: UInt64) async {
         guard gen == generation else { return }
         let stats = await pipeline.tickTelemetry()
@@ -2364,6 +2476,20 @@ public actor TwitchNativeEngine {
             return
         }
 
-        emit(.stats(stats))
+        let delayQuantum: Double = lowPowerMode ? 1.0 : 0.5
+        let quantizedDelay = stats.delay.map { ($0 / delayQuantum).rounded() * delayQuantum }
+        let quantizedBuffer = (stats.bufferSeconds * 2.0).rounded() / 2.0
+        let quantized = TwitchNativeStats(
+            delay: quantizedDelay,
+            bufferSeconds: quantizedBuffer,
+            isLowLatency: stats.isLowLatency,
+            rate: (stats.rate * 100).rounded() / 100,
+            isBuffering: stats.isBuffering,
+            isClockStarted: stats.isClockStarted,
+            isStalled: stats.isStalled
+        )
+        guard quantized != lastEmittedStats else { return }
+        lastEmittedStats = quantized
+        emit(.stats(quantized))
     }
 }

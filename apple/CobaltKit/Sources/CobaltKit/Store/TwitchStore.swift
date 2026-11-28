@@ -56,18 +56,23 @@ public final class TwitchStore {
     /// Channels opened before, newest first (names only).
     public private(set) var recents: [String] = []
 
-    /// Chat can send: signed in with the chat scopes and joined.
+    /// Chat can send: signed in with the chat scopes and joined on a platform that supports sending.
     public var canSend: Bool { isDualStream ? combinedChat.canSendAny : (chat?.canSend == true) }
     /// Signed in, but the studio's connection predates the chat scopes: connect twitch again in studio.
     public var needsChatScopes: Bool { session?.connected == true && session?.reconnect != true && session?.canChat != true }
     public var needsReconnect: Bool { session?.reconnect == true }
-    public var canClip: Bool { session?.canClip == true && activeChannels.contains(where: { streamInfos[$0] != nil }) }
+    public var canClip: Bool {
+        session?.canClip == true && activeChannels.contains(where: {
+            StreamAddress.platform(for: $0).supportsServerClip && streamInfos[$0] != nil
+        })
+    }
 
     @ObservationIgnored private let ctx: PipelineContext
-    @ObservationIgnored private var engine: TwitchChatEngine?
+    @ObservationIgnored private var engine: (any LiveChatEngine)?
     @ObservationIgnored private var listen: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var emotesVersion = -1
+    @ObservationIgnored private var lowPowerMode = false
     /// When `GET /stage/twitch/session` was last asked, so a session that cannot chat yet is asked again (after a
     /// reconnect in studio) without asking on every appearance.
     @ObservationIgnored var sessionFetchedAt: Date?  // internal: tests age it past `recheckAfter`
@@ -81,6 +86,20 @@ public final class TwitchStore {
     init(context: PipelineContext) {
         self.ctx = context
         self.recents = context.settings.defaults.stringArray(forKey: Self.recentsKey) ?? []
+        let conserve = AppLifecycle.shared.snapshot.shouldConservePower
+        self.lowPowerMode = conserve
+        self.combinedChat.setLowPowerMode(conserve)
+        AppLifecycle.shared.register(self, order: .media)
+    }
+
+    /// Propagates power-conservation / Low Power Mode to active single or combined chat engines.
+    public func setLowPowerMode(_ enabled: Bool) {
+        guard lowPowerMode != enabled else { return }
+        lowPowerMode = enabled
+        combinedChat.setLowPowerMode(enabled)
+        if let active = engine {
+            Task { await active.setLowPowerMode(enabled) }
+        }
     }
 
     /// Reads the session (when it is missing, near its end, or cannot chat yet) and the followed live channels. A
@@ -128,6 +147,7 @@ public final class TwitchStore {
     /// The open channel's chat was joined without chat scopes and the session has them now: join again, signed in.
     private func rejoinIfChatGained() {
         guard !engineCanChat, session?.credentials?.canChat == true else { return }
+        guard activeChannels.contains(where: { StreamAddress.platform(for: $0) == .twitch }) else { return }
         if activeChannels.count >= 2 {
             let channelsToReopen = activeChannels
             let focused = combinedChat.focusedChannel
@@ -140,10 +160,12 @@ public final class TwitchStore {
         open(login)
     }
 
-    /// Opens `name` (a login, or a twitch.tv link): its stream and its chat.
+    /// Opens `name` (a Twitch login/URL, Kick slug/URL, or YouTube Live URL/handle): its stream and live chat.
     public func open(_ name: String) {
         guard let login = Self.login(from: name) else { return }
-        if activeChannels == [login], engine != nil, engineCanChat || session?.credentials?.canChat != true { return }
+        let platform = StreamAddress.platform(for: login)
+        let needsSessionUpgrade = platform == .twitch && !engineCanChat && session?.credentials?.canChat == true
+        if activeChannels == [login], engine != nil, !needsSessionUpgrade { return }
         // Preserve already-fetched metadata if demoting from dual/multi-stream to one of the active channels.
         let preservedInfo = channelInfos[login]
         let preservedStream = streamInfos[login]
@@ -153,11 +175,14 @@ public final class TwitchStore {
         if let preservedStream { streamInfos[login] = preservedStream }
         remember(login)
         let gen = generation
+        let lpm = lowPowerMode
         Task {
-            await refreshSessionIfNeeded()
-            guard gen == generation, activeChannels == [login] else { return }
-            let creds = session?.credentials
-            let engine = TwitchChatEngine(channel: login, credentials: creds)
+            if platform == .twitch {
+                await refreshSessionIfNeeded()
+                guard gen == generation, activeChannels == [login] else { return }
+            }
+            let creds = platform == .twitch ? session?.credentials : nil
+            let engine = LiveChatEngineFactory.make(channel: login, credentials: creds)
             self.engine = engine
             engineCanChat = creds?.canChat == true
             listen = Task { [weak self] in
@@ -171,27 +196,40 @@ public final class TwitchStore {
                     }
                 }
             }
+            if lpm { await engine.setLowPowerMode(true) }
             await engine.start()
-            if let creds {
-                let dir = TwitchDirectory(credentials: creds)
-                async let info = dir.channel(login: login)
-                async let live = dir.stream(login: login)
-                let (i, l) = await (info, live)
-                guard gen == generation, activeChannels == [login] else { return }
-                if let i { channelInfos[login] = i } else { channelInfos.removeValue(forKey: login) }
-                if let l { streamInfos[login] = l } else { streamInfos.removeValue(forKey: login) }
+            if platform == .twitch {
+                if let creds {
+                    let dir = TwitchDirectory(credentials: creds)
+                    async let info = dir.channel(login: login)
+                    async let live = dir.stream(login: login)
+                    let (i, l) = await (info, live)
+                    guard gen == generation, activeChannels == [login] else { return }
+                    if let i { channelInfos[login] = i } else { channelInfos.removeValue(forKey: login) }
+                    if let l { streamInfos[login] = l } else { streamInfos.removeValue(forKey: login) }
+                }
+            } else {
+                if let meta = await ExternalLiveDirectory.fetchMetadata(for: login) {
+                    guard gen == generation, activeChannels == [login] else { return }
+                    channelInfos[login] = meta.asChannelInfo
+                    if let live = meta.asStreamInfo {
+                        streamInfos[login] = live
+                    } else {
+                        streamInfos.removeValue(forKey: login)
+                    }
+                }
             }
         }
     }
 
-    /// Opens two simultaneous Twitch streams and wires `combinedChat` for both channels.
+    /// Opens two simultaneous live streams (Twitch, Kick, or YouTube) and wires `combinedChat` for both channels.
     /// Keeps any already-fetched channel/stream metadata intact on 1 -> 2 promotion to avoid flicker.
     public func openDual(primary rawPrimary: String, secondary rawSecondary: String, focusedChannel rawFocused: String? = nil) {
         guard let primary = Self.login(from: rawPrimary), let secondary = Self.login(from: rawSecondary) else { return }
         openMulti(channels: [primary, secondary], focusedChannel: rawFocused)
     }
 
-    /// Opens 1...4 simultaneous Twitch streams and wires `combinedChat` for all active channels.
+    /// Opens 1...4 simultaneous live streams (Twitch, Kick, or YouTube) and wires `combinedChat` for all active channels.
     /// Preserves already-fetched metadata and running chat sockets for channels that remain open across 1↔2↔3↔4 transitions.
     public func openMulti(channels rawChannels: [String], focusedChannel rawFocused: String? = nil) {
         var normalized: [String] = []
@@ -206,8 +244,9 @@ public final class TwitchStore {
             return
         }
 
+        let hasTwitchChannel = normalized.contains { StreamAddress.platform(for: $0) == .twitch }
         let alreadyMatching = (activeChannels == normalized && combinedChat.channels == normalized)
-        if alreadyMatching, engineCanChat || session?.credentials?.canChat != true {
+        if alreadyMatching, (!hasTwitchChannel || engineCanChat || session?.credentials?.canChat != true) {
             if let rawFocused { combinedChat.setFocusedChannel(rawFocused) }
             return
         }
@@ -233,7 +272,7 @@ public final class TwitchStore {
         var nextStreamInfos: [String: TwitchStreamInfo] = [:]
         for login in normalized {
             if let info = knownInfo[login] { nextChannelInfos[login] = info }
-            if let live = knownStream[login] ?? following.first(where: { $0.login.lowercased() == login }) {
+            if let live = knownStream[login] ?? following.first(where: { StreamAddress.canonicalKey(for: $0.login) == login }) {
                 nextStreamInfos[login] = live
             }
         }
@@ -245,9 +284,10 @@ public final class TwitchStore {
         }
 
         let gen = generation
-        let focused = rawFocused?.lowercased() ?? normalized[0]
+        let focused = rawFocused.map(StreamAddress.canonicalKey(for:)) ?? normalized[0]
         let initialNames = displayNamesMap(for: normalized)
-        if session != nil {
+        combinedChat.setLowPowerMode(lowPowerMode)
+        if session != nil || !hasTwitchChannel {
             let creds = session?.credentials
             engineCanChat = creds?.canChat == true
             combinedChat.configure(
@@ -263,8 +303,10 @@ public final class TwitchStore {
         }
 
         Task {
-            await refreshSessionIfNeeded()
-            guard gen == generation, activeChannels == normalized else { return }
+            if hasTwitchChannel {
+                await refreshSessionIfNeeded()
+                guard gen == generation, activeChannels == normalized else { return }
+            }
             let creds = session?.credentials
             engineCanChat = creds?.canChat == true
             combinedChat.configure(
@@ -272,32 +314,40 @@ public final class TwitchStore {
                 displayNames: self.displayNamesMap(for: normalized),
                 credentials: creds,
                 focusedChannel: self.combinedChat.focusedChannel ?? focused)
-            if let creds {
-                let dir = TwitchDirectory(credentials: creds)
-                let results = await withTaskGroup(
-                    of: (String, TwitchChannelInfo?, TwitchStreamInfo?).self,
-                    returning: [(String, TwitchChannelInfo?, TwitchStreamInfo?)].self
-                ) { group in
-                    for login in normalized {
-                        group.addTask {
+
+            let results = await withTaskGroup(
+                of: (String, TwitchChannelInfo?, TwitchStreamInfo?).self,
+                returning: [(String, TwitchChannelInfo?, TwitchStreamInfo?)].self
+            ) { group in
+                let dir = creds.map { TwitchDirectory(credentials: $0) }
+                for login in normalized {
+                    let platform = StreamAddress.platform(for: login)
+                    group.addTask {
+                        if platform == .twitch {
+                            guard let dir else { return (login, nil, nil) }
                             async let info = dir.channel(login: login)
                             async let live = dir.stream(login: login)
                             return (login, await info, await live)
+                        } else {
+                            let meta = await ExternalLiveDirectory.fetchMetadata(for: login)
+                            return (login, meta?.asChannelInfo, meta?.asStreamInfo)
                         }
                     }
-                    var collected: [(String, TwitchChannelInfo?, TwitchStreamInfo?)] = []
-                    for await item in group {
-                        collected.append(item)
-                    }
-                    return collected
                 }
-                guard gen == generation, activeChannels == normalized else { return }
-                for (login, info, live) in results {
-                    if let info { channelInfos[login] = info }
-                    if let live { streamInfos[login] = live } else { streamInfos.removeValue(forKey: login) }
+                var collected: [(String, TwitchChannelInfo?, TwitchStreamInfo?)] = []
+                for await item in group {
+                    collected.append(item)
                 }
-                combinedChat.updateDisplayNames(self.displayNamesMap(for: normalized))
+                return collected
             }
+            guard gen == generation, activeChannels == normalized else { return }
+            for (login, info, live) in results {
+                if let info { channelInfos[login] = info }
+                if let live { streamInfos[login] = live } else if StreamAddress.platform(for: login) == .twitch || info != nil {
+                    streamInfos.removeValue(forKey: login)
+                }
+            }
+            combinedChat.updateDisplayNames(self.displayNamesMap(for: normalized))
         }
     }
 
@@ -309,29 +359,29 @@ public final class TwitchStore {
 
     /// Live stream info for `login` (checks active streams and followed live directory).
     public func streamInfo(for login: String) -> TwitchStreamInfo? {
-        let lower = login.lowercased()
-        if let live = streamInfos[lower] { return live }
-        return following.first { $0.login.lowercased() == lower }
+        let key = StreamAddress.canonicalKey(for: login)
+        if let live = streamInfos[key] { return live }
+        return following.first { StreamAddress.canonicalKey(for: $0.login) == key }
     }
 
     /// Channel profile info for `login`.
     public func channelInfo(for login: String) -> TwitchChannelInfo? {
-        channelInfos[login.lowercased()]
+        channelInfos[StreamAddress.canonicalKey(for: login)]
     }
 
-    /// Best display name for `login` (falling back to the login itself).
+    /// Best display name for `login` (falling back to the platform-free display label).
     public func displayName(for login: String) -> String {
-        let lower = login.lowercased()
-        if let name = streamInfo(for: lower)?.displayName, !name.isEmpty { return name }
-        if let name = channelInfo(for: lower)?.displayName, !name.isEmpty { return name }
-        return lower
+        let key = StreamAddress.canonicalKey(for: login)
+        if let name = streamInfo(for: key)?.displayName, !name.isEmpty { return name }
+        if let name = channelInfo(for: key)?.displayName, !name.isEmpty { return name }
+        return StreamAddress.displayLabel(for: key)
     }
 
     private func displayNamesMap(for logins: [String]) -> [String: String] {
         var map: [String: String] = [:]
         for login in logins {
-            let lower = login.lowercased()
-            map[lower] = displayName(for: lower)
+            let key = StreamAddress.canonicalKey(for: login)
+            map[key] = displayName(for: key)
         }
         return map
     }
@@ -382,9 +432,10 @@ public final class TwitchStore {
         return ok
     }
 
-    /// Clips the last seconds of the live stream (or a specific channel in dual-stream mode) and hands the clip's link to `save`.
+    /// Clips the last seconds of a live Twitch stream (or a specific channel in dual-stream mode) and hands the clip's link to `save`.
     public func clip(channel targetLogin: String? = nil, save: @MainActor (URL) -> Void) async {
-        let login = targetLogin?.lowercased() ?? channel
+        let login = targetLogin.map(StreamAddress.canonicalKey(for:)) ?? channel
+        if let login, !StreamAddress.platform(for: login).supportsServerClip { return }
         let broadcasterID: String?
         if let login {
             broadcasterID = streamInfo(for: login)?.userID ?? channelInfo(for: login)?.id
@@ -422,14 +473,21 @@ public final class TwitchStore {
         ctx.settings.defaults.set(list, forKey: Self.recentsKey)
     }
 
-    /// `name`, `@name`, `twitch.tv/name` or a full link → `name`; nil when it is not a Twitch login.
+    /// Parses a Twitch login/URL (`name`, `@name`, `twitch.tv/name`), Kick slug/URL (`kick:name`, `kick.com/name`),
+    /// or YouTube Live URL/handle (`youtube.com/watch?v=...`, `youtube.com/@handle`, `youtu.be/...`, `yt:@handle`, `yt:<id>`)
+    /// into its canonical key; returns `nil` if invalid.
     public nonisolated static func login(from input: String) -> String? {
-        var s = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let url = URL(string: s.hasPrefix("http") ? s : "https://\(s)"), let host = url.host, host.hasSuffix("twitch.tv") {
-            s = url.pathComponents.dropFirst().first ?? ""
+        StreamAddress.parse(input)?.canonicalKey
+    }
+}
+
+extension TwitchStore: LifecycleAware {
+    public func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        switch event {
+        case .lowPowerModeChanged, .thermalChanged:
+            setLowPowerMode(snapshot.shouldConservePower)
+        default:
+            break
         }
-        if s.hasPrefix("@") { s.removeFirst() }
-        guard (3...25).contains(s.count), s.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }) else { return nil }
-        return s
     }
 }

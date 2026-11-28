@@ -37,10 +37,10 @@ struct CobaltButtonStyle: PrimitiveButtonStyle {
         #endif
     }
 
-    /// Compact buttons still clear 44 pt on iOS.
+    /// Every iOS button meets at least 44 pt hit height for effortless pressing.
     private var minHeight: CGFloat? {
         #if os(iOS)
-        return compact ? Metrics.hit : nil
+        return Metrics.hit
         #else
         return nil
         #endif
@@ -62,9 +62,9 @@ struct CobaltButtonStyle: PrimitiveButtonStyle {
             #if os(macOS)
             // On the Mac a glass button over the glass card washes out to a pale slab with a pale
             // label; the platform's own bordered button keeps its contrast in both appearances.
-            base(configuration, ink: nil).buttonStyle(.bordered)
+            base(configuration, ink: CobaltColor.text).buttonStyle(.bordered)
             #else
-            base(configuration, ink: nil).buttonStyle(.glass)
+            base(configuration, ink: CobaltColor.text).buttonStyle(.glass)
             #endif
         }
     }
@@ -75,11 +75,12 @@ struct CobaltButtonStyle: PrimitiveButtonStyle {
                 configuration.label
                     .labelStyle(.titleAndIcon)
                     .font(font)
-                    .foregroundStyle(ink ?? .primary)
+                    .foregroundStyle(ink ?? CobaltColor.text)
                     .lineLimit(1)
                     // A label is never wrapped or cut: it keeps its natural width, and a `ButtonRow`
                     // stacks its buttons when they would not fit side by side.
                     .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, fullWidth ? 0 : (compact ? 6 : 8))
                     .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: minHeight)
             }
             .controlSize(size)
@@ -170,7 +171,7 @@ struct CloseButton: View {
         Button(action: action) {
             Label(Copy.closeA11y, systemImage: symbolName)
                 .labelStyle(.iconOnly)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 15.5, weight: .semibold))
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)

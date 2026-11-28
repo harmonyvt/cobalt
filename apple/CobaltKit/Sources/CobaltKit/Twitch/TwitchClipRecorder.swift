@@ -21,8 +21,11 @@ public enum TwitchClipRecorderError: Error, Sendable, Equatable {
 
 public actor TwitchClipRecorder {
     public static let maxRollingSeconds: Double = 60.0
+    /// Reduced rolling buffer duration in Low Power Mode to cut memory & Jetsam risk while idle.
+    public static let lowPowerRollingSeconds: Double = 20.0
     /// Keep slightly more than 60 s in memory so trimming on IDR keyframe boundaries always leaves >= 60 s available.
     private static let trimHighWaterSeconds: Double = 66.0
+    private static let lowPowerTrimHighWaterSeconds: Double = 24.0
     /// Studio Editor's maximum clip duration (10 minutes).
     public static let maxRecordingSeconds: Double = 600.0
     private static let timescale90k: Double = Double(MPEGTSDemuxer.timescale)
@@ -72,6 +75,7 @@ public actor TwitchClipRecorder {
     private var latestSPS: Data?
     private var latestPPS: Data?
     private var lastDelaySeconds: Double = 0
+    private var lowPowerMode = false
 
     // Chat rolling buffer & disconnect gap tracker
     private var chatRing: [BufferedChat] = []
@@ -79,6 +83,7 @@ public actor TwitchClipRecorder {
     private var chatGaps: [ChatGapInterval] = []
     private var chatWasConnected = false
     private var activeGapIndex: Int?
+    private var lastBackfillCosmeticCounts: (Int, Int) = (0, 0)
 
     // Continuous recording session (when user taps Record)
     private var recording: ActiveRecording?
@@ -92,6 +97,15 @@ public actor TwitchClipRecorder {
     public nonisolated let states: AsyncStream<TwitchClipCaptureState>
     private let stateContinuation: AsyncStream<TwitchClipCaptureState>.Continuation
     private var lastPublishTime: Date = .distantPast
+    private var lastPublishedState: TwitchClipCaptureState?
+
+    private var effectiveMaxRollingSeconds: Double {
+        lowPowerMode ? Self.lowPowerRollingSeconds : Self.maxRollingSeconds
+    }
+
+    private var effectiveTrimHighWaterSeconds: Double {
+        lowPowerMode ? Self.lowPowerTrimHighWaterSeconds : Self.trimHighWaterSeconds
+    }
 
     public init() {
         (states, stateContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -121,6 +135,16 @@ public actor TwitchClipRecorder {
 
     // MARK: - Session & Input Feeding
 
+    /// Shrinks the idle rolling ring buffer in Low Power Mode without ever interrupting an active recording.
+    public func setLowPowerMode(_ enabled: Bool) {
+        guard lowPowerMode != enabled else { return }
+        lowPowerMode = enabled
+        if enabled && recording == nil {
+            trimRollingBuffers()
+        }
+        publishState(force: true)
+    }
+
     /// Resets the rolling buffer for a new channel (cancelling any in-flight recording cleanly).
     public func reset(for channel: String?) {
         let clean = channel?.lowercased()
@@ -133,11 +157,13 @@ public actor TwitchClipRecorder {
         chatGaps.removeAll(keepingCapacity: false)
         chatWasConnected = false
         activeGapIndex = nil
+        lastBackfillCosmeticCounts = (0, 0)
         latestSPS = nil
         latestPPS = nil
         recording = nil
         isSaving = false
         savingKind = nil
+        lastPublishedState = nil
         publishState(force: true)
     }
 
@@ -244,9 +270,12 @@ public actor TwitchClipRecorder {
             chatRing.removeAll { deletedIDs.contains($0.line.id) }
         }
 
-        // Backfill late-arriving 7TV paints/badges for buffered entries whose cosmetics arrived after the line.
-        if !snapshot.paints.isEmpty || !snapshot.sevenTvBadges.isEmpty {
+        // Backfill late-arriving 7TV paints/badges only when new cosmetics arrived since the previous backfill pass.
+        let cosmeticCounts = (snapshot.paints.count, snapshot.sevenTvBadges.count)
+        if cosmeticCounts != lastBackfillCosmeticCounts && (!snapshot.paints.isEmpty || !snapshot.sevenTvBadges.isEmpty) {
+            lastBackfillCosmeticCounts = cosmeticCounts
             for idx in chatRing.indices {
+                if chatRing[idx].paint != nil && chatRing[idx].sevenTvBadge != nil { continue }
                 let loginKey = chatRing[idx].line.login.lowercased()
                 if chatRing[idx].paint == nil, let paint = snapshot.paints[loginKey] {
                     chatRing[idx].paint = paint
@@ -276,13 +305,13 @@ public actor TwitchClipRecorder {
 
     // MARK: - Rolling Buffer Queries
 
-    /// Current buffered span in seconds (from first IDR keyframe to latest video frame, capped at `maxRollingSeconds`).
+    /// Current buffered span in seconds (from first IDR keyframe to latest video frame, capped at `effectiveMaxRollingSeconds`).
     public func bufferedSeconds() -> Double {
         guard let firstIDR = videoRing.first(where: { $0.frame.isKeyframe }),
               let last = videoRing.last else { return 0 }
         let span = Double(last.frame.pts90k - firstIDR.frame.pts90k) / Self.timescale90k
         guard span.isFinite, span > 0 else { return 0 }
-        return min(Self.maxRollingSeconds, span)
+        return min(effectiveMaxRollingSeconds, span)
     }
 
     public func currentState(now: Date = Date()) -> TwitchClipCaptureState {
@@ -302,10 +331,10 @@ public actor TwitchClipRecorder {
         }
         return TwitchClipCaptureState(
             channel: channel,
-            bufferedSeconds: bufferedSeconds(),
-            maxBufferSeconds: Self.maxRollingSeconds,
+            bufferedSeconds: floor(bufferedSeconds()),
+            maxBufferSeconds: effectiveMaxRollingSeconds,
             isRecording: recording != nil,
-            recordingSeconds: recSeconds,
+            recordingSeconds: floor(recSeconds),
             recordingChatCount: recChatCount,
             isSaving: isSaving,
             savingKind: savingKind
@@ -328,7 +357,7 @@ public actor TwitchClipRecorder {
         guard let lastVideo = videoRing.last else {
             throw TwitchClipRecorderError.noBufferedVideo
         }
-        let targetTicks = Int64(max(1, min(Self.maxRollingSeconds, requestedSeconds)) * Self.timescale90k)
+        let targetTicks = Int64(max(1, min(effectiveMaxRollingSeconds, requestedSeconds)) * Self.timescale90k)
         let targetStartPTS = lastVideo.frame.pts90k - targetTicks
 
         // Pick the IDR keyframe closest to (and at or before) targetStartPTS, falling back to the earliest IDR in the ring.
@@ -492,7 +521,7 @@ public actor TwitchClipRecorder {
 
     private func trimRollingBuffers() {
         guard let last = videoRing.last else { return }
-        let keepFromPTS = last.frame.pts90k - Int64(Self.trimHighWaterSeconds * Self.timescale90k)
+        let keepFromPTS = last.frame.pts90k - Int64(effectiveTrimHighWaterSeconds * Self.timescale90k)
         // Find the latest IDR keyframe at or before keepFromPTS so the rolling ring always begins on a clean IDR.
         if let trimIdx = videoRing.lastIndex(where: { $0.frame.isKeyframe && $0.frame.pts90k <= keepFromPTS }), trimIdx > 0 {
             let newStartPTS = videoRing[trimIdx].frame.pts90k
@@ -502,9 +531,12 @@ public actor TwitchClipRecorder {
     }
 
     private func publishState(force: Bool, now: Date = Date()) {
-        if !force && now.timeIntervalSince(lastPublishTime) < 0.25 { return }
+        if !force && now.timeIntervalSince(lastPublishTime) < 1.0 { return }
+        let next = currentState(now: now)
+        if !force, next == lastPublishedState { return }
         lastPublishTime = now
-        stateContinuation.yield(currentState(now: now))
+        lastPublishedState = next
+        stateContinuation.yield(next)
     }
 
     private func writeDraftFiles(

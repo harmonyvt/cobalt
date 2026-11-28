@@ -485,6 +485,42 @@ struct TwitchDualComposerTargetAndLimiterTests {
         #expect(model.composerTarget == .channel("alpha"))
     }
 
+    @Test func focusChangeFollowsChatFilterAndIdleTargetWithoutBreakingLockedDraft() {
+        let model = TwitchCombinedChatModel(
+            assetCache: TwitchChatAssetCache(),
+            sendLimiter: TwitchChatSendLimiter(minimumGap: .zero))
+        model.configureChannelsWithoutEngines(["nyaphelia", "yawn"], focusedChannel: "nyaphelia")
+
+        // Initial combined view starts on All with focus on nyaphelia.
+        #expect(model.filter == .all)
+        #expect(model.focusedChannel == "nyaphelia")
+        #expect(model.composerTarget == .channel("nyaphelia"))
+
+        // Switching stream focus to yawn immediately switches chat filter & idle send target to yawn.
+        model.setFocusedChannel("yawn")
+        #expect(model.focusedChannel == "yawn")
+        #expect(model.filter == .channel("yawn"))
+        #expect(model.composerTarget == .channel("yawn"))
+
+        // User can manually switch back to All at any time.
+        model.setFilter(.all)
+        #expect(model.filter == .all)
+        #expect(model.composerTarget == .channel("yawn"))
+
+        // Switching focus back to nyaphelia switches chat to nyaphelia again.
+        model.setFocusedChannel("nyaphelia")
+        #expect(model.filter == .channel("nyaphelia"))
+        #expect(model.composerTarget == .channel("nyaphelia"))
+
+        // While typing a draft in nyaphelia, changing focus switches the visible chat to yawn
+        // without hijacking the locked composer target.
+        model.composerDidOpen()
+        model.setFocusedChannel("yawn")
+        #expect(model.filter == .channel("yawn"))
+        #expect(model.composerTarget == .channel("nyaphelia"))
+        #expect(model.isTargetOutOfFocus)
+    }
+
     @Test func sendingToBothStaggersViaSharedLimiterAndRespectsWindowLimits() async {
         let clock = LockedClock()
         let recordedWaits = LockedRecorder<Duration>()

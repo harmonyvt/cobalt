@@ -77,10 +77,14 @@ public final class ServerActivityStore {
     public internal(set) var finishedHistory: [FinishedWork] = []
     /// Renders of the editor the owner hid with "dismiss" (this device only).
     public internal(set) var dismissedEdits: Set<String> = []
+    /// Audio leveling jobs the owner hid with "dismiss" (this device only).
+    public internal(set) var dismissedAudioLevels: Set<String> = []
 
     @ObservationIgnored let ctx: PipelineContext
     /// The renders of each fresh snapshot (the Live Activities of renders); wired by `AppModel` (through `UnifiedQueue.onEdits`).
     @ObservationIgnored var onEdits: (@MainActor ([EditRender]) -> Void)?
+    /// The audio leveling jobs of each fresh snapshot (reconciles `AudioLevelStore` and updates `AudioLevelLiveManager`).
+    @ObservationIgnored var onAudioLevels: (@MainActor ([QueueSnapshot.AudioLevelJob]) -> Void)?
 
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var loopToken = 0
@@ -119,8 +123,10 @@ public final class ServerActivityStore {
         // a context has one: a store made earlier (a queue read before the model finished building) hands over and stops
         if let old = Self.registry[ObjectIdentifier(context)]?.store, old !== self {
             onEdits = old.onEdits
+            onAudioLevels = old.onAudioLevels
             finishedHistory = old.finishedHistory
             dismissedEdits = old.dismissedEdits
+            dismissedAudioLevels = old.dismissedAudioLevels
             old.retire()
         }
         Self.registry[ObjectIdentifier(context)] = Entry(store: self)
@@ -181,7 +187,8 @@ public final class ServerActivityStore {
             if let r = line.running, !isLocal(sid: r.sid, job: r.job) { return true }
             if line.entries.contains(where: { !isLocal(sid: $0.sid, job: $0.job) }) { return true }
         }
-        return snapshot.edits?.contains(where: \.isActive) == true
+        if snapshot.edits?.contains(where: \.isActive) == true { return true }
+        return snapshot.audio?.contains(where: \.isActive) == true
     }
 
     /// Whether the server rows of `snapshot` are news: while the app is in front and reads keep working, always; otherwise for
@@ -325,6 +332,7 @@ public final class ServerActivityStore {
         failures = 0
         ctx.jobQueue?.serverLine.apply(fresh.line)
         if let edits = fresh.edits, !edits.isEmpty { onEdits?(edits) }
+        if let audio = fresh.audio, !audio.isEmpty { onAudioLevels?(audio) }
         for w in watchers {
             if let r = fresh.edits?.first(where: { $0.id == w.renderID }) { w.handler(.render(r)) } else { w.handler(.missing) }
         }

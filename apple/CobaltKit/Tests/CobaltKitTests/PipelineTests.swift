@@ -148,11 +148,11 @@ struct PipelineStateMachineTests {
         let h = Harness(.tooBig)
         let file = try makeTempFile("big.mov")
         h.pipeline.start(file: file)
-        #expect(h.pipeline.state == .failed(.tooLarge(limit: 100_000_000)))
+        #expect(h.pipeline.state == .failed(.tooLarge(limit: 1_073_741_824)))
         #expect(!h.kinds.contains("uploading"))
         #expect(h.clock.registrations == 0)       // nothing even started waiting on the network
         guard case .file(let name, let bytes, _) = h.pipeline.input else { Issue.record("no input"); return }
-        #expect(name == "big.mov" && bytes > 100_000_000)
+        #expect(name == "big.mov" && bytes > 1_073_741_824)
     }
 
     @Test func aFileThatIsNotMediaIsRefusedBeforeAnyUpload() throws {

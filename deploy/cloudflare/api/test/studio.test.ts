@@ -5,6 +5,7 @@ import {
     BUSY_RETRY_MS,
     BUSY_WAIT_MS,
     LOCK_STALE_MS,
+    MAX_SOURCE_BYTES,
     SAVE_BUDGET_MS,
     SWEEP_ITEM_MS,
     SWEEP_RENDER_MS,
@@ -412,8 +413,8 @@ describe("GET /studio/<sid>/advance (the poll-driven save)", () => {
         it("too_large from the helper", async () => {
             await failing((x) => (x.helper.fetchError = "error.studio.too_large"), "error.studio.too_large");
         });
-        it("a helper file over 200 MB is too_large even if it slipped through", async () => {
-            await failing((x) => (x.helper.fetchDone = { bytes: 201 * 1024 * 1024 }), "error.studio.too_large");
+        it("a helper file over 1 GiB is too_large even if it slipped through", async () => {
+            await failing((x) => (x.helper.fetchDone = { bytes: MAX_SOURCE_BYTES + 1 }), "error.studio.too_large");
         });
         it("R2 refusing the write is error.studio.storage", async () => {
             await failing((x) => (x.originals.failPut = true), "error.studio.storage");

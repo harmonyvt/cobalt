@@ -12,6 +12,19 @@ import SwiftUI
 //   `\.lifecycle` (background & thermal throttle), and `.onScrollVisibilityChange`.
 // - Remote `URL` image paints stay on `EmotePicture` (off-main `MediaPipeline` + `EmoteCache` + `MotionBudget.shared`).
 
+@MainActor
+private enum SevenTvUniformCache {
+    private static var cache: [String: SevenTvPaintShaderUniforms] = [:]
+
+    static func uniforms(for paint: SevenTvPaint) -> SevenTvPaintShaderUniforms {
+        if let hit = cache[paint.id] { return hit }
+        if cache.count >= 256 { cache.removeAll(keepingCapacity: true) }
+        let built = SevenTvPaintShaderUniforms(paint: paint)
+        cache[paint.id] = built
+        return built
+    }
+}
+
 /// Renders a Twitch username (or any short label) with a 7TV paint powered by `SevenTvPaintShader.metal`.
 struct SevenTvPaintedLabel: View {
     let text: String
@@ -20,7 +33,7 @@ struct SevenTvPaintedLabel: View {
     let fallback: SevenTvRGBA
 
     private var uniforms: SevenTvPaintShaderUniforms {
-        SevenTvPaintShaderUniforms(paint: paint)
+        SevenTvUniformCache.uniforms(for: paint)
     }
 
     var body: some View {
@@ -46,7 +59,7 @@ private struct SevenTvPaintModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if let paint {
-            let uniforms = SevenTvPaintShaderUniforms(paint: paint)
+            let uniforms = SevenTvUniformCache.uniforms(for: paint)
             if paint.hasAnimatedShader {
                 AnimatedSevenTvPaintContent { phase in
                     applyShaders(to: content, uniforms: uniforms, phase: phase)
@@ -98,7 +111,7 @@ private struct StaticSevenTvPaintLeaf: View {
             uniforms: uniforms,
             fallback: fallback,
             phase: 0,
-            allowsImageMotion: lifecycle.isForeground && !lifecycle.shouldThrottle
+            allowsImageMotion: lifecycle.isForeground && !lifecycle.shouldConservePower
         )
     }
 }
@@ -122,7 +135,7 @@ private struct AnimatedSevenTvPaintLeaf: View {
                 uniforms: uniforms,
                 fallback: fallback,
                 phase: phase,
-                allowsImageMotion: lifecycle.isForeground && !lifecycle.shouldThrottle
+                allowsImageMotion: lifecycle.isForeground && !lifecycle.shouldConservePower
             )
         }
     }
@@ -140,7 +153,7 @@ private struct AnimatedSevenTvPaintContent<Content: View>: View {
     @State private var onScreen = false
 
     private var wantsSlot: Bool {
-        onScreen && !reduceMotion && lifecycle.isForeground && !lifecycle.shouldThrottle
+        onScreen && !reduceMotion && lifecycle.isForeground && !lifecycle.shouldConservePower
     }
 
     private var shouldAnimate: Bool {
@@ -148,7 +161,8 @@ private struct AnimatedSevenTvPaintContent<Content: View>: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !shouldAnimate)) { context in
+        // 15 fps is visually smooth for subtle gradient drift/shimmer while cutting GPU work in half vs 30 fps.
+        TimelineView(.animation(minimumInterval: 1.0 / 15.0, paused: !shouldAnimate)) { context in
             // Keep phase bounded in [0, 3600) so 32-bit Float never loses sub-frame precision.
             let phase: Float = shouldAnimate
                 ? Float(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3600))
@@ -296,9 +310,10 @@ private struct SevenTvPaintCanvas: View {
 private struct SevenTvShadowWrap<Content: View>: View {
     let uniforms: SevenTvPaintShaderUniforms
     @ViewBuilder let content: () -> Content
+    @Environment(\.lifecycle) private var lifecycle
 
     var body: some View {
-        if uniforms.hasShadows {
+        if uniforms.hasShadows && !lifecycle.shouldConservePower {
             let padX = CGFloat(uniforms.shadowPadX)
             let padY = CGFloat(uniforms.shadowPadY)
             let shadowFloats = uniforms.shadowFloats

@@ -129,6 +129,9 @@ public actor EmoteCache {
     /// The shared cache does nothing here under test, so a test of the client never reaches 7TV's CDN.
     public func prefetch(_ urls: [URL]) {
         if self === EmoteCache.shared, RunningTests.now { return }
+        if ProcessInfo.processInfo.isLowPowerModeEnabled { return }
+        let thermal = ProcessInfo.processInfo.thermalState
+        if thermal == .serious || thermal == .critical { return }
         for url in urls where !queued.contains(url) && queue.count < Self.queueMax {
             queued.insert(url)
             queue.append(url)
@@ -141,6 +144,11 @@ public actor EmoteCache {
 
     private func drain() async {
         while !queue.isEmpty {
+            if ProcessInfo.processInfo.isLowPowerModeEnabled {
+                queue.removeAll()
+                queued.removeAll()
+                break
+            }
             let url = queue.removeFirst()
             queued.remove(url)
             if has(url) { continue }
@@ -170,8 +178,12 @@ public actor EmoteCache {
     private func readDisk(_ url: URL) -> Data? {
         let file = path(url)
         guard let data = try? Data(contentsOf: file), !data.isEmpty else { return nil }
-        // used now: the trim keeps it over older ones
-        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
+        // Only touch mtime once per day so cache hits don't generate flash metadata writes on every emote render.
+        let now = Date()
+        let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        if mtime == nil || now.timeIntervalSince(mtime!) > 86_400 {
+            try? FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+        }
         return data
     }
 

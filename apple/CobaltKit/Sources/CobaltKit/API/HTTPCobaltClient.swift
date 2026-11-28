@@ -23,15 +23,20 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
     let backgroundUploads: BackgroundUploads?
     /// The kept 7TV answers (57.13): the device's folder, or nothing under test; a test sets its own.
     var answers: SevenTvAnswerCache = .standard
+    /// Files larger than this byte threshold automatically use R2 multipart upload (`/studio/upload/multipart*`)
+    /// so uploads up to 1 GiB bypass Cloudflare Workers' 100 MB single-request cap.
+    public let multipartThresholdBytes: Int64
 
     public init(
         baseURL: URL, apiKey: @escaping @Sendable () -> String?, session: URLSession = .shared,
-        backgroundUploads: BackgroundUploads? = nil
+        backgroundUploads: BackgroundUploads? = nil,
+        multipartThresholdBytes: Int64 = 90_000_000
     ) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.urlSession = session
         self.backgroundUploads = backgroundUploads
+        self.multipartThresholdBytes = multipartThresholdBytes
     }
 
     // MARK: - Request plumbing
@@ -239,6 +244,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
                 var booru: Bool?
                 var postFrame: Bool?
                 var audioLeveling: Bool?
+                var multipartUpload: Bool?
             }
             struct Limits: Decodable {
                 var maxWebpSeconds: Double?; var minWebpSeconds: Double?; var webpWidths: [Int]?
@@ -353,6 +359,7 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         caps.booru = f?.booru ?? false
         caps.postFrame = f?.postFrame ?? false
         caps.audioLeveling = f?.audioLeveling ?? false
+        caps.multipartUpload = f?.multipartUpload ?? false
         if let ph = w.posthog, let token = ph.token?.trimmingCharacters(in: .whitespaces), !token.isEmpty,
            let host = ph.host.flatMap(URL.init(string:)), host.scheme == "https" {
             caps.postHog = PostHogProject(token: token, host: host)
@@ -493,6 +500,13 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         file: URL, name: String, contentType: String, public makePublic: Bool?, queue: Bool, title: String?,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> UploadResult {
+        let size = ((try? FileManager.default.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value
+        if let size, size > multipartThresholdBytes {
+            return try await uploadMultipart(
+                file: file, totalBytes: size, name: name, contentType: contentType,
+                public: makePublic, queue: queue, title: title, progress: progress
+            )
+        }
         var query = [("name", name)]
         if makePublic == true { query.append(("public", "1")) }
         if queue { query.append(("queue", "1")) }
@@ -514,20 +528,142 @@ public struct HTTPCobaltClient: CobaltClient, ChatLiveClient {
         } catch let e as URLError {
             throw CobaltError.network(e.code)
         }
-        guard http.statusCode == 201 || http.statusCode == 200 else { throw apiError(data, status: http.statusCode) }
+        return try decodeUploadResult(data, status: http.statusCode, name: name, contentType: contentType, size: size)
+    }
+
+    private func decodeUploadResult(
+        _ data: Data, status: Int, name: String, contentType: String, size: Int64?
+    ) throws -> UploadResult {
+        guard status == 201 || status == 200 else { throw apiError(data, status: status) }
         guard let wire = try? CobaltJSON.decoder().decode(UploadWire.self, from: data) else {
-            throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+            throw CobaltError.invalidResponse(httpStatus: status)
         }
         // The server may answer without `item` when it stored the file but could not read the row
         // back (APP-API-CONTRACT section 3 shows an object; app-routes.ts can send null). Then the
         // item id is unknown: an empty id says so and the pipeline avoids routes that need it.
-        let size = ((try? FileManager.default.attributesOfItem(atPath: file.path)[.size]) as? NSNumber)?.int64Value
         let item = wire.item ?? LibraryFile(
             id: "", kind: .private, source: .upload, name: name, url: nil, contentType: contentType, bytes: size,
             width: nil, height: nil, duration: nil, createdAt: Date(), mediaName: nil, deletable: false)
         return UploadResult(
             sessionID: wire.id, item: item, studioErrorCode: wire.studioError?.code,
             queued: wire.queued ?? false, queueAhead: wire.queueAhead)
+    }
+
+    /// Streams a large file (>90 MB, up to 1 GiB) to R2 via `/studio/upload/multipart*` in bounded chunks
+    /// written to a temporary part file (~2 MB peak RAM), reporting aggregate `TransferProgress`.
+    private func uploadMultipart(
+        file: URL, totalBytes: Int64, name: String, contentType: String,
+        public makePublic: Bool?, queue: Bool, title: String?,
+        progress: @escaping @Sendable (TransferProgress) -> Void
+    ) async throws -> UploadResult {
+        struct InitWire: Decodable {
+            var uploadId: String
+            var partSize: Int64?
+            var maxPartSize: Int64?
+        }
+        struct PartWire: Decodable {
+            var partNumber: Int
+            var etag: String
+        }
+
+        var fields: [String: Any] = [
+            "name": name,
+            "content_type": contentType,
+            "bytes": totalBytes,
+        ]
+        if let makePublic { fields["public"] = makePublic }
+        if queue { fields["queue"] = true }
+        if let title { fields["title"] = title }
+
+        let initReq = try makeRequest("POST", "/studio/upload/multipart", keyed: true, timeout: 60)
+        let initWire = try await sendJSON(InitWire.self, initReq, body: Self.jsonBody(fields))
+        let uploadId = initWire.uploadId
+        let maxPart = max(1_048_576, initWire.maxPartSize ?? 67_108_864)
+        let partSize = min(maxPart, max(1, initWire.partSize ?? 50_000_000))
+
+        var uploadedParts: [[String: Any]] = []
+        var offset: Int64 = 0
+        var partNumber = 1
+
+        do {
+            while offset < totalBytes {
+                try Task.checkCancellation()
+                let partLength = min(partSize, totalBytes - offset)
+                let tempURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("cobalt-mp-\(UUID().uuidString)-\(partNumber).part")
+                defer { try? FileManager.default.removeItem(at: tempURL) }
+
+                try Self.writePartSlice(from: file, offset: offset, length: partLength, to: tempURL)
+
+                var partReq = try makeRequest(
+                    "PUT", "/studio/upload/multipart/part",
+                    query: [("part", String(partNumber))],
+                    keyed: true, timeout: 300
+                )
+                partReq.setValue(uploadId, forHTTPHeaderField: "X-Upload-Id")
+                partReq.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+                partReq.setValue(String(partLength), forHTTPHeaderField: "Content-Length")
+
+                let baseOffset = offset
+                let delegate = ProgressDelegate { p in
+                    let sent = min(totalBytes, baseOffset + p.bytes)
+                    progress(TransferProgress(bytes: sent, total: totalBytes))
+                }
+                defer { delegate.finish() }
+
+                let data: Data
+                let http: HTTPURLResponse
+                do {
+                    let (d, r) = try await urlSession.upload(for: partReq, fromFile: tempURL, delegate: delegate)
+                    guard let h = r as? HTTPURLResponse else { throw CobaltError.invalidResponse(httpStatus: 0) }
+                    data = d; http = h
+                } catch let e as URLError {
+                    throw CobaltError.network(e.code)
+                }
+                guard (200...299).contains(http.statusCode) else {
+                    throw apiError(data, status: http.statusCode)
+                }
+                guard let partWire = try? CobaltJSON.decoder().decode(PartWire.self, from: data) else {
+                    throw CobaltError.invalidResponse(httpStatus: http.statusCode)
+                }
+                uploadedParts.append(["part_number": partWire.partNumber, "etag": partWire.etag])
+                offset += partLength
+                partNumber += 1
+                progress(TransferProgress(bytes: offset, total: totalBytes))
+            }
+
+            try Task.checkCancellation()
+            let completeReq = try makeRequest("POST", "/studio/upload/multipart/complete", keyed: true, timeout: 120)
+            let completeBody = Self.jsonBody(["upload_id": uploadId, "parts": uploadedParts])
+            let (doneData, doneHTTP) = try await send(completeReq, body: completeBody)
+            return try decodeUploadResult(doneData, status: doneHTTP.statusCode, name: name, contentType: contentType, size: totalBytes)
+        } catch {
+            // Best-effort abort so R2 discards uploaded parts immediately.
+            if var abortReq = try? makeRequest("DELETE", "/studio/upload/multipart", keyed: true, timeout: 15) {
+                abortReq.setValue(uploadId, forHTTPHeaderField: "X-Upload-Id")
+                _ = try? await send(abortReq)
+            }
+            throw error
+        }
+    }
+
+    private static func writePartSlice(from source: URL, offset: Int64, length: Int64, to destination: URL) throws {
+        FileManager.default.createFile(atPath: destination.path, contents: nil)
+        let reader = try FileHandle(forReadingFrom: source)
+        defer { try? reader.close() }
+        let writer = try FileHandle(forWritingTo: destination)
+        defer { try? writer.close() }
+        try reader.seek(toOffset: UInt64(offset))
+        var remaining = length
+        let chunkSize = 1_048_576
+        while remaining > 0 {
+            let want = Int(min(Int64(chunkSize), remaining))
+            guard let chunk = try reader.read(upToCount: want), !chunk.isEmpty else {
+                throw CobaltError.invalidResponse(httpStatus: 0)
+            }
+            try writer.write(contentsOf: chunk)
+            remaining -= Int64(chunk.count)
+        }
     }
 
     public func session(_ id: String, wait: Int) async throws -> StudioSession {

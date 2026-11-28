@@ -96,51 +96,93 @@ struct LinksScreen: View {
     // MARK: the list
 
     private var list: some View {
-        List {
-            if case .failed = store.state {
-                Text(Copy.Links.staleLine)
-                    .font(CobaltType.captionSmall)
-                    .foregroundStyle(CobaltColor.errorText)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-            }
-            if controller.collectionsEnabled {
-                Section {
-                    // the sets over the folders: a chip on shows only that set's collections
-                    if controller.setsEnabled {
-                        CollectionSetChips(store: store, controller: controller)
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 4, trailing: 16))
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 18) {
+                if case .failed = store.state {
+                    Text(Copy.Links.staleLine)
+                        .font(CobaltType.captionSmall)
+                        .foregroundStyle(CobaltColor.errorText)
+                }
+
+                if controller.collectionsEnabled {
+                    VStack(alignment: .leading, spacing: 10) {
+                        collectionsHeader
+                        if controller.setsEnabled {
+                            CollectionSetChips(store: store, controller: controller)
+                        }
+                        CollectionFolderGrid(store: store, controller: controller) { pane?.open(.collection($0.id)) }
                     }
-                    // the collections as folders, two to a row, then "new collection"
-                    CollectionFolderGrid(store: store, controller: controller) { pane?.open(.collection($0.id)) }
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 10, trailing: 16))
-                } header: {
-                    SectionLabel(text: Copy.Collections.section)
+                    .motion(Motion.rows, value: store.collections.map(\.id))
                 }
-                .motion(Motion.rows, value: store.collections.map(\.id))
-            }
-            // looked up once for the list, not once per row; only the copied row changes on a copy
-            let lookup = LinkRowLookup(store: store, collectionsEnabled: controller.collectionsEnabled)
-            let copiedID = controller.copiedID
-            Section {
-                ForEach(store.sets) { link in
-                    LinkItemRow(
-                        link: link, collection: nil, controller: controller, lookup: lookup, copied: copiedID == link.id,
-                        open: opener(link))
-                        .listRowSeparator(.hidden)
+
+                // looked up once for the list, not once per row; only the copied row changes on a copy
+                let lookup = LinkRowLookup(store: store, collectionsEnabled: controller.collectionsEnabled)
+                let copiedID = controller.copiedID
+                VStack(alignment: .leading, spacing: 10) {
+                    if controller.collectionsEnabled {
+                        HStack(spacing: 6) {
+                            SectionLabel(text: Copy.Collections.linksHeader)
+                            SectionCountPill(count: store.sets.count)
+                        }
+                    }
+                    LazyVStack(spacing: 8) {
+                        ForEach(store.sets) { link in
+                            LinkRow(
+                                link: link, collection: nil, controller: controller, lookup: lookup,
+                                copied: copiedID == link.id, open: opener(link))
+                                .contextMenu { LinkMenu(link: link, collection: nil, controller: controller) }
+                        }
+                    }
                 }
-            } header: {
-                if controller.collectionsEnabled { SectionLabel(text: Copy.Collections.linksHeader) }
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
         }
-        .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .motion(Motion.rows, value: store.sets.map(\.id))
         .refreshable { await store.refresh() }
+    }
+
+    private var collectionsHeader: some View {
+        HStack(spacing: 6) {
+            SectionLabel(text: Copy.Collections.section)
+            SectionCountPill(count: controller.shownCollections.count)
+            Spacer(minLength: 8)
+            if controller.selectedSet == nil {
+                Button { controller.newCollection(including: nil) } label: {
+                    Label(Copy.Collections.new, systemImage: Symbol.collectionNew)
+                        .font(Font.cobalt(11.5, .semibold, relativeTo: .caption))
+                        .foregroundStyle(CobaltColor.collection)
+                        .padding(.horizontal, 11)
+                        .frame(minHeight: 28)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(CobaltColor.collection.opacity(0.14)).interactive(), in: .capsule)
+                .overlay(
+                    Capsule()
+                        .strokeBorder(CobaltColor.collection.opacity(0.3), lineWidth: 0.6)
+                        .allowsHitTesting(false)
+                )
+            }
+        }
+    }
+}
+
+/// Subtle monospaced count badge next to a section label.
+struct SectionCountPill: View {
+    let count: Int
+
+    var body: some View {
+        Text("\(count)")
+            .font(Font.cobalt(10.5, .semibold, relativeTo: .caption2))
+            .monospacedDigit()
+            .foregroundStyle(CobaltColor.caption)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(CobaltColor.elevated.opacity(0.75), in: Capsule())
+            .accessibilityHidden(true)
     }
 }
 
@@ -373,7 +415,7 @@ struct LinkRow: View {
     var body: some View {
         let when = Format.when(link.createdAt, now: Date())
         HStack(alignment: .center, spacing: 12) {
-            LinkCover(items: link.items, side: Platform.isMac ? 64 : 60)
+            LinkCover(items: link.items, side: Platform.isMac ? 66 : 62, totalCount: link.items.count)
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(link.displayTitle)
@@ -405,9 +447,13 @@ struct LinkRow: View {
                     if let collectionsLine {
                         Label(collectionsLine, systemImage: Symbol.collection)
                             .labelStyle(CollectionLineLabel())
-                            .font(CobaltType.captionSmall)
+                            .font(Font.cobalt(11, .medium, relativeTo: .caption2))
                             .foregroundStyle(CobaltColor.collection)
                             .lineLimit(1)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(CobaltColor.collectionBack.opacity(0.75), in: Capsule())
+                            .padding(.top, 1)
                     }
                 }
                 .accessibilityElement(children: .combine)
@@ -421,7 +467,12 @@ struct LinkRow: View {
             }
         }
         .padding(10)
-        .background(CobaltColor.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glassEffect(.regular.tint(CobaltColor.surface.opacity(0.55)), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(CobaltColor.hairline, lineWidth: 0.7)
+                .allowsHitTesting(false)
+        )
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture { open?() }
         .opacity(busy ? 0.4 : 1)
@@ -487,46 +538,207 @@ struct LinkRow: View {
     }
 }
 
-// MARK: - the cover
+// MARK: - adaptive covers (0 / 1 / 2 / 3 / 4-up)
 
-/// A set's files, up to four, as a 2x2 square cover (the library's shelf cards, the links tab's cards and collection
-/// folders). Empty cells are plain tiles, so a 2-file link still reads as a square.
+/// A set's files as an adaptive square cover (0 = icon placeholder, 1 = full bleed, 2 = 2-up split,
+/// 3 = 1 hero + 2 stacked, 4+ = 2x2 mosaic with optional `+N` overflow badge). Zero empty gray cells.
 struct LinkCover: View {
     let items: [ShareSetItem]
     let side: CGFloat
+    var totalCount: Int? = nil
     private let gap: CGFloat = 2
 
+    private var overflow: Int {
+        max(0, (totalCount ?? items.count) - 4)
+    }
+
     var body: some View {
-        let cell = (side - gap) / 2
         let shown = Array(items.prefix(4))
-        VStack(spacing: gap) {
-            ForEach(0..<2, id: \.self) { row in
+        let outerRadius: CGFloat = side <= 44 ? 8 : 11
+        Group {
+            switch shown.count {
+            case 0:
+                ZStack {
+                    CobaltColor.elevated
+                    Image(systemName: Symbol.typeImage)
+                        .font(.system(size: side * 0.3, weight: .medium))
+                        .foregroundStyle(CobaltColor.caption.opacity(0.8))
+                }
+            case 1:
+                LinkMediaTile(item: shown[0], radius: outerRadius, maxPixel: 260, iconSize: side * 0.24)
+            case 2:
                 HStack(spacing: gap) {
-                    ForEach(0..<2, id: \.self) { column in
-                        let index = row * 2 + column
-                        if index < shown.count {
-                            LinkThumb(item: shown[index], side: cell, radius: 4)
-                        } else {
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(CobaltColor.elevated)
-                                .frame(width: cell, height: cell)
-                        }
+                    LinkMediaTile(item: shown[0], radius: 4, maxPixel: 220, iconSize: side * 0.16)
+                    LinkMediaTile(item: shown[1], radius: 4, maxPixel: 220, iconSize: side * 0.16)
+                }
+            case 3:
+                let leadW = ((side - gap) * 0.56).rounded(.down)
+                let trailW = side - gap - leadW
+                let smallH = (side - gap) / 2
+                HStack(spacing: gap) {
+                    LinkMediaTile(item: shown[0], radius: 4, maxPixel: 240, iconSize: side * 0.18)
+                        .frame(width: leadW, height: side)
+                    VStack(spacing: gap) {
+                        LinkMediaTile(item: shown[1], radius: 4, maxPixel: 180, iconSize: side * 0.14)
+                            .frame(width: trailW, height: smallH)
+                        LinkMediaTile(item: shown[2], radius: 4, maxPixel: 180, iconSize: side * 0.14)
+                            .frame(width: trailW, height: smallH)
+                    }
+                }
+            default:
+                let cell = (side - gap) / 2
+                VStack(spacing: gap) {
+                    HStack(spacing: gap) {
+                        LinkMediaTile(item: shown[0], radius: 4, maxPixel: 180, iconSize: cell * 0.28)
+                            .frame(width: cell, height: cell)
+                        LinkMediaTile(item: shown[1], radius: 4, maxPixel: 180, iconSize: cell * 0.28)
+                            .frame(width: cell, height: cell)
+                    }
+                    HStack(spacing: gap) {
+                        LinkMediaTile(item: shown[2], radius: 4, maxPixel: 180, iconSize: cell * 0.28)
+                            .frame(width: cell, height: cell)
+                        LinkMediaTile(item: shown[3], radius: 4, maxPixel: 180, iconSize: cell * 0.28)
+                            .frame(width: cell, height: cell)
+                            .overlay {
+                                if overflow > 0 {
+                                    ZStack {
+                                        Color.black.opacity(0.52)
+                                        Text("+\(overflow)")
+                                            .font(Font.cobalt(max(9.5, side * 0.17), .semibold, relativeTo: .caption2))
+                                            .monospacedDigit()
+                                            .foregroundStyle(.white)
+                                    }
+                                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                }
+                            }
                     }
                 }
             }
         }
         .frame(width: side, height: side)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: outerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: outerRadius, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                .allowsHitTesting(false)
+        )
         .accessibilityHidden(true)
     }
 }
 
-struct LinkThumb: View {
+/// Rectangular 16:10 adaptive media cover for Glassy Bento collection folder cards:
+/// 0 = sleek amber folder canvas, 1 = full-bleed hero, 2 = 50/50 split, 3 = hero + 2 stacked,
+/// 4+ = 2x2 mosaic with Clear Liquid Glass `+N` overflow badge.
+struct BentoMediaCover: View {
+    let items: [ShareSetItem]
+    let totalCount: Int
+    var cornerRadius: CGFloat = 12
+    private let gap: CGFloat = 2
+
+    private var overflow: Int { max(0, totalCount - 4) }
+
+    var body: some View {
+        let shown = Array(items.prefix(4))
+        Color.clear
+            .aspectRatio(1.6, contentMode: .fit)
+            .overlay {
+                GeometryReader { geo in
+                    let w = max(1, geo.size.width)
+                    let h = max(1, geo.size.height)
+                    Group {
+                        switch shown.count {
+                        case 0:
+                            ZStack {
+                                LinearGradient(
+                                    colors: [CobaltColor.collectionBack.opacity(0.7), CobaltColor.elevated.opacity(0.5)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                                Image(systemName: Symbol.collection)
+                                    .symbolVariant(.fill)
+                                    .font(.system(size: 24, weight: .medium))
+                                    .foregroundStyle(CobaltColor.collection.opacity(0.65))
+                            }
+                        case 1:
+                            LinkMediaTile(item: shown[0], radius: cornerRadius, maxPixel: 360, iconSize: 22)
+                                .frame(width: w, height: h)
+                        case 2:
+                            let half = (w - gap) / 2
+                            HStack(spacing: gap) {
+                                LinkMediaTile(item: shown[0], radius: 5, maxPixel: 280, iconSize: 18)
+                                    .frame(width: half, height: h)
+                                LinkMediaTile(item: shown[1], radius: 5, maxPixel: 280, iconSize: 18)
+                                    .frame(width: half, height: h)
+                            }
+                        case 3:
+                            let leadW = ((w - gap) * 0.58).rounded(.down)
+                            let trailW = max(1, w - gap - leadW)
+                            let smallH = (h - gap) / 2
+                            HStack(spacing: gap) {
+                                LinkMediaTile(item: shown[0], radius: 5, maxPixel: 320, iconSize: 18)
+                                    .frame(width: leadW, height: h)
+                                VStack(spacing: gap) {
+                                    LinkMediaTile(item: shown[1], radius: 5, maxPixel: 220, iconSize: 13)
+                                        .frame(width: trailW, height: smallH)
+                                    LinkMediaTile(item: shown[2], radius: 5, maxPixel: 220, iconSize: 13)
+                                        .frame(width: trailW, height: smallH)
+                                }
+                            }
+                        default:
+                            let cellW = (w - gap) / 2
+                            let cellH = (h - gap) / 2
+                            VStack(spacing: gap) {
+                                HStack(spacing: gap) {
+                                    LinkMediaTile(item: shown[0], radius: 5, maxPixel: 220, iconSize: 13)
+                                        .frame(width: cellW, height: cellH)
+                                    LinkMediaTile(item: shown[1], radius: 5, maxPixel: 220, iconSize: 13)
+                                        .frame(width: cellW, height: cellH)
+                                }
+                                HStack(spacing: gap) {
+                                    LinkMediaTile(item: shown[2], radius: 5, maxPixel: 220, iconSize: 13)
+                                        .frame(width: cellW, height: cellH)
+                                    LinkMediaTile(item: shown[3], radius: 5, maxPixel: 220, iconSize: 13)
+                                        .frame(width: cellW, height: cellH)
+                                        .overlay(alignment: .bottomTrailing) {
+                                            if overflow > 0 {
+                                                Text("+\(overflow)")
+                                                    .font(Font.cobalt(10, .semibold, relativeTo: .caption2))
+                                                    .monospacedDigit()
+                                                    .foregroundStyle(.white)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .mediaGlassCapsule(interactive: false)
+                                                    .padding(4)
+                                            }
+                                        }
+                                }
+                            }
+                        }
+                    }
+                    .frame(width: w, height: h)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if !shown.isEmpty {
+                    MediaEdgeVignette(edge: .bottom, height: 28, intensity: 0.24)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            )
+            .accessibilityHidden(true)
+    }
+}
+
+/// Flexible media cell that fills any aspect ratio frame cleanly (used by `LinkCover`, `BentoMediaCover`, and `LinkThumb`).
+struct LinkMediaTile: View {
     let item: ShareSetItem
-    let side: CGFloat
     var radius: CGFloat = 8
-    /// The picture's decode size: the 2x2 covers need little, the pane's big tiles more.
     var maxPixel = 240
+    var iconSize: CGFloat = 16
 
     /// The still to draw: the poster or the image itself; a video with no poster draws a frame of the file.
     private var poster: RemotePoster? {
@@ -541,27 +753,40 @@ struct LinkThumb: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: radius, style: .continuous).fill(CobaltColor.elevated)
+            CobaltColor.elevated
             if !item.isPublic {
                 Image(systemName: Symbol.linkFilePrivate)
-                    .font(.system(size: side * 0.28))
+                    .font(.system(size: iconSize))
                     .foregroundStyle(CobaltColor.caption)
             } else if let poster {
                 RemoteStill(poster: poster, maxPixel: maxPixel)
             } else {
                 Image(systemName: isVideo ? Symbol.typeVideo : Symbol.typeImage)
-                    .font(.system(size: side * 0.28))
+                    .font(.system(size: iconSize))
                     .foregroundStyle(CobaltColor.caption)
             }
             if isVideo, item.isPublic {
                 Image(systemName: Symbol.linkFilePlay)
-                    .font(.system(size: side * 0.22, weight: .bold))
+                    .font(.system(size: max(8, iconSize * 0.72), weight: .bold))
                     .foregroundStyle(CobaltColor.badgeInk)
-                    .padding(side * 0.12)
+                    .padding(max(4, iconSize * 0.36))
                     .background(CobaltColor.badgeBack, in: Circle())
             }
         }
-        .frame(width: side, height: side)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+    }
+}
+
+struct LinkThumb: View {
+    let item: ShareSetItem
+    let side: CGFloat
+    var radius: CGFloat = 8
+    /// The picture's decode size: the 2x2 covers need little, the pane's big tiles more.
+    var maxPixel = 240
+
+    var body: some View {
+        LinkMediaTile(item: item, radius: radius, maxPixel: maxPixel, iconSize: side * 0.28)
+            .frame(width: side, height: side)
     }
 }

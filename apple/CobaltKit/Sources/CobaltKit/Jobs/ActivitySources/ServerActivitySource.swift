@@ -46,12 +46,19 @@ final class ServerActivitySource: ActivitySource {
             if !r.isActive, now.timeIntervalSince(r.lastMoment) >= UnifiedQueue.finishedLinger { continue }
             if let s = JobStatus(edit: r, now: now) { out.append(s) }
         }
+        // audio loudness leveling jobs: local optimistic jobs are always known; server's while fresh
+        let audioJobs = UnifiedQueue.mergeAudioLevels(
+            server: fresh ? (snapshot?.audio ?? []) : [], local: unified.audioLevels?() ?? [])
+        for job in audioJobs where !store.dismissedAudioLevels.contains(job.itemID) {
+            if !job.isActive, now.timeIntervalSince(job.lastMoment) >= UnifiedQueue.finishedLinger { continue }
+            out.append(JobStatus(audioLevel: job, now: now))
+        }
         return out
     }
 
     func perform(_ action: ActivityModel.Action, on status: JobStatus) async -> Bool {
         switch status.ref {
-        case .server, .editRender: break
+        case .server, .editRender, .audioLevel: break
         default: return false
         }
         let mapped: QueueAction

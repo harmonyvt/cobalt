@@ -57,7 +57,7 @@ enum PreviewData {
 
     static let videoUploadBytes: Int64 = 18_200_000     // "1.2 MB / 18.2 MB"
     static let imageUploadBytes: Int64 = 1_200_000      // "a 1.2 MB PNG upload"
-    static let tooBigBytes: Int64 = 142_000_000
+    static let tooBigBytes: Int64 = 1_200_000_000
 
     /// A picked file smaller than 100 KB (or missing) stands in for the scenario's canned size.
     static func uploadBytes(forFileSize size: Int64?, scenario: PreviewScenario) -> Int64 {

@@ -58,6 +58,73 @@ public struct QueueSnapshot: Sendable, Equatable {
         public init(pending: Int) { self.pending = pending }
     }
 
+    /// One audio loudness leveling job returned by `GET /queue` (`audio`) or tracked locally by `AudioLevelStore`.
+    public struct AudioLevelJob: Sendable, Equatable, Identifiable, Decodable {
+        public enum State: String, Sendable, Equatable, Decodable {
+            case rendering, ready, failed
+        }
+
+        public var itemID: String
+        public var title: String
+        public var state: State
+        public var targetLufs: Double?
+        public var outputLufs: Double?
+        public var error: String?
+        public var updatedAt: Date
+        public var leveledAt: Date?
+
+        public var id: String { itemID }
+        public var isActive: Bool { state == .rendering }
+        public var lastMoment: Date { leveledAt ?? updatedAt }
+
+        public init(
+            itemID: String, title: String, state: State, targetLufs: Double? = nil, outputLufs: Double? = nil,
+            error: String? = nil, updatedAt: Date, leveledAt: Date? = nil
+        ) {
+            self.itemID = itemID
+            self.title = title
+            self.state = state
+            self.targetLufs = targetLufs
+            self.outputLufs = outputLufs
+            self.error = error
+            self.updatedAt = updatedAt
+            self.leveledAt = leveledAt
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case itemID = "itemId"
+            case title, state
+            case targetLufs
+            case outputLufs
+            case error
+            case updatedAt
+            case leveledAt
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            itemID = try c.decode(String.self, forKey: .itemID)
+            let rawTitle = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil
+            title = (rawTitle?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? itemID
+            state = try c.decode(State.self, forKey: .state)
+            targetLufs = (try? c.decodeIfPresent(Double.self, forKey: .targetLufs)) ?? nil
+            outputLufs = (try? c.decodeIfPresent(Double.self, forKey: .outputLufs)) ?? nil
+            error = (try? c.decodeIfPresent(String.self, forKey: .error)) ?? nil
+            let updatedMs = (try? c.decodeIfPresent(Double.self, forKey: .updatedAt)) ?? 0
+            updatedAt = Date(timeIntervalSince1970: updatedMs / 1000)
+            let leveledMs = (try? c.decodeIfPresent(Double.self, forKey: .leveledAt)) ?? nil
+            leveledAt = leveledMs.map { Date(timeIntervalSince1970: $0 / 1000) }
+        }
+
+        /// True when `self` should beat `other` during local/server merge (settled states beat optimistic rendering,
+        /// otherwise newer timestamp wins).
+        func isFresher(than other: AudioLevelJob) -> Bool {
+            if state != .rendering && other.state == .rendering { return true }
+            if state == .rendering && other.state != .rendering { return updatedAt > other.updatedAt.addingTimeInterval(2) }
+            return updatedAt >= other.updatedAt
+        }
+    }
+
     /// The server's clock when it answered (ms on the wire); nil when absent.
     public var now: Date?
     public var line: ServerLineSnapshot?
@@ -66,26 +133,29 @@ public struct QueueSnapshot: Sendable, Equatable {
     /// The editor's renders (`features.editor`, APP-API-CONTRACT 31.13): the running ones, then those that ended in the last
     /// 30 minutes, newest first. Nil when the server has none to say (an older server, a failed read, or `null`).
     public var edits: [EditRender]?
+    /// Active and recently settled audio loudness leveling jobs (`features.audio_leveling`).
+    public var audio: [AudioLevelJob]?
 
     public init(
         now: Date? = nil, line: ServerLineSnapshot? = nil, search: Search? = nil, posters: Posters? = nil,
-        edits: [EditRender]? = nil
+        edits: [EditRender]? = nil, audio: [AudioLevelJob]? = nil
     ) {
-        self.now = now; self.line = line; self.search = search; self.posters = posters; self.edits = edits
+        self.now = now; self.line = line; self.search = search; self.posters = posters; self.edits = edits; self.audio = audio
     }
 
-    /// Something on the server is moving right now (a job running or waiting in the line, an index pass running, a render going).
+    /// Something on the server is moving right now (a job running or waiting in the line, an index pass running, a render or audio leveling going).
     /// `ServerActivityStore` decides its own cadence from the part of this that nobody in the app follows (3 s, else 30 s).
     public var isActive: Bool {
         if let line, line.running != nil || !line.entries.isEmpty { return true }
         if search?.running == true { return true }
         if edits?.contains(where: \.isActive) == true { return true }
+        if audio?.contains(where: \.isActive) == true { return true }
         return false
     }
 }
 
 extension QueueSnapshot: Decodable {
-    private enum CodingKeys: String, CodingKey { case now, line, search, posters, edits }
+    private enum CodingKeys: String, CodingKey { case now, line, search, posters, edits, audio }
 
     private struct WireSearch: Decodable {
         struct WireNext: Decodable { var postKey: String?; var title: String? }
@@ -121,5 +191,6 @@ extension QueueSnapshot: Decodable {
         }
         posters = ((try? c.decodeIfPresent(WirePosters.self, forKey: .posters)) ?? nil).map { Posters(pending: max(0, $0.pending ?? 0)) }
         edits = ((try? c.decodeIfPresent([Lossy<EditRender>].self, forKey: .edits)) ?? nil).map { $0.compactMap(\.value) }
+        audio = ((try? c.decodeIfPresent([Lossy<AudioLevelJob>].self, forKey: .audio)) ?? nil).map { $0.compactMap(\.value) }
     }
 }

@@ -68,8 +68,8 @@ private struct IconButtonBody: View {
     @State private var tagID = UUID()
     #endif
 
-    private var diameter: CGFloat { size == .regular ? 50 : 34 }
-    private var symbolSize: CGFloat { size == .regular ? 20 : 15 }
+    private var diameter: CGFloat { size == .regular ? 50 : 40 }
+    private var symbolSize: CGFloat { size == .regular ? 20 : 16.5 }
     private var wordsBack: Bool { typeSize.isAccessibilitySize }
 
     private var ink: Color {
@@ -100,24 +100,31 @@ private struct IconButtonBody: View {
             configuration.trigger()
         } label: {
             styledLabel
-                .font(wordsBack ? CobaltType.buttonSmall : .system(size: symbolSize, weight: .medium))
+                .font(wordsBack ? CobaltType.buttonSmall : .system(size: symbolSize, weight: .semibold))
                 .symbolEffect(.pulse, isActive: state == .working)
                 .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(ink)
                 .lineLimit(1)
                 .frame(minWidth: diameter, minHeight: diameter)
                 .padding(.horizontal, wordsBack ? 12 : 0)
-                .contentShape(.capsule)
+                .background { if let fill { Capsule().fill(fill) } }
+                .glassEffect(isEnabled ? .regular.interactive() : .regular, in: .capsule)
+                .overlay {
+                    if fill == nil {
+                        Capsule()
+                            .strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .opacity(isEnabled ? 1 : 0.45)
+                .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background { if let fill { Capsule().fill(fill) } }
-        .glassEffect(isEnabled ? .regular.interactive() : .regular, in: .capsule)
-        .opacity(isEnabled ? 1 : 0.45)
         #if os(macOS)
         // the Mac's tag is a window of its own (NameTagWindow), so nothing in the app's window can cover it
         .background { NameTagAnchorView(anchor: tagAnchor) }
         #endif
-        .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
         .animation(Motion.copy, value: state)
         #if !os(macOS)
         .overlay(alignment: .top) {
@@ -231,8 +238,8 @@ struct CobaltIconMenuLabel: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.isEnabled) private var isEnabled
 
-    private var diameter: CGFloat { size == .regular ? 50 : 34 }
-    private var symbolSize: CGFloat { size == .regular ? 20 : 15 }
+    private var diameter: CGFloat { size == .regular ? 50 : 40 }
+    private var symbolSize: CGFloat { size == .regular ? 20 : 16.5 }
     private var wordsBack: Bool { typeSize.isAccessibilitySize }
 
     var body: some View {
@@ -243,17 +250,22 @@ struct CobaltIconMenuLabel: View {
                     .font(CobaltType.buttonSmall)
             } else {
                 Image(systemName: systemImage)
-                    .font(.system(size: symbolSize, weight: .medium))
+                    .font(.system(size: symbolSize, weight: .semibold))
             }
         }
         .foregroundStyle(CobaltColor.text)
         .lineLimit(1)
         .frame(minWidth: diameter, minHeight: diameter)
         .padding(.horizontal, wordsBack ? 12 : 0)
-        .contentShape(.capsule)
         .glassEffect(isEnabled ? .regular.interactive() : .regular, in: .capsule)
+        .overlay {
+            Capsule()
+                .strokeBorder(CobaltColor.hairline, lineWidth: 0.75)
+                .allowsHitTesting(false)
+        }
         .opacity(isEnabled ? 1 : 0.45)
         .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
+        .contentShape(Rectangle())
     }
 }
 

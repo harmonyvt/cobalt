@@ -309,19 +309,20 @@ public enum TwitchClipRenderer {
         log: RecordedChatLog,
         config: TwitchClipEditConfig,
         duration: Double,
-        canvasSize: PixelSize = PixelSize(w: canvasWidth, h: canvasHeight),
+        canvasSize: PixelSize? = nil,
         to url: URL
     ) async throws -> PixelSize {
+        let resolvedCanvas = canvasSize ?? TwitchClipTimelineBridge.canvasSize(for: config)
         let clipDuration = max(0.5, duration)
         let chatRect = TwitchClipTimelineBridge.chatOverlayRect(for: config)
-        // Render GIF at half of 1080p (~500px wide) so it stays crisp on phones while remaining compact.
-        let targetW = max(160, min(540, Int((chatRect.w * Double(canvasSize.w) * 0.5).rounded()) & ~1))
-        let targetH = max(80, min(420, Int((chatRect.h * Double(canvasSize.h) * 0.5).rounded()) & ~1))
+        // Render GIF at half of 1080p so it stays crisp while remaining compact for Studio Lane 2.
+        let targetW = max(160, min(540, Int((chatRect.w * Double(resolvedCanvas.w) * 0.5).rounded()) & ~1))
+        let targetH = max(80, min(540, Int((chatRect.h * Double(resolvedCanvas.h) * 0.5).rounded()) & ~1))
         let size = CGSize(width: targetW, height: targetH)
 
         let prefetched = await prefetchAssets(for: log, config: config.chat, maxPixel: 72)
         let emoteAssets = prefetched.assets
-        let maxLines = config.chat.placement == .band ? 4 : 6
+        let maxLines = TwitchClipTimelineBridge.maxVisibleChatLines(for: config)
 
         // Collect key timestamps where visible chat changes, subdividing intervals containing animated emotes
         // so animated 7TV/Twitch emotes also animate inside the Studio Lane 2 chat GIF.
@@ -509,10 +510,10 @@ public enum TwitchClipRenderer {
         return false
     }
 
-    // MARK: - 2. Full 9:16 Split-Frame + Synced Chat MP4 Render
+    // MARK: - 2. Full Portrait (9:16) or Landscape (16:9) + Synced Chat MP4 Render
 
-    /// Renders the final 9:16 `1080×1920` H.264/AAC MP4 with Region A / B split-frame and burned-in chat overlay
-    /// featuring real animated & static 7TV/Twitch emotes, zero-width overlays, badges, and 7TV gradient paints.
+    /// Renders the final H.264/AAC MP4 (`1080×1920` portrait or `1920×1080` landscape) with Region A/B framing
+    /// and burned-in chat overlay featuring animated & static 7TV/Twitch emotes, zero-width stacks, badges, and paints.
     @discardableResult
     public static func renderCompositeMP4(
         videoURL: URL,
@@ -521,6 +522,26 @@ public enum TwitchClipRenderer {
         duration: Double,
         outputURL: URL,
         progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> TwitchClipRenderStats {
+        try await Task.detached(priority: .userInitiated) {
+            try await renderCompositeMP4OffMain(
+                videoURL: videoURL,
+                log: log,
+                config: config,
+                duration: duration,
+                outputURL: outputURL,
+                progress: progress
+            )
+        }.value
+    }
+
+    private static func renderCompositeMP4OffMain(
+        videoURL: URL,
+        log: RecordedChatLog,
+        config: TwitchClipEditConfig,
+        duration: Double,
+        outputURL: URL,
+        progress: (@Sendable (Double) -> Void)?
     ) async throws -> TwitchClipRenderStats {
         let renderStartedAt = ContinuousClock.now
         let asset = AVURLAsset(url: videoURL)
@@ -537,12 +558,18 @@ public enum TwitchClipRenderer {
         let assetDuration = try await asset.load(.duration).seconds
         let totalDuration = max(0.5, min(duration > 0 ? duration : assetDuration, assetDuration > 0 ? assetDuration : duration))
 
+        let outSize = TwitchClipTimelineBridge.canvasSize(for: config)
+        let targetWidth = outSize.w
+        let targetHeight = outSize.h
+        let bitrate = totalDuration > 120 ? 5_000_000 : 6_500_000
+
         let prefetched: PrefetchSummary
         if config.chat.enabled {
             prefetched = await prefetchAssets(for: log, config: config.chat, maxPixel: 128)
         } else {
             prefetched = PrefetchSummary(assets: [:], emoteCount: 0, animatedEmoteCount: 0, badgeCount: 0)
         }
+        try Task.checkCancellation()
         let emoteAssets = prefetched.assets
 
         let fm = FileManager.default
@@ -569,13 +596,13 @@ public enum TwitchClipRenderer {
         }
         reader.add(videoReaderOutput)
 
-        // Video writer (1080×1920 H.264)
+        // Video writer (1080×1920 portrait or 1920×1080 landscape H.264)
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: canvasWidth,
-            AVVideoHeightKey: canvasHeight,
+            AVVideoWidthKey: targetWidth,
+            AVVideoHeightKey: targetHeight,
             AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: 6_500_000,
+                AVVideoAverageBitRateKey: bitrate,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
                 AVVideoExpectedSourceFrameRateKey: renderFPS,
             ],
@@ -589,8 +616,8 @@ public enum TwitchClipRenderer {
 
         let adaptorAttrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: canvasWidth,
-            kCVPixelBufferHeightKey as String: canvasHeight,
+            kCVPixelBufferWidthKey as String: targetWidth,
+            kCVPixelBufferHeightKey as String: targetHeight,
         ]
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: videoWriterInput,
@@ -633,17 +660,30 @@ public enum TwitchClipRenderer {
             throw TwitchClipRendererError.exportFailed(reader.error?.localizedDescription ?? "reader failed to start")
         }
         guard writer.startWriting() else {
+            reader.cancelReading()
             throw TwitchClipRendererError.exportFailed(writer.error?.localizedDescription ?? "writer failed to start")
         }
         writer.startSession(atSourceTime: .zero)
 
         let ciContext = CIContext(options: [.useSoftwareRenderer: false])
         let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let outW = Double(canvasWidth)
-        let outH = Double(canvasHeight)
+        let outW = Double(targetWidth)
+        let outH = Double(targetHeight)
         let slots = TwitchClipTimelineBridge.slots(for: config)
         let chatBox = TwitchClipTimelineBridge.chatOverlayRect(for: config)
-        let maxLines = config.chat.placement == .band ? 4 : 6
+        let maxLines = TwitchClipTimelineBridge.maxVisibleChatLines(for: config)
+        let hasBandBackdrop = config.chat.enabled && config.chat.placement == .band
+        let bandBackdropImage: CIImage? = hasBandBackdrop
+            ? CIImage(color: CIColor(red: 0.08, green: 0.08, blue: 0.09, alpha: 1))
+                .cropped(to: CGRect(
+                    x: chatBox.x * outW,
+                    y: outH - (chatBox.y + chatBox.h) * outH,
+                    width: chatBox.w * outW,
+                    height: chatBox.h * outH
+                ))
+            : nil
+        let baseBackdrop = CIImage(color: CIColor(red: 0.043, green: 0.043, blue: 0.043, alpha: 1))
+            .cropped(to: CGRect(x: 0, y: 0, width: outW, height: outH))
 
         var cachedChatKey: String?
         var cachedChatImage: CIImage?
@@ -681,14 +721,19 @@ public enum TwitchClipRenderer {
 
         // Process video frames (interleaving audio chunks within 0.5 s of video PTS)
         while let sampleBuffer = videoReaderOutput.copyNextSampleBuffer() {
+            if Task.isCancelled {
+                reader.cancelReading()
+                writer.cancelWriting()
+                try? fm.removeItem(at: outputURL)
+                throw CancellationError()
+            }
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { continue }
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             let t = max(0, pts.seconds)
 
             let srcCI = CIImage(cvPixelBuffer: pixelBuffer)
             let srcExtent = srcCI.extent
-            var composite = CIImage(color: CIColor(red: 0.043, green: 0.043, blue: 0.043, alpha: 1))
-                .cropped(to: CGRect(x: 0, y: 0, width: outW, height: outH))
+            var composite = baseBackdrop
 
             // Draw each slot (Region B, then Region A / PiP)
             for slot in slots {
@@ -726,6 +771,10 @@ public enum TwitchClipRenderer {
                 } else {
                     composite = positioned.composited(over: composite)
                 }
+            }
+
+            if let bandBackdropImage {
+                composite = bandBackdropImage.composited(over: composite)
             }
 
             // Composite chat overlay (re-rasterized whenever visible messages OR any visible animated emote frame changes)
@@ -770,8 +819,14 @@ public enum TwitchClipRenderer {
             drainAudio(upTo: t + 0.5)
 
             while !videoWriterInput.isReadyForMoreMediaData && writer.status == .writing {
+                if Task.isCancelled {
+                    reader.cancelReading()
+                    writer.cancelWriting()
+                    try? fm.removeItem(at: outputURL)
+                    throw CancellationError()
+                }
                 drainAudio(upTo: t + 0.5)
-                try? await Task.sleep(for: .milliseconds(2))
+                try? await Task.sleep(for: .milliseconds(3))
             }
             guard writer.status == .writing else { break }
             guard let pool = adaptor.pixelBufferPool else { continue }
@@ -799,7 +854,7 @@ public enum TwitchClipRenderer {
             while !audioEOF && writer.status == .writing {
                 drainAudio(upTo: nil)
                 if !audioEOF && !audioWriterInput.isReadyForMoreMediaData {
-                    try? await Task.sleep(for: .milliseconds(2))
+                    try? await Task.sleep(for: .milliseconds(3))
                 }
             }
             if !audioEOF {
@@ -824,6 +879,7 @@ public enum TwitchClipRenderer {
             overlayRasterizations: overlayRasterizations
         )
         Telemetry.log(.info, .live, "twitch.clip.render", data: [
+            "orientation": .string(config.orientation.rawValue),
             "render_ms": .int(stats.renderMs),
             "chat_entries": .int(stats.chatEntries),
             "emotes": .int(stats.emotesPrefetched),

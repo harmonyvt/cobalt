@@ -61,7 +61,8 @@ struct TwitchDualStage: View {
 
     private func displayName(for slot: TwitchStreamSlot) -> String {
         let ch = login(for: slot)
-        return displayNames[ch.lowercased()] ?? ch
+        let key = StreamAddress.canonicalKey(for: ch)
+        return displayNames[key] ?? StreamAddress.displayLabel(for: ch)
     }
 
     private func displayName(for slot: TwitchDualSlot) -> String {
@@ -542,9 +543,9 @@ struct TwitchDualStage: View {
         ZStack {
             if !isSeparated && showControls {
                 VStack(spacing: 0) {
-                    MediaEdgeVignette(edge: .top, height: compactChrome ? 60 : 80, intensity: showsTopChrome ? 0.46 : 0.34)
+                    MediaEdgeVignette(edge: .top, height: compactChrome ? 60 : 80, intensity: showsTopChrome ? 0.48 : 0.36)
                     Spacer(minLength: 0)
-                    MediaEdgeVignette(edge: .bottom, height: compactChrome ? 72 : 92, intensity: 0.52)
+                    MediaEdgeVignette(edge: .bottom, height: compactChrome ? 84 : 104, intensity: 0.64)
                 }
                 .allowsHitTesting(false)
                 .transition(.opacity)
@@ -616,9 +617,9 @@ struct TwitchDualStage: View {
                 Button(action: onMinimize) {
                     Label(Copy.close, systemImage: "chevron.backward")
                         .labelStyle(.iconOnly)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 38, height: 38)
                         .mediaGlassCircle()
                         .frame(width: Metrics.hit, height: Metrics.hit)
                         .contentShape(Rectangle())
@@ -663,7 +664,7 @@ struct TwitchDualStage: View {
                     streamManagementMenu
                     Button(role: .destructive, action: onStop) {
                         Image(systemName: "stop.fill")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(CobaltColor.errorText)
                             .frame(width: Metrics.hit, height: Metrics.hit)
                             .contentShape(Rectangle())
@@ -680,132 +681,147 @@ struct TwitchDualStage: View {
         .padding(.top, compactChrome ? 4 : 8)
     }
 
-    /// Bottom Clear Liquid Glass control strip: Play/Pause, Audio Mixer (`A · Mix · B` for N=2; Audio Popover pill for N>=3),
-    /// Focus Swap/Cycle, Layout toggle, `+` Add Stream (when < 4), PiP / Floating Window, and Stream Actions.
+    /// Bottom Liquid Glass control strip: adapts cleanly to narrow side-by-side stages via `ViewThatFits`
+    /// so controls never clip off the left or right edge, while preserving full 44 pt hit targets.
     private func bottomGlassHUD(isSeparated: Bool) -> some View {
-        MediaGlassGroup(spacing: 8) {
-            HStack(spacing: 6) {
-                // Play / Pause all streams
-                Button {
-                    host.setPaused(showsPauseGlyph)
-                    bumpHUD()
-                } label: {
-                    Label(showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play,
-                          systemImage: showsPauseGlyph ? "pause.fill" : "play.fill")
-                        .labelStyle(.iconOnly)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: Metrics.hit, height: Metrics.hit)
-                        .contentShape(Circle())
+        let isNarrow = stageSize.width > 0 && stageSize.width < 460
+        return MediaGlassGroup(spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                if !isNarrow {
+                    bottomHUDRow(compact: false, includeSecondaryActions: true)
                 }
-                .buttonStyle(.plain)
-                .mediaGlassCircle()
-                .accessibilityLabel(showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play)
-                .accessibilityIdentifier("twitch.dual.playpause")
-
-                if isMulti {
-                    multiAudioMixerPill
-                } else {
-                    // One >= 44 pt A · Mix · B segmented + scrubbable equal-power crossfader
-                    TwitchDualAudioMixerControl(
-                        mixer: mixer,
-                        primaryMark: shortMark(for: .primary),
-                        secondaryMark: shortMark(for: .secondary),
-                        primaryName: primaryDisplayName,
-                        secondaryName: secondaryDisplayName,
-                        primaryAccent: primaryAccent,
-                        secondaryAccent: secondaryAccent,
-                        isMuted: host.isMuted,
-                        isScrubbing: $isScrubbingAudio,
-                        onInteract: bumpHUD
-                    )
+                bottomHUDRow(compact: true, includeSecondaryActions: false)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    bottomHUDRow(compact: true, includeSecondaryActions: false)
                 }
-
-                Spacer(minLength: 4)
-
-                // Focus swap/cycle + Layout toggle + Add Stream + PiP/Floating panel in a unified glass capsule
-                HStack(spacing: 0) {
-                    Button {
-                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
-                            if isMulti {
-                                host.cycleSpotlight(forward: true)
-                            } else {
-                                host.swapDualFocus()
-                            }
-                        }
-                        bumpHUD()
-                    } label: {
-                        Label(Copy.Twitch.swapFocus,
-                              systemImage: isMulti ? Symbol.Twitch.cycleFocus : Symbol.Twitch.swapFocus)
-                            .labelStyle(.iconOnly)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: Metrics.hit, height: Metrics.hit)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Copy.Twitch.swapFocus)
-                    .accessibilityIdentifier("twitch.dual.swapFocus")
-                    .help(Copy.Twitch.swapFocus)
-
-                    layoutToggleButton
-
-                    if canAddMoreStreams {
-                        Button {
-                            onAddStream()
-                            bumpHUD()
-                        } label: {
-                            Label(Copy.Twitch.addStreamTitle(current: streamCount, max: PaneItem.maxSimultaneousStreams),
-                                  systemImage: Symbol.Twitch.addStream)
-                                .labelStyle(.iconOnly)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: Metrics.hit, height: Metrics.hit)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(Copy.Twitch.addStreamTitle(current: streamCount, max: PaneItem.maxSimultaneousStreams))
-                        .accessibilityIdentifier("twitch.multi.addStream")
-                        .help(Copy.Twitch.addStreamTitle(current: streamCount, max: PaneItem.maxSimultaneousStreams))
-                    }
-
-                    if host.canTogglePiP {
-                        Button {
-                            host.togglePiP()
-                            bumpHUD()
-                        } label: {
-                            #if os(iOS)
-                            let icon = host.isPiPActive ? Symbol.Twitch.pipExit : Symbol.Twitch.pipEnter
-                            let label = host.isPiPActive ? Copy.Twitch.pipExit : (isMulti ? Copy.Twitch.spotlightPiP : Copy.Twitch.dualPiP)
-                            #else
-                            let icon = host.isPiPActive ? Symbol.Twitch.pipExit : Symbol.Twitch.floatingPanel
-                            let label = host.isPiPActive ? Copy.Twitch.closeFloatingWindow : Copy.Twitch.floatingWindow
-                            #endif
-                            Label(label, systemImage: icon)
-                                .labelStyle(.iconOnly)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: Metrics.hit, height: Metrics.hit)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(host.isPiPActive ? Copy.Twitch.pipExit : (isMulti ? Copy.Twitch.spotlightPiP : Copy.Twitch.dualPiP))
-                        .accessibilityIdentifier("twitch.dual.pip")
-                    }
-
-                    if !showsTopChrome {
-                        streamManagementMenu
-                    }
-                }
-                .padding(.horizontal, 2)
-                .mediaGlassCapsule(interactive: false)
             }
         }
         .padding(.horizontal, 10)
-        .padding(.bottom, isSeparated ? 12 : (compactChrome ? 6 : 10))
+        .padding(.bottom, isSeparated ? 12 : (compactChrome ? 8 : 10))
     }
 
-    private var layoutToggleButton: some View {
+    private func bottomHUDRow(compact: Bool, includeSecondaryActions: Bool) -> some View {
+        let buttonWidth: CGFloat = compact ? 40 : Metrics.hit
+        return HStack(spacing: 6) {
+            // Play / Pause all streams
+            Button {
+                host.setPaused(showsPauseGlyph)
+                bumpHUD()
+            } label: {
+                Label(showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play,
+                      systemImage: showsPauseGlyph ? "pause.fill" : "play.fill")
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 14.5, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: Metrics.hit, height: Metrics.hit)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .mediaGlassCircle()
+            .accessibilityLabel(showsPauseGlyph ? Copy.Twitch.pause : Copy.Twitch.play)
+            .accessibilityIdentifier("twitch.dual.playpause")
+
+            if isMulti {
+                multiAudioMixerPill
+            } else {
+                // One >= 44 pt A · Mix · B segmented + scrubbable equal-power crossfader
+                TwitchDualAudioMixerControl(
+                    mixer: mixer,
+                    primaryMark: shortMark(for: .primary),
+                    secondaryMark: shortMark(for: .secondary),
+                    primaryName: primaryDisplayName,
+                    secondaryName: secondaryDisplayName,
+                    primaryAccent: primaryAccent,
+                    secondaryAccent: secondaryAccent,
+                    isMuted: host.isMuted,
+                    compact: compact,
+                    isScrubbing: $isScrubbingAudio,
+                    onInteract: bumpHUD
+                )
+            }
+
+            Spacer(minLength: 4)
+
+            // Action capsule: collapses secondary actions into the overflow menu on narrow columns so nothing clips.
+            HStack(spacing: 0) {
+                Button {
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
+                        if isMulti {
+                            host.cycleSpotlight(forward: true)
+                        } else {
+                            host.swapDualFocus()
+                        }
+                    }
+                    bumpHUD()
+                } label: {
+                    Label(Copy.Twitch.swapFocus,
+                          systemImage: isMulti ? Symbol.Twitch.cycleFocus : Symbol.Twitch.swapFocus)
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 14.5, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: buttonWidth, height: Metrics.hit)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Copy.Twitch.swapFocus)
+                .accessibilityIdentifier("twitch.dual.swapFocus")
+                .help(Copy.Twitch.swapFocus)
+
+                layoutToggleButton(width: buttonWidth)
+
+                if includeSecondaryActions && canAddMoreStreams {
+                    Button {
+                        onAddStream()
+                        bumpHUD()
+                    } label: {
+                        Label(Copy.Twitch.addStreamTitle(current: streamCount, max: PaneItem.maxSimultaneousStreams),
+                              systemImage: Symbol.Twitch.addStream)
+                            .labelStyle(.iconOnly)
+                            .font(.system(size: 14.5, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: buttonWidth, height: Metrics.hit)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Copy.Twitch.addStreamTitle(current: streamCount, max: PaneItem.maxSimultaneousStreams))
+                    .accessibilityIdentifier("twitch.multi.addStream")
+                    .help(Copy.Twitch.addStreamTitle(current: streamCount, max: PaneItem.maxSimultaneousStreams))
+                }
+
+                if includeSecondaryActions && host.canTogglePiP {
+                    Button {
+                        host.togglePiP()
+                        bumpHUD()
+                    } label: {
+                        #if os(iOS)
+                        let icon = host.isPiPActive ? Symbol.Twitch.pipExit : Symbol.Twitch.pipEnter
+                        let label = host.isPiPActive ? Copy.Twitch.pipExit : (isMulti ? Copy.Twitch.spotlightPiP : Copy.Twitch.dualPiP)
+                        #else
+                        let icon = host.isPiPActive ? Symbol.Twitch.pipExit : Symbol.Twitch.floatingPanel
+                        let label = host.isPiPActive ? Copy.Twitch.closeFloatingWindow : Copy.Twitch.floatingWindow
+                        #endif
+                        Label(label, systemImage: icon)
+                            .labelStyle(.iconOnly)
+                            .font(.system(size: 14.5, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: buttonWidth, height: Metrics.hit)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(host.isPiPActive ? Copy.Twitch.pipExit : (isMulti ? Copy.Twitch.spotlightPiP : Copy.Twitch.dualPiP))
+                    .accessibilityIdentifier("twitch.dual.pip")
+                }
+
+                if !showsTopChrome || !includeSecondaryActions {
+                    streamManagementMenu
+                }
+            }
+            .padding(.horizontal, 2)
+            .mediaGlassCapsule(interactive: false)
+        }
+    }
+
+    private func layoutToggleButton(width: CGFloat = Metrics.hit) -> some View {
         Button {
             withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
                 if isMulti {
@@ -836,9 +852,9 @@ struct TwitchDualStage: View {
             }
             return Label(label, systemImage: symbol)
                 .labelStyle(.iconOnly)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 14.5, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: Metrics.hit, height: Metrics.hit)
+                .frame(width: width, height: Metrics.hit)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -989,7 +1005,8 @@ struct TwitchDualStage: View {
             ForEach(activeSlots) { slot in
                 let ch = login(for: slot)
                 let name = displayName(for: slot)
-                Button("\(Copy.Twitch.openOnTwitch) (\(name))", systemImage: Symbol.Twitch.open) {
+                let openLabel = Copy.Twitch.openOnPlatform(StreamAddress.platform(for: ch).lowercaseName)
+                Button("\(openLabel) (\(name))", systemImage: Symbol.Twitch.open) {
                     onOpenOnTwitch(ch)
                 }
             }
@@ -1165,10 +1182,11 @@ struct TwitchDualAudioMixerControl: View {
     let primaryAccent: Color
     let secondaryAccent: Color
     let isMuted: Bool
+    var compact: Bool = false
     @Binding var isScrubbing: Bool
     let onInteract: () -> Void
 
-    @State private var controlWidth: CGFloat = 156
+    @State private var controlWidth: CGFloat = 148
 
     private var activePreset: TwitchDualAudioPreset {
         mixer.activePreset
@@ -1179,14 +1197,14 @@ struct TwitchDualAudioMixerControl: View {
             // Segmented + horizontal-scrubbable `A · Mix · B` pill
             ZStack(alignment: .leading) {
                 // Continuous equal-power position indicator thumb behind the 3 labels
-                let trackW = max(controlWidth - 8, 114)
-                let thumbW = max(trackW / 3.0, 38)
+                let trackW = max(controlWidth - 8, 102)
+                let thumbW = max(trackW / 3.0, 34)
                 let offsetX = CGFloat(mixer.balance) * (trackW - thumbW)
                 Capsule()
-                    .fill(thumbTint.opacity(isMuted ? 0.16 : 0.36))
+                    .fill(thumbTint.opacity(isMuted ? 0.22 : 0.48))
                     .overlay {
                         Capsule()
-                            .strokeBorder(thumbTint.opacity(isMuted ? 0.25 : 0.65), lineWidth: 0.75)
+                            .strokeBorder(thumbTint.opacity(isMuted ? 0.35 : 0.85), lineWidth: 1)
                     }
                     .frame(width: thumbW, height: Metrics.hit - 8)
                     .offset(x: 4 + offsetX)
@@ -1224,7 +1242,7 @@ struct TwitchDualAudioMixerControl: View {
                     }
                 }
             }
-            .frame(minWidth: 136, maxWidth: 176, minHeight: Metrics.hit)
+            .frame(minWidth: compact ? 116 : 136, maxWidth: compact ? 140 : 176, minHeight: Metrics.hit)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controlWidth = $0 }
             .mediaGlassCapsule(interactive: false)
             .highPriorityGesture(
@@ -1251,20 +1269,28 @@ struct TwitchDualAudioMixerControl: View {
                     mixer.unpin()
                     onInteract()
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: Symbol.Twitch.pinFill)
-                            .font(.system(size: 11, weight: .semibold))
-                        Text(Copy.Twitch.audioUnpin)
-                            .font(Font.cobalt(11, .semibold))
-                            .lineLimit(1)
+                    Group {
+                        if compact {
+                            Image(systemName: Symbol.Twitch.pinFill)
+                                .font(.system(size: 13.5, weight: .semibold))
+                                .frame(width: Metrics.hit, height: Metrics.hit)
+                        } else {
+                            HStack(spacing: 4) {
+                                Image(systemName: Symbol.Twitch.pinFill)
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                Text(Copy.Twitch.audioUnpin)
+                                    .font(Font.cobalt(11.5, .semibold))
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 10)
+                            .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
+                        }
                     }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 9)
-                    .frame(minWidth: Metrics.hit, minHeight: Metrics.hit)
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .mediaGlassCapsule()
+                .mediaGlassCapsule(tint: thumbTint.opacity(0.45))
                 .accessibilityLabel("\(Copy.Twitch.audioPinned), \(Copy.Twitch.audioUnpin)")
                 .accessibilityIdentifier("twitch.dual.unpinAudio")
                 .help(Copy.Twitch.audioUnpin)

@@ -25,7 +25,8 @@ public struct TwitchCredentials: Sendable, Equatable {
 public actor TwitchChatEngine {
     public static let lineLimit = 300
     static let ircURL = URL(string: "wss://irc-ws.chat.twitch.tv:443")!
-    static let publishGap: Duration = .milliseconds(120)
+    static let publishGap: Duration = .milliseconds(150)
+    static let lowPowerPublishGap: Duration = .milliseconds(400)
     /// Twitch's IRC has no history: the recent lines come from the public recent-messages service Chatterino and other
     /// chat clients use (it is told the channel name only). Best effort: no answer, no history.
     static let historyBase = "https://recent-messages.robotty.de/api/v2/recent-messages/"
@@ -46,6 +47,7 @@ public actor TwitchChatEngine {
     private var dirty = false
     private var publishing = false
     private var stopped = false
+    private var lowPowerMode = false
 
     private var irc: URLSessionWebSocketTask?
     private var ircLoop: Task<Void, Never>?
@@ -442,6 +444,17 @@ public actor TwitchChatEngine {
 
     // MARK: - publishing
 
+    public func setLowPowerMode(_ enabled: Bool) {
+        guard lowPowerMode != enabled else { return }
+        lowPowerMode = enabled
+        if !enabled, !stopped, cosmeticTask == nil, !pendingCosmeticLookups.isEmpty {
+            cosmeticTask = Task { [weak self] in
+                guard let self else { return }
+                await self.drainCosmeticLookups()
+            }
+        }
+    }
+
     private func set(status: TwitchChatStatus) {
         guard snapshot.status != status else { return }
         snapshot.status = status
@@ -452,8 +465,9 @@ public actor TwitchChatEngine {
         dirty = true
         guard !publishing else { return }
         publishing = true
+        let gap = lowPowerMode ? Self.lowPowerPublishGap : Self.publishGap
         Task { [weak self] in
-            try? await Task.sleep(for: Self.publishGap)
+            try? await Task.sleep(for: gap)
             await self?.publish()
         }
     }
@@ -742,28 +756,34 @@ public actor TwitchChatEngine {
 
         let missingSet = Set(missingIDs)
         let uncached = batch.filter { missingSet.contains($0.userID) }
-        if !uncached.isEmpty,
-           let body = SevenTvChatWire.cosmeticsQueryBody(userIDs: uncached.map(\.userID)),
-           let data = await post(SevenTvChatWire.gqlURL, body: body),
-           let response = try? SevenTvChatWire.decoder().decode(SevenTvChatWire.GQLCosmeticsResponse.self, from: data),
-           let users = response.data, !stopped {
-            var toCache: [String: TwitchCachedCosmetics] = [:]
-            for (idx, item) in uncached.enumerated() {
-                let style = users["u\(idx)"]??.style
-                let paint: SevenTvPaint? = style?.paint.flatMap { pData in
-                    guard let pid = pData.id, !pid.isEmpty else { return nil }
-                    return SevenTvChatWire.paint(pData, id: pid)
+        if !uncached.isEmpty {
+            if lowPowerMode {
+                // Skip outbound 7TV GQL HTTP fetches in Low Power Mode; allow retry once LPM turns off.
+                for item in uncached {
+                    seenCosmeticUsers.remove(item.userID)
                 }
-                let badge: ChatBadge? = style?.badge.flatMap { bData in
-                    guard let bid = bData.id, !bid.isEmpty else { return nil }
-                    return SevenTvChatWire.badge(bData, id: bid)
+            } else if let body = SevenTvChatWire.cosmeticsQueryBody(userIDs: uncached.map(\.userID)),
+                      let data = await post(SevenTvChatWire.gqlURL, body: body),
+                      let response = try? SevenTvChatWire.decoder().decode(SevenTvChatWire.GQLCosmeticsResponse.self, from: data),
+                      let users = response.data, !stopped {
+                var toCache: [String: TwitchCachedCosmetics] = [:]
+                for (idx, item) in uncached.enumerated() {
+                    let style = users["u\(idx)"]??.style
+                    let paint: SevenTvPaint? = style?.paint.flatMap { pData in
+                        guard let pid = pData.id, !pid.isEmpty else { return nil }
+                        return SevenTvChatWire.paint(pData, id: pid)
+                    }
+                    let badge: ChatBadge? = style?.badge.flatMap { bData in
+                        guard let bid = bData.id, !bid.isEmpty else { return nil }
+                        return SevenTvChatWire.badge(bData, id: bid)
+                    }
+                    let resolved = TwitchCachedCosmetics(paint: paint, badge: badge)
+                    toCache[item.userID] = resolved
+                    if applyCachedCosmetics(resolved, login: item.login) { changed = true }
                 }
-                let resolved = TwitchCachedCosmetics(paint: paint, badge: badge)
-                toCache[item.userID] = resolved
-                if applyCachedCosmetics(resolved, login: item.login) { changed = true }
-            }
-            if !toCache.isEmpty {
-                await assetCache.storeCosmetics(toCache)
+                if !toCache.isEmpty {
+                    await assetCache.storeCosmetics(toCache)
+                }
             }
         }
         if changed { applyCosmetics() }

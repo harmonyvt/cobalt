@@ -404,7 +404,7 @@ public final class TwitchClipDraftStore {
 
     // MARK: - Direct Render to Private Library
 
-    /// Renders the 9:16 1080×1920 composite MP4 (Region A/B split-frame + burned-in chat overlay)
+    /// Renders the 9:16 (`1080×1920`) or 16:9 (`1920×1080`) composite MP4 (with optional burned-in chat overlay)
     /// and uploads it to the Library as private.
     public func renderAndUpload(draft: TwitchClipDraft) async throws -> UploadResult {
         let currentDraft = self.draft(id: draft.id) ?? draft
@@ -415,7 +415,9 @@ public final class TwitchClipDraftStore {
             throw err
         }
 
-        exportState = .rendering(draftID: currentDraft.id, progress: 0.02, stage: "rendering 9:16…")
+        let aspectLabel = currentDraft.edit.orientation == .landscape ? "16:9" : "9:16"
+        let renderStage = "rendering \(aspectLabel)…"
+        exportState = .rendering(draftID: currentDraft.id, progress: 0.02, stage: renderStage)
         let log = await loadChatLog(for: currentDraft)
         let outURL = directory.appendingPathComponent("\(currentDraft.id)-render.mp4")
 
@@ -432,11 +434,15 @@ public final class TwitchClipDraftStore {
                         self?.exportState = .rendering(
                             draftID: currentDraft.id,
                             progress: min(0.85, max(0.02, frac * 0.85)),
-                            stage: "rendering 9:16…"
+                            stage: renderStage
                         )
                     }
                 }
             )
+        } catch is CancellationError {
+            await storage.removeFile(at: outURL)
+            exportState = .idle
+            throw CancellationError()
         } catch {
             await storage.removeFile(at: outURL)
             let err = TwitchClipExportError.renderFailed(error.localizedDescription)
@@ -468,6 +474,10 @@ public final class TwitchClipDraftStore {
             await storage.removeFile(at: outURL)
             exportState = .done(draftID: currentDraft.id, message: "saved to library (private)")
             return result
+        } catch is CancellationError {
+            await storage.removeFile(at: outURL)
+            exportState = .idle
+            throw CancellationError()
         } catch {
             await storage.removeFile(at: outURL)
             let err = TwitchClipExportError.uploadFailed(error.localizedDescription)

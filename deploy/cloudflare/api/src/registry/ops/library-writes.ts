@@ -15,6 +15,10 @@ import {
     libraryVisibility,
     POST_KEY_SQL,
     studioUpload,
+    studioUploadMultipartAbort,
+    studioUploadMultipartComplete,
+    studioUploadMultipartCreate,
+    studioUploadMultipartPart,
     uploadLogInfo,
 } from "../../app-routes";
 import { loadPosts } from "../../chat-tools";
@@ -98,6 +102,70 @@ export const studioUploadOp = defineOp({
         await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "PUT /studio/upload", keyOf(ctx), ctx.request!, uploadLogInfo(ctx.request!), res));
         return res;
     },
+});
+
+// POST /studio/upload/multipart: start a stateless R2 multipart upload (files up to 1 GiB).
+export const studioUploadMultipartCreateOp = defineOp({
+    name: "studio.upload.multipart.create",
+    route: { method: "POST", path: "/studio/upload/multipart" },
+    auth: "key_or_service",
+    runs: "worker",
+    cors: true,
+    noStore: true,
+    input: NoInput,
+    http: none,
+    ai: { tier: "hidden", summary: "Begin a multipart upload (POST /studio/upload/multipart)." },
+    handler: async (ctx) => reply(await studioUploadMultipartCreate(ctx.app(), ctx.env.COBALT_API_KEY, keyOf(ctx), ctx.request!)),
+});
+
+// PUT /studio/upload/multipart/part?part=<n>: stream one part straight to R2 without buffering.
+export const studioUploadMultipartPartOp = defineOp({
+    name: "studio.upload.multipart.part",
+    route: { method: "PUT", path: "/studio/upload/multipart/part" },
+    auth: "key_or_service",
+    runs: "worker",
+    cors: true,
+    raw: true,
+    input: NoInput,
+    http: none,
+    ai: { tier: "hidden", summary: "Upload one multipart chunk (PUT /studio/upload/multipart/part)." },
+    handler: async (ctx) => {
+        const r = await studioUploadMultipartPart(ctx.app(), ctx.env.COBALT_API_KEY, keyOf(ctx), ctx.request!, ctx.query);
+        return json(r.status, r.body);
+    },
+});
+
+// POST /studio/upload/multipart/complete: assemble R2 parts and finalize into the library + studio.
+export const studioUploadMultipartCompleteOp = defineOp({
+    name: "studio.upload.multipart.complete",
+    route: { method: "POST", path: "/studio/upload/multipart/complete" },
+    auth: "key_or_service",
+    runs: "worker",
+    cors: true,
+    noStore: true,
+    input: NoInput,
+    http: none,
+    ai: { tier: "hidden", summary: "Complete a multipart upload (POST /studio/upload/multipart/complete)." },
+    handler: async (ctx) => {
+        const r = await studioUploadMultipartComplete(ctx.app(), ctx.env.COBALT_API_KEY, keyOf(ctx), ctx.request!);
+        const res = json(r.status, r.body);
+        await background(ctx.edge.waitUntil, () => logRequest(ctx.db, "POST /studio/upload/multipart/complete", keyOf(ctx), ctx.request!, uploadLogInfo(ctx.request!), res));
+        return reply(r);
+    },
+});
+
+// DELETE /studio/upload/multipart: abort an in-progress multipart upload and discard uploaded parts.
+export const studioUploadMultipartAbortOp = defineOp({
+    name: "studio.upload.multipart.abort",
+    route: { method: "DELETE", path: "/studio/upload/multipart" },
+    auth: "key_or_service",
+    runs: "worker",
+    cors: true,
+    noStore: true,
+    input: NoInput,
+    http: none,
+    ai: { tier: "hidden", summary: "Abort a multipart upload (DELETE /studio/upload/multipart)." },
+    handler: async (ctx) => reply(await studioUploadMultipartAbort(ctx.app(), ctx.env.COBALT_API_KEY, keyOf(ctx), ctx.request!, ctx.query)),
 });
 
 // POST /studio/<sid>/publish (sections 13, 16.3): D1 + R2, answered here.
@@ -644,6 +712,10 @@ export const LIBRARY_WRITE_OPS = [
     libraryDeleteFileOp,
     studioCreateOp,
     studioUploadOp,
+    studioUploadMultipartCreateOp,
+    studioUploadMultipartPartOp,
+    studioUploadMultipartCompleteOp,
+    studioUploadMultipartAbortOp,
     studioPublishOp,
     libraryPublishOp,
     libraryVisibilityRouteOp,

@@ -110,6 +110,7 @@ extension Copy {
             case .editorRender: what = "an edit render"
             case .deviceDownload: what = "a download"
             case .photosExport: what = "photos"
+            case .audioLevel: what = "audio leveling"
             case .swarm: what = "a swarm"
             }
             if let name = s.remote?.keyName, !name.isEmpty { return "\(what) from your \(name)" }
@@ -158,6 +159,7 @@ extension Copy {
 
         private static func rendering(_ kind: JobStatus.Kind, _ phase: RenderPhase?) -> String {
             if kind == .editorRender { return "rendering your edit" }
+            if kind == .audioLevel { return "leveling audio" }
             switch phase {
             case .pack?: return Copy.packing
             case .fetching?: return "fetching the video"

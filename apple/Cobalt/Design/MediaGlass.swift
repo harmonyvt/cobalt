@@ -95,24 +95,43 @@ struct MediaUnifiedHeaderPill<Trailing: View>: View {
 }
 
 extension View {
-    /// Applies Clear Liquid Glass in a capsule over media canvases (photos, videos, streams, maps).
+    /// Applies high-legibility Liquid Glass in a capsule over media canvases (photos, videos, streams, maps)
+    /// with a subtle dark scrim tint and crisp specular rim so controls pop over bright and dark frames alike.
     func mediaGlassCapsule(interactive: Bool = true, tint: Color? = nil) -> some View {
         let base: Glass = interactive ? .clear.interactive() : .clear
-        let styled: Glass = tint.map { base.tint($0) } ?? base
-        return self.glassEffect(styled, in: .capsule)
+        let effectiveTint = tint ?? Color.black.opacity(0.44)
+        return self
+            .glassEffect(base.tint(effectiveTint), in: .capsule)
+            .overlay {
+                Capsule()
+                    .strokeBorder(Color.white.opacity(tint == nil ? 0.22 : 0.28), lineWidth: 0.75)
+                    .allowsHitTesting(false)
+            }
     }
 
-    /// Applies Clear Liquid Glass in a circle over media canvases (44 pt+ circular HUD buttons).
+    /// Applies high-legibility Liquid Glass in a circle over media canvases (44 pt+ circular HUD buttons).
     func mediaGlassCircle(interactive: Bool = true, tint: Color? = nil) -> some View {
         let base: Glass = interactive ? .clear.interactive() : .clear
-        let styled: Glass = tint.map { base.tint($0) } ?? base
-        return self.glassEffect(styled, in: .circle)
+        let effectiveTint = tint ?? Color.black.opacity(0.44)
+        return self
+            .glassEffect(base.tint(effectiveTint), in: .circle)
+            .overlay {
+                Circle()
+                    .strokeBorder(Color.white.opacity(tint == nil ? 0.22 : 0.28), lineWidth: 0.75)
+                    .allowsHitTesting(false)
+            }
     }
 
-    /// Applies Clear Liquid Glass in a continuous rounded rectangle over media canvases.
+    /// Applies high-legibility Liquid Glass in a continuous rounded rectangle over media canvases.
     func mediaGlassRounded(cornerRadius: CGFloat = Metrics.thumbRadius, interactive: Bool = true, tint: Color? = nil) -> some View {
         let base: Glass = interactive ? .clear.interactive() : .clear
-        let styled: Glass = tint.map { base.tint($0) } ?? base
-        return self.glassEffect(styled, in: .rect(cornerRadius: cornerRadius))
+        let effectiveTint = tint ?? Color.black.opacity(0.44)
+        return self
+            .glassEffect(base.tint(effectiveTint), in: .rect(cornerRadius: cornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(tint == nil ? 0.20 : 0.26), lineWidth: 0.75)
+                    .allowsHitTesting(false)
+            }
     }
 }

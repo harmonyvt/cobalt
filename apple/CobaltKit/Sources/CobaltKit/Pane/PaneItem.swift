@@ -129,7 +129,7 @@ public enum PaneItem: Hashable, Codable, Sendable {
     public static func streams(_ rawChannels: [TwitchChannel]) -> PaneItem? {
         var normalized: [TwitchChannel] = []
         for raw in rawChannels {
-            let clean = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let clean = StreamAddress.canonicalKey(for: raw)
             guard !clean.isEmpty, !normalized.contains(clean) else { continue }
             normalized.append(clean)
             if normalized.count == maxSimultaneousStreams { break }
@@ -145,15 +145,15 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// Promotes a single `.stream` item into `.dualStream` (or replaces secondary if already dual).
     /// Returns `nil` when `self` is not a stream or `secondary` matches the primary channel.
     public func promotedToDual(secondary rawSecondary: TwitchChannel) -> PaneItem? {
-        let sec = rawSecondary.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let sec = StreamAddress.canonicalKey(for: rawSecondary)
         guard !sec.isEmpty else { return nil }
         switch self {
         case .stream(let primary):
-            let pri = primary.lowercased()
+            let pri = StreamAddress.canonicalKey(for: primary)
             guard pri != sec else { return nil }
             return .dualStream(primary: pri, secondary: sec)
         case .dualStream(let primary, _):
-            let pri = primary.lowercased()
+            let pri = StreamAddress.canonicalKey(for: primary)
             guard pri != sec else { return nil }
             return .dualStream(primary: pri, secondary: sec)
         default:
@@ -165,9 +165,9 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// Returns `nil` when `self` is not a stream, `rawChannel` is empty/already active, or already at the 4-stream cap.
     public func addingStream(_ rawChannel: TwitchChannel) -> PaneItem? {
         guard isStream else { return nil }
-        let clean = rawChannel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let clean = StreamAddress.canonicalKey(for: rawChannel)
         guard !clean.isEmpty else { return nil }
-        let current = streamChannels.map { $0.lowercased() }
+        let current = streamChannels.map(StreamAddress.canonicalKey(for:))
         guard current.count < Self.maxSimultaneousStreams, !current.contains(clean) else { return nil }
         return Self.streams(current + [clean])
     }
@@ -175,8 +175,8 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// Removes a stream from a dual/multi-stream item, demoting 4 -> 3 -> 2 -> 1 (or `nil` if not found / last stream).
     public func removingStream(_ rawChannel: TwitchChannel) -> PaneItem? {
         guard isStream else { return nil }
-        let clean = rawChannel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let current = streamChannels.map { $0.lowercased() }
+        let clean = StreamAddress.canonicalKey(for: rawChannel)
+        let current = streamChannels.map(StreamAddress.canonicalKey(for:))
         guard current.contains(clean) else { return nil }
         let remaining = current.filter { $0 != clean }
         return Self.streams(remaining)
@@ -185,9 +185,9 @@ public enum PaneItem: Hashable, Codable, Sendable {
     /// Replaces the channel at `index` with a distinct `rawChannel`, preserving slot order.
     public func replacingStream(at index: Int, with rawChannel: TwitchChannel) -> PaneItem? {
         guard isStream else { return nil }
-        let clean = rawChannel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let clean = StreamAddress.canonicalKey(for: rawChannel)
         guard !clean.isEmpty else { return nil }
-        var current = streamChannels.map { $0.lowercased() }
+        var current = streamChannels.map(StreamAddress.canonicalKey(for:))
         guard current.indices.contains(index) else { return nil }
         if current[index] == clean { return nil }
         guard !current.contains(clean) else { return nil }
@@ -197,9 +197,9 @@ public enum PaneItem: Hashable, Codable, Sendable {
 
     /// Demotes a `.dualStream` or `.multiStream` item down to a single `.stream(keeping)`.
     public func demotedToSingle(keeping rawChannel: TwitchChannel) -> PaneItem? {
-        let current = streamChannels.map { $0.lowercased() }
+        let current = streamChannels.map(StreamAddress.canonicalKey(for:))
         guard current.count >= 2 else { return nil }
-        let keep = rawChannel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let keep = StreamAddress.canonicalKey(for: rawChannel)
         guard current.contains(keep) else { return nil }
         return .stream(keep)
     }

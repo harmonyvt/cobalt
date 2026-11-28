@@ -79,10 +79,21 @@ public struct TwitchVariant: Sendable, Equatable, Identifiable {
 public struct TwitchResolvedStream: Sendable, Equatable {
     public let masterURL: URL
     public let variants: [TwitchVariant]
+    /// Extra HTTP headers required when polling media playlists or fetching segments (e.g., Android User-Agent for YouTube HLS).
+    public let requiredHeaders: [String: String]
+    /// Optional metadata resolved alongside Kick/YouTube streams.
+    public let metadata: ExternalLiveStreamMetadata?
 
-    public init(masterURL: URL, variants: [TwitchVariant]) {
+    public init(
+        masterURL: URL,
+        variants: [TwitchVariant],
+        requiredHeaders: [String: String] = [:],
+        metadata: ExternalLiveStreamMetadata? = nil
+    ) {
         self.masterURL = masterURL
         self.variants = variants
+        self.requiredHeaders = requiredHeaders
+        self.metadata = metadata
     }
 }
 
@@ -402,9 +413,89 @@ public enum TwitchHLSParser {
 
     public static func parseISO8601(_ raw: String) -> Date? {
         let s = raw.trimmingCharacters(in: .whitespaces)
+        if let fast = parseISO8601Fast(s) { return fast }
         if let d = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(s) { return d }
         if let d = try? Date.ISO8601FormatStyle(includingFractionalSeconds: false).parse(s) { return d }
         return nil
+    }
+
+    /// Zero-allocation parser for standard HLS `YYYY-MM-DDTHH:MM:SS(.frac)(Z|±HH:MM)` timestamps.
+    private static func parseISO8601Fast(_ s: String) -> Date? {
+        let bytes = Array(s.utf8)
+        let n = bytes.count
+        // Minimum: "YYYY-MM-DDTHH:MM:SSZ" (20 bytes)
+        guard n >= 20 else { return nil }
+        guard bytes[4] == 0x2D, bytes[7] == 0x2D,
+              (bytes[10] == 0x54 || bytes[10] == 0x74 || bytes[10] == 0x20),
+              bytes[13] == 0x3A, bytes[16] == 0x3A else { return nil }
+
+        func digit(_ b: UInt8) -> Int? {
+            let v = Int(b) - 0x30
+            return (v >= 0 && v <= 9) ? v : nil
+        }
+        func parse2(_ i: Int) -> Int? {
+            guard let a = digit(bytes[i]), let b = digit(bytes[i + 1]) else { return nil }
+            return a * 10 + b
+        }
+        func parse4(_ i: Int) -> Int? {
+            guard let a = parse2(i), let b = parse2(i + 2) else { return nil }
+            return a * 100 + b
+        }
+
+        guard let year = parse4(0),
+              let month = parse2(5), (1...12).contains(month),
+              let day = parse2(8), (1...31).contains(day),
+              let hour = parse2(11), (0...23).contains(hour),
+              let minute = parse2(14), (0...59).contains(minute),
+              let second = parse2(17), (0...60).contains(second) else { return nil }
+
+        var idx = 19
+        var frac = 0.0
+        if idx < n && bytes[idx] == 0x2E { // '.'
+            idx += 1
+            var scale = 0.1
+            var sawDigit = false
+            while idx < n, let d = digit(bytes[idx]) {
+                sawDigit = true
+                frac += Double(d) * scale
+                scale *= 0.1
+                idx += 1
+            }
+            guard sawDigit else { return nil }
+        }
+
+        guard idx < n else { return nil }
+        var tzOffsetSeconds = 0
+        let tzByte = bytes[idx]
+        if tzByte == 0x5A || tzByte == 0x7A { // 'Z' or 'z'
+            guard idx + 1 == n else { return nil }
+        } else if tzByte == 0x2B || tzByte == 0x2D { // '+' or '-'
+            let sign = tzByte == 0x2B ? 1 : -1
+            idx += 1
+            guard idx + 2 <= n, let tzH = parse2(idx), tzH <= 23 else { return nil }
+            idx += 2
+            var tzM = 0
+            if idx < n {
+                if bytes[idx] == 0x3A { idx += 1 }
+                guard idx + 2 == n, let m = parse2(idx), m <= 59 else { return nil }
+                tzM = m
+            }
+            tzOffsetSeconds = sign * (tzH * 3600 + tzM * 60)
+        } else {
+            return nil
+        }
+
+        // Howard Hinnant's civil-to-days algorithm (days since 1970-01-01).
+        let y = year - (month <= 2 ? 1 : 0)
+        let era = (y >= 0 ? y : y - 399) / 400
+        let yoe = y - era * 400
+        let mAdj = month + (month > 2 ? -3 : 9)
+        let doy = (153 * mAdj + 2) / 5 + day - 1
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+        let days = era * 146_097 + doe - 719_468
+
+        let epochSeconds = Double(days * 86_400 + hour * 3_600 + minute * 60 + second - tzOffsetSeconds) + frac
+        return Date(timeIntervalSince1970: epochSeconds)
     }
 
     private static func parseByteRange(_ raw: String) -> TwitchByteRange? {
@@ -531,9 +622,12 @@ public actor TwitchStreamResolver {
     }
 
     /// Fetches and parses a live variant media playlist.
-    public func fetchMediaPlaylist(url: URL) async throws -> TwitchMediaPlaylist {
+    public func fetchMediaPlaylist(url: URL, headers: [String: String] = [:]) async throws -> TwitchMediaPlaylist {
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        for (field, value) in headers {
+            req.setValue(value, forHTTPHeaderField: field)
+        }
         let (data, http) = try await fetch(req)
         if http.statusCode == 404 { throw TwitchHLSError.offline }
         guard (200..<300).contains(http.statusCode), let text = String(data: data, encoding: .utf8) else {
@@ -542,19 +636,37 @@ public actor TwitchStreamResolver {
         return TwitchHLSParser.parseMedia(text, baseURL: url)
     }
 
-    /// Resolves `channel` to both the signed Usher master playlist URL and its parsed variants.
+    /// Resolves `channel` (Twitch login, `kick:<slug>`, or `yt:<videoId|@handle|channel/UC...>`)
+    /// to its HLS master playlist URL, parsed variants, and any required playback headers.
     public func resolveStream(channel: String, authToken: String? = nil) async throws -> TwitchResolvedStream {
+        if let address = StreamAddress.parse(channel) {
+            switch address.platform {
+            case .kick:
+                return try await KickStreamResolver(fetch: fetch).resolveStream(address: address)
+            case .youtube:
+                return try await YouTubeLiveResolver(fetch: fetch).resolveStream(address: address)
+            case .twitch:
+                let token = try await fetchPlaybackToken(channel: address.identifier, authToken: authToken)
+                return try await fetchMasterStream(channel: address.identifier, token: token)
+            }
+        }
         let token = try await fetchPlaybackToken(channel: channel, authToken: authToken)
         return try await fetchMasterStream(channel: channel, token: token)
     }
 
-    /// Resolves `channel` to Usher variants (token + master playlist).
+    /// Resolves `channel` to HLS variants (Twitch Usher, Kick IVS, or YouTube Live).
     public func resolve(channel: String, authToken: String? = nil) async throws -> [TwitchVariant] {
         try await resolveStream(channel: channel, authToken: authToken).variants
     }
 
+    /// Sanitizes a channel string: preserves canonical `kick:` and `yt:` addresses (including case-sensitive YouTube IDs),
+    /// and otherwise filters down to lowercase ASCII Twitch login characters.
     public static func sanitize(_ channel: String) -> String {
-        channel.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "_" }
+        let trimmed = channel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = StreamAddress.parse(trimmed), parsed.platform != .twitch {
+            return parsed.canonicalKey
+        }
+        return trimmed.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "_" }
     }
 
     private func requestToken(channel: String, authToken: String?) async throws -> TwitchPlaybackToken {

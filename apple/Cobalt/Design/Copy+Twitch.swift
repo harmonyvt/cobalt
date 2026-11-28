@@ -8,7 +8,7 @@ extension Copy {
 
         // MARK: the list
 
-        static let searchPrompt = "channel name or twitch link"
+        static let searchPrompt = "twitch, kick, or youtube live link"
         static let open = "watch"
         static let yourChannel = "your channel"
         static let liveNow = "live now"
@@ -41,6 +41,7 @@ extension Copy {
         static let clipFailed = "twitch didn't make the clip"
         static let watchingNow = "watching"
         static let openOnTwitch = "open on twitch"
+        static func openOnPlatform(_ platform: String) -> String { "open on \(platform)" }
         static let playingElsewhere = "playing on the other screen"
 
         // MARK: delay & player mode (70.4)
@@ -101,6 +102,7 @@ extension Copy {
         static let readOnlyChat = "read only"
         static let composerPrompt = "send a message"
         static let composerReadOnly = "connect twitch in the live stage to chat"
+        static func composerReadOnlyPlatform(_ platform: String) -> String { "\(platform) chat is read-only" }
         static let send = "send"
         static let paused = "paused"
         static func newLines(_ n: Int) -> String { n == 1 ? "1 new message" : "\(n) new messages" }
@@ -150,8 +152,8 @@ extension Copy {
         static let swapShort = "swap"
         static let swapSecondStream = "switch 2nd stream"
         static let pickSecondStreamTitle = "add 2nd stream"
-        static let pickSecondStreamPrompt = "channel name or twitch link"
-        static let pickSecondStreamEmpty = "pick a live channel or type any twitch login"
+        static let pickSecondStreamPrompt = "twitch, kick, or youtube live link"
+        static let pickSecondStreamEmpty = "pick a live channel or paste a twitch, kick, or youtube link"
         static let dualFocusInset = "focus"
         static let dualSplit5050 = "50/50"
         static let dualSideBySide32x9 = "32:9 side by side"
@@ -242,10 +244,14 @@ extension Copy {
         static let regionALabel = "region A · facecam"
         static let regionBLabel = "region B · gameplay"
         static let layoutSplit5050 = "50/50"
+        static let orientationPortrait = "9:16 portrait"
+        static let orientationLandscape = "16:9 landscape"
         static let layoutSplit4060 = "40/60"
         static let layoutSplit3565 = "35/65"
         static let layoutPiP = "pip"
         static let layoutSingle = "single"
+        static let layoutFullFrame = "full 16:9"
+        static let removeSplit = "remove split"
         static let swapRegions = "swap A ⇅ B"
         static let sourcePickerHint = "drag A & B on the 16:9 frame · corners resize aspect-locked"
         static let seamHint = "drag seam (snaps to 35 / 40 / 50 / 60 / 65)"
@@ -254,6 +260,8 @@ extension Copy {
         static let chatPlacementSeam = "seam"
         static let chatPlacementTop = "top"
         static let chatPlacementBand = "band"
+        static let chatPlacementRightOverlay = "right"
+        static let chatPlacementSidebar = "sidebar"
         static let chatLookGlass = "liquid glass"
         static let chatLookClear = "clear text"
         static let chatSize = "size"

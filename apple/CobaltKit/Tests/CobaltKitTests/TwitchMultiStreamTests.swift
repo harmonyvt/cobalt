@@ -366,10 +366,10 @@ private final class SpyMultiAudioTarget: TwitchMultiAudioTarget {
         #expect(phoneBudget.effectiveLimit == 10)
         #expect(phoneBudget.playingCount == 10)
 
-        // Larger iPad/Mac budget (16) throttles 16 -> 10
+        // Larger iPad/Mac budget (16) throttles 16 -> 8
         let macBudget = MotionBudget(limit: 16, watchPower: false)
         macBudget.setActiveStreamCount(4)
-        #expect(macBudget.effectiveLimit == 10)
+        #expect(macBudget.effectiveLimit == 8)
         macBudget.setActiveStreamCount(1)
         #expect(macBudget.effectiveLimit == 16)
     }

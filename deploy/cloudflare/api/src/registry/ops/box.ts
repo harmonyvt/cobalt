@@ -3,7 +3,7 @@
 // The box runs in the Workbench Durable Object (src/workbench.ts); these ops reach it over Workers RPC. A saved file
 // goes through the normal upload path (PUT /studio/upload's own code), typed by its bytes, as the chat's key id.
 import * as z from "zod";
-import { MAX_UPLOAD_BYTES, studioUpload } from "../../app-routes";
+import { MAX_SINGLE_UPLOAD_BYTES, studioUpload } from "../../app-routes";
 import { ITEM_ID_REGEX } from "../../gate";
 import type { BoxError, BoxRun, BoxStat, BoxWrite } from "../../workbench-core";
 import { BOX_NAME_REGEX, RUN_DEFAULT_S, RUN_MAX_S } from "../../workbench-core";
@@ -106,7 +106,7 @@ export const boxSaveOp = defineOp({
     ai: {
         tier: "free",
         only: true,
-        summary: `Put a file from the box into Harmony's library like an upload (jpg png webp gif heic mp4 mov, typed by its bytes, max ${MAX_UPLOAD_BYTES / 1_000_000} MB). Convert anything else with ffmpeg first.`,
+        summary: `Put a file from the box into Harmony's library like an upload (jpg png webp gif heic mp4 mov, typed by its bytes, max ${MAX_SINGLE_UPLOAD_BYTES / 1_000_000} MB). Convert anything else with ffmpeg first.`,
         params: ["path"],
         options: true,
         when: (f) => f.box === true,
@@ -117,8 +117,8 @@ export const boxSaveOp = defineOp({
         const st = await box.stat(thread, input.path);
         if (isError(st)) throw new OpError(404, "error.workbench", `cobalt.box.save: ${st.error}`);
         if (st.size === 0) throw new OpError(400, "error.library.empty", "cobalt.box.save: the file is empty");
-        if (st.size > MAX_UPLOAD_BYTES) {
-            throw new OpError(413, "error.library.too_large", `cobalt.box.save: ${Math.ceil(st.size / 1_000_000)} MB is over the ${MAX_UPLOAD_BYTES / 1_000_000} MB cap; make it smaller with ffmpeg`);
+        if (st.size > MAX_SINGLE_UPLOAD_BYTES) {
+            throw new OpError(413, "error.library.too_large", `cobalt.box.save: ${Math.ceil(st.size / 1_000_000)} MB is over the ${MAX_SINGLE_UPLOAD_BYTES / 1_000_000} MB cap; make it smaller with ffmpeg`);
         }
         const type = sniffSave(new Uint8Array(st.head));
         if (!type) {

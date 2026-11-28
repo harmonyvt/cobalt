@@ -82,10 +82,11 @@ public struct TwitchChannelAccent: Sendable, Hashable {
     public var hueDegrees: Double
 
     public init(slot: TwitchChannelSlot, channel: String, displayName: String? = nil, markOverride: String? = nil) {
-        let lower = channel.lowercased()
-        let shown = (displayName?.isEmpty == false ? displayName! : lower)
+        let canonical = StreamAddress.canonicalKey(for: channel)
+        let fallbackLabel = StreamAddress.displayLabel(for: canonical)
+        let shown = (displayName?.isEmpty == false ? displayName! : fallbackLabel)
         self.slot = slot
-        self.channel = lower
+        self.channel = canonical
         self.displayName = shown
         if let markOverride, !markOverride.isEmpty {
             self.mark = markOverride
@@ -122,8 +123,9 @@ public struct TwitchChannelAccent: Sendable, Hashable {
 
         for (idx, ch) in channels.prefix(TwitchChannelSlot.allCases.count).enumerated() {
             let slot = TwitchChannelSlot(rawValue: idx) ?? .quaternary
-            let rawDisplay = displayNames[ch] ?? displayNames[ch.lowercased()]
-            let shown = (rawDisplay?.isEmpty == false ? rawDisplay! : ch)
+            let rawDisplay = displayNames[ch] ?? displayNames[StreamAddress.canonicalKey(for: ch)] ?? displayNames[ch.lowercased()]
+            let fallbackLabel = StreamAddress.displayLabel(for: ch)
+            let shown = (rawDisplay?.isEmpty == false ? rawDisplay! : fallbackLabel)
             shownByChannel[ch] = shown
             let alnums = shown.filter { $0.isLetter || $0.isNumber }
             let single = alnums.first.map { String($0).uppercased() } ?? slot.fallbackMark
@@ -134,7 +136,7 @@ public struct TwitchChannelAccent: Sendable, Hashable {
         var result: [String: TwitchChannelAccent] = [:]
         for (idx, ch) in channels.prefix(TwitchChannelSlot.allCases.count).enumerated() {
             let slot = TwitchChannelSlot(rawValue: idx) ?? .quaternary
-            let shown = shownByChannel[ch] ?? ch
+            let shown = shownByChannel[ch] ?? StreamAddress.displayLabel(for: ch)
             let single = baseMarkByChannel[ch] ?? slot.fallbackMark
             let mark: String
             if (initialCounts[single] ?? 0) > 1 {
@@ -425,7 +427,7 @@ public final class TwitchCombinedChatModel {
 
     @ObservationIgnored private let assetCache: TwitchChatAssetCache
     @ObservationIgnored private let sendLimiter: TwitchChatSendLimiter
-    @ObservationIgnored private var engines: [String: TwitchChatEngine] = [:]
+    @ObservationIgnored private var engines: [String: any LiveChatEngine] = [:]
     @ObservationIgnored private var listeners: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var emotesVersions: [String: Int] = [:]
     /// Per-channel set of already-seen line IDs so an evicted line from a slower channel is never re-appended.
@@ -436,6 +438,7 @@ public final class TwitchCombinedChatModel {
     @ObservationIgnored private var isComposerOpen = false
     /// True after an explicit channel/both pick from the composer target menu until overridden by a filter pick or reply.
     @ObservationIgnored private var hasExplicitTargetSelection = false
+    @ObservationIgnored private var lowPowerMode = false
 
     public init(
         assetCache: TwitchChatAssetCache = .shared,
@@ -471,9 +474,10 @@ public final class TwitchCombinedChatModel {
             knownIDsByChannel[existing] = nil
         }
 
-        // Start engines for newly added channels, sharing assetCache & sendLimiter
+        // Start engines for newly added channels, routing Twitch / Kick / YouTube via LiveChatEngineFactory
+        let lpm = lowPowerMode
         for ch in normalized where engines[ch] == nil {
-            let engine = TwitchChatEngine(
+            let engine = LiveChatEngineFactory.make(
                 channel: ch,
                 credentials: credentials,
                 session: session,
@@ -481,29 +485,46 @@ public final class TwitchCombinedChatModel {
                 sendLimiter: sendLimiter)
             engines[ch] = engine
             startListening(to: engine, channel: ch)
-            Task { await engine.start() }
+            Task {
+                if lpm { await engine.setLowPowerMode(true) }
+                await engine.start()
+            }
         }
 
         applyChannelLayout(normalized: normalized, displayNames: displayNames, focusedChannel: rawFocused)
     }
 
-    /// Attaches pre-constructed `TwitchChatEngine` instances (useful for testing or custom wiring).
-    public func attachEngines(
-        _ newEngines: [TwitchChatEngine],
+    /// Propagates iOS Low Power Mode / power conservation state to all active chat engines.
+    public func setLowPowerMode(_ enabled: Bool) {
+        guard lowPowerMode != enabled else { return }
+        lowPowerMode = enabled
+        let active = Array(engines.values)
+        for engine in active {
+            Task { await engine.setLowPowerMode(enabled) }
+        }
+    }
+
+    /// Attaches pre-constructed `LiveChatEngine` instances (useful for testing or custom wiring).
+    public func attachEngines<E: LiveChatEngine>(
+        _ newEngines: [E],
         displayNames: [String: String] = [:],
         focusedChannel rawFocused: String? = nil,
         autoStart: Bool = false
     ) {
         stop()
         var ordered: [String] = []
+        let lpm = lowPowerMode
         for engine in newEngines.prefix(Self.maxChannels) {
-            let ch = engine.channelName.lowercased()
+            let ch = StreamAddress.canonicalKey(for: engine.channelName)
             guard !ch.isEmpty, !ordered.contains(ch) else { continue }
             ordered.append(ch)
             engines[ch] = engine
             startListening(to: engine, channel: ch)
             if autoStart {
-                Task { await engine.start() }
+                Task {
+                    if lpm { await engine.setLowPowerMode(true) }
+                    await engine.start()
+                }
             }
         }
         applyChannelLayout(normalized: ordered, displayNames: displayNames, focusedChannel: rawFocused)
@@ -543,7 +564,7 @@ public final class TwitchCombinedChatModel {
         knownIDsByChannel = [:]
     }
 
-    private func startListening(to engine: TwitchChatEngine, channel: String) {
+    private func startListening(to engine: any LiveChatEngine, channel: String) {
         listeners[channel]?.cancel()
         listeners[channel] = Task { [weak self] in
             for await snap in engine.snapshots {
@@ -585,7 +606,7 @@ public final class TwitchCombinedChatModel {
         }
 
         // Revalidate focus
-        let nextFocused = rawFocused?.lowercased()
+        let nextFocused = rawFocused.map(StreamAddress.canonicalKey(for:))
         if let nextFocused, normalizedSet.contains(nextFocused) {
             focusedChannel = nextFocused
         } else if let current = focusedChannel, normalizedSet.contains(current) {
@@ -629,9 +650,9 @@ public final class TwitchCombinedChatModel {
     private func normalizeChannels(_ raw: [String]) -> [String] {
         var out: [String] = []
         for ch in raw {
-            let lower = ch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard !lower.isEmpty, !out.contains(lower) else { continue }
-            out.append(lower)
+            let clean = StreamAddress.canonicalKey(for: ch)
+            guard !clean.isEmpty, !out.contains(clean) else { continue }
+            out.append(clean)
             if out.count == Self.maxChannels { break }
         }
         return out
@@ -642,7 +663,7 @@ public final class TwitchCombinedChatModel {
     /// Merges a channel's snapshot into the combined feed in strict monotonic live arrival order.
     /// Existing lines update in place (moderation deletes, backfilled badges, late 7TV emotes) without moving.
     public func ingest(_ snapshot: TwitchChatSnapshot) {
-        let ch = snapshot.channel.lowercased()
+        let ch = StreamAddress.canonicalKey(for: snapshot.channel)
         guard !ch.isEmpty else { return }
         if !channels.contains(ch), channels.count < Self.maxChannels {
             configureChannelsWithoutEngines(channels + [ch], focusedChannel: focusedChannel)
@@ -717,7 +738,7 @@ public final class TwitchCombinedChatModel {
     // MARK: - channel cosmetics & accents
 
     public func accent(for channel: String) -> TwitchChannelAccent? {
-        accentsByChannel[channel.lowercased()]
+        accentsByChannel[StreamAddress.canonicalKey(for: channel)]
     }
 
     public func paint(for line: TwitchChatLine) -> SevenTvPaint? {
@@ -736,10 +757,10 @@ public final class TwitchCombinedChatModel {
         return nil
     }
 
-    /// Display name for a channel login (falling back to the login itself).
+    /// Display name for a channel login (falling back to the display label without platform prefix).
     public func displayName(for channel: String) -> String {
-        let lower = channel.lowercased()
-        return accentsByChannel[lower]?.displayName ?? lower
+        let key = StreamAddress.canonicalKey(for: channel)
+        return accentsByChannel[key]?.displayName ?? StreamAddress.displayLabel(for: key)
     }
 
     /// Updates cached display names for active channels without disturbing running sockets, messages, or composer state.
@@ -763,13 +784,19 @@ public final class TwitchCombinedChatModel {
     // MARK: - focus, filter & Opus's Foolproof Composer Target Locking
 
     /// Updates which stream currently holds audio/visual focus.
-    /// Does NOT disturb a locked composer target, an explicit menu selection, or an active reply.
+    /// In multi-stream mode, switching focus also switches the visible chat filter to the focused stream
+    /// so chat follows audio focus (tapping `All` or another filter chip manually still works anytime).
+    /// Does NOT disturb a locked mid-type composer target or an active reply.
     public func setFocusedChannel(_ channel: String?) {
-        let lower = channel?.lowercased()
-        guard lower != focusedChannel else { return }
-        if let lower, !channels.contains(lower) { return }
-        focusedChannel = lower
-        if !composerTargetLocked, !hasExplicitTargetSelection, replyTo == nil {
+        let key = channel.map(StreamAddress.canonicalKey(for:))
+        guard key != focusedChannel else { return }
+        if let key, !channels.contains(key) { return }
+        focusedChannel = key
+        if isDualChannel, let key {
+            filter = .channel(key)
+        }
+        if !composerTargetLocked, replyTo == nil {
+            hasExplicitTargetSelection = false
             composerTarget = resolvedInitialTarget()
         }
     }
@@ -784,8 +811,8 @@ public final class TwitchCombinedChatModel {
         case .all:
             validated = .all
         case .channel(let raw):
-            let lower = raw.lowercased()
-            validated = channels.contains(lower) ? .channel(lower) : .all
+            let key = StreamAddress.canonicalKey(for: raw)
+            validated = channels.contains(key) ? .channel(key) : .all
         }
         guard validated != filter else { return }
         filter = validated
@@ -869,15 +896,15 @@ public final class TwitchCombinedChatModel {
             // Never attach a single-channel reply-parent-msg-id when broadcasting to Both.
             replyTo = nil
         case .channel(let raw):
-            let lower = raw.lowercased()
-            guard channels.contains(lower) else { return }
-            composerTarget = .channel(lower)
+            let key = StreamAddress.canonicalKey(for: raw)
+            guard channels.contains(key) else { return }
+            composerTarget = .channel(key)
             hasExplicitTargetSelection = true
             composerTargetLocked = isComposerOpen
-            if case .channel(let filtered) = filter, filtered != lower {
-                filter = .channel(lower)
+            if case .channel(let filtered) = filter, filtered != key {
+                filter = .channel(key)
             }
-            if let reply = replyTo, reply.channel != lower {
+            if let reply = replyTo, reply.channel != key {
                 replyTo = nil
             }
         }

@@ -120,6 +120,89 @@ struct TwitchClipTests {
         }
     }
 
+    @Test func landscapeOrientationGeometryAndStudioTimeline() throws {
+        // Backwards-compatible decoding: legacy JSON without `orientation` defaults to `.portrait`
+        let encoded = try JSONEncoder().encode(TwitchClipEditConfig())
+        var raw = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        raw.removeValue(forKey: "orientation")
+        let legacyJSON = try JSONSerialization.data(withJSONObject: raw)
+        let decodedLegacy = try JSONDecoder().decode(TwitchClipEditConfig.self, from: legacyJSON)
+        #expect(decodedLegacy.orientation == .portrait)
+
+        // Landscape single + sidebar band: video takes 74% width centered vertically at 16:9 (zero crop), chat takes 26% full-height right sidebar
+        var sidebarConfig = TwitchClipEditConfig(
+            orientation: .landscape,
+            layout: .single,
+            regionB: TwitchClipRegionTarget(cx: 0.5, cy: 0.5, w: 1.0)
+        )
+        sidebarConfig.chat.enabled = true
+        sidebarConfig.chat.placement = .band
+
+        let size = TwitchClipTimelineBridge.canvasSize(for: sidebarConfig)
+        #expect(size.w == 1920 && size.h == 1080)
+
+        let sidebarSlots = TwitchClipTimelineBridge.slots(for: sidebarConfig)
+        #expect(sidebarSlots.count == 1)
+        #expect(sidebarSlots[0].region == .b)
+        #expect(abs(sidebarSlots[0].rect.w - 0.74) < 0.001)
+        #expect(abs(sidebarSlots[0].rect.h - 0.74) < 0.001)
+        #expect(abs(sidebarSlots[0].rect.y - 0.13) < 0.001)
+
+        let sidebarChatRect = TwitchClipTimelineBridge.chatOverlayRect(for: sidebarConfig)
+        #expect(abs(sidebarChatRect.x - 0.74) < 0.001)
+        #expect(abs(sidebarChatRect.w - 0.26) < 0.001)
+        #expect(abs(sidebarChatRect.h - 1.0) < 0.001)
+
+        // Landscape single + overlay: video is full 16:9 uncropped (Region B), chat overlays on right/bottom/top
+        for placement in [TwitchClipChatPlacement.seam, .bottom, .top] {
+            var overlayConfig = TwitchClipEditConfig(
+                orientation: .landscape,
+                layout: .single,
+                regionB: TwitchClipRegionTarget(cx: 0.5, cy: 0.5, w: 1.0)
+            )
+            overlayConfig.chat.enabled = true
+            overlayConfig.chat.placement = placement
+            let slots = TwitchClipTimelineBridge.slots(for: overlayConfig)
+            #expect(slots.count == 1)
+            #expect(slots[0].region == .b)
+            #expect(abs(slots[0].rect.w - 1.0) < 0.001)
+            #expect(abs(slots[0].rect.h - 1.0) < 0.001)
+            let crop = TwitchClipTimelineBridge.cropRect(for: .b, config: overlayConfig, sourceAspect: 16.0 / 9.0)
+            #expect(abs(crop.w - 1.0) < 0.01 && abs(crop.h - 1.0) < 0.01)
+            let chatRect = TwitchClipTimelineBridge.chatOverlayRect(for: overlayConfig)
+            #expect(chatRect.w > 0.2 && chatRect.h > 0.2)
+            #expect(chatRect.x >= 0 && chatRect.y >= 0 && chatRect.x + chatRect.w <= 1.001 && chatRect.y + chatRect.h <= 1.001)
+        }
+
+        // Studio timeline handoff for 16:9 landscape uses 1920x1080 wide canvas
+        let draft = TwitchClipDraft(
+            id: "draft-landscape",
+            channel: "caedrel",
+            title: "wide clip",
+            kind: .clip,
+            duration: 20,
+            videoFileName: "clip.mp4",
+            chatFileName: "clip.chat.json",
+            chatLineCount: 15,
+            edit: sidebarConfig
+        )
+        let timeline = TwitchClipTimelineBridge.buildStudioTimeline(
+            draft: draft,
+            videoItemID: "AAAAAAAAAAAAAAAA",
+            chatItemID: "BBBBBBBBBBBBBBBB",
+            fps: 30
+        )
+        #expect(timeline.canvas.w == 1920)
+        #expect(timeline.canvas.h == 1080)
+        let encodedTimeline = try JSONEncoder().encode(timeline)
+        guard case .ok(let roundTripped) = EditLanes.parse(encodedTimeline) else {
+            Issue.record("EditLanes.parse failed for landscape timeline")
+            return
+        }
+        #expect(roundTripped.canvas.w == 1920)
+        #expect(roundTripped.canvas.h == 1080)
+    }
+
     // MARK: - Recorded Chat Log (Sync Nudge, Gaps, Density)
 
     @Test func recordedChatLogHandlesSyncNudgeGapsAndDensity() {

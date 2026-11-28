@@ -19,10 +19,10 @@ struct TwitchScreen: View {
     private var activeLogins: Set<String> {
         var logins: Set<String> = []
         if let item = pane.item, pane.state != .hidden {
-            logins.formUnion(item.streamChannels.map { $0.lowercased() })
+            logins.formUnion(item.streamChannels.map(StreamAddress.canonicalKey(for:)))
         }
         if let bar = pane.barItem {
-            logins.formUnion(bar.streamChannels.map { $0.lowercased() })
+            logins.formUnion(bar.streamChannels.map(StreamAddress.canonicalKey(for:)))
         }
         return logins
     }
@@ -75,7 +75,7 @@ private struct TwitchChannelList: View {
     private var store: TwitchStore { model.twitch }
 
     private func isWatching(_ login: String) -> Bool {
-        activeLogins.contains(login.lowercased())
+        activeLogins.contains(StreamAddress.canonicalKey(for: login))
     }
 
     var body: some View {
@@ -113,7 +113,7 @@ private struct TwitchChannelList: View {
         )) { target in
             TwitchAddSecondStreamSheet(
                 model: model,
-                excluding: [target.login.lowercased()]
+                excluding: [StreamAddress.canonicalKey(for: target.login)]
             ) { partner in
                 pane.open(.dualStream(primary: target.login, secondary: partner))
             }
@@ -124,7 +124,8 @@ private struct TwitchChannelList: View {
     }
 
     private var search: some View {
-        HStack(spacing: 8) {
+        let parsed = StreamAddress.parse(query)
+        return HStack(spacing: 8) {
             Image(systemName: Symbol.Twitch.search).foregroundStyle(CobaltColor.caption)
             TextField(Copy.Twitch.searchPrompt, text: $query)
                 .textFieldStyle(.plain)
@@ -135,7 +136,10 @@ private struct TwitchChannelList: View {
                 #endif
                 .onSubmit(openQuery)
                 .accessibilityIdentifier("twitch.search")
-            if TwitchStore.login(from: query) != nil {
+            if let parsed {
+                if parsed.platform != .twitch {
+                    StreamPlatformBadge(platform: parsed.platform)
+                }
                 Button(Copy.Twitch.open, action: openQuery)
                     .buttonStyle(.cobaltPrimary(fullWidth: false, compact: true))
             }
@@ -166,7 +170,7 @@ private struct TwitchChannelList: View {
         guard let login = TwitchStore.login(from: name) else { return }
         if let existing = currentStreamItem {
             let channels = existing.streamChannels
-            if channels.contains(where: { $0.caseInsensitiveCompare(login) == .orderedSame }) {
+            if channels.contains(where: { StreamAddress.canonicalKey(for: $0) == login }) {
                 pane.open(existing)
             } else if channels.count < PaneItem.maxSimultaneousStreams {
                 if let next = existing.addingStream(login) { pane.open(next) }
@@ -276,16 +280,55 @@ private struct TwitchBanner: View {
     }
 }
 
+/// Compact brand pill shown on Kick and YouTube channel chips, search inputs, and pickers.
+struct StreamPlatformBadge: View {
+    let platform: StreamPlatform
+
+    private var fill: Color {
+        let rgb = platform.brandRGB
+        return Color(
+            red: Double((rgb >> 16) & 0xFF) / 255.0,
+            green: Double((rgb >> 8) & 0xFF) / 255.0,
+            blue: Double(rgb & 0xFF) / 255.0
+        )
+    }
+
+    private var foreground: Color {
+        platform == .kick ? .black : .white
+    }
+
+    var body: some View {
+        Text(platform.badgeMark)
+            .font(Font.cobalt(9.5, .semibold))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(fill, in: Capsule())
+            .accessibilityLabel(platform.displayName)
+    }
+}
+
 private struct TwitchRecentChip: View {
     let login: String
     let icon: String
     var active = false
     let action: () -> Void
 
+    private var platform: StreamPlatform {
+        StreamAddress.platform(for: login)
+    }
+
+    private var label: String {
+        StreamAddress.displayLabel(for: login)
+    }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Label(login, systemImage: icon)
+                if platform != .twitch {
+                    StreamPlatformBadge(platform: platform)
+                }
+                Label(label, systemImage: icon)
                 if active {
                     Circle()
                         .fill(TwitchChatPalette.twitch)

@@ -64,20 +64,28 @@ public final class PlayerPool: LifecycleAware, Purgeable {
     private let cap: Int
     /// Non-AVPlayer hardware video decoders (e.g. concurrent `TwitchNativeEngine` streams) borrowing decoder slots.
     private var externalReservations: [String: Int] = [:]
+    /// True while Low Power Mode or serious/critical thermal pressure should pause unprotected autoplay loops.
+    private var conservingPower = false
 
     /// Total hardware decoder slots currently reserved by external engines (e.g. Twitch multi-stream).
     public var reservedExternalCount: Int {
         externalReservations.values.reduce(0, +)
     }
 
-    /// Effective AVPlayer cap after subtracting external decoder reservations.
+    /// Effective AVPlayer cap after subtracting external decoder reservations and power/thermal limits.
     public var effectiveCap: Int {
-        max(0, cap - reservedExternalCount)
+        if conservingPower { return 0 }
+        return max(0, cap - reservedExternalCount)
+    }
+
+    private static func shouldPauseAutoplay(_ snapshot: LifecycleSnapshot) -> Bool {
+        snapshot.isLowPowerMode || snapshot.thermal == .serious || snapshot.thermal == .critical
     }
 
     /// `lifecycle` is the app's listener; tests pass their own.
     init(lifecycle: AppLifecycle = .shared, cap: Int = PlayerPool.maxPlaying) {
         self.cap = cap
+        self.conservingPower = Self.shouldPauseAutoplay(lifecycle.snapshot)
         lifecycle.register(self, order: .media)
         lifecycle.register(purgeable: self)
     }
@@ -109,6 +117,10 @@ public final class PlayerPool: LifecycleAware, Purgeable {
         let known = entry(for: player, as: role, release: release)
         if holding {
             held.insert(known.id)
+            return
+        }
+        if conservingPower && !role.isProtected {
+            player.pause()
             return
         }
         clock += 1
@@ -167,6 +179,13 @@ public final class PlayerPool: LifecycleAware, Purgeable {
     // MARK: the app's state
 
     public func lifecycle(_ event: LifecycleEvent, snapshot: LifecycleSnapshot) {
+        let nextConserving = Self.shouldPauseAutoplay(snapshot)
+        if nextConserving != conservingPower {
+            conservingPower = nextConserving
+            if conservingPower {
+                enforceCap(keeping: nil)
+            }
+        }
         switch event {
         #if os(iOS)
         case .willResignActive, .didEnterBackground: hold()

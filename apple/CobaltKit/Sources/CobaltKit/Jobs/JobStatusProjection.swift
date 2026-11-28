@@ -367,6 +367,31 @@ extension JobStatus {
             canCancel: r.isActive && !r.cancelRequested, canRetry: retry, canDismiss: dismiss)
     }
 
+    /// An audio loudness leveling job (`GET /queue` `audio` or `AudioLevelStore.trackedJobs`).
+    public init(audioLevel job: QueueSnapshot.AudioLevelJob, now: Date) {
+        let stage: Stage
+        var fraction: Double?
+        var retry = false
+        var dismiss = false
+        switch job.state {
+        case .rendering:
+            stage = .rendering(phase: .decode, done: nil, total: nil)
+        case .ready:
+            stage = .completed(cloudSaved: true, deviceCopy: .notNeeded)
+            fraction = 1
+            dismiss = true
+        case .failed:
+            stage = .failed(failure: .server(code: job.error ?? "error.audio.level_failed"), retryable: true)
+            retry = true
+            dismiss = true
+        }
+        self.init(
+            id: "audio:\(job.itemID)", ref: .audioLevel(itemID: job.itemID), kind: .audioLevel, title: job.title,
+            mediaID: "post:\(job.itemID)", stage: stage, fraction: fraction, startedAt: job.updatedAt,
+            updatedAt: job.state == .rendering ? now : job.lastMoment, failedStep: .store,
+            canRetry: retry, canDismiss: dismiss)
+    }
+
     /// A job that finished and left the queue (`UnifiedQueue.finishedHistory`). The receipt is what is known: a stored media
     /// means the original is on this device.
     public init(finished work: FinishedWork) {
